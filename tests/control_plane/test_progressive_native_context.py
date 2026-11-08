@@ -9,6 +9,7 @@ import shlex
 import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_codex_context_lifecycle import setup, project, deliver, read_pages
@@ -220,10 +221,10 @@ def test_unknown_semantics_are_never_hidden(tmp_path, monkeypatch, change):
 def test_off_and_unsupported_surface_remain_exact(tmp_path, monkeypatch):
     setup(tmp_path, monkeypatch)
     original, unchanged = payload(), payload()
-    assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="one") is original
-    wire = context.project_codex_context(original, directory=str(tmp_path), capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="turn_envelope", capture_id="one")
+    assert context.prepare_codex_context(original, directory=None, capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="one").delivery is original
+    wire = context.prepare_codex_context(original, directory=str(tmp_path), capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="turn_envelope", capture_id="one").delivery
     assert wire["context"] == original == unchanged
     assert not (tmp_path / "required-context.json").exists()
 
@@ -253,8 +254,8 @@ def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_r
     path = tmp_path / "original.json"
     raw = json.dumps(original).encode()
     path.write_bytes(raw)
-    assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off") is original
+    assert context.prepare_codex_context(original, directory=None, capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off").delivery is original
     digest = hashlib.sha256(raw).hexdigest()
     registry, runtime = tmp_path / "no-registry.json", tmp_path / "no-runtime"
     command = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
@@ -266,7 +267,10 @@ def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_r
             context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, view = _run_cli(registry, runtime, *command, cwd=tmp_path)
         assert code == 0 and view["ok"], view
-        assert view["mode"] == ("delta" if cycle == 1 else "full")
+        # The real adapter compares complete reader framing, including this
+        # checkout's argv/path lengths. A warm view may legitimately prefer full;
+        # it must not fake a delta when that would cost more than the same capture.
+        assert view["mode"] in ({"delta", "full"} if cycle == 1 else {"full"})
         argv = shlex.split(view["recovery"]["command"])
         pages, contents = [], b""
         while True:
@@ -334,6 +338,33 @@ def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_
     assert not Path(recovery["path"]).with_name("required-context.json").exists()
 
 
+def test_delta_only_retains_original_material_and_recovers_changes(tmp_path, monkeypatch):
+    from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+    event = setup(tmp_path, monkeypatch)
+    previous = None
+    for turn, stop in enumerate(("Preserve scope.", "Stop now.")):
+        source = {**payload(), "stop": stop, "evidence": ["stable material " * 1000]}
+        capture = tmp_path / str(turn)
+        capture.mkdir(mode=0o700)
+        wire = context.prepare_codex_context(source, directory=str(tmp_path), capture_directory=capture,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=str(turn),
+            progressive_enabled=False).delivery
+        assert json.loads(Path(wire["recovery"]["path"]).read_bytes()) == source
+        from loopx.cli_commands.quota_capture import native_context_capture_view
+        view = native_context_capture_view(wire, capture, context_directory=str(tmp_path), progressive_enabled=False)
+        assert "first_read_command" not in view and "Follow next_command through eof" in view["instruction"]
+        if previous is None:
+            assert wire["mode"] == "full" and wire["context"] == source
+            previous = wire
+            deliver(tmp_path, event, read_pages(tmp_path, wire))
+        else:
+            assert wire["mode"] == "delta"
+            restored = restore_context_delivery(wire, baseline=previous, current={
+                "schema_version": wire["schema_version"], "mode": "full", "target": wire["target"], "context": source})
+            assert restored["mode"] == "delta" and restored["context"] == source
+
+
 def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path, monkeypatch):
     setup(tmp_path, monkeypatch)
     row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Keep this constraint.", "claimed_by": "peer"}
@@ -351,19 +382,26 @@ def test_native_required_view_and_encoding_use_one_runtime_request(tmp_path, mon
     setup(tmp_path, monkeypatch)
     invoke = turn_envelope.effect_runtime_projection_result
     requests = []
+    responses = []
 
     def observe(method, params, **kwargs):
         requests.append((method, params["operation"]))
-        return invoke(method, params, **kwargs)
+        response = invoke(method, params, **kwargs)
+        responses.append(response)
+        return response
 
     monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
     original = payload()
     before = json.dumps(original, sort_keys=True)
     for capture in ("cold", "warm"):
         requests.clear()
+        responses.clear()
         _, wire = project(tmp_path, capture, payload=original)
         assert requests == [("quota.turn_envelope.evaluate", "context_delivery")]
         required = json.loads(Path(wire["recovery"]["path"]).read_bytes())
+        if capture == "cold":
+            assert wire["mode"] == "full" and wire["context"] == required
+            assert not any(edit["path"][:2] == ["delivery", "context"] for edit in responses[0]["changes"])
         assert outcome(required)["requirements"][0]["description"] == "Preserve this final requirement."
         assert json.loads(Path(required["context_details"]["path"]).read_bytes()) == original
     assert wire["mode"] == "delta"
@@ -432,11 +470,18 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     lifecycle.mkdir(mode=0o700)
     (tmp_path / "captures").mkdir(mode=0o700)
     setup(lifecycle, monkeypatch)
-    code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+    # Use the raw CLI response here. The acceptance fixture's policy reader
+    # unwraps the navigation before returning the authoritative document.
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(tmp_path / "captures"),
-        "--turn-instance-id", "original-turn")
+        "--turn-instance-id", "original-turn", registry_path=workspace.parent / "registry.json",
+        runtime_root=workspace.parent / "runtime")
     assert code == 0, {key: packet.get(key) for key in ("error", "error_code", "error_detail", "reason", "reason_code")}
+    first_read = shlex.split(packet["first_read_command"])
+    assert int(first_read[first_read.index("--max-page-output-bytes") + 1]) == 12000
+    bulk_read = shlex.split(packet["recovery"]["command"])
+    assert int(bulk_read[bulk_read.index("--max-page-output-bytes") + 1]) == 64000
     recovery = context._state(lifecycle)["recovery"]
     assert Path(recovery["path"]).name == "required-context.json"
     required = json.loads(Path(recovery["path"]).read_bytes())

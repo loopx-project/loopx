@@ -18,6 +18,15 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 
 
+def _registered_goal_identity(goal: dict[str, Any] | None) -> dict[str, Any] | None:
+    if goal is None:
+        return None
+    return {"goal_id": goal["id"], "goal_instance_id": goal.get("goal_instance_id"),
+            "workspace_path": str(Path(goal["repo"]).resolve()),
+            "creation_operation_id": goal.get("creation_operation_id"),
+            "registered_agents": registered_agent_ids_for_goal(goal)}
+
+
 class StewardManagedMode:
     def __init__(self, controller: Any, bindings: Any) -> None:
         self.controller, self.bindings = controller, bindings
@@ -55,13 +64,7 @@ class StewardManagedMode:
         return path.resolve()
 
     def _goal(self, goal_id: str) -> dict[str, Any] | None:
-        goal = load_goal_from_registry(self.controller.registry_path, goal_id)
-        if goal is None:
-            return None
-        return {"goal_id": goal["id"], "goal_instance_id": goal.get("goal_instance_id"),
-                "workspace_path": str(Path(goal["repo"]).resolve()),
-                "creation_operation_id": goal.get("creation_operation_id"),
-                "registered_agents": registered_agent_ids_for_goal(goal)}
+        return _registered_goal_identity(load_goal_from_registry(self.controller.registry_path, goal_id))
 
     def prepare(self, binding_id: str, *, session_id: str | None = None,
                 expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
@@ -162,6 +165,9 @@ class StewardManagedMode:
             cadence = monitor_cadence_delta(monitor.get("cadence")) if monitor else None
             from .steward_reports import StewardReports
             return {"available": True, "prepared": True,
+                    **(self.bindings._core("collaboration.steward.managed_mode.executor", {
+                        "binding": binding, "session": session})
+                       if binding["executor_endpoint_id"] != "codex" else {}),
                     "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
                     "goal_active": active, "report": StewardReports(self.controller).health(binding_id),
                     "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
@@ -179,13 +185,21 @@ class ManagedTaskValidationUnavailable(ValueError):
 
 def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path,
                              session: dict[str, Any] | None = None) -> dict[str, Any]:
+    return registered_managed_session_identity(registry_path=controller.registry_path,
+        goal_id=goal_id, agent_id=agent_id, workspace=workspace, session=session)
+
+
+def registered_managed_session_identity(*, registry_path: Path, goal_id: str, agent_id: str,
+                                       session: dict[str, Any] | None = None,
+                                       workspace: Path | None = None) -> dict[str, Any]:
     """Observe existing registration; the typed owner admits the exact binding."""
     from .conversation_bindings import ChatConversationBindings
-    native_goal = load_goal_from_registry(controller.registry_path, goal_id)
+    native_goal = load_goal_from_registry(registry_path, goal_id)
+    goal = _registered_goal_identity(native_goal)
     return ChatConversationBindings._core("collaboration.session.managed_identity", {
-        "goal": StewardManagedMode(controller, None)._goal(goal_id),
+        "goal": goal,
         "goal_active": bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal)),
-        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve()),
+        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve()) if workspace else (goal or {}).get("workspace_path"),
         **({"session": session} if session is not None else {})})
 
 
@@ -428,11 +442,19 @@ class ManagedSessionTurn:
             raise ManagedTaskValidationUnavailable("the selected task needs its existing independent argv validation declaration")
         return rows[0]
 
-    def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any]) -> None:
-        from ...control_plane.turn_driver.driver import selected_turn_todo
+    def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any], *,
+                           _checked_work_identity: dict[str, str] | None = None) -> None:
+        from ...control_plane.turn_driver.driver import selected_turn_todo, turn_host_lineage
         from ...control_plane.turn_driver.command_validation import build_loopx_turn_command_validator
         from ...control_plane.todos.completion_validation_store import read_completion_validation_declaration
-        selected = selected_turn_todo(native_request.get("turn_envelope") or {})
+        # Dispatch can reuse its just-checked identity within this invocation;
+        # direct callers still check the complete source through the same owner.
+        if "work_contract" in native_request:
+            selected = _checked_work_identity
+            if selected is None:
+                selected = turn_host_lineage(native_request)
+        else:
+            selected = selected_turn_todo(native_request.get("turn_envelope") or {})
         if not selected.get("todo_id"):
             raise ManagedTaskValidationUnavailable("select an existing native task with independent validation")
         self.validation_basis = self._validation_source(request, selected["todo_id"])
@@ -453,11 +475,16 @@ class ManagedSessionTurn:
         The captured canonical digest and fresh source must agree before and
         after the existing command validator reads the task's real artifact.
         """
-        from ...control_plane.turn_driver.driver import selected_turn_todo
+        from ...control_plane.turn_driver.driver import (
+            COMPLETE_TURN_PLAN_SCHEMA_VERSION, selected_turn_todo, turn_host_lineage,
+        )
 
         def validate(plan, result):
             actor = request["actor"]
-            selected = selected_turn_todo(plan.get("turn_envelope") or {})
+            # Model work is a reentry boundary. Recheck the complete source;
+            # only an absent contract retains historical envelope decoding.
+            selected = (turn_host_lineage(plan) if "work_contract" in plan or plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+                        else selected_turn_todo(plan.get("turn_envelope") or {}))
             basis = self.validation_basis
             if not basis or not self.task_validator or basis["todo_id"] != selected["todo_id"]:
                 raise ValueError("the original task validation source was not captured before model work")

@@ -22,6 +22,7 @@ from .heartbeat_receipt import (
     requalify_bound_heartbeat_receipt,
 )
 from .settlement import (
+    QuotaSettlementReadback,
     attach_settlement_progress,
     read_heartbeat_settlement,
     settlement_result_payload,
@@ -460,16 +461,15 @@ def attach_spend_settlement_result(
     payload: dict[str, object],
     *,
     runtime_root: Path,
+    registry_path: Path,
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None,
     turn_instance_id: str,
     replan_obligation_id: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
-) -> None:
-    registry_path = (
-        Path(str(payload["registry"])) if payload.get("registry") else None
-    )
+) -> QuotaSettlementReadback:
+    """Attach receipts and return the same post-event observation to the caller."""
     readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=goal_id,
@@ -500,3 +500,4 @@ def attach_spend_settlement_result(
     elif payload.get("receipt_repair_required"):
         payload["receipt_repair_required"] = False
         payload["receipt_repaired"] = True
+    return readback

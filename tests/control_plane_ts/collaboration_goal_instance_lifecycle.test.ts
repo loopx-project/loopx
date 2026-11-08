@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideCollaborationLifecycle, proveOriginalRequestDelivery } from "../../loopx/control_plane/collaboration/goal_instance_lifecycle.ts";
+import { decideCollaborationLifecycle, inspectOriginalRequestBatch, proveOriginalRequestDelivery } from "../../loopx/control_plane/collaboration/goal_instance_lifecycle.ts";
 
 const INSTANCE_A = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const INSTANCE_B = "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -262,4 +262,26 @@ test("readback observes a committed active request without permitting its result
   assert.deepEqual(decideCollaborationLifecycle(facts("original_request_inspect", {
     current_goal_ref: GOAL_B, initial_delivery: committedDelivery("failed"),
   })), { kind: "allow", mode: "historical_read", goal_ref: GOAL_A });
+});
+
+test("a bounded inspection batch keeps independent request refusals and order", () => {
+  for (const profile_id of [null, "source_session_v1"]) {
+    const valid = committedDelivery("running", profile_id !== null);
+    const conflict = { ...valid, turn: { ...valid.turn, context_handoff_receipt: {} } };
+    const wrongSource = { ...conflict, authorized_source_id: "web:other" };
+    const scope = { profile_id, caller_goal_ref: GOAL_A, current_goal_ref: GOAL_B };
+    const item = (initial_delivery: typeof valid) => ({
+      initial_delivery, record_goal_ref: GOAL_A, route_goal_ref: GOAL_A,
+    });
+    assert.deepEqual(inspectOriginalRequestBatch({
+      ...scope, items: [item(conflict), item(valid), item(wrongSource)],
+    }), {
+      items: [
+        { kind: "reject", code: "initial_delivery_unproved", delivery_proof_reason: "handoff_receipt_conflict" },
+        profile_id === null ? { kind: "legacy" } : { kind: "allow", mode: "historical_read", goal_ref: GOAL_A },
+        { kind: "reject", code: "initial_delivery_unproved" },
+      ],
+    });
+    assert.throws(() => inspectOriginalRequestBatch({ ...scope, items: Array(13).fill(item(valid)) }), /at most 12/);
+  }
 });

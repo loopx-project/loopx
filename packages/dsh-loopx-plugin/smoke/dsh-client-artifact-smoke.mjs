@@ -48,6 +48,7 @@ const packedStaticEntries = new Set([
   'package/lib/observer.js',
   'package/lib/types/cli.d.ts',
   'package/lib/types/client/LoopXGoalBar.d.ts',
+  'package/lib/types/client/dashboard.d.ts',
   'package/lib/types/client/index.d.ts',
   'package/lib/types/client/locale.d.ts',
   'package/lib/types/client/rpc.d.ts',
@@ -300,11 +301,32 @@ function createClientApplyHarness() {
     },
     slots: {
       inject(name, install) {
-        assert.equal(name, 'conversation.input.dock')
+        assert(
+          ['sidebar.panellist', 'main', 'conversation.input.dock'].includes(name),
+          `unexpected slot injection ${name}`,
+        )
         const dispose = install()
         if (typeof dispose === 'function') effects.push(dispose)
       },
       register(config, component) {
+        if (config.name === 'sidebar.panellist') {
+          assert.equal(config.id, 'loopx-dashboard')
+          assert.equal(config.order, 7)
+          assert.equal(typeof config.label, 'function')
+          assert.equal(config.label(), 'LoopX')
+          assert.equal(typeof component, 'function')
+          assert.equal(slots.has('sidebar:loopx-dashboard'), false)
+          slots.add('sidebar:loopx-dashboard')
+          return () => slots.delete('sidebar:loopx-dashboard')
+        }
+        if (config.name === 'main') {
+          assert.equal(config.key, 'loopx-dashboard')
+          assert.equal(config.locale, 'loopx.dashboard')
+          assert.equal(typeof component, 'function')
+          assert.equal(slots.has('main:loopx-dashboard'), false)
+          slots.add('main:loopx-dashboard')
+          return () => slots.delete('main:loopx-dashboard')
+        }
         assert.equal(config.name, 'conversation.input.dock')
         assert.equal(config.id, 'loopx-goal')
         assert.equal(config.order, 15)
@@ -339,6 +361,7 @@ async function assertClientArtifact(root) {
   assert(!/sourceMappingURL|\.(?:ts|tsx)\.map/iu.test(source), 'client artifact contains a source map')
   assert(!/(?:^|["'])node:/mu.test(source), 'client artifact contains a Node builtin')
   assert(!/(?:typert|remote|EventSource)/u.test(source), 'client artifact contains a forbidden transport')
+  assert(source.includes('http://127.0.0.1:8767/chat/'), 'client artifact lacks the loopback workspace address')
   assert(!/\/(?:Users|home|private|workspace)\//u.test(source), 'client artifact contains an absolute path')
   assert(!/[A-Za-z]:\\(?:Users|home|workspace)\\/u.test(source), 'client artifact contains a Windows absolute path')
 
@@ -373,9 +396,14 @@ async function assertClientArtifact(root) {
   assert.deepEqual(first.labels, [
     'dsh-loopx-plugin CSS ownership',
     'dsh-loopx-plugin GoalBar locale',
+    'dsh-loopx-plugin dashboard locale',
   ])
-  assert.equal(first.locales.size, 1)
-  assert.deepEqual([...first.slots], ['loopx-goal'])
+  assert.equal(first.locales.size, 2)
+  assert.deepEqual([...first.slots], [
+    'sidebar:loopx-dashboard',
+    'main:loopx-dashboard',
+    'loopx-goal',
+  ])
   assert.equal(styles.length, 1)
   assert.equal(styles[0].dataset.plugin, packageId)
   assert.equal(styles[0].dataset.pluginCss, `${packageId}/goalbar.module.css`)
@@ -399,7 +427,11 @@ async function assertClientArtifact(root) {
   const reapplied = createClientApplyHarness()
   assert.equal(cachedExports.apply(reapplied.ctx), undefined)
   assert.equal(styles.length, 1, 'cached-export reapply did not restore CSS')
-  assert.deepEqual([...reapplied.slots], ['loopx-goal'])
+  assert.deepEqual([...reapplied.slots], [
+    'sidebar:loopx-dashboard',
+    'main:loopx-dashboard',
+    'loopx-goal',
+  ])
   reapplied.dispose()
   assert.equal(styles.length, 0, 'cached-export unload retained CSS')
   removeOwnedStylesForHmr()

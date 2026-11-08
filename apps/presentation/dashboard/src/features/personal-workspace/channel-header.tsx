@@ -1,4 +1,4 @@
-import { List, Bot, Eye, FolderOpen, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { List, Bot, Eye, FolderOpen, LoaderCircle, Menu, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { GoalLifecycleControl, GoalMastheadIdentity } from "./goal-masthead";
 
 import { useWorkspaceI18n } from "./i18n";
@@ -12,6 +12,7 @@ export function ChannelHeader({
   agents,
   agentWorkActive = false,
   conversationScope,
+  conversationRunning = false,
   goalLifecycleBusy,
   managerChannelBinding,
   managerChatOpen,
@@ -45,6 +46,7 @@ export function ChannelHeader({
 }: {
   agents: WorkspaceAgentOption[];
   agentWorkActive?: boolean;
+  conversationRunning?: boolean;
   /** Steward conversation scope; absent when the host grants no workspace. */
   conversationScope?: { options: { disabled?: boolean; label: string; value: string }[]; value: string; onChange: (value: string) => void } | null;
   goalLifecycleBusy?: boolean;
@@ -84,6 +86,11 @@ export function ChannelHeader({
 }) {
   const { locale, t } = useWorkspaceI18n();
   const statusOnly = selectedAgentId === "status-only";
+  const chatLabel = <>{t("header.chat")}{conversationRunning ? (
+    <span aria-label={t("conversation.replying")} className="personal-chat-activity" role="status">
+      <LoaderCircle aria-hidden className="is-spinning" size={12} />
+    </span>
+  ) : null}</>;
   const ordinaryConversation = Boolean(selectedGoal || workspaceGrantLabel);
   // The chip reports the selected executor, whose credential pays for it, and
   // the resolved model, so an executor and a model that disagree are visible
@@ -159,7 +166,7 @@ export function ChannelHeader({
   const sourceNamedByTitle = selectedGoal?.title === readOnlySourceLabel;
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <div className="personal-read-only-source">
-      <ContextHelp icon={Eye} label={sourceNamedByTitle ? t("header.readOnlySourceHelp") : `${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p></ContextHelp>
+      <ContextHelp icon={Eye} label={sourceNamedByTitle ? t("header.readOnlySourceHelp") : `${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p>{selectedGoal?.sourceAccess?.original_goal_id ? <p>{locale === "zh-CN" ? "原始 Goal：" : "Original Goal: "}<code>{selectedGoal.sourceAccess.original_goal_id}</code></p> : null}</ContextHelp>
       {sourceNamedByTitle ? null : <span className="personal-read-only-source-label">{readOnlySourceLabel}</span>}
       <small>{t("common.readOnly")}</small>
     </div>
@@ -259,7 +266,7 @@ export function ChannelHeader({
           <button aria-current={selectedGoalTab === "overview" ? "page" : undefined} onClick={() => onSelectGoalTab("overview")} type="button">{t("header.overview")}</button>
           <button aria-current={selectedGoalTab === "tasks" ? "page" : undefined} onClick={() => onSelectGoalTab("tasks")} type="button">{t("header.tasks")}</button>
           <button aria-current={selectedGoalTab === "research" ? "page" : undefined} onClick={() => onSelectGoalTab("research")} type="button">{t("header.research")}</button>
-          <button aria-current={selectedGoalTab === "chat" ? "page" : undefined} onClick={() => onSelectGoalTab("chat")} type="button">{t("header.chat")}</button>
+          <button aria-current={selectedGoalTab === "chat" ? "page" : undefined} aria-label={t("header.chat")} onClick={() => onSelectGoalTab("chat")} type="button">{chatLabel}</button>
           <button aria-current={selectedGoalTab === "files" ? "page" : undefined} onClick={() => onSelectGoalTab("files")} type="button">{t("header.files")}</button>
         </nav>
         {researchControl}
@@ -268,7 +275,7 @@ export function ChannelHeader({
       ) : !scopeUnavailable ? (
         <nav aria-label={t("header.managerView")} className="personal-goal-tabs">
           <button aria-current={!managerChatOpen ? "page" : undefined} onClick={onReturnManagerHome} type="button">{t("header.managerOverview")}</button>
-          <button aria-current={managerChatOpen ? "page" : undefined} onClick={onOpenManagerChat} type="button">{t("header.chat")}</button>
+          <button aria-current={managerChatOpen ? "page" : undefined} aria-label={t("header.chat")} onClick={onOpenManagerChat} type="button">{chatLabel}</button>
         </nav>
       ) : null}
       <div className="personal-channel-actions">

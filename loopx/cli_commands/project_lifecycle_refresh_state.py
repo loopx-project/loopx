@@ -80,6 +80,7 @@ from .quota_reward_memory import (
     reward_memory_candidate_details,
     stage_reward_memory_outcome_candidate,
 )
+from ..control_plane.quota.cli_projection import compact_refresh_state_cli_payload
 
 
 def register_refresh_state_command(
@@ -410,6 +411,10 @@ def register_refresh_state_command(
         help="After verified writeback, execute the owed quota step once for this exact Turn; replay never creates another debit.",
     )
     refresh_state_parser.add_argument(
+        "--settlement-receipt", action="store_true",
+        help="With --settle-turn, retain successful supporting snapshots in an immutable result and print controls plus exact receipts.",
+    )
+    refresh_state_parser.add_argument(
         "--no-global-sync",
         action="store_true",
         help="Do not refresh the shared global registry after writing the state run.",
@@ -483,6 +488,8 @@ def handle_refresh_state_command(
     outcome_update_result = None
     goal_acceptance_preview = None
     try:
+        if getattr(args, "settlement_receipt", False) and (not args.settle_turn or fmt != "json"):
+            raise ValueError("--settlement-receipt requires --settle-turn and --format json")
         if getattr(args, "settle_turn", False) and not (
             args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
         ):
@@ -589,7 +596,10 @@ def handle_refresh_state_command(
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
             refinement_result = refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update)
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update,
+                **({"reviewed_work_update": {"todo_id": args.todo_id,
+                    "append_explore_result_node_refs": [explore_result["node_id"]]}}
+                   if explore_result is not None and "review" in outcome_update["refinement"] else {}))
             outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
             if args.dry_run:
                 # Preview the same ordered composition as execution: the typed
@@ -812,7 +822,13 @@ def handle_refresh_state_command(
                 raise RuntimeError(
                     "exact settlement readback unexpectedly returned not-found"
                 )
-            settlement_result = settlement_readback.delivery
+            # A combined retry may already be settled, with no owed child to
+            # dispatch. Retain its complete receipts from the same typed read.
+            settlement_result = (
+                settlement_readback.settlement
+                if getattr(args, "settle_turn", False) and settlement_readback.spend.failure is None
+                else settlement_readback.delivery
+            )
             attach_settlement_progress(
                 payload, settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_ref=goal_ref,
@@ -831,14 +847,10 @@ def handle_refresh_state_command(
             if (material_refresh_ready and isinstance(candidate, Mapping)
                     and candidate.get("validation_bound") is True):
                 # A late reflection may recover after spend already committed.
-                # Read the same settlement; never repeat its accounting effect.
+                # Reuse the settlement read after recording the refresh event.
                 attach_reward_memory_ingest_after_spend(
                     payload, execute=True, registry_path=registry_path,
-                    runtime_root=runtime_root, goal_id=args.goal_id,
-                    agent_id=args.agent_id, todo_id=args.todo_id,
-                    turn_instance_id=args.turn_instance_id,
-                    replan_obligation_id=getattr(args, "replan_obligation_id", None),
-                    goal_ref=goal_ref,
+                    runtime_root=runtime_root, readback=settlement_readback,
                 )
         if material_refresh_ready and post_writeback_hooks:
             settlement_identity = (
@@ -871,7 +883,7 @@ def handle_refresh_state_command(
             )
         if not material_refresh_ready:
             _settle_requested_refresh(payload, args, registry_path, goal_ref)
-            print_payload(payload, fmt, render_state_refresh_markdown)
+            print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
             from ..capabilities.explore.result_writeback import deliver_result_attachment
@@ -961,17 +973,17 @@ def handle_refresh_state_command(
             ),
         )
     _settle_requested_refresh(payload, args, registry_path, goal_ref)
-    print_payload(payload, fmt, render_state_refresh_markdown)
+    print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1
 
 
 def _settle_requested_refresh(payload, args, registry_path, goal_ref):
     if not getattr(args, "settle_turn", False):
         return
-    from .refresh_settlement import settle_refreshed_turn
+    from .refresh_settlement import present_settled_refresh, settle_refreshed_turn
 
-    settle_refreshed_turn(payload, registry_path=registry_path,
-        runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
+    runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
+    settle_refreshed_turn(payload, registry_path=registry_path, runtime_root=runtime_root,
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         replan_obligation_id=args.replan_obligation_id,
         turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
@@ -979,3 +991,13 @@ def _settle_requested_refresh(payload, args, registry_path, goal_ref):
             Path(args.delivery_workspace_path)
             if args.delivery_workspace_path else None
         ))
+    if getattr(args, "settlement_receipt", False):
+        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+        try:
+            view = present_settled_refresh(payload, runtime_root=runtime_root)
+        except QuotaDecisionTransportError as exc:
+            payload.update(ok=False, error=str(exc))
+            return  # Exact committed receipts stay visible; never re-admit.
+        if view is not payload:
+            payload.clear()
+            payload.update(view)

@@ -556,11 +556,12 @@ def anti_entropy_context_registration(
     and the Goal registry. Disabled turns declare no readback slot, so no empty
     guidance field is written into the host payload.
     """
-    workspace = _resolve_workspace(
-        payload, registry_path=registry_path, goal_id=goal_id
-    )
     basis = _resolve_retirement_basis(payload, decision)
     enabled = _is_anti_entropy_enabled(payload, decision, basis)
+    workspace = (
+        _resolve_workspace(payload, registry_path=registry_path, goal_id=goal_id)
+        if enabled else None
+    )
 
     def produce() -> Mapping[str, Any]:
         return anti_entropy_context_result(

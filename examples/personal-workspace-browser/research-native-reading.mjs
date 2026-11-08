@@ -142,12 +142,37 @@ export const researchNativeReadingScenario = {
         assert.match(await native.locator(".research-native-best .research-native-unit").textContent(), new RegExp(c.unit ?? "points"), "The raw unit remains visible even when no valid measurement exists");
         assert.match(await native.locator(".research-native-scope").innerText(), new RegExp(`${c.values.filter(v => v !== null).length} / ${c.values.length}.*有效结果`));
         if (c.partial) assert.match(await native.innerText(), /部分窗口 · 起点未知/);
+        if (c.id === "partial") {
+          const sources = native.locator(".research-native-basis");
+          await sources.locator("summary").click();
+          assert.match(await sources.innerText(), /提交时间: 未知\s+观测时间: 2026-01-01T00:03:00Z/);
+          await sources.locator("summary").click();
+        }
         if (c.id === "invalid-first") {
-          const best = await native.locator('[data-native-point="best_valid"]').boundingBox();
-          const retained = await native.locator('[data-native-point="retained"]').boundingBox();
-          assert(best.width > retained.width + 8, "An unknown retained result must not reserve an equal primary column beside the best valid measurement");
+          const measureUnknownRetention = () => native.evaluate(section => {
+            const retained = section.querySelector('[data-native-point="retained"]');
+            const unknown = retained.querySelector(".research-native-unknown");
+            const label = document.createRange();
+            label.selectNodeContents(retained.querySelector("dt"));
+            return {
+              unusedWidth: retained.getBoundingClientRect().width - Math.max(label.getBoundingClientRect().width, unknown.getBoundingClientRect().width),
+              bestFont: parseFloat(getComputedStyle(section.querySelector('[data-native-point="best_valid"] strong')).fontSize),
+              unknownFont: parseFloat(getComputedStyle(unknown).fontSize),
+            };
+          });
+          const actual = await measureUnknownRetention();
           await native.evaluate(e => e.scrollIntoView({block: "start"}));
           await page.screenshot({path: resolve(outputDir, "research-native-unknown-desktop.png"), animations: "disabled"});
+          assert(actual.bestFont > actual.unknownFont, "The best valid measurement remains primary when retention is unknown");
+          assert(actual.unusedWidth <= 2, `Unknown retention must not reserve an empty primary column: ${JSON.stringify(actual)}`);
+          const reading = native.locator(".research-native-reading");
+          const originalStyle = await reading.getAttribute("style");
+          try {
+            await reading.evaluate(e => {e.style.display = "grid"; e.style.gridTemplateColumns = "repeat(4, minmax(0, 1fr))";});
+            assert((await measureUnknownRetention()).unusedWidth > 2, "The same oracle must reject equal-width empty columns");
+          } finally {
+            await reading.evaluate((e, style) => style === null ? e.removeAttribute("style") : e.setAttribute("style", style), originalStyle);
+          }
         }
         await page.setViewportSize({width: 390, height: 844});
         const details = native.locator(".research-native-basis");
@@ -170,18 +195,20 @@ export const researchNativeReadingScenario = {
         await details.locator(":scope > summary").tap();
         if (c.id === "invalid-first") await page.screenshot({path: resolve(outputDir, "research-native-unknown-phone.png"), animations: "disabled"});
         if (c.id === "lower-negative") {
-          const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
+          // The native point identifies the action independently of translated
+          // copy distinguishing source declarations from verified adoption.
+          const retained = native.locator('[data-native-point="retained"]').getByRole("button");
           await retained.focus(); await retained.press("Enter");
           const citation = page.getByRole("region", {name: "引用原文", exact: true});
           await citation.waitFor();
           await citation.getByText(/Synthetic observation 0: value -1/).waitFor();
           assert.match(await citation.innerText(), /Synthetic observation 0: value -1/);
           await citation.press("Escape");
-          await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("原生保留结果:"));
+          await page.waitForFunction(() => document.activeElement?.matches('[data-native-point="retained"] button'));
           await page.screenshot({path: resolve(outputDir, "research-native-negative-phone.png"), animations: "disabled"});
         }
         if (c.source) {
-          const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
+          const retained = native.locator('[data-native-point="retained"]').getByRole("button");
           await retained.focus(); await retained.press("Enter");
           const citation = page.getByRole("region", {name: "引用原文", exact: true});
           await citation.waitFor();
@@ -230,7 +257,7 @@ export const researchNativeReadingScenario = {
             }
           }
           await citation.press("Escape");
-          await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("原生保留结果:"));
+          await page.waitForFunction(() => document.activeElement?.matches('[data-native-point="retained"] button'));
         }
         if (c.unit) {
           await page.evaluate(() => document.documentElement.style.fontSize = "200%");
@@ -246,13 +273,17 @@ export const researchNativeReadingScenario = {
       await selector.selectOption({label: "decimal"});
       await page.waitForFunction(() => document.querySelector('[data-native-point="best_valid"] strong')?.textContent === "0.8765");
       assert.equal(await page.locator("[data-retained-improvement]").textContent(), "+0.0642");
+      const sources = page.locator(".research-native-basis");
+      await sources.locator("summary").click();
+      assert.match(await sources.innerText(), /Submitted at: Unknown\s+Observed at: 2026-01-01T00:02:00Z/);
+      await sources.locator("summary").click();
       await page.getByRole("button", {name: "About native measurements", exact: true}).focus();
       await page.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
       await selector.selectOption({label: "tool-pending-source"});
       const selected = await selector.inputValue();
       await page.locator(`.research-progress-scope[data-pack-id="${selected}"]`).waitFor();
-      await page.getByRole("region", {name: "Native measurements", exact: true}).getByRole("button", {name: /Native retained result.*Read original evidence/}).click();
+      await page.getByRole("region", {name: "Native measurements", exact: true}).locator('[data-native-point="retained"]').getByRole("button").click();
       const originalPanel = page.getByRole("region", {name: "Cited original", exact: true});
       await originalPanel.getByText("Exit code 17", {exact: true}).waitFor();
       await originalPanel.getByText("No exit code yet", {exact: true}).waitFor();

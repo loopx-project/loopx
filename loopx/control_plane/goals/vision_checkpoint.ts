@@ -104,10 +104,10 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
       "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
       (autonomousReplan
-        ? "JSON replaces the complete packet; the sparse minimal_example is not an update to an existing Vision. " +
-          "Start from the current Agent's complete packet and full vision_patch, then replace only deliberately reviewed fields and the fresh path_delta. " +
-          "Preserve every other field and the current state; path_delta.retained text does not merge omitted fields. " +
-          "Reuse the known current packet, or read it from canonical status/history if unavailable; never reconstruct missing intent from summaries. "
+        ? "JSON replaces the complete packet. For an existing Vision, the sparse minimal_example shows syntax. " +
+          "Use the current Agent's complete packet and full vision_patch. Read canonical status/history if unavailable. Never reconstruct intent from summaries. " +
+          "Edit only deliberately reviewed fields and supply a fresh path_delta. Keep the current state and all other fields. " +
+          "path_delta.retained text does not merge omitted fields. "
         : "") +
       "checkpoint-context is only for recovery after the original committed Turn writeback; " +
       "follow its returned same-Turn recovery action, not a fresh-turn preflight.",
@@ -191,7 +191,7 @@ const LABELED_CREDENTIAL_ASSIGNMENT = /\b(?:Bearer|token|password|secret)["']?\s
 // Python detector -- a raw remote location -- is deliberately not ported: it is
 // outside the internal-state policy, and the per-face URL decision is the
 // caller-migration work still open in #5136.
-const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b(?:access|api|secret)[_-]?key[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
+const SECRET_LIKE_SHAPE = new RegExp("(?:\\bbearer\\s+[a-z0-9._~+/=-]{16,}|\\b[a-z][a-z0-9+.-]*://[^/\\s:@`'\\\"<>]+:[^/\\s@`'\\\"<>]+@[^\\s`'\\\"<>]*|\\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|\\b(?:ak|sk)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]+|(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|\\bgh[pousr]_[a-z0-9]{16,}\\b|\\bgithub_pat_[a-z0-9_]{20,}|\\b(?:akia|asia)[a-z0-9]{16}\\b|\\bxox[baprs]-[a-z0-9-]{10,}|\\baiza[a-z0-9_-]{20,}|\\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|\\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}|\\bsk-ant-[a-z0-9_-]{20,}|\\bnpm_[a-z0-9]{20,}|\\bpypi-[a-z0-9_-]{20,}|\\beyj[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\.[a-z0-9_-]{10,}\\b|\\b(?:access|refresh)[_-]?token[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|\\b(?:password|secret)[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,}|-{3,}\\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\\s\\S]*?(?:-{3,}\\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|\\btoken[\\\"']?\\s*[=:]\\s*[\\\"']?[^\\s`'\\\"<>]{12,})", "i");
 const LOCAL_PATH_SHAPE = new RegExp("(?<![:/A-Za-z0-9])(?:/(?:Users|home|Volumes|private|tmp|var|etc|opt|srv|mnt|root|data|workspace|workspaces)/[^\\s`'\\\"<>]+|[A-Za-z]:[\\\\/][^\\s`'\\\"<>]+|\\\\\\\\[A-Za-z0-9_.-]+\\\\[^\\s`'\\\"<>]+)", "i");
 export const CREDENTIAL_WORD_PATTERNS: RegExp[] = [/\bBearer\b/i, /\bpassword\b/i, /\bsecret\b/i];
 export const PRIVATE_TEXT_PATTERNS: RegExp[] = [
@@ -379,11 +379,40 @@ function visionBudgetError(
   return new EffectRuntimeRequestError(message, GOAL_VISION_BUDGET_ERROR);
 }
 
-function boundedPublicText(field: string, value: unknown, limit: number): string {
+// Only prepare collects recoverable budget failures. Other normalizer callers
+// retain fail-fast behavior, and malformed/private input still rejects directly.
+class VisionBudgetDiagnostics {
+  private failures: {error: EffectRuntimeRequestError; summary: string}[] = [];
+  completeUsage = true;
+
+  add(error: EffectRuntimeRequestError, summary = error.message): void {
+    this.failures.push({error, summary});
+  }
+
+  items<T>(field: string, items: T[], limit: number): T[] | null {
+    if (items.length <= limit) return items;
+    this.add(new EffectRuntimeRequestError(`${field} has ${items.length} items; limit is ${limit}`));
+    this.completeUsage = false;
+    // Preserve count-before-content rejection, without traversing unbounded
+    // input. finish() rejects before a diagnostic-only placeholder is used.
+    return null;
+  }
+
+  finish(): void {
+    const [first, ...rest] = this.failures;
+    if (!first) return;
+    if (!rest.length) throw first.error;
+    throw new EffectRuntimeRequestError(first.error.message, first.error.code,
+      rest.map(item => item.summary));
+  }
+}
+
+function boundedPublicText(field: string, value: unknown, limit: number,
+  diagnostics?: VisionBudgetDiagnostics): string {
   const text = compactText(value);
   validatePublicSafeText(`agent_vision.${field}`, text);
   if (text.length > limit) {
-    throw visionBudgetError(
+    const error = visionBudgetError(
       field,
       text.length,
       limit,
@@ -392,6 +421,8 @@ function boundedPublicText(field: string, value: unknown, limit: number): string
         Math.min(limit, VISION_BUDGET_SUGGESTION_LIMIT),
       ),
     );
+    if (!diagnostics) throw error;
+    diagnostics.add(error, `${field} uses ${text.length} chars; limit is ${limit}`);
   }
   return text;
 }
@@ -400,10 +431,11 @@ function packetText(
   packet: JsonObject,
   field: string,
   limit: number,
+  diagnostics?: VisionBudgetDiagnostics,
 ): string | null {
   const value = packet[field];
   if (value === null || value === undefined) return null;
-  return boundedPublicText(field, value, limit) || null;
+  return boundedPublicText(field, value, limit, diagnostics) || null;
 }
 
 function normalizeGoalVisionState(value: unknown): string {
@@ -473,6 +505,7 @@ export function normalizeGoalPathDeltaOutcome(value: unknown): string {
 
 export function normalizeGoalPathDelta(
   value: unknown,
+  diagnostics?: VisionBudgetDiagnostics,
 ): [JsonObject | null, Record<string, number>] {
   if (value === null || value === undefined) return [null, {}];
   const source = requiredObject(value, "agent_vision.path_delta");
@@ -493,7 +526,7 @@ export function normalizeGoalPathDelta(
   for (const [field, limit] of Object.entries(GOAL_PATH_DELTA_SCALAR_LIMITS)) {
     const rawValue = source[field];
     if (rawValue === null || rawValue === undefined) continue;
-    const text = boundedPublicText(`path_delta.${field}`, rawValue, limit);
+    const text = boundedPublicText(`path_delta.${field}`, rawValue, limit, diagnostics);
     if (!text) continue;
     normalized[field] = text;
     fieldUsage[`path_delta.${field}`] = text.length;
@@ -508,17 +541,23 @@ export function normalizeGoalPathDelta(
       );
     }
     const [maxItems, itemLimit] = limits;
-    if (rawItems.length > maxItems) {
+    if (rawItems.length > maxItems && !diagnostics) {
       throw new EffectRuntimeRequestError(
         `agent_vision.path_delta.${field} has ${rawItems.length} items; limit is ${maxItems}`,
       );
     }
     const items: string[] = [];
-    rawItems.forEach((item, index) => {
+    const checkedItems = diagnostics ? diagnostics.items(`agent_vision.path_delta.${field}`, rawItems, maxItems) : rawItems;
+    if (checkedItems === null) {
+      normalized[field] = [];
+      continue;
+    }
+    checkedItems.forEach((item, index) => {
       const text = boundedPublicText(
         `path_delta.${field}[${index}]`,
         item,
         itemLimit,
+        diagnostics,
       );
       if (!text) return;
       items.push(text);
@@ -542,6 +581,7 @@ export function normalizeGoalPathDelta(
 
 function normalizeFallbackDeclarations(
   value: unknown,
+  diagnostics?: VisionBudgetDiagnostics,
 ): [JsonObject[], Record<string, number>] | null {
   if (value === null || value === undefined) return null;
   if (!Array.isArray(value)) {
@@ -550,7 +590,7 @@ function normalizeFallbackDeclarations(
     );
   }
   if (value.length === 0) return null;
-  if (value.length > VISION_FALLBACK_DECLARATION_ENTRY_LIMIT) {
+  if (value.length > VISION_FALLBACK_DECLARATION_ENTRY_LIMIT && !diagnostics) {
     throw new EffectRuntimeRequestError(
       `agent_vision.fallback_declarations has ${value.length} items; limit is ${VISION_FALLBACK_DECLARATION_ENTRY_LIMIT}`,
     );
@@ -558,7 +598,10 @@ function normalizeFallbackDeclarations(
   const declarations: JsonObject[] = [];
   const seenIds = new Set<string>();
   const fieldUsage: Record<string, number> = {};
-  value.forEach((raw, index) => {
+  const checkedItems = diagnostics ? diagnostics.items("agent_vision.fallback_declarations", value,
+    VISION_FALLBACK_DECLARATION_ENTRY_LIMIT) : value;
+  if (checkedItems === null) return [[], {}];
+  checkedItems.forEach((raw, index) => {
     const entry = requiredObject(
       raw,
       `agent_vision.fallback_declarations[${index}]`,
@@ -567,6 +610,7 @@ function normalizeFallbackDeclarations(
       `fallback_declarations[${index}].declaration_id`,
       entry.declaration_id ?? null,
       VISION_FALLBACK_DECLARATION_ID_LIMIT,
+      diagnostics,
     );
     if (!declarationId) {
       throw new EffectRuntimeRequestError(
@@ -587,6 +631,7 @@ function normalizeFallbackDeclarations(
         `fallback_declarations[${index}].${field}`,
         entry[field],
         VISION_FALLBACK_DECLARATION_ID_LIMIT,
+        diagnostics,
       );
       if (!text) continue;
       declaration[field] = text;
@@ -686,10 +731,14 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
 
   const visionPatch: JsonObject = {};
   const fieldUsage: Record<string, number> = {};
+  const diagnostics = new VisionBudgetDiagnostics();
   for (const [field, limit] of Object.entries(GOAL_VISION_FIELD_LIMITS)) {
-    let text = packetText(source, field, limit);
+    let text = packetText(source, field, limit, diagnostics);
     if (text === null) continue;
-    if (field === "advancement_policy") text = normalizeAdvancementPolicy(text);
+    // An over-budget enum already has its original field-level rejection.
+    // Decoding that same invalid value must not replace it with invalid_request;
+    // unrelated structural/privacy checks below still run normally.
+    if (field === "advancement_policy" && text.length <= limit) text = normalizeAdvancementPolicy(text);
     visionPatch[field] = text;
     fieldUsage[field] = text.length;
   }
@@ -699,39 +748,44 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
     );
   }
 
-  const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
+  const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta, diagnostics);
   const visionUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
   Object.assign(fieldUsage, pathDeltaUsage);
-  const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
+  const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision,
+    (field, value, limit) => boundedPublicText(field, value, limit, diagnostics));
   const allowedStridePaths = request.allow_terminal_stride_path
     ? ["continue", "no_change", "replan", "stop"]
     : ["continue", "no_change", "replan"];
-  if (strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
+  // An oversized list has not supplied a validated evidence set yet; report its
+  // count first rather than diagnosing the temporary placeholder as missing.
+  if (diagnostics.completeUsage && strideDecision && (!pathDelta || !allowedStridePaths.includes(String(pathDelta.outcome)) ||
       !Array.isArray(pathDelta.evidence_refs) || !pathDelta.evidence_refs.length)) {
     throw new EffectRuntimeRequestError("stride_decision requires an evidence-linked path decision");
   }
   Object.assign(fieldUsage, strideUsage);
   const [fallbackDeclarations, fallbackUsage] = normalizeFallbackDeclarations(
     updatePacket.fallback_declarations,
+    diagnostics,
   ) ?? [null, {}];
   Object.assign(fieldUsage, fallbackUsage);
   const totalUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
-  if (totalUsage > GOAL_VISION_TOTAL_LIMIT) {
+  if (diagnostics.completeUsage && totalUsage > GOAL_VISION_TOTAL_LIMIT) {
     const sections = {vision_patch: visionUsage, path_delta: pathDeltaUsage,
       stride_decision: strideUsage, fallback_declarations: fallbackUsage};
     const usage = Object.entries(sections).map(([name, fields]) => name + "=" +
       (typeof fields === "number" ? fields : Object.values(fields).reduce((total, used) => total + used, 0))).join(", ");
-    throw new EffectRuntimeRequestError(`${GOAL_VISION_BUDGET_ERROR}: total_agent_vision uses ${totalUsage} chars; ` +
-      `limit is ${GOAL_VISION_TOTAL_LIMIT}; usage: ${usage}; shorten counted text`, GOAL_VISION_BUDGET_ERROR);
+    diagnostics.add(new EffectRuntimeRequestError(`${GOAL_VISION_BUDGET_ERROR}: total_agent_vision uses ${totalUsage} chars; ` +
+      `limit is ${GOAL_VISION_TOTAL_LIMIT}; usage: ${usage}; shorten counted text`, GOAL_VISION_BUDGET_ERROR));
   }
 
   const todoDelta: string[] = [];
   if (Array.isArray(updatePacket.todo_delta)) {
     for (const item of updatePacket.todo_delta.slice(0, VISION_TODO_DELTA_ENTRY_LIMIT)) {
-      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT);
+      const text = boundedPublicText("todo_delta", item, VISION_TODO_DELTA_TEXT_LIMIT, diagnostics);
       if (text) todoDelta.push(text);
     }
   }
+  diagnostics.finish();
   const rawValidation = typeof updatePacket.validation === "object" &&
       updatePacket.validation !== null && !Array.isArray(updatePacket.validation)
     ? updatePacket.validation as JsonObject

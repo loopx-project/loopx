@@ -4,6 +4,9 @@ import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request.ts
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
 import "./monitor-readback.test.mjs";
+// Exercise shared reconciliation semantics rather than freezing where its
+// helpers are called in the dashboard's revision-aware observation path.
+import "../../data/conversation-returns.test.mjs";
 
 const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
 const projectionAgent = { agentId: "status-only", adapterKind: "status_projection", available: true, label: "Status" };
@@ -41,7 +44,6 @@ const statusSourceSwitcher = source("./status-source-switcher.tsx");
 const workspaceSettings = source("./workspace-settings-page.tsx");
 const styles = source("./personal-workspace.css");
 const dashboard = source("../../views/dashboard-page.tsx");
-const conversationReturns = source("../../data/conversation-returns.ts");
 const tasks = source("./goal-tasks-view.tsx");
 const status = source("../../data/status.ts");
 const chatData = source("../../data/chat.ts");
@@ -118,8 +120,6 @@ assert.doesNotMatch(page.match(/function operationProposalFields[\s\S]*?\n\}/)?.
 assert.match(page, /t\("proposal\.primary\.operationGroup"\)/, "Operation confirmation routes users to the bound group");
 assert.match(chatData, /result_delivery:/, "Dashboard retains operation result-delivery readback");
 assert.match(chatData, /return_delivery\??:/, "Chat messages retain manager return-delivery readback");
-assert.match(dashboard, /reconcileConversationReturns\(/, "Manager return polling uses the shared conversation-return read model");
-assert.match(conversationReturns, /source\.return_delivery \?\? row\.returnDelivery/, "Manager return polling refreshes delivery state after the message arrives");
 assert.match(timeline + page, /ReturnDeliveryStatus/, "Both manager conversation surfaces render return delivery state");
 for (const state of ["delivered", "verification_required", "explicit_unverified"]) {
   assert.match(returnDelivery, new RegExp(state), `Return delivery renders ${state}`);
@@ -323,16 +323,8 @@ assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGr
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");
-assert.match(page, /function ManagerConversationTray/, "Manager home has a dedicated conversation tray instead of burying replies in the board timeline");
 assert.match(page, /managerMessages/, "Manager conversation is derived from the active manager message context");
-assert.match(page, /managerConversationReceiptVisible/, "Manager conversation is a send-triggered receipt instead of permanent history chrome");
-assert.match(page, /setManagerConversationReceiptVisible\(true\)/, "A new manager send reveals the temporary conversation receipt");
-assert.match(page, /setManagerConversationReceiptVisible\(false\)/, "Opening or leaving the receipt clears it from the overview");
-assert.match(page, /personal-manager-conversation-tray/, "Manager conversation stays anchored beside the composer");
-assert.match(page, /aria-live="polite"/, "Manager conversation announces streamed replies without moving focus");
-assert.match(page, /t\("conversation\.full"\)/, "The compact manager conversation can expand in place");
-assert.match(page, /onOpenConversation/, "The compact manager conversation has a dedicated full-chat navigation action");
-assert.match(page, /managerChatOpen/, "Manager full conversation uses a dedicated Chat view instead of stretching the home tray");
+assert.match(page, /managerChatOpen/, "Manager conversation uses a dedicated Chat view");
 assert.match(page, /managerChatItems/, "Manager Chat only renders conversation and confirmation items");
 assert.match(page, /sessionProposalIds\.includes\(item\.proposal\.previewId\)/, "Manager Chat only shows proposals created in the current UI session");
 assert.match(page, /\["preview_ready", "gated", "deferred", "applying"\]\.includes\(proposal\.status\)[\s\S]*compileActionReviewPlan\(proposal\)\.retryOriginal === true/, "Restored proposal history uses wire states and preserves retryable original operations");
@@ -347,8 +339,6 @@ assert.doesNotMatch(sidebar, /personal-manager-channels/, "The sidebar does not 
 assert.doesNotMatch(sidebar, /onSelectChannel/, "The sidebar only navigates to the manager or a concrete Goal");
 assert.doesNotMatch(page, /selectedChannel|selectChannel\(|__manager_channel__/, "Manager state lanes do not create hidden conversation channels");
 assert.match(page, /personal-digest-stats[\s\S]*t\("digest\.completed"\)/, "The away digest is a non-interactive summary");
-assert.match(page, /!selectedGoal && !managerChatOpen && managerConversationReceiptVisible[\s\S]*<ManagerConversationTray/, "The tray only appears on the manager overview after a send");
-assert.match(page, /managerMessages\.some\(\(message\) => message\.pending\)[\s\S]*setManagerConversationReceiptVisible\(true\)/, "A recovered active Manager turn restores its compact conversation tray");
 assert.match(page, /goal\.needsYou \?\? goal\.nextSentence/, "Needs-you cards keep the source Goal action visible");
 assert.match(page, /onClick=\{\(\) => onSelectGoal\(goal\.goalId\)\}/, "Manager cards open their source Goal instead of a hidden lane channel");
 assert.doesNotMatch(page, /managerConversationActive/, "Sending from the manager never replaces the overview with a separate conversation page");
@@ -483,7 +473,7 @@ assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/,
 assert.match(capabilityWorkbench, /capability\.capability_id === "multi_subagent"\) return 3/, "Immature child-agent capacity stays behind mature supported capabilities");
 assert.match(capabilityWorkbench, /availability\?\.includes\("experimental"\)/, "Experimental capabilities share a stable late presentation tier");
 assert.match(capabilityWorkbench, /configuration_editor\.writable_scopes\.length === 0/, "Provider-bound read-only capabilities follow directly actionable settings");
-assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(capabilities, locale\)/, "Machine and Goal catalogs use one presentation-order policy");
+assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(visible, locale\)/, "Machine and Goal search results use the shared presentation-order policy");
 for (const capabilityId of [
   "change_quality_qualification",
   "coordination_runtime_shadow",

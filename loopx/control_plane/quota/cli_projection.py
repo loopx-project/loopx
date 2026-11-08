@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
-from copy import deepcopy
 from typing import Any, cast
 
 from .decision_summary import compact_quota_decision
 from .should_run_packet import reference_duplicate_fallback_guidance
+from .turn_envelope import _apply_context_projection_changes
 
 QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND = (
     "quota should-run --include-detail agent-todos"
@@ -23,9 +22,6 @@ QUOTA_CLI_VISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_vision_continuation_compaction_v0"
 )
 QUOTA_CLI_VISION_DETAIL_COMMAND = "quota should-run --include-detail vision"
-QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_replan_action_compaction_v0"
-)
 QUOTA_CLI_MONITOR_POLL_DECISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_monitor_poll_decision_compaction_v0"
 )
@@ -94,16 +90,6 @@ _RETAINED_MONITOR_POLL_FOLLOW_UP_SUMMARY_FIELDS = (
 )
 
 
-def _json_content_key(value: Any) -> str:
-    """Compare original JSON values for sharing, including types and signed zero.
-
-    This is local serialization IO, not another quota or context-selection rule.
-    Python equality merges booleans with integers and integral floats; those
-    distinct source facts must not borrow each other's in-response owner.
-    """
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
-
-
 def _compact_monitor_poll_interaction_contract(
     contract: Any,
 ) -> dict[str, Any] | None:
@@ -137,7 +123,7 @@ def _compact_monitor_poll_interaction_contract(
 
 
 def _compact_monitor_poll_decision(decision: dict[str, Any]) -> dict[str, Any]:
-    compact = compact_quota_decision(decision)
+    compact = cast(dict[str, Any], compact_quota_decision(decision))
     selected_todo = decision.get("selected_todo")
     if isinstance(selected_todo, dict):
         compact["selected_todo"] = {
@@ -246,100 +232,6 @@ def _compact_vision_continuation_audit(
         "full_detail_cold_path": QUOTA_CLI_VISION_DETAIL_COMMAND,
     }
     return compact
-
-
-def _reference_inline_replan_authoring(
-    packet: dict[str, Any], *, payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Reference an identical executable input already present in this response."""
-
-    writeback = packet.get("writeback_contract")
-    if not isinstance(writeback, dict) or not isinstance(
-        writeback.get("vision_authoring"), dict
-    ):
-        return packet
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    plan = cli.get("settlement_plan") if isinstance(cli, dict) else None
-    steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
-    if not isinstance(steps, list):
-        return packet
-    authoring_key = _json_content_key(writeback["vision_authoring"])
-    index = next(
-        (index for index, step in enumerate(steps)
-         if isinstance(step, dict) and step.get("kind") == "durable_writeback"
-         and _json_content_key(step.get("vision_authoring")) == authoring_key),
-        None,
-    )
-    if index is None:
-        return packet
-    reference = (
-        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps"
-        f"[{index}].vision_authoring"
-    )
-    compact_writeback = dict(writeback)
-    compact_writeback.pop("vision_authoring")
-    compact_writeback["vision_authoring_ref"] = reference
-    compact = dict(packet)
-    compact["writeback_contract"] = compact_writeback
-    compact["payload_compaction"] = {
-        "schema_version": QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION,
-        "mode": "compact_hot_path",
-        "compacted_fields": ["writeback_contract.vision_authoring"],
-        "projection_ref": reference,
-    }
-    return compact
-
-
-def _vision_continuation_ref(audit: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        key: audit[key]
-        for key in ("schema_version", "required", "decision")
-        if key in audit
-    }
-    judge = audit.get("vision_gap_judge")
-    if isinstance(judge, dict):
-        compact["vision_gap_judge"] = {
-            key: judge[key] for key in ("done", "decision") if key in judge
-        }
-        compact["vision_gap_judge"]["projection_ref"] = (
-            "$.vision_continuation_audit.vision_gap_judge"
-        )
-    compact["projection_ref"] = "$.vision_continuation_audit"
-    return compact
-
-
-def _replace_nested_vision_continuation_audits(
-    payload: dict[str, Any],
-    *,
-    source_audit: dict[str, Any],
-    audit_ref: dict[str, Any],
-) -> None:
-    source_key = _json_content_key(source_audit)
-    frontier = payload.get("goal_frontier_projection")
-    if (
-        isinstance(frontier, dict)
-        and _json_content_key(frontier.get("vision_continuation_audit")) == source_key
-    ):
-        compact_frontier = dict(frontier)
-        compact_frontier["vision_continuation_audit"] = dict(audit_ref)
-        payload["goal_frontier_projection"] = compact_frontier
-
-    interaction = payload.get("interaction_contract")
-    if not isinstance(interaction, dict):
-        return
-    compact_interaction = dict(interaction)
-    for channel_name in ("agent_channel", "cli_channel"):
-        channel = compact_interaction.get(channel_name)
-        if (
-            not isinstance(channel, dict)
-            or _json_content_key(channel.get("vision_continuation_audit")) != source_key
-        ):
-            continue
-        compact_channel = dict(channel)
-        compact_channel["vision_continuation_audit"] = dict(audit_ref)
-        compact_interaction[channel_name] = compact_channel
-    payload["interaction_contract"] = compact_interaction
 
 
 def _deduplicate_next_action_warning(
@@ -489,142 +381,105 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
-def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Share exact JSON copies in this display only; never trim the contract.
-
-    Work context is the preferred full carrier, then the planning horizon.
-    This Python CLI adapter only changes serialization after owner decisions;
-    canonical state, captures and replan context construction remain untouched.
-    """
-    paths: list[tuple[str | int, ...]] = []
-    interaction = payload.get("interaction_contract")
-    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
-    context = channel.get("work_context") if isinstance(channel, dict) else None
-    sources = context.get("sources") if isinstance(context, dict) else None
-    for index, source in enumerate(sources if isinstance(sources, list) else []):
-        if (isinstance(source, dict) and source.get("source") == "goal_acceptance"
-                and isinstance(source.get("content"), dict)
-                and source["content"].get("status", "loaded") == "loaded"
-                and isinstance(source["content"].get("goal_acceptance_contract"), dict)
-                and source["content"]["goal_acceptance_contract"]):
-            paths.append(("interaction_contract", "agent_channel", "work_context",
-                          "sources", index, "content", "goal_acceptance_contract"))
-            break
-    paths.extend([
-        ("planning_horizon", "core_goal", "acceptance_contract"),
-        ("autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
-        ("agent_todo_summary", "goal_acceptance_contract"),
-    ])
-    carriers: dict[str, str] = {}
-    relocated: dict[str, str] = {}
-    references: list[tuple[tuple[str | int, ...], str]] = []
-    result = payload
-
-    def writable_parent(path: tuple[str | int, ...]) -> dict[str, Any]:
-        nonlocal result
-        # Copy only the affected spine; never mutate caller-owned facts.
-        result = dict(result)
-        target: Any = result
-        for part in path[:-1]:
-            child = target[part]
-            target[part] = list(child) if isinstance(child, list) else dict(child)
-            target = target[part]
-        return cast(dict[str, Any], target)
-
-    for path in paths:
-        parent: Any = result
-        for part in path[:-1]:
-            if isinstance(parent, dict) and isinstance(part, str):
-                parent = parent.get(part)
-            elif isinstance(parent, list) and isinstance(part, int) and part < len(parent):
-                parent = parent[part]
-            else:
-                parent = None
-                break
-        field = str(path[-1])
-        existing = parent.get(field + "_ref") if isinstance(parent, dict) else None
-        if isinstance(existing, str):
-            references.append((path, existing))
-        value = parent.get(field) if isinstance(parent, dict) else None
-        if not isinstance(value, dict) or not value or field + "_ref" in parent:
-            continue
-        # Keep complete revision, scope, failures and sources in the identity.
-        encoded = _json_content_key(value)
-        reference = carriers.get(encoded)
-        own_ref = "$" + "".join(
-            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
-        if reference is None:
-            carriers[encoded] = own_ref
-            continue
-        if len(encoded) <= len(reference) + 8:
-            continue
-        target = writable_parent(path)
-        del target[field]
-        target[field + "_ref"] = reference
-        relocated[own_ref] = reference
-    # Retarget only references to owners actually moved by this projection.
-    # A later owner can move after an earlier alias was visited; a second pass
-    # keeps both directions direct without following arbitrary input chains.
-    for path, reference in references:
-        if reference in relocated:
-            writable_parent(path)[str(path[-1]) + "_ref"] = relocated[reference]
-    return result
-
-
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
+    goal_acceptance: bool = False, vision_audit: bool = False,
+    replan_authoring: bool = False,
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
     contract = payload.get("interaction_contract")
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
-    # No source carrier means neither operation can act. Leave semantic matching
-    # and reference validation in TypeScript, rather than replicating its rules.
-    if diagnostics is None and (not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")):
-        return payload
+    sources = context.get("sources") if isinstance(context, dict) else None
+    needs_context = bool(sources) and (task_title or explore_guidance)
+    if not needs_context and (diagnostics is None or (
+        diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True
+    )):
+        if not goal_acceptance and not vision_audit and not replan_authoring:
+            return payload
+        if goal_acceptance:
+            # A reference can only be created or relocated when two literal
+            # owners are present. Equality, schema and owner choice stay in TS.
+            def contains_contract(value: Any, *path: str) -> bool:
+                for key in path:
+                    value = value.get(key) if isinstance(value, dict) else None
+                return isinstance(value, dict) and bool(value)
+
+            carriers = (
+                any(contains_contract(row, "content", "goal_acceptance_contract") for row in sources)
+                if isinstance(sources, list) else False,
+                contains_contract(payload, "planning_horizon", "core_goal", "acceptance_contract"),
+                contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
+                contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
+            )
+            if sum(carriers) < 2 and not vision_audit and not replan_authoring:
+                return payload
     from .turn_envelope import _turn_envelope_result
 
-    result = _turn_envelope_result("reference_context", payload=payload,
+    # The typed projection reads and edits these roots. Untouched capture
+    # facts stay local. Apply the returned paths against the original payload.
+    source = {key: payload[key] for key in (
+        "mode", "groups", "next_automatic_turn", "agent_todo_summary", "user_todo_summary",
+        "todo_summary_projection", "planning_horizon", "autonomous_replan_obligation",
+        "interaction_contract", "agent_lane_next_action", "selected_todo",
+    ) if key in payload}
+    if replan_authoring and "replan_action_packet" in payload:
+        source["replan_action_packet"] = payload["replan_action_packet"]
+    if (
+        isinstance(contract, dict)
+        and isinstance(agent, dict)
+        and isinstance(context, dict)
+        and isinstance(context.get("sources"), list)
+    ):
+        # Edits address rows by their original index. Keep unrelated rows in
+        # place without sending their bodies through the display RPC.
+        rows = [
+            row if isinstance(row, dict) and (
+                (task_title and row.get("source") == "selected_todo")
+                or (explore_guidance and row.get("kind") == "explore_turn_context")
+                or (goal_acceptance and row.get("source") == "goal_acceptance")
+            ) else None
+            for row in context["sources"]
+        ]
+        source["interaction_contract"] = {
+            **contract,
+            "agent_channel": {
+                **agent,
+                "work_context": {**context, "sources": rows},
+            },
+        }
+    if vision_audit:
+        source["vision_continuation_audit"] = payload["vision_continuation_audit"]
+        frontier = payload.get("goal_frontier_projection")
+        if isinstance(frontier, dict) and "vision_continuation_audit" in frontier:
+            source["goal_frontier_projection"] = {"vision_continuation_audit": frontier["vision_continuation_audit"]}
+    result = _turn_envelope_result("reference_context", payload=source,
         task_title=task_title, explore_guidance=explore_guidance,
+        goal_acceptance=goal_acceptance,
+        **({"vision_audit": True} if vision_audit else {}),
+        **({"replan_authoring": True} if replan_authoring else {}),
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
 
-def _apply_context_projection_changes(
-    source: dict[str, Any], result: dict[str, Any],
-) -> dict[str, Any]:
-    """Apply typed display edits to the original Python facts, without policy."""
-    if set(result) != {"changes"} or not isinstance(result["changes"], list):
-        raise RuntimeError("TypeScript context projection must return changes")
-    # JSON transport has no aliasing. Keep Python's exact numeric values while
-    # separating repeated caller-owned objects before applying path edits.
-    projected = json.loads(json.dumps(source, allow_nan=False))
+def compact_refresh_state_cli_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Share only repeated successful Explore input; full output is the fallback."""
+    if (payload.get("ok") is not True or not isinstance(payload.get("explore_result"), dict)
+            or not isinstance(payload.get("explore_result_delivery"), dict)):
+        return payload
+    from ..effect_runtime import source_number_tokens
+    from .turn_envelope import _turn_envelope_result
+
+    source = {key: payload[key] for key in ("explore_result", "explore_result_delivery")}
     try:
-        for change in result["changes"]:
-            path = change["path"]
-            if not isinstance(path, list) or not path:
-                raise ValueError("projection path must be nonempty")
-            parent: Any = projected
-            for key in path[:-1]:
-                parent = parent[key]
-            key = path[-1]
-            if "remove" in change:
-                del parent[key]
-                continue
-            if "from" in change:
-                value: Any = source
-                for part in change["from"]:
-                    value = value[part]
-            else:
-                value = change["value"]
-            if isinstance(parent, list) and key == len(parent):
-                parent.append(deepcopy(value))
-            else:
-                parent[key] = deepcopy(value)
-    except (KeyError, IndexError, TypeError, ValueError) as error:
-        raise RuntimeError("Invalid TypeScript context projection changes") from error
-    return projected
+        result = _turn_envelope_result("reference_context", payload=source,
+            refresh_result=True, source_number_tokens=source_number_tokens(source))
+        return {**payload, **_apply_context_projection_changes(source, result)}
+    except (RuntimeError, ValueError, OSError):
+        # A display failure must not obscure a committed result or suggest that
+        # the caller should repeat admission, writeback or accounting.
+        return payload
 
 
 def compact_quota_should_run_cli_payload(
@@ -645,23 +500,11 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["goal_boundary"] = compact_goal_boundary
     vision_audit = payload.get("vision_continuation_audit")
-    if not include_vision_detail and isinstance(vision_audit, dict):
-        compact = dict(compact)
-        compact_vision_audit = _compact_vision_continuation_audit(vision_audit)
-        compact["vision_continuation_audit"] = compact_vision_audit
-        _replace_nested_vision_continuation_audits(
-            compact,
-            source_audit=vision_audit,
-            audit_ref=_vision_continuation_ref(compact_vision_audit),
-        )
+    share_audit = not include_vision_detail and isinstance(vision_audit, dict)
     replan_action = payload.get("replan_action_packet")
-    if not include_vision_detail and isinstance(replan_action, dict):
-        compact_replan_action = _reference_inline_replan_authoring(
-            replan_action, payload=compact
-        )
-        if compact_replan_action is not replan_action:
-            compact = dict(compact)
-            compact["replan_action_packet"] = compact_replan_action
+    writeback = replan_action.get("writeback_contract") if isinstance(replan_action, dict) else None
+    share_authoring = (not include_vision_detail and isinstance(writeback, dict)
+        and bool({"vision_authoring", "vision_authoring_ref"}.intersection(writeback)))
     if not include_todo_summary_detail:
         warning = payload.get("next_action_projection_warning")
         if isinstance(warning, dict):
@@ -687,14 +530,16 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action = dict(agent_lane_next_action)
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
-    compact = _reference_inline_goal_acceptance(compact)
     diagnostics = None
     if ((not include_todo_summary_detail and isinstance(payload.get("agent_todo_summary"), dict))
             or (not include_user_todo_summary_detail and isinstance(payload.get("user_todo_summary"), dict))):
         diagnostics = {"agent_detail": include_todo_summary_detail,
             "user_detail": include_user_todo_summary_detail}
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
+        goal_acceptance=True, vision_audit=share_audit, replan_authoring=share_authoring,
         explore_guidance=not include_vision_detail, diagnostics=diagnostics)
+    if share_audit and isinstance(vision_audit, dict):
+        compact = {**compact, "vision_continuation_audit": _compact_vision_continuation_audit(vision_audit)}
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import contextlib
 import json
 import os
@@ -9,7 +11,6 @@ import tempfile
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from .agy_goal_mode import (
     ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
@@ -204,7 +205,8 @@ def _command_prompt_specs(*, cli_bin: str, include_legacy_aliases: bool) -> list
                     host_surface=None,
                 ),
                 "Treat the returned `ordered_steps` and `goal_start_contract` as authoritative. Follow their identity, capability-route, Todo, writeback, host-loop, quota, and stop/gate rules before substantive work; do not reconstruct those rules from skill memory.",
-                "When the host explicitly supplies a `loopx_task_planning_v0` packet from `loopx todo plan` for a registered Goal/Agent, execute that bounded planning checkpoint instead of starting another Goal. Follow its shared planner and Todo delta, then return actual Todo ids for readback. Its caller-owned execution_handoff retains host activation and quota; do not create a planning Todo, execute task work, or claim delivery during the checkpoint.",
+                "During first planning, follow the shared goal_requirements_guidance: reuse existing owner-approved requirements and declare only missing source-grounded overall requirements through the existing outcome owner, link actual Todos and read back the canonical declaration. Preserve existing requirements on resume; maximum timeout is not a minimum work commitment and independent executable checks stay optional.",
+                "When the host explicitly supplies a `loopx_task_planning_v0` packet from `loopx todo plan` for a registered Goal/Agent, execute that bounded planning checkpoint instead of starting another Goal. Follow its shared planner, requirement declaration/readback and Todo delta in the same invocation, then return actual Todo ids for readback. Its caller-owned execution_handoff retains host activation and quota; do not create a planning Todo, execute task work, or claim delivery during the checkpoint.",
                 "For a Codex App heartbeat, run the returned activation command, require ok=true, and save its `LoopX managed heartbeat bootstrap v2` task_body through automation_update. The saved loader fetches the current thin contract on every wake; do not persist a raw thin/compact/full execution body. Preserve the current goal, registered agent, task binding and existing schedule; read back the automation through the same App.",
                 "If the packet exposes a goal-selection gate, rerun one exact choice before any mutation.",
                 "When authoring task Todos, treat `--action-kind` as the documented extensible public-safe token: choose a short task-relevant value such as `implement`, `test`, or `review`; do not search the LoopX source for an allowlist.",
@@ -932,7 +934,7 @@ def _merge_managed_hooks_json(
     except (OSError, json.JSONDecodeError):
         marker_payload = {}
     recorded_hooks = (
-        marker_payload.get("hooks")
+        cast(dict[str, Any], marker_payload.get("hooks"))
         if isinstance(marker_payload, dict) and isinstance(marker_payload.get("hooks"), dict)
         else {}
     )
@@ -959,7 +961,7 @@ def _merge_managed_hooks_json(
         if not execute:
             return "would_retire"
         if legacy_owned:
-            legacy.pop(MANAGED_MCP_KEY)
+            cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
             if not legacy:
                 raw.pop("hooks")
         else:
@@ -976,7 +978,7 @@ def _merge_managed_hooks_json(
     if existing == entry and not legacy_owned:
         return "unchanged"
     if legacy_owned:
-        legacy.pop(MANAGED_MCP_KEY)
+        cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
         if not legacy:
             raw.pop("hooks")
     raw[MANAGED_MCP_KEY] = entry

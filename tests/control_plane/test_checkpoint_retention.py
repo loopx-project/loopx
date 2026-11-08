@@ -1,6 +1,7 @@
 """Real local artifact owner, retention CLI and filesystem recovery negatives."""
 import json
 import os
+import stat
 import threading
 from types import SimpleNamespace
 
@@ -57,6 +58,25 @@ def test_preview_is_read_only_and_execute_preserves_pins_latest_and_unsealed(ban
             "action": "verify", "root": str(bank / p["id"]), "expected_sha256": p["sha256"]})
         assert observed["integrity_verified"]
     assert transport.rotate_bank(bank, policy, execute=True)["deleted"] == []
+
+
+def test_rotation_flushes_directories_without_the_directory_flag(bank, policy, monkeypatch):
+    # A host can report os.name == "posix" without defining O_DIRECTORY. The
+    # rotation still moves recovery points, so it must still flush the
+    # directories the moves changed; skipping that would report a completed
+    # rotation that was never made durable.
+    policy["keep_latest"] = 1
+    flushed, real_fsync = [], os.fsync
+
+    def recording(descriptor):
+        flushed.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording)
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+    result = transport.rotate_bank(bank, policy, execute=True)
+    assert result["deleted"]
+    assert sum(flushed) >= 2, "the bank and the trash parent must be flushed after the moves"
 
 
 def test_stale_preview_and_changed_pin_cannot_delete(bank, policy):

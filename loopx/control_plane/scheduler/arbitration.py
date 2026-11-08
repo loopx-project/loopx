@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..agents.agent_scope_frontier import AGENT_SCOPE_FRONTIER_SCHEMA_VERSION, AgentScopeFrontierAction
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 
 SCHEDULER_ARBITRATION_SCHEMA_VERSION = "scheduler_arbitration_v0"
@@ -93,11 +94,19 @@ def _scheduler_arbitration_facts(
     facts = {"schema_version": contract.get("schema_version"),
             "mode": str(contract.get("mode") or "").strip(), **channels,
             "agent_scope_frontier_actions": [str(action) for action in agent_scope_frontier_actions]}
+    if not payload:
+        return facts
     wait = exact_blocked_successor_wait_state(payload)
-    if wait:
-        identity = payload.get("agent_identity")
-        facts.update({"effective_action": payload.get("effective_action"),
-                      "agent_id": identity.get("agent_id") if isinstance(identity, Mapping) else None,
-                      "vision_wait_state": wait,
+    frontier = payload.get("agent_scope_frontier")
+    identity = payload.get("agent_identity")
+    agent_id = identity.get("agent_id") if isinstance(identity, Mapping) else None
+    scoped_wait = None
+    if (isinstance(frontier, Mapping) and frontier.get("schema_version") == AGENT_SCOPE_FRONTIER_SCHEMA_VERSION
+            and frontier.get("action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
+            and frontier.get("agent_id") == agent_id):
+        scoped_wait = frontier.get("automatic_resume_todo")
+    if wait or scoped_wait:
+        facts.update({"effective_action": payload.get("effective_action"), "agent_id": agent_id,
+                      "vision_wait_state": wait or None, "scope_wait_todo": scoped_wait,
                       "heartbeat_receipt": payload.get("heartbeat_receipt")})
     return facts

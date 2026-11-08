@@ -44,7 +44,7 @@ def _phase_worker(tmp_path, monkeypatch, *, work_seconds=1, independent=None,
     monkeypatch.setattr(worker, "time", SimpleNamespace(
         time=lambda: clock[0], time_ns=time.time_ns, monotonic=time.monotonic))
     monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
-    env.update(LOOPX_PHASE_DEADLINE_EPOCH=str(1160 + work_seconds), LOOPX_EXECUTION_MODE="heartbeat")
+    env.update(LOOPX_PHASE_DEADLINE_EPOCH=str(1000 + work_seconds), LOOPX_EXECUTION_MODE="heartbeat")
     env.pop("LOOPX_CODEX_TURN_TIMEOUT_SEC", None)
     if independent is not None:
         env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(independent)
@@ -94,6 +94,17 @@ def _listen_without_capture(monkeypatch):
         return self
     monkeypatch.setattr(CheckpointWake, "__enter__", listen)
     return listeners
+
+
+def test_heartbeat_can_use_a_positive_allowance_smaller_than_the_old_reserve(tmp_path, monkeypatch):
+    env, project, *_ = _phase_worker(tmp_path, monkeypatch, work_seconds=140, output="success")
+    deadline = env["LOOPX_PHASE_DEADLINE_EPOCH"]
+    receipt = worker.run_once(env)
+    assert receipt["host_invoked"] and receipt["ok"]
+    assert not receipt.get("budget_exhausted")
+    assert env["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
+    assert (project / "native-starts").read_text().splitlines() == ["native"]
+    _assert_reaped(project)
 
 
 @pytest.mark.parametrize("listener", [False, True])

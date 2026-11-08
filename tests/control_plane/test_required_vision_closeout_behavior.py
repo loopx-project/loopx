@@ -43,14 +43,19 @@ def _packet(request: Mapping[str, Any]) -> dict[str, Any]:
                 packet = value
             elif value.get("stage") == "writeback" and packet:
                 packet["interaction_contract"]["cli_channel"].update(value["writeback"])
+                packet["stride_control"] = value["stride_control"]
     if packet:
         return packet
     raise AssertionError("quota was not observed")
 
 
-def vision_patch_action(_: Mapping[str, Any]) -> ScriptedExecToolAction:
+def vision_patch_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     # Authored independently from the implementation under test. The path is
     # still open: evidence confirms reader-by-default, not completion of a Goal.
+    packet = _packet(request)
+    control = packet.get("stride_control") or packet["replan_action_packet"]["stride_control"]
+    assert control["schema_version"] == "stride_decision_v2"
+    assert control["strategy_version"] == "evidence_conditioned_v1"
     decision = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
@@ -65,6 +70,35 @@ def vision_patch_action(_: Mapping[str, Any]) -> ScriptedExecToolAction:
             "observed_reality": "The configuration defaults to reader and requires a write grant.",
             "retained": ["Explicit write grant"], "changed": ["Evidence-linked vision baseline"],
             "evidence_refs": ["evidence-permission-config"],
+        },
+        "stride_decision": {
+            "schema_version": "stride_decision_v2",
+            "strategy_version": "evidence_conditioned_v1",
+            "reference_context_id": control["reference_context_id"],
+            "reference_obligation_id": control["reference_obligation_id"],
+            "basis": "uncertain_evidence",
+            "action": "verify",
+            "axes": {
+                "work_slice": {
+                    "plan": "Verify reader defaults and the explicit write grant together.",
+                    "reason": "Both facts determine whether the permission boundary is usable.",
+                },
+                "route_distance": {
+                    "plan": "Keep configuration inspection; test the ungranted write assumption.",
+                    "reason": "Reading the default alone does not establish write authority.",
+                },
+                "validation_scope": {
+                    "plan": "Check reader default and refusal without an explicit write grant.",
+                    "reason": "A contrary permission result would change the next implementation choice.",
+                },
+            },
+            "next_probe": {
+                "scope": "Reader and ungranted-write behavior.",
+                "prediction": "Reader remains default; writes need a grant.",
+                "minimum_evidence": "Configuration source plus an ungranted-write refusal.",
+                "adoption_criterion": "Both permission outcomes preserve the explicit boundary.",
+                "cost_bound": "One isolated permission check and its refusal case.",
+            },
         },
     }
     return ScriptedExecToolAction("cat > decision.json <<'JSON'\n" + json.dumps(decision, indent=2) + "\nJSON")
@@ -89,11 +123,10 @@ def _vision_transport(actions: list[Any]) -> ScriptedDoubaoExecTransport:
     remaining = list(actions)
     writeback: str | None = None
     review_read = False
-    work_emitted = False
     writeback_read = False
 
     def choose(request: Mapping[str, Any]) -> Any:
-        nonlocal writeback, review_read, work_emitted, writeback_read
+        nonlocal writeback, review_read, writeback_read
         latest = request["messages"][-1]
         try:
             value = json.loads(latest["content"]) if latest["role"] == "tool" else None
@@ -116,13 +149,11 @@ def _vision_transport(actions: list[Any]) -> ScriptedDoubaoExecTransport:
                 writeback_read = True
             if value.get("error_code") == "shell_nonzero" and writeback and not review_read:
                 return ScriptedAssistantAction("The projected reader did not return its review.")
-        if writeback and review_read and work_emitted and not writeback_read:
+        if writeback and review_read and not writeback_read:
             return ScriptedExecToolAction(writeback)
         if not remaining:
             return ScriptedAssistantAction("No further scripted action.")
         action = remaining.pop(0)
-        if review_read:
-            work_emitted = True
         return action(request) if callable(action) else action
 
     return ScriptedDoubaoExecTransport([choose] * 40)
@@ -153,6 +184,10 @@ def test_projected_module_readers_complete_native_shell_closeout(
                for message in transport.requests[-1]["messages"]
                if message["role"] == "tool" and message["content"].startswith("{")]
     assert [value["stage"] for value in outputs if "stage" in value] == ["review", "writeback"]
+    writer = next(value for value in outputs if value.get("stage") == "writeback")
+    assert "agent_vision.stride_decision" in writer["writeback_contract"]["required_fields"]
+    assert "fields" in writer["writeback_contract"]["vision_authoring"]
+    assert "refresh-state" in shlex.split(writer["writeback"]["next_cli_actions"][0])
     packet = _packet(transport.requests[-1])
     reader = packet["autonomous_replan_obligation"]["context_read"]
     assert shlex.split(reader)[1:3] == ["-m", "loopx.entrypoint"]
@@ -161,6 +196,64 @@ def test_projected_module_readers_complete_native_shell_closeout(
     assert result["vision_closeout"]["settled"] is True
     assert result["vision_closeout"]["spend_count"] == 1
     assert result["tool_call_limit"] == 40
+    history = tmp_path / "actor/runtime/goals/replan-semantic-action-fixture/runs/index.jsonl"
+    rows = [json.loads(line) for line in history.read_text().splitlines()]
+    decisions = [row["agent_vision"]["stride_decision"]
+                 for row in rows if isinstance(row.get("agent_vision"), dict)]
+    assert len(decisions) == 1
+    control = packet["stride_control"]
+    assert decisions[0]["reference_context_id"] == control["reference_context_id"]
+    assert decisions[0]["reference_obligation_id"] == control["reference_obligation_id"]
+    assert decisions[0]["schema_version"] == "stride_decision_v2"
+
+
+@pytest.mark.parametrize("context_mode", ["on", "off"])
+@pytest.mark.parametrize("invalid", [
+    "missing", "malformed_context", "other_obligation", "missing_axis_reason", "missing_minimum_evidence",
+])
+def test_native_stride_rejection_cannot_write_or_spend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_mode: str, invalid: str,
+) -> None:
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
+    fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+
+    def author(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        lines = vision_patch_action(request).command.splitlines()
+        draft = json.loads("\n".join(lines[1:-1]))
+        stride = draft["stride_decision"]
+        if invalid == "missing":
+            del draft["stride_decision"]
+        elif invalid == "malformed_context":
+            stride["reference_context_id"] = "foreign-context"
+        elif invalid == "other_obligation":
+            stride["reference_obligation_id"] = "replan-" + "0" * 16
+        elif invalid == "missing_axis_reason":
+            del stride["axes"]["route_distance"]["reason"]
+        else:
+            del stride["next_probe"]["minimum_evidence"]
+        return ScriptedExecToolAction(lines[0] + "\n" + json.dumps(draft) + "\nJSON")
+
+    def rejected(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        feedback = json.loads(request["messages"][-1]["content"])
+        assert feedback["exit_code"] != 0
+        assert "stride" in feedback["output"]
+        assert "vision_budget_exceeded" not in feedback["output"]
+        return projected_spend(request)
+
+    def unspent(request: Mapping[str, Any]) -> ScriptedAssistantAction:
+        feedback = json.loads(request["messages"][-1]["content"])
+        assert "vision_closeout_spend_before_writeback" in feedback["output"]
+        return ScriptedAssistantAction("Correct the decision before settlement.")
+
+    result = _qualify(tmp_path, [
+        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction("cat fixture/permission-config.json"),
+        author, projected_refresh, rejected, unspent,
+    ])
+    assert result["qualification_passed"] is False
+    assert not result.get("vision_closeout")
+    history = tmp_path / "actor/runtime/goals/replan-semantic-action-fixture/runs/index.jsonl"
+    assert history.read_text() == ""
 
 
 @pytest.mark.parametrize("change", ["source_hash", "decision_file", "other_module"])

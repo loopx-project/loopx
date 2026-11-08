@@ -1,0 +1,22 @@
+.goal-report-reviews { min-width: 0; margin-bottom: 24px; }
+.goal-report-reviews > header, .report-review-masthead > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.goal-report-reviews h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--text-heading); line-height: var(--leading-heading); }
+.goal-report-reviews button { min-height: 44px; font: inherit; }
+.goal-report-reviews [data-result-catalog] { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.goal-report-reviews [data-result-catalog][hidden] { display: none; }
+.goal-report-reviews .result-catalog-row { display: flex; align-items: start; gap: 16px; width: 100%; padding: 16px; text-align: start; }
+.goal-report-reviews .result-catalog-row > span { flex: 1; min-width: 0; }
+.goal-report-reviews .result-catalog-row strong { display: block; overflow-wrap: anywhere; }
+.goal-report-reviews :is([data-result-catalog], [data-result-reader]):focus { outline: 2px solid var(--pw-blue-ink); outline-offset: 4px; }
+.report-review-tools, .report-review-tools > button, .goal-report-reviews .result-catalog-return { display: inline-flex; align-items: center; gap: 8px; }
+.report-review-reader { min-width: 0; margin-top: 8px; }
+.report-review-masthead { padding: 8px 0; border-bottom: 1px solid var(--pw-line); }
+.report-review-masthead h2 { margin: 8px 0; font-size: var(--text-title); line-height: var(--leading-title); overflow-wrap: anywhere; }
+.report-review-masthead time, .report-review-masthead span { font-size: var(--text-caption); line-height: var(--leading-caption); color: var(--pw-muted); }
+.report-review-actions { display: flex; flex-wrap: wrap; align-items: start; gap: 8px; padding: 8px 0 16px; }
+.report-review-actions .personal-decision-bar { flex: 1; }
+.report-review-actions .personal-compact-menu { flex: 0 0 auto; }
+.report-review-reader iframe { display: block; width: 100%; height: min(1000px, 80vh); min-height: 560px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); }
+.report-review-prose { font-size: var(--text-lead); line-height: var(--leading-prose); }
+.report-review-reader > details { padding: 16px 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .report-review-masthead > div { flex-wrap: wrap; } .report-review-reader iframe { min-height: 640px; } .report-review-actions .personal-decision-bar { flex-basis: 100%; } }

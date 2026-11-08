@@ -25,18 +25,19 @@ from loopx.capabilities.explore.result_log import (
 from loopx.control_plane.status.goal_source import GoalSource
 
 
-def native_source(w):
+def native_source(w, name='original', task_text='Check the original question against its evidence', done=False,
+                  task_evidence=None, task_note=None):
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
 
-    source_root = w['tmp_path'] / 'original'
+    source_root = w['tmp_path'] / name
     source_root.mkdir()
     registry, runtime = source_root / 'registry.json', source_root / 'runtime'
     state = source_root / 'active.md'
     state.write_text('---\nstatus: active\n---\n\n# Original solving Goal\n\n## Agent Todo\n\n'
-        '- [ ] Check the original question against its evidence\n'
-        '  <!-- loopx:todo todo_id=todo_original role=agent status=open -->\n')
+        f'- [{"x" if done else " "}] {task_text}\n'
+        f'  <!-- loopx:todo todo_id=todo_original role=agent status={"done" if done else "open"} -->\n')
     registry.write_text(json.dumps({'schema_version': 1, 'common_runtime_root': str(runtime), 'goals': [
         {'id': 'solver-goal', 'repo': str(source_root), 'state_file': 'active.md',
          'status': 'active', 'domain': 'source-read', 'authority_sources': [],
@@ -44,19 +45,24 @@ def native_source(w):
     rows, _, _ = parse_todo_source(state.read_text())
     for todo in rows['agent']:
         todo['schema_version'] = 'todo_item_v0'
+        if task_evidence is not None:
+            todo['evidence'] = task_evidence
+        if task_note is not None:
+            todo['note'] = task_note
     initialize_canonical_authority(runtime, 'solver-goal', build_todo_runtime_shadow_projection(
         goal_id='solver-goal', todos=rows['agent'], handoff_mode='soft_claim'), state_path=state, provider='sqlite')
-    for goal in ('research-owner', 'other-owner'):
+    for goal in (('research-owner', 'other-owner') if name == 'original' else ()):
         initialize_canonical_authority(w['tmp_path'] / 'runtime', goal,
             build_todo_runtime_shadow_projection(goal_id=goal, todos=[], handoff_mode='soft_claim'),
             state_path=w['tmp_path'] / 'active.md', provider='sqlite')
     log = explore_result_log_path(runtime, 'solver-goal')
+    clock = '2026-01-03T00:15:00Z' if done else '2026-01-02T00:15:00Z'
     for name in ('question', 'attempt'):
         append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
-            node_id=name, node_kind='question', title=name, summary='Original native record'))
+            node_id=name, node_kind='question', title=name, summary='Original native record', recorded_at=clock))
     append_explore_result_event(log, build_explore_edge_event(goal_id='solver-goal',
-        from_node='attempt', to_node='question', edge_type='depends_on'))
-    raw = {'id': 'original', 'label': 'Original experiment',
+        from_node='attempt', to_node='question', edge_type='depends_on', recorded_at=clock))
+    raw = {'id': name, 'label': 'Original experiment',
         'connection': {'kind': 'local'}, 'environment': {'kind': 'host'},
         'scope': {'goal_id': 'solver-goal'}, 'registry': str(registry), 'runtime_root': str(runtime),
         'cli': str(Path(sys.executable).with_name('loopx')), 'python': sys.executable,
@@ -75,6 +81,47 @@ def native_source(w):
             return json.load(response)
 
     return raw, request, {path: path.read_bytes() for path in (registry, state, log)}
+
+
+@pytest.mark.parametrize('done', [False, True])
+def test_linked_task_details_keep_complete_evidence_and_notes(workspace, done):
+    evidence = 'Independent verification. ' + '证据🙂 ' * 180 + ' Retained baseline: reference-v2.'
+    note = 'Conditions and limitations. ' + '完整备注 ' * 180 + ' Attribution remains unknown.'
+    raw, request, before = native_source(workspace, done=done, task_evidence=evidence, task_note=note)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    query = {'goal_id': 'solver-goal', 'todo_id': 'todo_original', 'source_namespace': namespace}
+    endpoint = '/api/chat/todo/detail?'
+    detail = request(endpoint + urlencode(query))
+    assert detail['evidence'] == evidence and detail['note'] == note
+    assert detail['status'] == ('done' if done else 'open')
+    assert detail['source_access']['namespace'] == namespace
+    assert 'review_basis' not in detail
+
+    for changed in ({'source_namespace': 'f' * 64}, {'todo_id': 'todo_missing'}):
+        with pytest.raises(HTTPError) as refused:
+            request(endpoint + urlencode({**query, **changed}))
+        error = json.load(refused.value)
+        assert not error['ok'] and not {'text', 'evidence', 'note'} & error.keys()
+
+    source_registry = Path(raw['registry'])
+    source_registry.unlink()
+    with pytest.raises(HTTPError) as unavailable:
+        request(endpoint + urlencode(query))
+    assert unavailable.value.code == 503
+    assert 'Retained baseline' not in unavailable.value.read().decode()
+    source_registry.write_bytes(before[source_registry])
+    assert request(endpoint + urlencode(query))['evidence'] == evidence
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert not workspace['count'].exists()
+
+
+def test_linked_task_details_preserve_absent_metadata(workspace):
+    raw, request, _ = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    detail = request('/api/chat/todo/detail?' + urlencode({
+        'goal_id': 'solver-goal', 'todo_id': 'todo_original', 'source_namespace': GoalSource.parse(raw).namespace}))
+    assert detail['evidence'] is None and detail['note'] is None
 
 
 @pytest.mark.parametrize("separate_chat_store", [False, True])
@@ -194,9 +241,18 @@ def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
     bound = w['server'].registry_path.read_bytes()
     source_registry = Path(raw['registry'])
     request('/status.json?goal_id=solver-goal')
+    timing_url = '/api/chat/explore-results?' + urlencode({
+        'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace, 'view': 'history-timing',
+    })
+    assert request(timing_url)['first_recorded_at'] == '2026-01-02T00:15:00Z'
     # A real native CLI failure, including private stderr, must not become a
     # generic workspace failure or borrow a local Goal's snapshot.
     source_registry.unlink()
+    # Even the warm native status snapshot cannot authorize the timing read.
+    with pytest.raises(HTTPError) as unavailable_timing:
+        request(timing_url)
+    assert unavailable_timing.value.code == 503
+    assert str(w['tmp_path']).encode() not in unavailable_timing.value.read()
     reader = w['server'].goal_source_catalog.resolve('solver-goal')[1]
     reader._read_at = 0
     with pytest.raises(HTTPError) as unavailable:
@@ -216,7 +272,46 @@ def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
     assert removed.value.code == 409
     source_registry.write_bytes(before[source_registry])
     assert request('/status.json?goal_id=solver-goal')['run_history']['goals'][0]['registry_member']
+    assert request(timing_url)['first_recorded_at'] == '2026-01-02T00:15:00Z'
     assert not w['count'].exists()
+
+
+def test_research_reads_pin_code_revision_without_retaining_source_authority(workspace, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    raw, request, before = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    query = urlencode({'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace})
+    fingerprint = effect_runtime._runtime_fingerprint
+    qualifications = []
+
+    def qualify():
+        revision = fingerprint()
+        qualifications.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect_runtime, '_runtime_fingerprint', qualify)
+
+    def read(suffix):
+        qualifications.clear()
+        value = request('/api/chat/explore-results?' + query + suffix)
+        assert len(qualifications) == 1
+        return value
+
+    assert read('&view=history')['total'] == 3
+    log = explore_result_log_path(Path(raw['runtime_root']), 'solver-goal')
+    append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
+        node_id='new-evidence', title='New source observation', recorded_at='2026-01-04T00:15:00Z'))
+    assert any(row.get('title') == 'New source observation' for row in read('&view=history')['items'])
+    assert read('&view=history-timing')['last_recorded_at'] == '2026-01-04T00:15:00Z'
+    source_registry = Path(raw['registry'])
+    source_registry.unlink()
+    with pytest.raises(HTTPError) as unavailable:
+        read('&view=history-timing')
+    assert unavailable.value.code == 503
+    source_registry.write_bytes(before[source_registry])
+    assert read('&view=history-timing')['last_recorded_at'] == '2026-01-04T00:15:00Z'
+    assert not workspace['count'].exists()
 
 
 def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
@@ -410,3 +505,67 @@ def test_original_saved_findings_keep_full_text_associations_and_source_fences(w
     assert replaced.value.code == 409
     assert all(path.read_bytes() == data for path, data in before.items())
     assert not w['count'].exists()
+
+
+def test_same_named_native_goals_have_isolated_workspace_views(workspace):
+    w = workspace
+    first, request, before = native_source(w)
+    second, _, other_before = native_source(w, 'second', 'Measure the second experiment', done=True)
+    for view, raw in [('case-a', first), ('case-b', second)]:
+        assert request('/api/chat/goal-sources', {
+            'parent_goal_id': 'research-owner', 'source': raw, 'workspace_goal_id': view})['ok']
+    namespaces = [GoalSource.parse(raw).namespace for raw in (first, second)]
+    directory = request('/status.json?view=workspace-directory')
+    children = [goal for goal in directory['goals'] if goal.get('source_access')]
+    assert [goal['id'] for goal in children] == ['case-a', 'case-b']
+    assert all(goal['source_access']['original_goal_id'] == 'solver-goal' for goal in children)
+    for view, namespace, expected in [('case-a', namespaces[0], 'Check the original question against its evidence'),
+                                      ('case-b', namespaces[1], 'Measure the second experiment')]:
+        status = request('/status.json?goal_id=' + view)
+        assert status['run_history']['goals'][0]['id'] == view
+        todo = next(item for item in status['todo_index']['items'] if item['todo_id'] == 'todo_original')
+        assert todo['goal_id'] == view and todo['text'] == expected
+        query = urlencode({'goal_id': view, 'source_namespace': namespace})
+        assert request('/api/chat/todo/detail?' + query + '&todo_id=todo_original')['text'] == expected
+        history = request('/api/chat/explore-results?' + query + '&view=history')
+        assert history['goal_id'] == 'solver-goal' and history['total'] == 3
+        assert all(item['goal_id'] == 'solver-goal' for item in history['items'])
+        timing = request('/api/chat/explore-results?' + query + '&view=history-timing')
+        expected_start = '2026-01-03T00:15:00Z' if view == 'case-b' else '2026-01-02T00:15:00Z'
+        assert timing['first_recorded_at'] == expected_start
+        assert timing['goal_id'] == 'solver-goal' and timing['source_namespace'] == namespace
+        assert request('/api/chat/research-analysis?' + query)['catalog']['packs'] == []
+        completed = request('/api/chat/completed-todos?' + query)
+        assert completed['total'] == (1 if view == 'case-b' else 0)
+        if completed['items']:
+            assert completed['items'][0]['text'] == expected
+            assert request('/api/chat/completed-todos?' + query + '&q=absent')['total'] == 0
+    with pytest.raises(HTTPError):
+        request('/api/chat/explore-results?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1], 'view': 'history'}))
+    with pytest.raises(HTTPError) as wrong_timing_source:
+        request('/api/chat/explore-results?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1], 'view': 'history-timing'}))
+    assert wrong_timing_source.value.code == 409
+    with pytest.raises(HTTPError):
+        request('/api/chat/completed-todos?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1]}))
+    # Packs retain their original Goal identity inside the physical source store.
+    pack = register_pack(runtime_root=w['tmp_path'] / 'runtime' / 'goal-sources' / namespaces[0],
+        owner_goal_id='solver-goal', input_path=w['tmp_path'] / 'input.json',
+        source_root=w['sources'], title='First experiment')
+    base = '/api/chat/research-analysis?'
+    first_query = urlencode({'goal_id': 'case-a', 'source_namespace': namespaces[0]})
+    assert request(base + first_query)['pack']['pack_id'] == pack['pack_id']
+    second_query = urlencode({'goal_id': 'case-b', 'source_namespace': namespaces[1]})
+    assert request(base + second_query)['pack'] is None
+    w['mode'].write_text('ok')
+    result = request(base + 'source_namespace=' + namespaces[0], dict(
+        goal_id='case-a', pack_id=pack['pack_id'], analysis_key=pack['analysis_key']))
+    assert result['job']['status'] == 'succeeded'
+    assert request(base + first_query)['pack']['scope']['goal_id'] == 'solver-goal'
+    request('/api/chat/goal-sources', dict(parent_goal_id='research-owner', goal_id='case-a',
+                                         source_namespace=namespaces[0]))
+    assert [goal['id'] for goal in request('/api/chat/goal-sources')['goals']] == ['case-b']
+    assert request('/status.json?goal_id=case-b')['run_history']['goals'][0]['id'] == 'case-b'
+    assert all(path.read_bytes() == data for path, data in {**before, **other_before}.items())

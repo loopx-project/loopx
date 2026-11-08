@@ -85,17 +85,15 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     from .native_chat.machine_defaults import codex_profile_options
-    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
     definitions: dict[str, dict[str, Any]] = {
         "context_delivery": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [
-                _field("mode", "Codex App / benchmark heartbeats", "select",
-                    options=CONTEXT_DELIVERY_SETTINGS, required=True,
-                    description="On accepts only declared Codex App or benchmark heartbeats. Native host setup is still required; unsupported or unknown modes return an error."),
-                _field("antigravity_mode", "Antigravity manager history", "select",
-                    options=CONTEXT_DELIVERY_SETTINGS, required=True,
-                    description="On defers trusted-owner Antigravity manager delivery histories to private capture reads while keeping current facts inline; off keeps full inline input."),
+                _field("mode", "Context presentation", "select",
+                    options=("off", "on"), required=True,
+                    description="Present current requirements before expandable supporting material on every host. Off keeps complete inline delivery."),
+                _field("delta_delivery", "Cross-Turn Delta", "select", options=("off", "auto"), required=True,
+                    description="Auto reuses exact saved captures only on supported continuity hosts. Off leaves progressive presentation enabled. Neither choice proves retained model input."),
             ],
         },
         "codex_chat": {
@@ -146,6 +144,8 @@ def capability_configuration_editor(
                 _field("stride_strategy", "Stride strategy", "select",
                        options=list(stride_strategy_options()),
                        description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
+                _field("yardstick_enabled", "Review measurement criteria", "boolean",
+                       description="Default off. Use available Explore evidence to review measurement scope and feedback before choosing work. Requires Explore evidence; does not enable it or authorize execution."),
             ],
         },
         "periodic_report": {
@@ -153,6 +153,8 @@ def capability_configuration_editor(
             "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("enabled", "Enabled", "boolean"),
+                _field("review_required", "Request owner review", "boolean",
+                       description="For an original managed Session report, also put each edition in App results and keep a Home reminder until the owner handles its review."),
                 _field(
                     "profile_preset",
                     "Profile preset",
@@ -655,7 +657,7 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         entry["capability_id"] == "todo_replan_cadence"
         and goal_override is not None
         and bool(goal_override)
-        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal"}
+        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}
     ):
         from .todo_replan_cadence.machine_defaults import (
             cadence_configuration_value,
@@ -679,9 +681,12 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         # values and atomic Goal cadence overrides. Keep stored/current values
         # sparse: reading Settings must never pin or migrate an override.
         goal_override = None if goal_override is None else {
-            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **goal_override}
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": (machine_default or {}).get("yardstick_enabled", False),
+            **goal_override}
         machine_default = None if machine_default is None else {
-            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **machine_default}
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": False, **machine_default}
     if entry["capability_id"] == "explore_harness":
         from .explore.machine_defaults import resolve_explore_configuration
         from ..explore_graph import plan_explore_configuration

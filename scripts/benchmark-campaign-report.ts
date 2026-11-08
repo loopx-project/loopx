@@ -2,6 +2,7 @@
  * Benchmark toolkit owns run/countability authority. This developer helper neither
  * selects attempts nor normalizes native scores, adjudicates faults or launches work.
  */
+import { armColors, escapeChartText, scoreChart, scoreChartWidth } from './benchmark-score-chart.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -35,6 +36,7 @@ type Selection = {
   arm_id: string; case_id: string; run_id: string; status: Status;
   score: Score | null; protocol_id: string; exclude_reason: string | null;
   rerun_reason: Rerun | null;
+  active_intervals?: { start_ms: number; end_ms: number; evidence_ref: string }[];
   effort?: Effort; score_samples?: ScoreSample[]; configuration?: RunConfiguration;
 };
 type Incident = {
@@ -54,6 +56,7 @@ export type CampaignInput = {
   observed_at: string; title: string; case_ids: string[];
   arms: { arm_id: string; label: string }[];
   selection: Selection[]; incidents: Incident[]; notes: string[];
+  duration_policy?: { target_ms: number; allow_goal_completion: string[]; makeup_tolerance_ms?: number };
   execution_audit?: ExecutionAudit[];
 };
 
@@ -88,6 +91,15 @@ export function validateInput(raw: unknown): CampaignInput {
   const caseIds = new Set(d.case_ids);
   requireThat(Array.isArray(d.selection) && d.selection.length === d.arms.length * d.case_ids.length, 'selection must cover every arm/case exactly once');
   requireThat(distinct(d.selection.map(key)) && distinct(d.selection.map(r => r.run_id)), 'duplicate selection/run id');
+  if (d.duration_policy !== undefined) {
+    const policy = d.duration_policy;
+    requireThat(policy && Number.isSafeInteger(policy.target_ms) && policy.target_ms > 0, 'positive active duration target required');
+    requireThat(policy.makeup_tolerance_ms === undefined ||
+      (Number.isSafeInteger(policy.makeup_tolerance_ms) && policy.makeup_tolerance_ms >= 0 &&
+        policy.makeup_tolerance_ms < policy.target_ms), 'makeup tolerance must be a nonnegative integer below target');
+    requireThat(Array.isArray(policy.allow_goal_completion) && distinct(policy.allow_goal_completion) &&
+      policy.allow_goal_completion.every(id => armIds.has(id)), 'unknown or duplicate early completion arm');
+  }
   for (const r of d.selection) {
     requireThat(armIds.has(r.arm_id) && caseIds.has(r.case_id) && token(r.run_id), 'unknown selection identity');
     requireThat(statuses.includes(r.status) && token(r.protocol_id), 'invalid status/protocol');
@@ -99,6 +111,14 @@ export function validateInput(raw: unknown): CampaignInput {
       requireThat(token(s.normalization_id) && text(s.evidence_ref) && typeof s.countable === 'boolean', 'score provenance required');
       requireThat(s.origin === 'official' || (s.origin === 'authorized_failure_zero' && s.value === 0), 'score origin invalid');
       requireThat(!s.countable || (r.status === 'completed' && s.origin === 'official' && r.exclude_reason === null), 'countable score contradicts status/origin/exclusion');
+    }
+    if (r.active_intervals !== undefined) {
+      requireThat(Array.isArray(r.active_intervals), 'active intervals must be an array');
+      for (const interval of r.active_intervals) {
+        requireThat(interval && Number.isSafeInteger(interval.start_ms) && interval.start_ms >= 0 &&
+          Number.isSafeInteger(interval.end_ms) && interval.end_ms >= interval.start_ms &&
+          interval.end_ms <= Date.parse(d.observed_at) && text(interval.evidence_ref), 'invalid observed solver interval');
+      }
     }
     if (r.effort !== undefined) {
       const e = r.effort;
@@ -155,8 +175,36 @@ export function validateInput(raw: unknown): CampaignInput {
   return d;
 }
 
+// Each row contains only the verified segments of one selected logical run.
+function durationCoverage(d: CampaignInput, policy: NonNullable<CampaignInput['duration_policy']>) {
+  return d.selection.map(row => {
+    const { arm_id, case_id, run_id } = row;
+    let end = 0;
+    let elapsed = 0;
+    for (const interval of [...row.active_intervals ?? []].sort((a,b) => a.start_ms - b.start_ms)) {
+      elapsed += Math.max(0, interval.end_ms - Math.max(end, interval.start_ms));
+      end = Math.max(end, interval.end_ms);
+    }
+    const active_ms = row.active_intervals === undefined ? null : elapsed;
+    const remaining_ms = active_ms === null ? null : Math.max(0, policy.target_ms - active_ms);
+    const audit = d.execution_audit?.find(item => item.run_id === run_id);
+    const acceptedGoal = row.status === 'completed' && policy.allow_goal_completion.includes(arm_id) &&
+      audit?.outcome === 'normal_end' && audit.goal_verdict === 'satisfied';
+    let disposition: string;
+    if (remaining_ms === 0) disposition = 'covered';
+    else if (acceptedGoal) disposition = 'goal_completed';
+    else if (row.status === 'planned' || row.status === 'running') disposition = row.status;
+    else if (remaining_ms === null) disposition = 'verify_duration';
+    else if (active_ms !== null && active_ms > 0 && remaining_ms <= (policy.makeup_tolerance_ms ?? 0)) disposition = 'within_tolerance';
+    else disposition = 'needs_makeup';
+    return { case_id, arm_id, run_id, active_ms, remaining_ms, disposition };
+  });
+}
+
 export function buildReport(raw: unknown) {
   const d = validateInput(raw);
+  const coverage = d.duration_policy && durationCoverage(d, d.duration_policy);
+  const covered = new Set(coverage?.filter(row => ['covered', 'goal_completed', 'within_tolerance'].includes(row.disposition)).map(key));
   const selected = new Map(d.selection.map(r => [key(r), r]));
   const summary = d.arms.map(a => {
     const rows = d.selection.filter(r => r.arm_id === a.arm_id);
@@ -211,7 +259,7 @@ export function buildReport(raw: unknown) {
       return !reasons.length;
     });
     const scores = (a: string, cs: string[]) => cs.map(c => selected.get(key({arm_id:a,case_id:c}))!.score!.value);
-    const qualifiedCases = cases.filter(c => arms.every(a => selected.get(key({arm_id:a,case_id:c}))!.score!.countable));
+    const qualifiedCases = cases.filter(c => arms.every(a => selected.get(key({arm_id:a,case_id:c}))!.score!.countable && (!coverage || covered.has(key({arm_id:a,case_id:c})))));
     const means = Object.fromEntries(arms.map(a => [a, mean(scores(a, cases))]));
     const deltas = arms.length === 2 && cases.length ? cases.map(c => scores(arms[1], [c])[0] - scores(arms[0], [c])[0]) : [];
     return { arms, case_ids: cases, n: cases.length, case_set_sha256: digest(cases), means,
@@ -251,6 +299,12 @@ export function buildReport(raw: unknown) {
     b.run_count - a.run_count || a.profile_id.localeCompare(b.profile_id));
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
+    ...(coverage ? { duration_coverage: coverage } : {}),
+    ...(d.duration_policy?.makeup_tolerance_ms !== undefined ? { duration_policy: {
+      target_ms: d.duration_policy.target_ms,
+      allow_goal_completion: d.duration_policy.allow_goal_completion,
+      makeup_tolerance_ms: d.duration_policy.makeup_tolerance_ms,
+    } } : {}),
     configuration_profiles, score_time_series, incidents: d.incidents,
     execution_audit: d.execution_audit ?? [], notes: d.notes };
 }
@@ -286,6 +340,11 @@ export function renderMarkdown(r: Report): string {
     table(['实验组','运行数','Source','Scorer','Model','预算(h)','主动提交冷却(s)','后台评测(s)','资源档位','证据覆盖'],r.configuration_profiles.map(p => [labels.get(p.arm_id),p.run_count,known(p.source_revision_id),known(p.scorer_revision_id),known(p.model_id),hours(p.budget_ms),seconds(p.active_submission_cooldown_ms),seconds(p.background_evaluation_interval_ms),known(p.resource_profile),`${p.configuration_supplied ? p.run_count : 0}/${p.run_count}`])) +
     '\n\n均分使用相同题目交集、相同归一化规则，尺度 0–100。未出分不填 0；授权的故障判零单独保留来源。以下为描述性比较；源版本、协议、资源差异和完整性复核仍需独立审查。\n\n' +
     table(['对比范围','共同题数',...r.summary.map(a => a.label),'第二组−第一组','共同题中双方/各方可计数'],r.comparisons.map(c => [c.arms.map(a => labels.get(a)).join(' / '),c.n,...r.summary.map(a => number(c.means[a.arm_id] ?? null)),number(c.delta_second_minus_first),c.qualified_common_n])) +
+    (r.duration_coverage ? '\n\n## 各臂有效运行时间\n\n' +
+      ((r.duration_policy?.makeup_tolerance_ms ?? 0) > 0
+        ? `已终止运行的补时容差：${r.duration_policy!.makeup_tolerance_ms! / 60000} 分钟。within_tolerance 表示容差内免补；实际时长和缺口保持原值，不提前停止正在运行的任务。\n\n` : '') +
+      table(['题目','实验臂','已运行（小时）','距目标（小时）','状态'],
+      r.duration_coverage.map(row => [row.case_id, labels.get(row.arm_id), hours(row.active_ms), hours(row.remaining_ms), row.disposition])) : '') +
     '\n\n' + r.notes.map(n => '- ' + cell(n)).join('\n') + '\n\n## 共同题目与排除记录\n\n' +
     r.comparisons.map(c => `- ${c.arms.map(a => labels.get(a)).join(' / ')}：${c.case_ids.join('、') || '无'}。`).join('\n') +
     `\n\n分数/时间序列：${r.score_time_series.length} 个带来源的采样点，覆盖 ${new Set(r.score_time_series.map(s => s.run_id)).size} 个运行。采样覆盖不同，不从缺失点补零，也不自动计算跨题均值曲线；同名 JSON 保留可绘图序列。\n\n` +
@@ -298,13 +357,38 @@ export function renderCsv(r: Report): string {
     ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref,s.effort?.duration_ms,s.effort?.token_count,s.effort?.model_request_count,s.effort?.evidence_ref,s.score_samples?.length ?? 0,s.configuration?.source_revision_id,s.configuration?.scorer_revision_id,s.configuration?.model_id,s.configuration?.budget_ms,s.configuration?.active_submission_cooldown_ms,s.configuration?.background_evaluation_interval_ms,s.configuration?.resource_profile,s.configuration?.evidence_ref])].map(row => row.map(q).join(',')).join('\n')+'\n';
 }
 
+export function renderScoreCurves(report: Report): string {
+  const sections: string[] = [];
+  for (const caseId of new Set(report.score_time_series.map(s => s.case_id))) {
+    const samples = report.score_time_series.filter(s => s.case_id === caseId);
+    for (const mapping of new Set(samples.map(s => s.normalization_id))) {
+      const series = report.summary.map(arm => ({
+        label: arm.label,
+        points: samples.filter(s => s.arm_id === arm.arm_id && s.normalization_id === mapping)
+          .map(s => ({hour: s.elapsed_ms / 3_600_000, value: s.value})),
+      }));
+      const hours = series.reduce((max, run) => Math.max(max, run.points.at(-1)?.hour ?? 0), 0) || 1;
+      const options = {higherIsBetter: true, hours, unit: 'Normalized score'};
+      const legend = series.map((run, i) => run.points.length
+        ? `<li style="color:${armColors[i % armColors.length]}">${escapeChartText(run.label)}</li>` : '').join('');
+      sections.push(`<section><h2>${escapeChartText(caseId)}</h2><p>${escapeChartText(mapping)}</p><ul>${legend}</ul>
+        <h3>Best observed score</h3><div class="plot" tabindex="0" role="region" aria-label="Best observed scores for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: true})}</div>
+        <details><summary>All score observations</summary><div class="plot" tabindex="0" role="region" aria-label="All score observations for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: false})}</div></details></section>`);
+    }
+  }
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${escapeChartText(report.title)}</title><style>body{max-width:${scoreChartWidth}px;margin:2rem auto;padding:0 1rem;color:#20302c;font:16px system-ui}.plot{overflow-x:auto}.plot:focus-visible{outline:2px solid #3f5e80;outline-offset:3px}svg{display:block;width:${scoreChartWidth}px;max-width:none;height:auto}ul{display:flex;flex-wrap:wrap;gap:1.3rem;padding:0;list-style:none;font-weight:600}section{border-top:1px solid #dce4e1}summary{cursor:pointer}</style>
+    <h1>${escapeChartText(report.title)}</h1><p>Observed scores · includes provisional runs · ${escapeChartText(report.observed_at)}</p>${sections.join('') || '<p>No observed scores.</p>'}</html>`;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const [input, prefix, ...extra] = process.argv.slice(2);
-    requireThat(input && prefix && !extra.length, 'Usage: node --experimental-strip-types scripts/benchmark-campaign-report.ts INPUT.json OUTPUT_PREFIX');
+    requireThat(input && prefix && (!extra.length || (extra.length === 1 && extra[0] === '--score-curves')), 'Usage: node --experimental-strip-types scripts/benchmark-campaign-report.ts INPUT.json OUTPUT_PREFIX [--score-curves]');
     const report = buildReport(JSON.parse(readFileSync(input, 'utf8')));
     mkdirSync(dirname(resolve(prefix)), { recursive: true });
-    const files = {json: JSON.stringify(report,null,2)+'\n', md:renderMarkdown(report), csv:renderCsv(report)};
+    const files: Record<string, string> = {json: JSON.stringify(report,null,2)+'\n', md:renderMarkdown(report), csv:renderCsv(report)};
+    if (extra.length) files.html = renderScoreCurves(report);
     for (const [ext, body] of Object.entries(files)) {
       const path = `${prefix}.${ext}`; const temporary = `${path}.${process.pid}.tmp`;
       writeFileSync(temporary,body,{mode:0o600}); renameSync(temporary,path);

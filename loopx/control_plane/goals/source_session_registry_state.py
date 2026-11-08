@@ -10,7 +10,7 @@ from ..projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 from ..runtime.document_io import fsync_state_directory
 from .goal_ref_validation import (
     GOAL_INSTANCE_ID,
-    exact_goal_ref,
+    exact_goal_ref as exact_goal_ref,
     require_goal_id as require_goal_id,
 )
 

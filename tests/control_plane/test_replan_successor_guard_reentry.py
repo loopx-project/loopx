@@ -11,6 +11,7 @@ import pytest
 import loopx
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from test_replan_successor_durable_ack import AGENT, GOAL, history
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
@@ -71,6 +72,12 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:
+        # This fixture inspects the authority decision; checkpoint tests cover
+        # presentation and follow its captured reader to the delivered policy.
+        if args[:2] == ("quota", "should-run") and not any(
+            arg == "--context-delivery" or arg.startswith("--context-delivery=") for arg in args
+        ):
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)
@@ -98,6 +105,42 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_successor_cli_reads_policy_with_context_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    context_delivery: str,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider)
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    try:
+        presented = call(
+            "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+            "--context-delivery", context_delivery,
+            "--codex-context-dir", str(native), "--decision-output-root", str(captures),
+        )
+        if context_delivery == "on":
+            assert presented["schema_version"] == "context_capture_navigation_v1"
+        # Observe the complete current policy after checking native transport.
+        policy = read_cli_policy_payload(json.dumps(presented), returncode=0)
+        assert policy["decision"] == "autonomous_replan_required"
+        assert policy["heartbeat_receipt"]["turn_instance_id"] == TURN
+        identity = policy["heartbeat_receipt"]["settlement_identity"]
+        assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
+        assert identity["binding_kind"] == "autonomous_replan"
+        assert policy["execution_obligation"]["must_attempt_work"] is True
+    finally:
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+        restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -345,13 +388,16 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
             "unclaimed": ["--clear-claim"]}[invalidation]
     call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
          "--todo-id", added["todo_id"], *edit)
-    # An unclaimed successor loses its original-lane proof. Fail closed while
-    # retaining the original receipt; a stale creation ACK cannot settle it.
-    guarded = _guard(call, expected_code=1 if invalidation == "unclaimed" else 0)
+    # Losing the successor invalidates its settlement proof. The same Turn
+    # can still review the original obligation from current canonical facts.
+    guarded = _guard(call)
     assert guarded["heartbeat_receipt"]["settlement_identity"] == identity
-    if invalidation == "unclaimed":
-        assert "settlement identity conflicts" in guarded["reason"]
-        assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    obligation = guarded["autonomous_replan_obligation"]
+    assert guarded["effective_action"] == "autonomous_replan_required"
+    assert obligation["selection_binding"] == "heartbeat_receipt"
+    assert obligation["obligation_id"] == identity["replan_obligation_id"]
+    assert obligation["replan_context"]["obligation_id"] == identity["replan_obligation_id"]
     assert guarded.get("selected_todo") is None
     assert (guarded.get("autonomous_replan_obligation") or {}).get("resolution_mode") != "receipt_bound_replan_settlement"
     assert (guarded.get("replan_action_packet") or {}).get("settlement_only") is not True

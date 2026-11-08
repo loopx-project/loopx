@@ -8,7 +8,7 @@ never turn a display file into fallback authority.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..goals.legacy_event_source import require_no_legacy_todo_events
 from .active_state_editing import TODO_SECTION_HEADINGS
@@ -74,7 +74,9 @@ def observe_todo_acceptance(
         canonical, registry_path=registry_path, goal_id=goal_id)
     summary = fields.get("agent_todos")
     if isinstance(summary, dict) and "goal_acceptance_contract" in summary:
-        return {**fields, "agent_todos": {**summary, "goal_acceptance_contract": acceptance}}
+        from .summary_item import preserve_canonical_todo_source
+        return {**fields, "agent_todos": preserve_canonical_todo_source(summary,
+            {**summary, "goal_acceptance_contract": acceptance})}
     return fields
 
 
@@ -246,18 +248,25 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
     from contextlib import ExitStack
     from pathlib import Path
     from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+    from ..runtime.private_permissions import protect_private_path
 
-    request = {"schema_version": "todo_read_request_v0", **params}
+    native_read = None
+    if params.get("kind") == "select":
+        from .summary_item import canonical_todo_select_read
+        native_read = canonical_todo_select_read(params)
+    request = {"schema_version": "todo_read_request_v0", **(native_read or params)}
     encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    chunks = []
+    chunks: list[bytes] = []
     identity = None
     try:
         with ExitStack() as stack:
             if len(encoded) > MAX_LOCAL_SNAPSHOT_BYTES - 4096:
                 directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-todo-")))
+                protect_private_path(directory, directory=True)
                 source = directory / "facts.json"
                 fd = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "wb") as file:
+                    protect_private_path(source)
                     file.write(encoded)
                 request = {"schema_version": "todo_read_request_v0", "facts_ref": {
                     "path": str(source), "byte_count": len(encoded), "sha256": hashlib.sha256(encoded).hexdigest()}}
@@ -274,7 +283,8 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     break
                 if not isinstance(piece, dict) or piece.get("offset") != consumed:
                     raise ValueError("invalid Todo read result page")
-                current = (piece.get("sha256"), piece.get("byte_count"))
+                current = (piece.get("sha256"), piece.get("byte_count"),
+                           piece.get("content_encoding"), piece.get("decoded_byte_count"))
                 if identity is None:
                     identity = current
                 if identity != current or type(current[1]) is not int or current[1] <= consumed:
@@ -291,7 +301,7 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     complete = b"".join(chunks)
                     if consumed != current[1] or hashlib.sha256(complete).hexdigest() != current[0]:
                         raise ValueError("Todo read result digest mismatch")
-                    result = json.loads(complete)
+                    result = _decode_todo_result_bytes(complete, current[2], current[3])
                     break
                 if not isinstance(after, dict) or after.get("offset") != consumed or after.get("sha256") != current[0]:
                     raise ValueError("invalid Todo read result continuation")
@@ -302,6 +312,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid typed Todo read result")
     if result.get("rejection"):
         raise EffectRuntimeRejected(result["rejection"]["message"])
+    if result.get("canonical") is not None and (native_read is not None or params.get("kind") == "quota_projection"):
+        from ..coordination.local_authority import validate_canonical_todo_read
+        read = native_read or next(request["summary_request"]["source_reference"]["read"]
+            for request in params["requests"] if "source_reference" in request["summary_request"])
+        validate_canonical_todo_read(result["canonical"], goal_id=read["source"]["goal_id"])
     if params.get("kind") == "group":
         summary = result.get("summary")
         if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
@@ -310,20 +325,61 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
             frontier = summary.get("advancement_frontier_revision_index")
             if not isinstance(frontier, dict) or frontier.get("schema_version") != "todo_frontier_revision_index_v0":
                 raise ValueError("invalid typed Todo summary frontier index")
+    if params.get("kind") in {"canonical_fields", "query"} or native_read is not None:
+        _bind_todo_read_sources(result, native_read or params, native_selection=native_read is not None)
     return result
 
 
-def restore_todo_field_evaluations(result):
+def _decode_todo_result_bytes(data: bytes, encoding: Any, size: Any) -> dict[str, Any]:
+    import json
+    from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+
+    if encoding is None:
+        if size is not None:
+            raise ValueError("invalid Todo read result encoding")
+    elif encoding == "gzip" and type(size) is int and 0 < size <= MAX_LOCAL_SNAPSHOT_BYTES:
+        import zlib
+        try:
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            decoded = decoder.decompress(data, size + 1)
+        except zlib.error as error:
+            raise ValueError("invalid compressed Todo read result") from error
+        if len(decoded) != size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise ValueError("invalid compressed Todo read result")
+        data = decoded
+    else:
+        raise ValueError("invalid Todo read result encoding")
+    result = json.loads(data)
+    if not isinstance(result, dict):
+        raise ValueError("invalid typed Todo read result")
+    return result
+
+
+def _bind_todo_read_sources(result: dict[str, Any], read: dict[str, Any], *, native_selection: bool) -> None:
+    from .summary_item import bind_canonical_todo_sources
+
+    bind_canonical_todo_sources(result, read)
+    if native_selection and result.get("projection"):
+        from .succession_warning import _EvaluatedTodo
+        projection = result["projection"]
+        for field, decisions in result["field_evaluations"].items():
+            summary = projection["summaries"][field]
+            summary["items"] = [_EvaluatedTodo(item, decision)
+                for item, decision in zip(summary["items"], decisions, strict=True)]
+        projection["todos"] = [item for summary in projection["summaries"].values() for item in summary["items"]]
+
+
+def restore_todo_field_evaluations(result: dict[str, Any]) -> dict[str, Any]:
     from .succession_warning import _EvaluatedTodo
 
-    fields = result["fields"]
+    fields = cast(dict[str, Any], result["fields"])
     for role, decisions in result["field_evaluations"].items():
         fields[role]["items"] = [_EvaluatedTodo(item, decision)
             for item, decision in zip(fields[role]["items"], decisions, strict=True)]
     return fields
 
 
-def canonical_todo_fields(todos, *, rollout_events=None, **facts):
+def canonical_todo_fields(todos: Any, *, rollout_events: Any = None, **facts: Any) -> dict[str, Any]:
     from ..runtime.time import now_utc
 
     now = now_utc()
@@ -338,10 +394,10 @@ def canonical_todo_fields(todos, *, rollout_events=None, **facts):
     }))
 
 
-def source_todo_fields(groups, *, lineage, rollout_events=None, available_capabilities=None,
-                       preferred_todo_ids=None, item_limit=None, evaluated_at=None,
-                       archived_items=None, standing_items=None, legacy_source_order=False,
-                       vision_runs=None, include_task_orchestration_authority=False):
+def source_todo_fields(groups: Any, *, lineage: Any, rollout_events: Any = None, available_capabilities: Any = None,
+                       preferred_todo_ids: Any = None, item_limit: int | None = None, evaluated_at: str | None = None,
+                       archived_items: Any = None, standing_items: Any = None, legacy_source_order: bool = False,
+                       vision_runs: Any = None, include_task_orchestration_authority: bool = False) -> dict[str, Any]:
     from ..runtime.time import now_utc
 
     now = now_utc()
@@ -369,18 +425,18 @@ def source_todo_fields(groups, *, lineage, rollout_events=None, available_capabi
         if vision_runs:
             from .succession_warning import _EvaluatedTodo
             from ..goals.goal_vision_wait_projection import attach_active_vision_waits
-            source = [_EvaluatedTodo(item, decision) for item, decision in zip(
+            source: list[dict[str, Any]] = [_EvaluatedTodo(item, decision) for item, decision in zip(
                 result["source_items"][role], result["source_evaluations"][role], strict=True)]
             attach_active_vision_waits(summary, vision_runs, role=role, items=source,
                 lineage_items=lineage)
     return fields
 
 
-def project_todo_read_group(items, *, source_section, role, preferred_todo_ids=None,
-                            lineage=None, rollout_events=None, available_capabilities=None,
-                            item_limit=None, evaluated_at=None, evaluated=False,
-                            full_selection=True, selection=None, resume_lineage=None,
-                            include_full_source=False, include_task_orchestration_authority=False):
+def project_todo_read_group(items: Any, *, source_section: str | None, role: str | None, preferred_todo_ids: Any = None,
+                            lineage: Any = None, rollout_events: Any = None, available_capabilities: Any = None,
+                            item_limit: int | None = None, evaluated_at: str | None = None, evaluated: bool = False,
+                            full_selection: bool = True, selection: Any = None, resume_lineage: Any = None,
+                            include_full_source: bool = False, include_task_orchestration_authority: bool = False) -> dict[str, Any]:
     from .succession_warning import _EvaluatedTodo
     from ..runtime.time import now_utc
 
@@ -414,7 +470,7 @@ def project_todo_read_group(items, *, source_section, role, preferred_todo_ids=N
     return result
 
 
-def prepare_todo_source_groups(groups, *, lineage):
+def prepare_todo_source_groups(groups: Any, *, lineage: Any) -> list[dict[str, Any]]:
     from .todo_summary import _structured_todo_group_items, _structured_resume_source_items
     from .resume_condition import build_todo_resume_evaluation_request
 
@@ -430,7 +486,7 @@ def prepare_todo_source_groups(groups, *, lineage):
     return prepared
 
 
-def legacy_lineage_facts(items):
+def legacy_lineage_facts(items: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from .succession_warning import succession_facts
 
     return ([{"todo_id": item.get("todo_id"), "role": item.get("role"), "source_section": item.get("source_section"),
@@ -438,7 +494,7 @@ def legacy_lineage_facts(items):
             [succession_facts(item) for item in items])
 
 
-def prepare_todo_source_text(goal, state_text, state_path, *, todo_id=None, retained=False):
+def prepare_todo_source_text(goal: dict[str, Any] | None, state_text: str, state_path: Path, *, todo_id: str | None = None, retained: bool = False) -> dict[str, Any]:
     from .active_state_todo_parser import parse_todo_source
     from .todo_summary import _structured_resume_source_items
     from .standing_decision import standing_decision_source_items

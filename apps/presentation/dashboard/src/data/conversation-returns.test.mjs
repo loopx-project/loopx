@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
 
 const collaboration = { returns: [] };
+const queuedInput = [{sourceSessionId: "queued-session", sourceMessageId: "input", sourceTurnId: "queued-turn",
+  role: "user", text: "Original input"}];
+const editedInput = {message_id: "input", turn_id: "queued-turn", role: "user", text: "Corrected input", queue_input_revision: 1};
+const corrected = reconcileConversationReturns(queuedInput, "queued-session", [editedInput], () => assert.fail("no duplicate input"));
+assert.equal(corrected[0].text, "Corrected input");
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, role: "agent"}], () => assert.fail()), queuedInput);
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, turn_id: "other-turn"}], () => assert.fail()), queuedInput);
+const cancelledInput = {...editedInput, queue_input_revision: 2, queue_input_cancelled: true};
+const cancelled = reconcileConversationReturns(corrected, "queued-session", [cancelledInput], () => assert.fail("no duplicate input"));
+assert.equal(cancelled[0].queueInputCancelled, true);
+assert.equal(reconcileConversationReturns(cancelled, "queued-session", [editedInput], () => assert.fail()), cancelled, "stale reads cannot revert cancellation");
+assert.equal(reconcileConversationReturns(queuedInput, "other-session", [cancelledInput], () => assert.fail()), queuedInput);
+const liveAnswer = [{...queuedInput[0], role: "assistant", pending: true, text: "Live answer"}];
+assert.equal(reconcileConversationReturns(liveAnswer, "queued-session", [{...cancelledInput, role: "agent"}], () => assert.fail())[0].text, "Live answer");
 const original = [
   { sourceSessionId: "old", sourceMessageId: "brief", collaboration, text: "Original brief" },
   { sourceSessionId: "current", sourceMessageId: "brief", text: "New conversation" },
@@ -127,6 +141,53 @@ const observedBoth = reconcileConversationReturns(identified, "original", [
 assert.equal(observedBoth[0].text, "Ask both");
 assert.deepEqual(conversationPendingReturnSessions(observedBoth), []);
 assert.equal(reconcileConversationReturns(observedBoth, "original", [{message_id: "multi"}], createReply), observedBoth);
+
+// History can be displayed before the original admission ACK supplies the
+// live row's identity. Its stream callback target must survive that handoff.
+const historyFirst = {sourceSessionId: "current", sourceMessageId: "agent-message", sourceTurnId: "same-turn",
+  role: "assistant", text: "Stored answer", marker: "history"};
+const lateBoundStream = {sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant",
+  text: "Live fragment", pending: true, marker: "stream", activity: ["Running"]};
+const admittedAfterRead = reconcileConversationHistory([historyFirst, lateBoundStream], [storedRoles[1]], createHistory);
+assert.equal(admittedAfterRead.length, 1, "One canonical reply remains when history arrived first");
+assert.equal(admittedAfterRead[0].marker, "stream", "The original stream callback target and controls survive");
+assert.equal(admittedAfterRead[0].sourceMessageId, "agent-message");
+assert.equal(admittedAfterRead[0].pending, true);
+assert.equal(admittedAfterRead[0].text, "Live fragment", "Readback does not overwrite streaming text");
+assert.deepEqual(admittedAfterRead[0].activity, ["Running"]);
+assert.equal(reconcileConversationHistory(admittedAfterRead, [storedRoles[1]], createHistory), admittedAfterRead);
+const separateReplies = [historyFirst, lateBoundStream,
+  {...historyFirst, sourceSessionId: "foreign", marker: "foreign"},
+  {...historyFirst, sourceMessageId: "another-answer", sourceTurnId: "another-turn", marker: "another-turn"},
+  {...historyFirst, sourceMessageId: "followup", marker: "followup"}];
+const separateSources = [storedRoles[1], {...storedRoles[1], message_id: "followup", origin: "manager_followup"},
+  {...storedRoles[1], message_id: "another-answer", turn_id: "another-turn"}];
+const distinct = reconcileConversationHistory(separateReplies, separateSources, createHistory);
+assert.deepEqual(distinct.map(row => row.marker), ["stream", "foreign", "another-turn", "followup"],
+  "Equal text, other Sessions/Turns and separate follow-up identities remain distinct");
+console.log("conversation-returns: history-before-admission preserves the live identity and distinct replies");
+
+// A fast queued Turn can finish before its start/stream is observed. Its
+// canonical answer replaces the waiting receipt, never a live stream.
+const queuedReply = {sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant",
+  text: "", queued: true, pending: false};
+const completedQueue = reconcileConversationHistory([queuedReply], [storedRoles[1]], createHistory);
+assert.equal(completedQueue.length, 1);
+assert.equal(completedQueue[0].text, storedRoles[1].text);
+assert.equal(completedQueue[0].queued, false);
+assert.equal(completedQueue[0].sourceMessageId, "agent-message");
+assert.equal(reconcileConversationHistory(completedQueue, [storedRoles[1]], createHistory), completedQueue);
+const unboundQueuedReply = {...queuedReply, sourceTurnId: undefined, sourceMessageId: "agent-message"};
+const unboundAnswer = reconcileConversationReturns([unboundQueuedReply], "current", [{...storedRoles[1], turn_id: undefined}], createHistory);
+assert.equal(unboundAnswer[0].text, "");
+assert.equal(unboundAnswer[0].queued, true, "Two absent Turn identities do not prove queue execution");
+for (const change of [{pending: true, text: "Live fragment"}, {queued: false, text: "Existing answer"},
+  {sourceSessionId: "foreign"}, {sourceTurnId: "another-turn"}]) {
+  const original = {...queuedReply, ...change};
+  const observed = reconcileConversationHistory([original], [storedRoles[1]], createHistory);
+  assert.equal(observed.find(row => row === original || row.sourceTurnId === original.sourceTurnId
+    && row.sourceSessionId === original.sourceSessionId)?.text, original.text);
+}
 
 // A revised brief keeps its return obligation despite a delivered old conclusion.
 const revised = [{sourceSessionId: "original", collaborations: [

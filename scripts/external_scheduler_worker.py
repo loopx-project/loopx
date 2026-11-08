@@ -30,6 +30,7 @@ import shlex
 import signal
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,10 +75,7 @@ class TickDecision:
     final_probe_action: str
     reset_token: str
     terminal: bool
-
-    @property
-    def sleep_seconds(self) -> int:
-        return max(5, int(self.interval_minutes) * 60)
+    recheck_after_seconds: int | None = None
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -150,6 +148,10 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
         raise ValueError(f"{admission_field} must be a boolean; refusing model wake")
     local = _extract_local_scheduler(payload)
 
+    recheck = local.get("recheck_after_seconds")
+    if recheck is not None and (type(recheck) is not int or recheck <= 0):
+        raise ValueError("local_scheduler.recheck_after_seconds must be a positive integer")
+
     progression_values = local.get("example_progression_minutes")
     progression: tuple[int, ...] = ()
     if isinstance(progression_values, (list, tuple)):
@@ -194,6 +196,7 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
         final_probe_action=str(final_probe.get("action") or "").strip(),
         reset_token=_extract_reset_token(payload),
         terminal=False,
+        recheck_after_seconds=recheck,
     )
 
 
@@ -207,6 +210,7 @@ def run_quota_should_run(
         stdin=b"",
         timeout_seconds=max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if completed.failure_kind is not None:
         raise RuntimeError(f"quota should-run failed: {completed.failure_kind}")
@@ -818,6 +822,9 @@ def _run_worker_locked(
             interval_minutes, phase = select_interval(
                 decision, unchanged_count=unchanged_count
             )
+            interval_seconds = interval_minutes * 60
+            if not decision.should_run and decision.recheck_after_seconds is not None:
+                interval_seconds = min(interval_seconds, decision.recheck_after_seconds)
 
             effective_action = str(payload.get("effective_action") or "").strip()
             selected = _mapping(payload.get("selected_todo"))
@@ -915,12 +922,25 @@ def _run_worker_locked(
                         # state write or the Host invocation can be interrupted.
                         _save_host_pending(state_path, True)
                         state["host_attempt"] = {"scope": scope, "status": "started",
-                            "attempt": prior.get("attempt", 0) + 1,
-                            "session_id": prior.get("session_id"),
+                            "attempt_id": uuid.uuid4().hex,
+                            "attempt": prior.get("attempt", state.get("recovered_attempt_count", 0)) + 1,
+                            "session_id": prior.get("session_id") or state.get("recovered_session_id"),
                             **({"replan_obligation_id": attempt["obligation_id"]}
                                if attempt is not None else {})}
                         save({})
-                        environment = {**os.environ, "LOOPX_HOST_RETRY_SESSION_ID": prior.get("session_id") or ""}
+                        environment = {**os.environ,
+                            "LOOPX_HOST_ATTEMPT_ID": state["host_attempt"]["attempt_id"],
+                            "LOOPX_HOST_RETRY_SESSION_ID": state["host_attempt"]["session_id"] or ""}
+                        # The explicit continuation phase may carry one frozen
+                        # content handoff. It grants no work/ownership authority.
+                        # Keep it for uncertain retries; stop presenting it only
+                        # after the same native Host returns a successful receipt.
+                        for key in ("LOOPX_RECOVERY_HANDOFF", "LOOPX_RECOVERY_HANDOFF_SHA256"):
+                            environment.pop(key, None)
+                        handoff = state.get("recovery_handoff")
+                        if handoff is not None and not state.get("recovery_handoff_delivered"):
+                            environment.update(LOOPX_RECOVERY_HANDOFF=handoff["path"],
+                                               LOOPX_RECOVERY_HANDOFF_SHA256=handoff["sha256"])
                     wake_result = _run_wake(
                         args.wake_cmd,
                         timeout_seconds=getattr(args, "wake_timeout_seconds", None),
@@ -956,6 +976,11 @@ def _run_worker_locked(
                         failure = _host_result(wake_result, state["host_attempt"], clock())
                         if failure is None:
                             state.pop("host_attempt", None)
+                            if handoff is not None and not state.get("recovery_handoff_delivered"):
+                                receipt = json.loads(wake_result.stdout)
+                                if receipt.get("recovery_handoff_sha256") != handoff["sha256"]:
+                                    raise ValueError("Native Host did not confirm the recovery handoff input")
+                                state["recovery_handoff_delivered"] = True
                         else:
                             state["host_attempt"] = failure
                             wake_failed = True
@@ -1008,7 +1033,7 @@ def _run_worker_locked(
                 "status=waiting "
                 f"phase={phase} class={decision.cadence_class} "
                 f"effective_action={effective_action or '-'} "
-                f"next_check_minutes={interval_minutes} "
+                f"next_check_minutes={interval_seconds / 60:g} "
                 f"unchanged_count={unchanged_count}"
                 + (
                     f" unchanged_limit={decision.unchanged_limit}"
@@ -1085,7 +1110,7 @@ def _run_worker_locked(
         # still owns continuation; waiting/observe-only ticks retain their
         # cadence and failures use the independent backoff path above.
         if not wake_completed:
-            sleep(max(5, interval_minutes * 60))
+            sleep(interval_seconds)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

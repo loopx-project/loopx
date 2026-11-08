@@ -54,6 +54,27 @@ test("only the actual pending Monitor generation can cover an in-scope successor
   assert.equal(project({...waiting, excluded: ["agent-a"]}).length, 0);
 });
 
+test("automatic resume selects the earliest scoped clock before the display limit", () => {
+  const dates = ["06", "05", "04", "03", "02", "01"];
+  const rows = dates.map((day, index) => {
+    const id = "todo_clock_" + day, target = `2099-01-${day}T00:00:00Z`;
+    const todo = {todo_id: id, text: "Wait for the scheduled input", status: "deferred",
+      task_class: "advancement_task", resume_when: "resume_at:" + target};
+    const conditions = evaluateTodoResumeConditions({
+      schema_version: "todo_resume_evaluation_request_v0", items: [todo], source_items: [todo],
+      evaluated_at: "2098-12-01T00:00:00Z",
+    }).conditions as JsonObject[];
+    const claim = index === dates.length - 1 ? "peer" : "agent-a";
+    return fact(id, {index, claim, resume: todo.resume_when,
+      payload: {...todo, index, claimed_by: claim, resume_ready: false, resume_condition: conditions[0].condition}});
+  });
+  const input = request({item_limit: 1});
+  (input.sources as JsonObject).deferred_items = rows;
+  const result = projectTodoResumePlanning(input);
+  assert.equal((result.automatic_resume_todo as JsonObject).todo_id, "todo_clock_02");
+  assert.equal(((result.deferred_lanes as JsonObject).deferred_items as JsonObject[]).length, 1);
+});
+
 test("capacity evaluation and claim lanes use one snapshot without mutating it", () => {
   const input = request({ available_capabilities: ["compiler"] });
   (input.sources as JsonObject).items = [fact("todo_capacity", { claim: "agent-a" }),

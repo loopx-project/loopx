@@ -33,7 +33,11 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     register.add_argument("--input-json", type=Path, required=True)
     register.add_argument("--source-root", type=Path, required=True)
     register.add_argument("--title", required=True)
+    register.add_argument("--case-study-json", type=Path,
+                          help="Optional authored case reading document; source-bound, versioned with this pack, no model execution.")
     register.add_argument("--base-pack-id", help="Existing frozen pack in this owner Goal and original case/run; links a successor without running analysis.")
+    register.add_argument("--preserve-default", action="store_true",
+                          help="Keep the existing default capture when registering another version; the first capture still becomes default.")
     register.add_argument(
         "--usage-jsonl",
         help="Optional complete Codex session capture, relative to source-root; read-only cost facts, not model input.",
@@ -102,6 +106,7 @@ def _handle_benchmark_trajectory_command(
                 input_path=args.input_json,
                 source_root=args.source_root,
                 title=args.title,
+                case_study_json=args.case_study_json,
                 usage_jsonl=args.usage_jsonl,
                 usage_session_id=args.usage_session_id,
                 include_incomplete_usage=args.include_incomplete_usage,
@@ -109,6 +114,7 @@ def _handle_benchmark_trajectory_command(
                 loopx_input_json=args.loopx_input_json,
                 native_outcomes_json=args.native_outcomes_json,
                 base_pack_id=args.base_pack_id,
+                select_default=not args.preserve_default,
             )
             if args.benchmark_command == "trajectory-pack-register"
             else discover(**scope)

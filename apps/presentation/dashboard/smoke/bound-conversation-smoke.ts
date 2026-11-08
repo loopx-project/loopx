@@ -5,13 +5,15 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
 // create a replacement, disclose unrelated history, or redirect a message.
 const repoRoot = resolve(process.cwd(), "../../..");
-const child = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py"],
+const fallback = process.env.LOOPX_BOUND_STEWARD_FALLBACK === "1";
+const child = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py",
+  ...(fallback ? ["--steward-fallback"] : [])],
   { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] });
 const exited = once(child, "exit");
 const output = createInterface({ input: child.stdout });
@@ -50,8 +52,10 @@ try {
   assert.equal(original.session.session_id, sessionId);
   assert.equal(original.source.binding_id, bindingId);
   assert.equal(original.source.audience, "owner");
-  assert.equal(original.source.context_kind, "project");
+  assert.equal(original.source.context_kind, fallback ? "steward" : "project");
   assert.equal(original.source.project_title, "project");
+  assert.equal(original.source.executor_endpoint_id, fallback ? "antigravity" : "codex");
+  assert.equal(original.session.agent_id, "codex");
   assert.deepEqual(calls, [{path: `/api/chat/sessions?conversation_binding_id=${bindingId}`, method: "GET"}],
     "Opening an original conversation uses one source-qualified read, independent of settings health");
   child.stdin.write("settings-unavailable\n");
@@ -74,12 +78,104 @@ try {
   await fetchChatHistory(options, history);
   assert.equal(calls.length, 1, "Quiet refresh verifies the source using only its compact index");
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
-  child.stdin.write("source\n");
-  assert.equal((await next()).source_turn_status, "completed");
-  const updated = await fetchChatHistory(options, history);
-  assert.equal(updated.messages.filter(row => row.text === "A new synthetic message from the original private source.").length, 1);
-  const accepted = await acceptChatTurn(sessionId, "Continue from the desktop.", "synthetic-web-update");
-  assert.equal(accepted.session_id, sessionId);
+  const routedRead = globalThis.fetch;
+  if (!fallback) {
+    // Repeated transport loss at later pages must advance one original prefix
+    // through the existing retry caller, without ever publishing partial text.
+    child.stdin.write("history\n");
+    const expectedRows = (await next()).history_rows;
+    const complete = await fetchChatSessionHistory(original.session);
+    assert.equal(complete.messages.length, expectedRows);
+    const recoveredOffsets: number[] = [];
+    const failedOffsets = new Set<number>();
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (new URL(String(input), origin).pathname !== `/api/chat/sessions/${sessionId}`) return response;
+      const value = await response.clone().json();
+      const offset = value.message_page.offset;
+      recoveredOffsets.push(offset);
+      if (offset > 0 && !failedOffsets.has(offset)) {
+        failedOffsets.add(offset);
+        throw new Error("Synthetic interrupted transport after a verified prefix");
+      }
+      return response;
+    };
+    const interrupted = await fetchChatHistory(options);
+    assert.deepEqual(interrupted.unavailableSessionIds, [sessionId]);
+    assert.deepEqual(interrupted.messages, []);
+    assert.deepEqual(interrupted.snapshots, []);
+    const interruptedAgain = await fetchChatHistory(options, interrupted);
+    assert.deepEqual(interruptedAgain.messages, []);
+    const recovered = await fetchChatHistory(options, interruptedAgain);
+    assert.deepEqual(recovered.unavailableSessionIds, []);
+    assert.deepEqual(recovered.snapshots[0].messages, complete.messages);
+    assert.deepEqual(recoveredOffsets, [0, 200, 200, 400, 400], "Only failed pages are read again");
+    assert.equal(interrupted.pendingReads?.get(sessionId)?.messages.length, 200,
+      "Later retries cannot mutate the previously published read state");
+    assert.equal(recovered.pendingReads?.size, 0);
+    assert.ok(calls.every(row => row.method === "GET"), "Recovery never starts work");
+    globalThis.fetch = routedRead;
+    // Current source revocation blocks recovery before another history page.
+    child.stdin.write("deny\n"); assert.equal((await next()).source_verified, false);
+    calls.length = 0;
+    await assert.rejects(() => fetchChatHistory(options, interrupted));
+    assert.ok(calls.every(row => new URL(row.path, origin).pathname === "/api/chat/sessions"));
+    child.stdin.write("recover\n"); assert.equal((await next()).source_verified, true);
+    // Permanent denial, a changed source or malformed prefix cannot be retained
+    // as transport progress. The following read must validate page zero again.
+    for (const fault of ["denied", "source", "digest"]) {
+      globalThis.fetch = async (input, init) => {
+        const response = await routedRead(input, init);
+        if (!new URL(String(input), origin).searchParams.has("message_cursor")) return response;
+        if (fault === "denied") return new Response("{}", {status: 403});
+        const value = await response.json();
+        if (fault === "source") value.session.goal_id = "unrelated-goal";
+        else value.message_page.snapshot_sha256 = "0".repeat(64);
+        return new Response(JSON.stringify(value));
+      };
+      const rejected = await fetchChatHistory(options, interrupted);
+      assert.deepEqual(rejected.messages, []);
+      assert.equal(rejected.pendingReads?.size, 0);
+      globalThis.fetch = routedRead;
+      calls.length = 0;
+      assert.deepEqual((await fetchChatHistory(options, rejected)).snapshots[0].messages, complete.messages);
+      assert.equal(new URL(calls.find(row => row.path.includes(`${sessionId}?`))!.path, origin).searchParams.has("message_cursor"), false);
+    }
+    // Real HTTP responses beyond the old interactive deadline must still hydrate
+    // the complete original history. Source verification keeps its own deadline.
+    child.stdin.write("slow-history\n");
+    assert.equal((await next()).slow_history, true);
+    const slow = await fetchChatHistory(options);
+    assert.deepEqual(slow.messages, recovered.messages);
+    assert.deepEqual(slow.unavailableSessionIds, []);
+    // Delay only the post-history fresh source check, not initial discovery.
+    const beforeSlowSource = calls.length;
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (String(input).startsWith(`/api/chat/sessions/${sessionId}?`)) {
+        child.stdin.write("slow-history-source\n");
+        assert.equal((await next()).slow_history_source, true);
+      }
+      return response;
+    };
+    const sourceSlow = await fetchChatHistory(options);
+    assert.deepEqual(sourceSlow.messages, recovered.messages);
+    assert.deepEqual(sourceSlow.unavailableSessionIds, []);
+    assert.ok(calls.slice(beforeSlowSource).every(row => row.method === "GET"));
+    globalThis.fetch = routedRead;
+    child.stdin.write("slow-history-cancel\n");
+    assert.equal((await next()).slow_history, true);
+    await assert.rejects(() => fetchChatSessionHistory(original.session, AbortSignal.timeout(50)));
+  }
+  let updated = history;
+  if (!fallback) {
+    child.stdin.write("source\n");
+    assert.equal((await next()).source_turn_status, "completed");
+    updated = await fetchChatHistory(options, history);
+    assert.equal(updated.messages.filter(row => row.text === "A new synthetic message from the original private source.").length, 1);
+    const accepted = await acceptChatTurn(sessionId, "Continue from the desktop.", "synthetic-web-update");
+    assert.equal(accepted.session_id, sessionId);
+  }
   child.stdin.write("deny\n");
   assert.equal((await next()).source_verified, false);
   await assert.rejects(() => fetchChatHistory(options, updated));
@@ -89,13 +185,23 @@ try {
   assert.equal((await resolveBoundChatSession(target)).session_id, sessionId);
   const routedFetch = globalThis.fetch;
   for (const source of [undefined, {...original.source, binding_id: "f".repeat(24)},
-    {...original.source, audience: "group"}, {...original.source, context_available: false},
-    {...original.source, executor_endpoint_id: "another-executor"}]) {
+    {...original.source, audience: "group"}, {...original.source, context_available: false}]) {
     globalThis.fetch = async () => new Response(JSON.stringify({ok: true,
       conversation_binding_id: bindingId, sessions: history.sessions, conversation_source: source}));
     await assert.rejects(() => resolveBoundConversation(target));
   }
   globalThis.fetch = routedFetch;
+  if (fallback) {
+    for (const fault of ["fallback-invalid-allocation", "fallback-wrong-configured-endpoint"]) {
+      child.stdin.write(`${fault}\n`);
+      assert.equal((await next()).fallback_state, fault);
+      assert.equal((await originalFetch(new URL(`/api/chat/sessions?conversation_binding_id=${bindingId}`, origin))).status, 409);
+      await assert.rejects(() => resolveBoundConversation(target));
+      child.stdin.write("fallback-restore\n");
+      assert.equal((await next()).fallback_state, "fallback-restore");
+      assert.equal((await resolveBoundConversation(target)).session.session_id, sessionId);
+    }
+  }
   const projects = await fetchChatProjects();
   assert.ok(projects.projects.length > 0, "The production workspace response is accepted");
   for (const malformed of [{ok: true}, {ok: true, projects: null},
@@ -120,15 +226,24 @@ try {
   await assert.rejects(() => createChatSession(context, "codex"));
   child.stdin.write("inspect\n");
   const inspected = await next();
-  assert.equal(inspected.sessions, 2, "No discovery or denial creates a replacement Session");
+  assert.equal(inspected.sessions, fallback ? 3 : 2, "No discovery or denial creates a replacement Session");
   assert.equal(inspected.original_thread, "durable-thread");
   assert.equal(inspected.messages.filter((row: any) => row.text === "Must not execute.").length, 0);
   child.stdin.write("stop\n");
   const [code] = await exited;
   assert.equal(code, 0, stderr);
-  console.log("bound-conversation: passed (real HTTP/SQLite/Core, exact original history, no fallback/create, source and Web input, denial/recovery, closed and old-service refusal)");
+  console.log(fallback
+    ? "bound-conversation: passed (real HTTP/SQLite/Core steward fallback readback, original identity, invalid allocation/configured endpoint and revoked-source refusal; no model transition simulated)"
+    : "bound-conversation: passed (real HTTP/SQLite/Core, exact original history, no fallback/create, source and Web input, denial/recovery, closed and old-service refusal)");
 } finally {
   globalThis.fetch = originalFetch;
   output.close();
   if (child.exitCode === null) { child.kill("SIGINT"); await exited; }
+}
+if (!fallback) {
+  const alternate = spawn(process.execPath, [process.argv[1]], {
+    env: {...process.env, LOOPX_BOUND_STEWARD_FALLBACK: "1"}, stdio: "inherit",
+  });
+  const [code] = await once(alternate, "exit");
+  assert.equal(code, 0, "The same original-conversation journey must pass after quota fallback");
 }

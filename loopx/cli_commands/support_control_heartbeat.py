@@ -27,6 +27,49 @@ PrintPayload = Callable[
 FormatSelector = Callable[..., str]
 
 
+def handle_heartbeat_prequota_command(
+    args: argparse.Namespace,
+    *,
+    registry_path: Path,
+    registry_was_supplied: bool,
+    print_payload: PrintPayload,
+    output_format: FormatSelector,
+    runner: Callable[..., dict[str, object]] | None = None,
+    markdown_renderer: Callable[[dict[str, object]], str] | None = None,
+    global_registry_resolver: Callable[[str | None], Path] | None = None,
+) -> int:
+    # The complete facade passes its released patch points. The selected
+    # entry loads these same owners only when this command executes.
+    if runner is None:
+        from ..heartbeat_prequota import run_heartbeat_pre_quota
+
+        runner = run_heartbeat_pre_quota
+    if markdown_renderer is None:
+        from ..heartbeat_prequota import render_heartbeat_pre_quota_markdown
+
+        markdown_renderer = render_heartbeat_pre_quota_markdown
+    if global_registry_resolver is None:
+        from .support_control_registry import explicit_global_registry
+
+        global_registry_resolver = explicit_global_registry
+    prequota_registry = (
+        registry_path
+        if registry_was_supplied
+        else global_registry_resolver(args.runtime_root)
+    )
+    payload = runner(
+        registry_path=prequota_registry,
+        runtime_root_arg=args.runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        fetch_timeout_seconds=args.fetch_timeout_seconds,
+    )
+    print_payload(payload, output_format(args), markdown_renderer)
+    # Reconciliation is best effort: a returned degraded payload still
+    # continues to quota. Exceptions retain the complete facade's path.
+    return 0
+
+
 def handle_heartbeat_prompt_command(
     args: argparse.Namespace,
     *,
@@ -170,6 +213,7 @@ def handle_heartbeat_prompt_command(
             codex_context_dir=args.codex_context_dir,
             codex_context_root=args.codex_context_root,
             context_delivery=args.context_delivery,
+            delta_delivery=args.delta_delivery,
             turn_envelope=args.turn_envelope,
             reward_memory_enabled=reward_memory_enabled,
         )

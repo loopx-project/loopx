@@ -107,11 +107,15 @@ def test_invalid_optional_observation_cannot_erase_native_counters_or_escape_roo
     assert usage["projection"]["loopx_input"]["status"] == "unavailable"
 
 
-def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path):
+@pytest.mark.parametrize('wrapper', [
+    'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);',
+    'text(await tools.exec_command({cmd: "loopx quota context-read"}))',
+    'text((await tools.exec_command({cmd: "loopx quota context-read"})).output)',
+])
+def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path, wrapper):
     _, rows = native_trace(tmp_path)
     tool = [{'type': 'response_item', 'payload': {'type': 'custom_tool_call',
-        'name': 'exec', 'call_id': 'tool', 'input':
-        'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);'}},
+        'name': 'exec', 'call_id': 'tool', 'input': wrapper}},
         {'type': 'response_item', 'payload': {'type': 'custom_tool_call_output',
          'call_id': 'tool', 'output': '状态已保存'}}]
     path = tmp_path / 'usage.jsonl'
@@ -121,6 +125,9 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert 'tool_context' not in old['projection']
     measured = _usage_capture(tmp_path, 'usage.jsonl', 'session', include_tool_context=True)
     inventory = measured['projection'].pop('tool_context')
+    footprint = measured['projection'].pop('loopx_requests')
+    assert footprint['status'] == 'observed' and footprint['recognized_requests'] == 0
+    assert footprint['unmatched_calls'] == 1, 'A return before its request receipt stays unassociated'
     assert measured == old
     assert inventory['status'] == 'observed'
     assert inventory['loopx_tool_output_bytes'] == 15
@@ -128,10 +135,26 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert path.read_bytes() == raw
 
 
-def test_real_cli_registers_recorded_component_without_model_execution(tmp_path):
+@pytest.mark.parametrize("call_kind", ["absent", "direct", "compound"])
+def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, call_kind):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
-    source, _ = native_trace(tmp_path)
+    source, rows = native_trace(tmp_path)
+    if call_kind != "absent":
+        call = {"type": "custom_tool_call", "call_id": "tool", "name": "exec",
+                "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
+        reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
+        items = [{"type": "response_item", "payload": item} for item in (call, reply)]
+        native_command = []
+        if call_kind == "compound":
+            call["input"] = 'text(await Promise.all([tools.exec_command({cmd: "loopx status"}), tools.exec_command({cmd: "pwd"})]));'
+            # Same Turn and matching time window, but the command's ID is not the parent tool call ID.
+            native_command = [{"type": "event_msg", "timestamp": rows[2]["timestamp"], "payload": {
+                "type": "item_completed", "thread_id": "session", "turn_id": "turn",
+                "item": {"type": "CommandExecution", "id": "exec-child", "command": ["bash", "-lc", "loopx status"]},
+            }}]
+        usage_rows = rows[:2] + [items[0], rows[2], *native_command, items[1]] + rows[3:]
+        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, usage_rows)))
     evidence = "Synthetic fixed negative result."
     (tmp_path / "evidence.txt").write_text(evidence)
     data = {"schema_version": "trajectory_assessment_input_v1",
@@ -155,6 +178,23 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path)
     registered = json.loads(result.stdout)
     view = inspect_pack(runtime_root=runtime, owner_goal_id="research", pack_id=registered["pack_id"])
     assert view["solver_usage"]["projection"]["loopx_input"]["input_fraction"] == 0.02
-    assert view["solver_usage"]["projection"]["tool_context"]["loopx_tool_output_fraction"] is None
+    inventory = view["solver_usage"]["projection"]["tool_context"]
+    footprint = view["solver_usage"]["projection"]["loopx_requests"]
+    assert footprint["status"] == "observed"
+    if call_kind == "direct":
+        assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
+        assert inventory["loopx_tool_output_fraction"] == 1.0
+        assert footprint["recognized_requests"] == 1
+        assert footprint["tokens"]["input_tokens"] == 100
+        assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
+    elif call_kind == "compound":
+        assert view["solver_usage"]["projection"]["request_coverage"]["all_requests"]["input_tokens"] == 100
+        assert footprint["recognized_requests"] == 0 and footprint["unclassified_calls"] == 1
+        assert footprint["input_fraction"] is None and footprint["uncached_input_fraction"] is None
+        assert inventory["loopx_tool_output_bytes"] == 0  # The mixed return is still unassigned.
+        assert "exec-child" not in json.dumps(view)
+    else:
+        assert inventory["loopx_tool_output_fraction"] is None
+        assert footprint["recognized_requests"] == 0 and footprint["input_fraction"] == 0
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)

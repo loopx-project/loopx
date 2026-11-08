@@ -175,13 +175,15 @@ def worker(operation_id: str) -> int:
             payload = {"ok": False, "changes_applied": False,
                 "error": "Update worker failed; inspect private worker.log and installed doctor before retrying"}
             code = 1
+        # Publish the authoritative result before advertising completion. Readers
+        # may observe either file write, and terminal progress is best-effort.
+        atomic_json(folder / "result.json", payload)
         try:
             progress = json.loads((folder / "status.json").read_text(encoding="utf-8"))
             progress.update(status="succeeded" if payload.get("ok") else "failed", updated_at=time.time())
             atomic_json(folder / "status.json", progress)
         except (OSError, ValueError):
             pass
-        atomic_json(folder / "result.json", payload)
         return code or 0
 
 

@@ -7,7 +7,7 @@ import shlex
 import pytest
 
 from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view, read_context_capture
-from loopx.control_plane.turn_driver.codex_context import _context_pages
+from loopx.control_plane.turn_driver.codex_context import _context_pages, _verified_context_pages
 from loopx.control_plane.turn_driver.decision_capture import (
     capture_page_range, read_context_read_reference, write_context_read_reference,
 )
@@ -23,13 +23,97 @@ def read(command, **overrides):
     return read_context_capture(args)
 
 
+def pinned_initial_view(payload, directory):
+    base = native_context_capture_view(payload, directory)
+    from loopx.control_plane.quota import turn_envelope
+
+    plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
+    capture = {key: base["recovery"][key] for key in ("path", "sha256")}
+    return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        max_page_output_bytes=64000,
+        initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
 def fixture(tmp_path):
     payload = {"ok": True, "interaction_contract": {"schema_version": "loopx_interaction_contract_v0"},
         "goal_boundary": {"stop": "Do not extend the original budget."},
         "selected_todo": {"todo_id": "todo_fixture", "text": "Compare 原始条件。" * 900},
         "criterion": {"value": 9007199254740993, "stop": "No publication is authorized."}}
-    view = native_context_capture_view(payload, tmp_path)
+    view = pinned_initial_view(payload, tmp_path)
     return payload, view, model_context_reference(view)
+
+
+@pytest.mark.parametrize("listing", [False, True])
+@pytest.mark.parametrize("selectors", [
+    [""], ["/a~1b~0c/0/number"], ["/a~1b~0c", "/a~1b~0c/0/number"],
+    ["/", "/0/01"], ["/scalar/child"], ["/null/child"], ["/empty/child"],
+    ["/a~1b~0c/3"], ["/a~1b~0c/01"], ["/a~1b~0c/-1"],
+    ["/a~1b~0c/9007199254740992"], ["/a~1b~0c/0/absent/child"],
+    ["/a~1b~0c/0/number", "/missing"], ["/invalid~2"], ["invalid"],
+])
+def test_selected_structure_preserves_original_reader_and_recovery(tmp_path, monkeypatch, selectors, listing):
+    from loopx.control_plane.turn_driver import decision_capture
+
+    payload = {"a/b~c": [{"number": 10**45 + 17}, {"tail": "完整原值"}],
+        "": "empty-key", "0": {"01": -0.0}, "scalar": "source text", "null": None,
+        "empty": {}, "unread": {f"sibling_{index}": {"value": index} for index in range(200)}}
+    source = tmp_path / "source.json"
+    original = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
+    source.write_bytes(original)
+    source.chmod(0o600)
+    command = shlex.join(["loopx", "--format", "json", "quota", "context-read", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", "64000",
+        "--max-page-output-bytes", "64000"])
+    # The unpruned transport independently exercises the original typed owner,
+    # including its failed-batch precedence and nearest-container remediation.
+    with monkeypatch.context() as old:
+        old.setattr(decision_capture, "context_selection_transport", lambda value, *args, **kwargs: value)
+        expected = read(command, select=selectors, list_fields=listing, list_depth=2 if listing else None)
+    observed = read(command, select=selectors, list_fields=listing, list_depth=2 if listing else None)
+    assert observed == expected
+    assert source.read_bytes() == original
+    if not listing and selectors == ["/a~1b~0c/0/number"]:
+        assert json.loads(observed["content"])["selections"][0]["value"] == 10**45 + 17
+    if not observed["ok"] and "recovery_command" in observed:
+        assert read(observed["recovery_command"])["ok"], "Recovery must still discover the complete original parent"
+
+
+def test_scoped_discovery_keeps_unrelated_values_out_of_the_runtime_request(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    sizes = []
+    evaluate = turn_envelope.effect_runtime_projection_result
+
+    def measure(method, request):
+        if request.get("operation") == "context_select":
+            sizes.append(len(json.dumps(request, ensure_ascii=False).encode()))
+        return evaluate(method, request)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", measure)
+    template = b'{"selected":{"answer":42},"unrelated":""}'
+    raw = template[:-2] + b"x" * 100_000 + template[-2:]
+    source = tmp_path / "decision.json"
+    source.write_bytes(raw)
+    command = shlex.join(["loopx", "--format", "json", "quota", "context-read",
+        "--capture-file", str(source), "--capture-sha256", hashlib.sha256(raw).hexdigest()])
+    page = read(command, select=["/selected"], list_fields=True)
+    assert page["ok"] and page["eof"], page
+    assert sizes and sum(sizes) < len(raw) // 100
+    assert json.loads(page["content"])["selections"] == [{"pointer": "/selected", "fields": [
+        {"pointer": "/selected/answer", "type": "number", "bytes": 2}]}]
+
+
+def assert_section_read_only(page, machine):
+    raw = Path(machine["path"]).read_bytes()
+    reference = {"path": machine["path"], "sha256": machine["sha256"]}
+    pages = _context_pages(page)
+    assert pages == [page]
+    assert capture_page_range(page, raw=raw, digest=machine["sha256"]) is None
+    observed = _verified_context_pages({"source_recovery": reference, "recovery": reference}, pages)
+    assert len(observed) == 1, "a valid selected page must reach the section-read owner"
+    assert observed[0]["source_sha256"] == machine["sha256"]
+    assert observed[0]["read_sections"]
+    assert capture_page_range(observed[0], raw=raw, digest=machine["sha256"]) is None
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
@@ -97,7 +181,7 @@ def test_selected_continuations_hide_both_digests_and_preserve_exact_values(tmp_
     while True:
         assert page["ok"] and page["schema_version"] == "context_capture_selection_page_v1"
         assert not any(key in page for key in ("sha256", "selection_sha256", "selected_pointers"))
-        assert _context_pages(page) == []  # selected EOF is never a full-input receipt
+        assert_section_read_only(page, machine)
         parts.append(page["content"])
         if page["eof"]:
             break
@@ -156,9 +240,11 @@ def test_initial_reference_navigation_change_preserves_original_read_boundary(tm
         return original(operation, **kwargs)
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", changed_navigation)
-    # A fresh initial read now has different navigation over the same source.
-    current = read(model["first_read_command"])
+    # The explicit recipe replans; the prepared model cursor keeps the
+    # addresses selected when this immutable capture was presented.
+    current = read(machine["first_read_command"])
     assert json.loads(current["content"])["selections"] == [{"pointer": "/criterion", "value": payload["criterion"]}]
+    assert read(model["first_read_command"])["content"] == expected["content"]
     following = read(first["next_command"], reference_file=str(reference))
     if legacy:
         assert following["ok"] is False and "digest changed" in following["reason"]
@@ -170,7 +256,7 @@ def test_initial_reference_navigation_change_preserves_original_read_boundary(tm
         parts = [first["content"]]
         while True:
             assert following["ok"] and following["schema_version"] == "context_capture_selection_page_v1"
-            assert _context_pages(following) == []
+            assert_section_read_only(following, machine)
             assert following["offset"] == len("".join(parts).encode())
             parts.append(following["content"])
             if following["eof"]:
@@ -209,12 +295,13 @@ def test_pinned_explicit_replay_keeps_the_digest_bound_order_and_original_values
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe)
     command = f"loopx --format json quota context-read --reference-file {shlex.quote(str(reference))} --page-bytes 3000 --max-page-output-bytes 3500"
-    content, pages = b"", 0
+    content, pages, observed_pages = b"", 0, []
     while True:
         page = read(command)
         assert page["ok"] and page["offset"] == len(content), page
-        assert _context_pages(page) == []
+        assert _context_pages(page) == [page]
         assert capture_page_range(page, raw=path.read_bytes(), digest=digest) is None
+        observed_pages.append(page)
         content += page["content"].encode()
         pages += 1
         if page["eof"]:
@@ -225,6 +312,8 @@ def test_pinned_explicit_replay_keeps_the_digest_bound_order_and_original_values
     assert requests[0]["preserve_selection_order"] is True
     if layout == "legacy_canonical":
         assert all(not request.get("preserve_selection_order", False) for request in requests[1::2])
+    for page in observed_pages:
+        assert_section_read_only(page, machine)
     assert {f: f.read_bytes() for f in before} == before
 
 
@@ -265,18 +354,100 @@ def test_resolved_initial_addresses_replay_without_replanning_the_initial_profil
     assert {f: f.read_bytes() for f in before} == before
 
 
+@pytest.mark.parametrize("kind", ["initial", "historical_initial", "pinned"])
+def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_path, monkeypatch, kind):
+    from loopx.control_plane.turn_driver import codex_context as context
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    from test_codex_context_lifecycle import setup, project, deliver
+    from test_progressive_native_context import payload, outcome
+
+    event = setup(tmp_path, monkeypatch)
+    original = payload()
+    original["interaction_contract"] = {"schema_version": "loopx_interaction_contract_v0",
+        "agent_channel": {"work_context": {"sources": []}}}
+    original["selected_todo"] = {"todo_id": "todo_work", "claimed_by": "agent",
+        "text": "Read the complete original requirement. " * 400}
+    outcome(original)["requirements"][0]["description"] += " Keep the original Stop." * 400
+    project(tmp_path, payload=original)
+    source = context._state(tmp_path)["source_recovery"]
+    path, digest = Path(source["path"]), source["sha256"]
+    reference = write_context_read_reference(path, digest)
+    command = context_capture_read_command(path, digest, reference_file=reference)
+    if kind == "pinned":
+        pointers = ["/stop", "/planning_horizon"]
+        expected = json.dumps({"schema_version": "context_capture_selection_v1", "selections": [
+            {"pointer": pointer, "value": original[pointer[1:]]} for pointer in pointers]},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        reference = write_context_read_reference(path, digest, selection={"select": pointers,
+            "initial_read": False, "list_fields": False, "list_depth": None,
+            "sha256": hashlib.sha256(expected).hexdigest()})
+        page = read(command, reference_file=str(reference), page_bytes=3000, max_page_output_bytes=3500)
+    else:
+        page = read(command, initial_read=True, page_bytes=3000, max_page_output_bytes=3500)
+        if kind == "historical_initial":
+            _, descriptor = read_context_read_reference(page["reference_file"])
+            reference = write_context_read_reference(path, digest, selection={
+                **descriptor["selection"], "select": None, "initial_read": True})
+            page = read(command, reference_file=str(reference), page_bytes=3000, max_page_output_bytes=3500)
+    pages = []
+    while True:
+        assert page["ok"], page
+        pages.append(page)
+        if page["eof"]:
+            break
+        page = read(page["next_command"])
+    assert len(pages) > 2
+    before = path.read_bytes()
+    deliver(tmp_path, event, pages[1:])
+    assert not context._state(tmp_path).get("confirmed_read_sections"), "EOF cannot hide unread earlier pages"
+    deliver(tmp_path, event, pages[:1])
+    state = context._state(tmp_path)
+    assert state["confirmed_read_sections"]
+    assert state["consumed_pointers"]
+    assert "candidate" not in state, "section coverage cannot establish full model-input retention"
+    assert path.read_bytes() == before
+    _, warm = project(tmp_path, "after-selected-read", payload=original)
+    current = json.loads(Path(warm["recovery"]["path"]).read_bytes())
+    unread = current["context_details"]["unread_context_index"]["pointers"]
+    for pointer in state["consumed_pointers"]:
+        assert not any(item == pointer or item.startswith(pointer + "/") for item in unread)
+    assert "candidate" not in context._state(tmp_path)
+
+
+@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index"])
+def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tmp_path, damage):
+    _, machine, model = fixture(tmp_path)
+    reference = {"path": machine["path"], "sha256": machine["sha256"]}
+    state = {"source_recovery": reference, "recovery": reference}
+    page = read(model["command"], select=["/criterion"])
+    assert_section_read_only(page, machine)
+    if damage == "content":
+        page = {**page, "content": page["content"][:-1] + "!",
+            "read_sections": {"/criterion": "a" * 64}, "source_sha256": machine["sha256"]}
+    elif damage == "foreign_capture":
+        other = tmp_path / "foreign"
+        other.mkdir(mode=0o700)
+        _, _, foreign = fixture(other)
+        page = read(foreign["command"], select=["/criterion"])
+    else:
+        page = read(model["command"], select=[""], list_fields=True)
+    assert _verified_context_pages(state, _context_pages(page)) == []
+
+
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])
 def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypatch, selection):
     import errno
-    from loopx.cli_commands import quota_capture
+    from loopx.cli_commands import quota_context_reader
 
     payload, machine, model = fixture(tmp_path)
     before = Path(machine["path"]).read_bytes()
+    blocked_paths = []
 
-    def unavailable(*args, **kwargs):
+    def unavailable(path, *args, **kwargs):
+        blocked_paths.append(path)
         raise OSError(errno.ENOSPC, "synthetic metadata unavailable")
 
-    monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable)
+    monkeypatch.setattr(quota_context_reader, "write_context_read_reference", unavailable)
     options = {"fields": {"select": ["/selected_todo", "/criterion"]},
                "index": {"list_fields": True}, "initial": {"initial_read": True}}[selection]
     page = read(model["command"], max_page_output_bytes=3500, page_bytes=3000, **options)
@@ -298,6 +469,7 @@ def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypa
         assert {item["pointer"] for item in values[0]["fields"]} == {"/" + key for key in payload}
     else:
         assert next(item["value"] for item in values if item["pointer"] == "/goal_boundary") == payload["goal_boundary"]
+    assert blocked_paths == [Path(machine["path"])]
     assert Path(machine["path"]).read_bytes() == before
 
 

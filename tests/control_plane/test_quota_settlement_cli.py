@@ -810,6 +810,9 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
     for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(key, raising=False)
+    # Disposable transport qualification requires explicit collection and a
+    # numeric loopback endpoint; enabled state alone cannot bypass temp isolation.
+    monkeypatch.setenv("LOOPX_USAGE_PING", "1")
     usage_path = machine / "usage-ping.json"
     usage_ping.control("enable", usage_path)
     project, runtime, registry_path = _write_fixture(
@@ -4730,7 +4733,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         AGENT_ID,
     )
     assert guard_rc == 0, guard
-    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    interaction = guard["interaction_contract"]
+    agent = interaction["agent_channel"]
+    cli = interaction["cli_channel"]
+    actions = cli["next_cli_actions"]
     assert len(actions) == 1
     if profile == "codex_app_ssh_goal":
         assert actions[0].endswith("--begin-turn")
@@ -4738,6 +4744,18 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         assert "--turn-instance-id" in actions[0]
         assert "--begin-turn" not in actions[0]
     assert all("spend-slot" not in action for action in actions)
+    assert guard["should_run"] is True
+    assert guard["normal_delivery_allowed"] is False
+    assert guard["execution_obligation"]["delivery_allowed"] is False
+    assert guard["execution_obligation"]["must_attempt_work"] is False
+    assert guard["recommended_action"] == actions[0] == agent["primary_action"]
+    assert agent["must_attempt"] is True
+    assert agent["delivery_allowed"] is False
+    assert agent["quiet_noop_allowed"] is False
+    assert cli["turn_binding_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert "settlement_plan" not in cli
+    assert not guard.get("heartbeat_receipt")
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -4767,7 +4785,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     )
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
-    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    bound_interaction = bound["interaction_contract"]
+    assert bound_interaction["agent_channel"]["delivery_allowed"] is True
+    assert "turn_binding_required" not in bound_interaction["cli_channel"]
+    plan = bound_interaction["cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO_ID
     assert plan["identity"]["agent_id"] == AGENT_ID
     if profile != "codex_app_ssh_goal":
@@ -4805,6 +4826,37 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
         "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
         "passing its own --turn-instance-id"
     )
+
+
+@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    rc, preview = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+    )
+    assert rc == 0, preview
+    contract = preview["interaction_contract"]
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    cli = contract["cli_channel"]
+    assert cli["selection_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert not preview.get("heartbeat_receipt")
+
+    selection = cli["selection_command"]
+    command = (selection["route_prefix"] + " " + selection["command_args_template"]).replace(
+        "{todo_id}", ALTERNATIVE_TODO_ID,
+    ).replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
+    bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
+    assert bound_rc == 0, bound
+    assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = bound["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
@@ -5362,6 +5414,13 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID,
     )
     assert claim_rc == 0 and claim["execution_managed"] is True, json.dumps(claim)
+    prepared_rc, prepared = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert prepared_rc == 0, prepared
+    assert prepared["execution_preparation"]["state"] == "ready"
+    assert prepared["normal_delivery_allowed"] is True
+    assert prepared["heartbeat_receipt"]["settlement_identity"] == (
+        first["heartbeat_receipt"]["settlement_identity"]
+    )
     # This result exists before the lifecycle wait; recovery must account for
     # it without executing more work or rebinding the original Turn.
     artifact = project / "verified-before-wait.txt"
@@ -5409,7 +5468,8 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     )
     plan = interaction["cli_channel"].get("settlement_plan")
     assert plan["identity"] == first["heartbeat_receipt"]["settlement_identity"]
-    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+    # Preparation and positive work admission share one settlement identity.
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
     assert _spend_run_count(runtime) == 0
 
     conflict_rc, conflict = _run_cli(
@@ -5420,7 +5480,7 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "heartbeat_receipt_identity_conflict",
         "quota_action_selection_rejected",
     }
-    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
 
     vision = tmp_path / "before-wait-vision.json"
     vision.write_text(json.dumps({
@@ -5464,9 +5524,10 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
 
 
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_due_successor_replan_replays_until_the_same_task_is_reopened(
-    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, provider: str, handoff_mode: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -5478,7 +5539,7 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
         f"todo_id={TODO_ID} status=open",
         f"todo_id={TODO_ID} status=deferred resume_when=resume_at:2000-01-01T00:00:00Z",
     ))
-    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "due-successor-replay",
@@ -5486,6 +5547,10 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
     assert first["effective_action"] == "successor_replan_required"
+    assert first["should_run"] is True
+    assert first["normal_delivery_allowed"] is False
+    assert first["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert first["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is False
     identity = first["heartbeat_receipt"]["settlement_identity"]
     rc, replay = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, replay
@@ -5495,12 +5560,35 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert replay["heartbeat_receipt"]["settlement_identity"] == identity
     assert _spend_run_count(runtime) == 0
 
-    rc, deferred = _run_cli(
-        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+    defer_args = (
+        "todo", "update", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
         "--reason", "A new dependency is not ready yet.",
     )
+    rc, deferred = _run_cli(registry_path, runtime, *defer_args)
+    if handoff_mode == "hard_lease":
+        assert rc == 1 and deferred["error_code"] == "handoff_mode_requires_lease", deferred
+        recovery = deferred["recovery"]
+        assert recovery["execution_authority_granted"] is False
+        assert recovery["action"] == "resolve_lifecycle_edit"
+        # Follow the returned lifecycle recovery, without acquiring execution
+        # for a deferred Todo or changing its declaration.
+        rc, current = _run_cli(registry_path, runtime, "todo", "list",
+            "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0, current
+        command = shlex.join(["loopx", *recovery["retry"]["cli_args"],
+            "--reason", "Review the wait before rescheduling it.",
+            "--update-operation-id", "due-successor-reviewed-resume",
+            "--update-expected-provider-revision", current["authority_read"]["provider_revision"]])
+        rc, resumed_wait = _run_generated_cli(command, registry_path=registry_path)
+        assert rc == 0, resumed_wait
+        rc, current = _run_cli(registry_path, runtime, "todo", "list",
+            "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0, current
+        rc, deferred = _run_cli(registry_path, runtime, *defer_args,
+            "--update-operation-id", "due-successor-reviewed-deferral",
+            "--update-expected-provider-revision", current["authority_read"]["provider_revision"])
     assert rc == 0, deferred
     rc, paused = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, paused
@@ -5518,16 +5606,37 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert rc == 0, reopened
     rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
     assert rc == 0, resumed
+    if handoff_mode == "hard_lease":
+        assert resumed["normal_delivery_allowed"] is False
+        assert resumed["execution_preparation"]["state"] == "claim_required"
+        assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
+        rc, claimed = _run_cli(registry_path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID)
+        assert rc == 0 and claimed["execution_managed"] is True, claimed
+        rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+        assert rc == 0 and resumed["execution_preparation"]["state"] == "ready", resumed
     assert resumed["normal_delivery_allowed"] is True
     assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("scoped_gate,pending_selection", [
+    (False, False), (False, True), (True, False),
+])
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
-    tmp_path: Path,
+    tmp_path: Path, scoped_gate: bool, pending_selection: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if scoped_gate:
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text() + (
+            "\n## User Todo\n\n- [ ] [P0] Approve unrelated publication.\n"
+            "  <!-- loopx:todo todo_id=todo_publication_gate status=open "
+            f"task_class=user_gate blocks_agent={AGENT_ID} "
+            "decision_scope=write_scope:action:release "
+            "unblocks_todo_id=todo_publication -->\n"
+        ))
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
         "codex-settlement-peer"
@@ -5567,12 +5676,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     _initialize_fixture_authority(project, runtime)
-    first_rc, first = _run_cli(
-        registry_path,
-        runtime,
-        *guard_args,
-        cwd=project,
-    )
+    if pending_selection:
+        first_rc, first = _run_cli(
+            registry_path, runtime, *guard_args, cwd=project,
+        )
+        assert first_rc == 0, first
+        assert "settlement_identity" not in first["heartbeat_receipt"]
     repair_rc, repair = _run_cli(
         registry_path,
         runtime,
@@ -5582,8 +5691,6 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         cwd=project,
     )
 
-    assert first_rc == 0, first
-    assert "settlement_identity" not in first["heartbeat_receipt"]
     assert repair_rc == 0, repair
     assert repair.get("error_code") != "heartbeat_receipt_identity_conflict"
     assert repair["effective_action"] == "agent_workspace_repair"
@@ -5595,7 +5702,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         "create or switch to an independent worktree/branch, then rerun quota "
         "guard before file edits"
     )
-    assert repair["heartbeat_receipt"]["status"] == "upgraded"
+    assert repair["heartbeat_receipt"]["status"] == (
+        "upgraded" if pending_selection else "committed"
+    )
+    assert repair["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert repair["normal_delivery_allowed"] is False
+    assert repair["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
     assert repair["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
         ALTERNATIVE_TODO_ID
     )
@@ -5616,8 +5728,14 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     assert resumed_rc == 0, resumed
-    assert resumed["effective_action"] == "normal_run"
-    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["effective_action"] == (
+        "operator_gate_notify" if scoped_gate else "normal_run"
+    )
+    assert resumed["normal_delivery_allowed"] is (not scoped_gate)
+    assert resumed["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    if scoped_gate:
+        assert resumed["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert resumed["requires_user_action"] is True
     assert resumed["workspace_repair_allowed"] is False
     assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
@@ -5627,12 +5745,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     assert resumed["heartbeat_receipt"]["status"] == "upgraded"
     assert resumed["heartbeat_receipt"]["settlement_identity"] == repair["heartbeat_receipt"]["settlement_identity"]
     assert resumed["heartbeat_receipt"]["event_id"] != repair["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
     replay_rc, replay = _run_cli(registry_path, runtime, *guard_args,
         "--todo-id", ALTERNATIVE_TODO_ID, cwd=linked_worktree)
     assert replay_rc == 0 and replay["heartbeat_receipt"]["status"] == "replayed", replay
     assert replay["heartbeat_receipt"]["event_id"] == resumed["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
 
 
 def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
@@ -6924,6 +7042,21 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert actions[0].endswith("--begin-turn")
     assert "refresh-state" not in actions[0]
     assert "spend-slot" not in actions[0]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(unbound)
+    assert envelope["action"]["primary_action"] == actions[0]
+    assert envelope["action"]["must_attempt"] is True
+    assert envelope["action"]["delivery_allowed"] is False
+    assert envelope["writeback"]["next_cli_actions"] == actions
+    assert envelope["writeback"]["spend_after_validation"] is False
+    assert envelope["replan_action_packet"] is None
+    from loopx.control_plane.turn_driver import build_loopx_turn_plan
+
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert plan["route"]["kind"] == "blocked"
+    assert plan["route"]["would_invoke_host"] is False
+    assert not any(plan["effects"].values())
 
     bound_rc, bound = _run_generated_cli(
         actions[0],
@@ -7307,8 +7440,9 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("stride", [False, True])
+@pytest.mark.parametrize("vision_gap", [False, True])
 def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool, vision_gap: bool,
 ) -> None:
     """Refreshing cumulative requirements must not rebind an admitted review."""
     if provider == "sqlite":
@@ -7348,11 +7482,36 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         "declare-outcome")
     call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--no-follow-up", "--evidence", "artifact:initial-delivery")
+    if vision_gap:
+        from loopx.control_plane.goals.goal_vision import (
+            compact_goal_vision_packet, normalize_goal_vision_packet,
+        )
+
+        # Two independently owned gaps coexist before admission. Linking work
+        # removes only the outcome gap, not the owed evidence-based review.
+        index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        source_json, source_md = index.parent / "source.json", index.parent / "source.md"
+        source_json.write_text('{"fixture":"independent-vision-gap"}\n')
+        source_md.write_text("# Independently review the original artifact\n")
+        vision = compact_goal_vision_packet(normalize_goal_vision_packet({
+            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Recovery evidence remains unproven.",
+                "replan_trigger_summary": "Review the artifact before selecting further work.",
+                "advancement_policy": "repeat_until_closed"},
+        }, goal_id=GOAL_ID, agent_id=AGENT_ID))
+        with index.open("a") as stream:
+            stream.write(json.dumps({"classification": "validated_progress", "agent_id": AGENT_ID,
+                "generated_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                "agent_vision": vision, "json_path": str(source_json), "markdown_path": str(source_md)}) + "\n")
     turn = "turn-replan-outcome-refinement"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn)
     first = call(*guard_args)
     assert first["decision"] == "autonomous_replan_required", first
+    if vision_gap:
+        assert {row["kind"] for row in first["autonomous_replan_obligation"]["triggers"]} == {
+            "vision_acceptance_gap", "goal_outcome_uncovered"}
     identity = first["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     receipt = _heartbeat_receipt_events(runtime, turn)[0]
@@ -7372,7 +7531,8 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         if row.get("source") == "goal_acceptance")
     assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
     assert _heartbeat_receipt_count(runtime, turn) == 1
-    assert receipt["details"]["semantic_replan_review_kind"] == "goal_outcome_uncovered"
+    assert receipt["details"]["semantic_replan_review_kind"] == (
+        "vision_acceptance_gap" if vision_gap else "goal_outcome_uncovered")
     assert receipt["details"]["semantic_replan_review_stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert replay["autonomous_replan_obligation"]["stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert "semantic_replan_obligation" not in receipt["details"]
@@ -7427,7 +7587,9 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
     empty = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
         "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
-        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(decision),
+        "--delivery-outcome", "outcome_progress",
+        *(("--vision-unchanged-reason", "The original artifact remains unproven.") if vision_gap
+          else ("--agent-vision-json", str(decision))),
         "--no-global-sync", "--suppress-external-sinks", expected_code=1)
     assert empty["appended"] is False
     assert _spend_run_count(runtime) == 0
@@ -7959,6 +8121,196 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
     assert rc == 0, settled
     assert settled["effective_action"] == "heartbeat_settled_skip"
     assert settled["interaction_contract"]["agent_channel"]["must_attempt"] is False
+
+
+@pytest.mark.parametrize("goal_commitment", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_turn_closes_automatically_archived_todo_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, goal_commitment: bool,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    # A real validator checks a synthetic result; its counter detects any
+    # repeated validation during closeout or receipt recovery.
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
+    state_path = _configure_read_only_todo(project)
+    artifact = project / "result.json"
+    artifact.write_text('{"sum":45}\n', encoding="utf-8")
+    counter = project / "validator-count.txt"
+    validator = (
+        "import json; from pathlib import Path; "
+        f"assert json.loads(Path({str(artifact)!r}).read_text()) == {{'sum':45}}; "
+        f"p=Path({str(counter)!r}); "
+        "p.write_text(str(int(p.read_text())+1 if p.exists() else 1))"
+    )
+    argv = quote(json.dumps([sys.executable, "-c", validator]), safe="")
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate ",
+            f"action_kind=validate validation_command_argv={argv} ", 1,
+        ) + "".join(
+            f"\n- [x] [P2] Completed synthetic history {index}.\n"
+            f"  <!-- loopx:todo todo_id=todo_history_{index:04d} status=done "
+            "task_class=advancement_task action_kind=validate -->\n"
+            for index in range(100)
+        ),
+        encoding="utf-8",
+    )
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider,
+                                  handoff_mode="hard_lease", leases=[])
+    goal_counter = project / "goal-validator-count.txt"
+    if goal_commitment:
+        # A failed cross-task Goal check cannot replace or block the local
+        # validator, nor become accepted just because this Todo closes.
+        checks = tmp_path / "goal-checks.json"
+        checks.write_text(json.dumps({
+            "scope": {"kind": "goal"}, "objective": "Fulfil the overall commitment",
+            "non_goals": [], "bindings": [], "criteria": [{
+                "id": "overall-commitment", "description": "Overall work remains incomplete",
+                "validation_argv": [sys.executable, "-c",
+                    "from pathlib import Path; "
+                    f"p=Path({str(goal_counter)!r}); "
+                    "p.write_text(str(int(p.read_text())+1 if p.exists() else 1)); "
+                    "raise SystemExit(1)"],
+            }],
+        }), encoding="utf-8")
+        rc, inspected = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                                 "--goal-id", GOAL_ID)
+        assert rc == 0, inspected
+        rc, configured = _run_cli(
+            registry_path, runtime, "goal-acceptance", "configure", "--goal-id", GOAL_ID,
+            "--document", str(checks), "--operation-id", "overall-check",
+            "--expected-provider-revision", inspected["provider_revision"], "--execute",
+        )
+        assert rc == 0, configured
+        rc, failed = _run_cli(registry_path, runtime, "goal-acceptance", "verify",
+                             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--execute")
+        assert rc == 1 and failed["checks_passed"] is False, failed
+        assert goal_counter.read_text() == "1"
+    claim_id = "original-archive-closeout-claim"
+    rc, claim = _run_cli(registry_path, runtime, "todo", "claim",
+                        "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID,
+                        "--claim-operation-id", claim_id)
+    assert rc == 0, claim
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry_path, runtime, "quota", "should-run",
+                        "--codex-app", *binding)
+    assert rc == 0 and guard["normal_delivery_allowed"], guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    ordinary_args = ("todo", "complete", *binding, "--claim-operation-id", claim_id,
+                     "--evidence", "artifact:verified-sum")
+    rc, ordinary = _run_cli(registry_path, runtime, *ordinary_args)
+    assert rc == 0 and ordinary["validation_receipt"]["passed"], ordinary
+    rc, archived = _run_cli(registry_path, runtime, "todo", "list",
+                           "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                           "--include-archived")
+    assert rc == 0, archived
+    assert archived["todo"]["archive_state"] == "archive"
+    assert archived["todo"]["status"] == "done"
+    completed_at = archived["todo"]["completed_at"]
+    terminal_args = (*ordinary_args, "--no-follow-up")
+    rc, premature = _run_cli(registry_path, runtime, *terminal_args)
+    assert rc == 1, premature
+    assert "requires matching writeback and quota spend receipts" in premature["error"]
+    assert _spend_run_count(runtime) == 0
+
+    rc, written = _run_cli(
+        registry_path, runtime, "refresh-state", *binding,
+        "--classification", "archived_result_verified",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--vision-state", "vision_closed",
+        "--vision-acceptance", "The independently verified sum is durably recorded.",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0, written
+    spend_args = ("quota", "spend-slot", *binding, "--slots", "1",
+                  "--source", "heartbeat", "--execute")
+    for _ in range(2):
+        rc, spent = _run_cli(registry_path, runtime, *spend_args)
+        assert rc == 0, spent
+    validation_runs = counter.read_text()
+    assert validation_runs == "1"
+
+    # A reused validation receipt cannot authorize replacing the artifact that
+    # the archived Todo accepted. Changing only evidence must fail before the
+    # terminal receipt exists and after that receipt can be replayed.
+    replacement_args = tuple(
+        "artifact:unvalidated-replacement" if arg == "artifact:verified-sum" else arg
+        for arg in terminal_args
+    )
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
+    rc, preserved = _run_cli(registry_path, runtime, "todo", "list",
+                             "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                             "--include-archived")
+    assert rc == 0, preserved
+    assert preserved["todo"]["evidence"] == "artifact:verified-sum"
+    assert counter.read_text() == validation_runs
+    assert _spend_run_count(runtime) == 1
+
+    # An unrelated archived task, another actor, and a different claim or Turn
+    # cannot borrow the completed task's original receipt or settlement.
+    attempts = [
+        ("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+         "--todo-id", "todo_history_0000"),
+        tuple("unregistered-actor" if arg == AGENT_ID else arg for arg in terminal_args),
+        tuple("unrelated-claim" if arg == claim_id else arg for arg in terminal_args),
+        tuple("different-turn" if arg == TURN_ID else arg for arg in terminal_args),
+        (*terminal_args, "--clear-claim"),
+    ]
+    for attempt in attempts:
+        rc, refused = _run_cli(registry_path, runtime, *attempt)
+        assert rc == 1, refused
+        assert _spend_run_count(runtime) == 1
+        assert counter.read_text() == validation_runs
+    assert refused["error_code"] == "coordination_operation_identity_mismatch", refused
+
+    rc, terminal = _run_cli(registry_path, runtime, *terminal_args)
+    assert rc == 0, terminal
+    assert terminal["completion_continuation"] == "no_followup"
+    assert terminal["completion_recovery"] == "same_turn_terminal_closeout"
+    assert terminal["completion_identity_key"] == ordinary["completion_identity_key"]
+    assert terminal["validation_receipt"] == ordinary["validation_receipt"]
+    assert [row["step_kind"] for row in terminal["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    evidence_index = terminal_args.index("--evidence")
+    omitted_evidence = terminal_args[:evidence_index] + terminal_args[evidence_index + 2:]
+    empty_evidence = (*terminal_args[:evidence_index + 1], "", *terminal_args[evidence_index + 2:])
+    for args in (omitted_evidence, empty_evidence):
+        rc, refused = _run_cli(registry_path, runtime, *args)
+        assert rc == 1 and "requires --note or --evidence" in refused["error"], refused
+    completion_note = ("--note", "Close the original independently verified result.")
+    for args in (terminal_args, ordinary_args,
+                 (*omitted_evidence, *completion_note), (*empty_evidence, *completion_note)):
+        rc, replay = _run_cli(registry_path, runtime, *args)
+        assert rc == 0 and replay["idempotent_replay"], replay
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
+    rc, final = _run_cli(registry_path, runtime, "todo", "list",
+                        "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                        "--include-archived")
+    assert rc == 0, final
+    assert final["todo"]["archive_state"] == "archive"
+    assert final["todo"]["completed_at"] == completed_at
+    assert final["todo"]["evidence"] == "artifact:verified-sum"
+    assert final["todo"]["completion_turn_key"] == identity["effect_id"]
+    assert counter.read_text() == validation_runs
+    assert _spend_run_count(runtime) == 1
+    assert _classification_count(runtime, "archived_result_verified") == 1
+    if goal_commitment:
+        rc, overall = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                               "--goal-id", GOAL_ID)
+        assert rc == 0, overall
+        assert overall["goal_acceptance_contract"]["status"] == "failed"
+        assert goal_counter.read_text() == "1"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

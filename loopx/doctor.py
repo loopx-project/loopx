@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from datetime import datetime, timezone
 from functools import partial
 from importlib.metadata import PackageNotFoundError, distribution
@@ -9,7 +11,6 @@ import re
 import shlex
 import sys
 from pathlib import Path
-from typing import Any
 
 from . import __version__, doctor_git
 from .command_invocation import resolve_command_path
@@ -27,7 +28,6 @@ from .install_contract import (
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
-    interpreter_invocation,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
 )
@@ -147,12 +147,18 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
     expected = module_path.resolve()
-    owns_module = any(
-        item.as_posix().endswith("loopx/doctor.py")
-        and Path(item.locate()).resolve() == expected
-        for item in installed.files or ()
-    )
-    if not owns_module:
+    module_suffix = os.path.join("loopx", "doctor.py")
+    for item in installed.files or ():
+        entry = item.as_posix()
+        if not os.path.normcase(entry).endswith(module_suffix):
+            continue
+        # A PackagePath uses POSIX components, so locating a drive-qualified
+        # RECORD entry can lose its Windows root on Python 3.11.
+        record_path = Path(entry)
+        located = record_path if record_path.is_absolute() else Path(item.locate())
+        if located.resolve() == expected:
+            break
+    else:
         return {"available": False}
     owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {
@@ -161,7 +167,7 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         "version": installed.version,
         "installer": owner.manager,
         "installer_environment": owner.environment,
-        "root": str(Path(installed.locate_file("")).resolve()),
+        "root": str(Path(cast(Path, installed.locate_file(""))).resolve()),
     }
 
 
@@ -180,7 +186,7 @@ def command_root_summary(
         "command": str(command_path) if command_path else None,
         "realpath": str(command_realpath) if command_realpath else None,
         "root": str(root) if root else None,
-        "release_id": root.name if is_release_snapshot(root) else None,
+        "release_id": cast(Path, root).name if is_release_snapshot(root) else None,
         "is_release_snapshot": is_release_snapshot(root),
     }
 
@@ -218,7 +224,7 @@ def build_install_freshness(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     reference = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    release_id = release_root.name if is_release_snapshot(release_root) else None
+    release_id = cast(Path, release_root).name if is_release_snapshot(release_root) else None
     release_time = parse_release_id_time(release_id)
     age_hours: float | None = None
     if release_time:
@@ -269,9 +275,9 @@ def build_install_freshness(
         requires_upgrade = False
 
     manifest = release_manifest if isinstance(release_manifest, dict) else {}
-    manifest_body = manifest.get("manifest") if isinstance(manifest.get("manifest"), dict) else {}
+    manifest_body = cast(dict[str, Any], manifest.get("manifest")) if isinstance(manifest.get("manifest"), dict) else {}
     manifest_package = (
-        manifest_body.get("package") if isinstance(manifest_body.get("package"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("package")) if isinstance(manifest_body.get("package"), dict) else {}
     )
     manifest_package_version = manifest_package.get("version")
     manifest_package_version_tag = manifest_package.get("version_tag") or (
@@ -286,7 +292,7 @@ def build_install_freshness(
         else None
     )
     manifest_source = (
-        manifest_body.get("source") if isinstance(manifest_body.get("source"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("source")) if isinstance(manifest_body.get("source"), dict) else {}
     )
     no_clone_command = no_clone_upgrade_command(
         manifest_source.get("ref"),
@@ -362,7 +368,7 @@ def build_install_freshness(
         requires_upgrade = True
 
     manifest_skills = (
-        manifest_body.get("skills") if isinstance(manifest_body.get("skills"), dict) else {}
+        cast(dict[str, Any], manifest_body.get("skills")) if isinstance(manifest_body.get("skills"), dict) else {}
     )
     return {
         "schema_version": "loopx_install_freshness_v0",
@@ -810,12 +816,12 @@ def collect_doctor(
     default_release["release_manifest_available"] = release_manifest.get("available")
     default_release["release_manifest_path"] = release_manifest.get("path")
     release_manifest_body = (
-        release_manifest.get("manifest")
+        cast(dict[str, Any], release_manifest.get("manifest"))
         if isinstance(release_manifest.get("manifest"), dict)
         else {}
     )
     release_manifest_source = (
-        release_manifest_body.get("source")
+        cast(dict[str, Any], release_manifest_body.get("source"))
         if isinstance(release_manifest_body.get("source"), dict)
         else {}
     )
@@ -1222,9 +1228,16 @@ def collect_doctor(
             if canonical_agent_type
             and agent_type_uses_host_managed_skills(canonical_agent_type)
             else (
-                "Run `loopx workflow-skills --install`, then "
-                "`loopx slash-commands --install`, and rerun doctor. Upgrade this "
-                f"installation with `{interpreter_invocation(sys.executable)} -m pip install --upgrade loopx`."
+                (
+                    f"Upgrade this installation with:\n\n```\n{install_freshness['upgrade_command']}\n```"
+                    if install_freshness["upgrade_command"]
+                    else (
+                        "Run `loopx workflow-skills --install`, then "
+                        "`loopx slash-commands --install`, and rerun doctor. "
+                        "Use the original package manager "
+                        f"({python_distribution.get('installer') or 'unknown installer'}) to upgrade this installation."
+                    )
+                )
                 if python_distribution.get("available")
                 else (
                     f"Run `{local_install_command(repo_root, skip_skills=externally_managed_skills)}` "
@@ -1336,12 +1349,12 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     release_provenance = payload.get("release_provenance") or {}
     default_release = release_provenance.get("default_release") or {}
     typescript_control_plane = (
-        payload.get("typescript_control_plane")
+        cast(dict[str, Any], payload.get("typescript_control_plane"))
         if isinstance(payload.get("typescript_control_plane"), dict)
         else {}
     )
     typescript_runtime_lifecycle = (
-        typescript_control_plane.get("runtime_lifecycle")
+        cast(dict[str, Any], typescript_control_plane.get("runtime_lifecycle"))
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
         else {}
     )
@@ -1388,13 +1401,13 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     for check in payload.get("checks") or []:
         required = "required" if check.get("required") else "optional"
         lines.append(f"- {check.get('id')} ({required}): `{check.get('ok')}` - {check.get('detail')}")
-    provenance = payload.get("release_provenance") if isinstance(payload.get("release_provenance"), dict) else {}
+    provenance = cast(dict[str, Any], payload.get("release_provenance")) if isinstance(payload.get("release_provenance"), dict) else {}
     if provenance:
-        default_release = provenance.get("default_release") if isinstance(provenance.get("default_release"), dict) else {}
-        live_canary = provenance.get("live_canary") if isinstance(provenance.get("live_canary"), dict) else {}
-        current = provenance.get("current_invocation") if isinstance(provenance.get("current_invocation"), dict) else {}
+        default_release = cast(dict[str, Any], provenance.get("default_release")) if isinstance(provenance.get("default_release"), dict) else {}
+        live_canary = cast(dict[str, Any], provenance.get("live_canary")) if isinstance(provenance.get("live_canary"), dict) else {}
+        current = cast(dict[str, Any], provenance.get("current_invocation")) if isinstance(provenance.get("current_invocation"), dict) else {}
         readiness = (
-            provenance.get("promotion_readiness")
+            cast(dict[str, Any], provenance.get("promotion_readiness"))
             if isinstance(provenance.get("promotion_readiness"), dict)
             else {}
         )
@@ -1431,7 +1444,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
                 ),
             ]
         )
-    freshness = payload.get("install_freshness") if isinstance(payload.get("install_freshness"), dict) else {}
+    freshness = cast(dict[str, Any], payload.get("install_freshness")) if isinstance(payload.get("install_freshness"), dict) else {}
     if freshness:
         manifest_source_repo = freshness.get("manifest_source_repo") or freshness.get("manifest_source_kind")
         manifest_source_ref = (

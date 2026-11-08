@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .contract import (
     normalize_todo_blocks_agent,
     normalize_todo_decision_outcome,
@@ -12,7 +14,7 @@ from .contract import (
 )
 
 
-def standing_decision_source_items(user_items, *, canonical_records=False):
+def standing_decision_source_items(user_items: Any, *, canonical_records: bool = False) -> list[dict[str, Any]]:
     items = []
     for item in user_items or []:
         if not isinstance(item, dict):

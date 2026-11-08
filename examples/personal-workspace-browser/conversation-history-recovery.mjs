@@ -12,6 +12,8 @@ async function pagedHistoryRecovery(browser, url) {
     role: index % 2 ? "agent" : "user", text: index === 201 ? "原始长文。".repeat(2400) : `原始历史第 ${index} 条。`,
     created_at: "2026-08-13T01:00:00Z"}));
   const context = await openWorkspacePage(browser, url, {
+    // The second page stays in flight until this setup returns to the test.
+    gotoWaitUntil: "domcontentloaded",
     async beforeGoto(_api, page) {
       const runtime = page.__loopxRuntime;
       runtime.sessions.clear();
@@ -131,6 +133,7 @@ async function retiredHistoryRead(browser, url) {
   const readWait = new Promise(resolve => { releaseRead = resolve; });
   const readStarted = new Promise(resolve => { markReadStarted = resolve; });
   const context = await openWorkspacePage(browser, url, {
+    gotoWaitUntil: "domcontentloaded",
     async beforeGoto(api, page) {
       const runtime = page.__loopxRuntime;
       runtime.sessions.set(sessionId, {
@@ -198,6 +201,7 @@ async function recoveryObserverHandover(browser, url) {
   const newTurnWait = new Promise(resolve => { releaseNewTurn = resolve; });
   const previewStarted = new Promise(resolve => { markPreviewStarted = resolve; });
   const context = await openWorkspacePage(browser, url, {
+    gotoWaitUntil: "domcontentloaded",
     async beforeGoto(api, page) {
       const runtime = page.__loopxRuntime;
       runtime.sessions.set(sessionId, {
@@ -277,6 +281,7 @@ export const conversationHistoryRecoveryScenario = {
     let unavailable = oldId;
     let failedReads = 0;
     const context = await openWorkspacePage(browser, url, {
+      gotoWaitUntil: "domcontentloaded",
       collectCoverage,
       beforeGoto(_api, page) {
         for (const [id, agentId, date, text] of [

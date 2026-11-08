@@ -5,6 +5,81 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 
+test("initial work measurement feedback preserves linked scopes without choosing an outcome profile", () => {
+  const profile = {metric: "quality", unit: "points", higher_is_better: true,
+    comparison_scope: "inputs:shared", input_revision: "v1", evaluation_ref: "judge:public"};
+  const finding = (id: string, node: string, order: number, candidate: string, value: number | null,
+    changes: JsonObject = {}) => ({finding_id: id, node_id: node, recorded_order: order,
+    measurements: [{...profile, ...changes, candidate_ref: candidate, evidence_ref: `result:${id}`, value}]});
+  const todo = {todo_id: "todo_current", role: "agent", status: "open", done: false, claimed_by: "worker",
+    explore_result_node_refs: ["shared", "local"]};
+  const request = {goal_id: "research", agent_id: "worker", route: ["loopx"], yardstick_enabled: true,
+    graph_enabled: true, harness_gate: {enabled: false}, work_todos: [todo], plan: {},
+    projection: {nodes: [], findings: [
+      finding("first", "shared", 1, "candidate:a", 10),
+      finding("second", "shared", 2, "candidate:b", 20),
+      finding("foreign", "unlinked", 3, "candidate:foreign", 1000),
+      finding("local-a", "local", 4, "candidate:a", 9, {metric: "screen"}),
+      finding("local-b", "local", 5, "candidate:b", 8, {metric: "screen"}),
+      finding("unknown", "local", 6, "candidate:c", null, {input_revision: "v2"}),
+      finding("other-unit", "local", 7, "candidate:c", 30, {unit: "percent"}),
+    ]}};
+  const original = structuredClone(request);
+  const graph = projectExploreTurnContext(request).graph as JsonObject;
+  const card = graph.work_measurements[0];
+  assert.equal(card.todo_id, todo.todo_id);
+  assert.equal(card.measurement_feedback.length, 3);
+  assert.equal(card.omitted_measurement_feedback, 1);
+  const outcome = card.measurement_feedback.find(row => row.node_id === "shared");
+  assert.equal(outcome.best.candidate_ref, "candidate:b");
+  assert.equal(outcome.best.value, 20);
+  assert.equal(outcome.latest.finding_id, "second");
+  assert.equal(outcome.input_revision, "v1");
+  const unknown = card.measurement_feedback.find(row => row.input_revision === "v2");
+  assert.equal(unknown.latest.measurement.value, null);
+  assert.equal(unknown.best, null);
+  assert.equal(unknown.improvement, null);
+  assert.ok(card.measurement_feedback.every(row => row.node_id !== "unlinked"));
+  assert.ok(!Object.hasOwn(card, "authoritative") && !Object.hasOwn(card, "search_comparison"));
+  assert.ok(!Object.hasOwn(graph, "work_yardsticks"));
+  assert.ok(card.details_command.includes("--todo-id") && card.details_command.includes(todo.todo_id));
+  assert.deepEqual(request, original);
+  for (const enabled of [false, undefined]) {
+    const off = projectExploreTurnContext({...request, yardstick_enabled: enabled}).graph as JsonObject;
+    assert.ok(!Object.hasOwn(off, "work_measurements"));
+    assert.deepEqual(off.measurement_feedback, graph.measurement_feedback);
+  }
+  for (const changes of [{claimed_by: "another"}, {done: true}, {status: "blocked"}, {explore_result_node_refs: []}]) {
+    const unavailable = projectExploreTurnContext({...request, work_todos: [{...todo, ...changes}]}).graph as JsonObject;
+    assert.ok(!Object.hasOwn(unavailable, "work_measurements"));
+  }
+  const scoped = projectExploreTurnContext({...request, result_node: "unlinked"}).graph as JsonObject;
+  assert.ok(!Object.hasOwn(scoped, "work_measurements"));
+  const shared = projectExploreTurnContext({...request,
+    work_todos: [todo, {...todo, todo_id: "todo_shared"}]}).graph as JsonObject;
+  assert.deepEqual(shared.work_measurements.map(row => row.todo_id), ["todo_current", "todo_shared"]);
+  assert.deepEqual(shared.work_measurements[0].measurement_feedback, shared.work_measurements[1].measurement_feedback);
+  const tied = structuredClone(request);
+  tied.projection.findings[1].measurements[0].value = 10;
+  const tiedGraph = projectExploreTurnContext(tied).graph as JsonObject;
+  const tie = tiedGraph.work_measurements[0].measurement_feedback.find(row => row.node_id === "shared");
+  assert.equal(tie.best.candidate_ref, "candidate:a");
+  assert.equal(tie.latest.measurement.candidate_ref, "candidate:b");
+  assert.equal(tie.improvement, 0);
+  const declared: JsonObject = {...request, result_node: "local", projection: {...request.projection,
+    findings: [...request.projection.findings, {finding_id: "declared", node_id: "shared", recorded_order: 8,
+      evidence_refs: [], work_yardstick: {binding: {goal_id: "research", agent_id: "worker",
+        todo_id: todo.todo_id, turn_instance_id: "turn:declared"}, decision: {
+        schema_version: "work_yardstick_decision_v0", target: {summary: "Improve the accepted outcome",
+          scope: "Original work", acceptance_ref: "acceptance:original"}, authoritative: profile,
+        proxy: null, counterevidence_refs: [], prior_finding_id: null,
+        next_action: {method_id: "method:retained", reason: "Continue the recorded choice", cost_bound: "Existing budget"},
+      }}}]}};
+  const differentQuestion = projectExploreTurnContext(declared).graph as JsonObject;
+  assert.ok(!Object.hasOwn(differentQuestion, "work_measurements"));
+  assert.ok(differentQuestion.measurement_feedback.every(row => row.node_id === "local"));
+});
+
 test("recent questions use UTC instants, preserve microseconds and retain legacy timestamps", () => {
   for (const timestamps of [
     ["2026-01-02T08:00:00+08:00", "2026-01-02T00:01:00Z", "2026-01-01T19:02:00-05:00"],

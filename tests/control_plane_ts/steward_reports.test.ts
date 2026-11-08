@@ -127,6 +127,69 @@ function original() {
   return {...params, binding: {...binding, managed_actor: actor}, actor, goal_active: true, source};
 }
 
+function allocatedFallback() {
+  const p = original();
+  const binding = {...p.binding, executor_endpoint_id: "antigravity"};
+  const session = {...p.session, executor_endpoint_id: "codex",
+    steward_context: {...p.session.steward_context, executor_endpoint_id: "antigravity"},
+    manager_executor_allocation: {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+      configured_endpoint: "antigravity", executor_endpoint: "codex", configuration_revision: "original-profile",
+      allocation_reason: "flexible_availability_fallback", eligible_endpoints: ["antigravity", "codex"]},
+    upstream_context_history: [{agent_id: "antigravity", thread_id: "original-native-thread",
+      manager_context_version: null, agent_model_id: "gemini-4-argon-high"}]};
+  return {...p, binding, session};
+}
+
+test("a Core-qualified Codex fallback retains report consent and native report identity", () => {
+  const p = allocatedFallback();
+  const route = {binding_id: p.binding.binding_id, source_ref: p.source, session_id: p.session.session_id,
+    provider_ref: p.binding.provider_ref, operator_ref: p.binding.operator_ref};
+  const proposed = {enabled: true, profile_preset: "portfolio-progress",
+    route_ref: `steward-private:${p.binding.binding_id}:${p.source}`};
+  const input = {...p, configuration: null, proposed, route, operation: "enable"};
+  const before = structuredClone(input);
+  assert.deepEqual(planStewardReport(input).actor, p.actor);
+  assert.deepEqual(input, before);
+  const window = {window_id: "cadence_original", subscription_revision: "sha256:original",
+    goal_id: p.actor.goal_id, agent_id: p.actor.agent_id};
+  const request = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: `report.${window.window_id}`, todo_id: "todo_report", validation_command: ["validate"],
+    work_kind: "report", report_window_id: window.window_id, report_subscription_revision: window.subscription_revision};
+  const params = {...p, request, report_window: window,
+    report_subscription: {...proposed, effective_revision: window.subscription_revision},
+    report_todo: {todo_id: request.todo_id, target_key: window.window_id, action_kind: "generate_periodic_report",
+      claimed_by: "steward", status: "open"}};
+  assert.deepEqual(admitStewardManagedTurn(params).actor, p.actor);
+  for (const changed of [{binding: {...p.binding, enabled: false}}, {binding: {...p.binding, audience: "group"}},
+    {session: {...p.session, status: "closed"}}, {queued_turn_count: 1}, {goal_active: false},
+    {report_subscription: {...params.report_subscription, enabled: false}},
+    {report_window: {...window, window_id: "another-window"}},
+    {observation: {...p.observation, operator_ref: "0".repeat(24)}}]) {
+    assert.throws(() => admitStewardManagedTurn({...params, ...changed}));
+  }
+});
+
+test("a configured preference alone cannot qualify a different native report executor", () => {
+  const p = allocatedFallback();
+  const proposed = {enabled: true, profile_preset: "portfolio-progress",
+    route_ref: `steward-private:${p.binding.binding_id}:${p.source}`};
+  const route = {binding_id: p.binding.binding_id, source_ref: p.source, session_id: p.session.session_id,
+    provider_ref: p.binding.provider_ref, operator_ref: p.binding.operator_ref};
+  const input = {...p, configuration: null, proposed, route, operation: "enable"};
+  const allocation = p.session.manager_executor_allocation;
+  for (const changed of [{selection_policy: "pinned"}, {configured_endpoint: "codex"},
+    {executor_endpoint: "antigravity"}, {allocation_reason: "configured_preference"},
+    {configuration_revision: ""}, {eligible_endpoints: ["codex"]},
+    {eligible_endpoints: ["codex", "antigravity", "other"]}]) {
+    assert.throws(() => planStewardReport({...input,
+      session: {...p.session, manager_executor_allocation: {...allocation, ...changed}}}));
+  }
+  for (const changed of [{upstream_context_history: []}, {executor_endpoint_id: "antigravity"},
+    {agent_id: "antigravity"}, {session_mode: "attached_host"}]) {
+    assert.throws(() => planStewardReport({...input, session: {...p.session, ...changed}}));
+  }
+});
+
 test("report consent fixes the original actor, source and private audience without starting work", () => {
   const p = original();
   const proposed = {enabled: true, profile_preset: "portfolio-progress",

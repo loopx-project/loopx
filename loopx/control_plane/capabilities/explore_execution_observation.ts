@@ -7,12 +7,14 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 
+export const EXPLORE_EXECUTION_OBSERVATION_SCHEMA = "explore_execution_observation_v0";
+
 export function normalizeExploreExecutionObservation(params: JsonObject): JsonObject {
   const row = requireJsonObject(params.observation, "execution observation");
   const required = ["schema_version", "candidate_sha256", "input_revision", "planned_method_id",
     "executed_method_id", "change_reason", "elapsed_seconds", "limit_seconds",
     "search_iterations", "stop_reason", "evidence_refs"];
-  if (row.schema_version !== "explore_execution_observation_v0"
+  if (row.schema_version !== EXPLORE_EXECUTION_OBSERVATION_SCHEMA
     || required.some(key => !Object.hasOwn(row, key))
     || Object.keys(row).some(key => ![...required, "exit_code", "result_ref", "result_candidate_sha256"].includes(key))) {
     throw new EffectRuntimeRequestError("execution observation fields are missing or unsupported");

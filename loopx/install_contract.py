@@ -95,7 +95,7 @@ def local_install_command(repo_root: Path, *, skip_skills: bool = False) -> str:
             f"-Python {_powershell_literal(sys.executable)}"
             + (" -SkipSkills" if skip_skills else "")
         )
-    command = str(repo_root / "scripts" / "install-local.sh")
+    command = shlex.quote(str(repo_root / "scripts" / "install-local.sh"))
     return f"LOOPX_INSTALL_SKILL=0 {command}" if skip_skills else command
 
 

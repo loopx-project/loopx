@@ -42,11 +42,16 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
 
     first = status()
     assert first["delivery"]["at"] and first["read"]["status"] == "not_recorded"
-    turn_start_hook(root, registry, "research", "worker").producer()
+    hook = turn_start_hook(root, registry, "research", "worker")
+    assert hook.producer()["agent_read_required"] is True
+    assert "manager-inbox read" in hook.required_read["command"]
     assert status()["read"]["status"] == "not_recorded"
     args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
     assert handle_manager_inbox(args, registry, root) == 0
-    assert json.loads(capsys.readouterr().out)["items"][0]["message"] == turn["message"]
+    read = json.loads(capsys.readouterr().out)
+    assert read["items"][0]["message"] == turn["message"]
+    assert "Explain unfamiliar terms on first use" in read["instruction"]
+    assert "Preserve the original author, audience and facts" in read["instruction"]
     read_at = status()["read"]["at"]
     record_read(root, pending(root, "research", "worker")["items"])
     assert status()["read"]["at"] == read_at

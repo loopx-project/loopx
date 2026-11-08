@@ -48,12 +48,14 @@ export function ChannelTimeline({
   historyPhase = "ready",
   onReadMessage,
   onRetryHistory,
+  queuedTurnKeys,
 }: {
   emptyState?: { title: string; description: string };
   messageFocus?: {sessionId: string; messageId: string};
   historyPhase?: ConversationHistoryStatus["phase"];
   onReadMessage?: () => void;
   onRetryHistory?: () => void;
+  queuedTurnKeys?: ReadonlySet<string>;
   readOnly?: boolean;
   items: WorkspaceTimelineItem[];
   onCancelPreparation?: () => void;
@@ -67,7 +69,15 @@ export function ChannelTimeline({
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const orderedItems = conversationOrder(items);
+  const orderedItems = conversationOrder(items.filter(item => {
+    if (item.kind !== "message") return true;
+    if (item.message.queued) return false;
+    const queued = item.message.role === "user" && queuedTurnKeys?.has(
+      JSON.stringify([item.message.sourceSessionId, item.message.sourceTurnId]));
+    const focused = messageFocus?.sessionId === item.message.sourceSessionId
+      && messageFocus?.messageId === item.message.sourceMessageId;
+    return !queued || focused;
+  }));
   const messageKey = (message: Extract<WorkspaceTimelineItem, {kind: "message"}>["message"]) =>
     JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
   const [historical, setHistorical] = useState<Set<string> | null>(null);
@@ -135,7 +145,7 @@ export function ChannelTimeline({
     item.kind === "run" && ["queued", "running", "completed"].includes(item.run.status));
   const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> => item.kind === "schedule");
   const backgroundIds = new Set([...routineRuns, ...scheduleItems].map(item => item.id));
-  const primaryItems = items.filter(item => item.kind !== "proposal" && !backgroundIds.has(item.id));
+  const primaryItems = orderedItems.filter(item => item.kind !== "proposal" && !backgroundIds.has(item.id));
   const pausedScheduleCount = scheduleItems.filter(item => item.schedule.status === "paused").length;
   const enabledScheduleCount = scheduleItems.length - pausedScheduleCount;
   const workingCount = routineRuns.filter(item => item.run.status === "running" && Boolean(item.run.sessionId) && Boolean(item.run.canInterrupt)).length;
@@ -192,11 +202,14 @@ export function ChannelTimeline({
     return (
       <article className={`personal-message is-${item.message.role}`} key={item.id}
         data-message-session={item.message.sourceSessionId} data-message-id={item.message.sourceMessageId}
+        data-returned-answer={item.message.role === "assistant" && !item.message.pending && item.message.returnDelivery ? true : undefined}
         ref={messageFocus && messageKey(item.message) === focusKey ? focusTarget : undefined}
         tabIndex={messageFocus && messageKey(item.message) === focusKey ? -1 : undefined}>
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
+          <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
+          {item.message.queueInputCancelled ? <span>{locale === "zh-CN" ? "已取消排队" : "Cancelled before starting"}</span> : null}
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isTextDocument(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
@@ -211,7 +224,6 @@ export function ChannelTimeline({
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
-              <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
         </div>
       </article>
     );

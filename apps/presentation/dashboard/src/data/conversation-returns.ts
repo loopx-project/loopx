@@ -1,12 +1,15 @@
 import type { ChatVisibleMessage } from "./chat";
 
 type ConversationMessage = {
+  queueInputRevision?: number;
+  queueInputCancelled?: true;
   sourceSessionId?: string;
   sourceMessageId?: string;
   sourceTurnId?: string;
   sourceCreatedAt?: string;
   role?: string;
   pending?: boolean;
+  queued?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
   collaborations?: ChatVisibleMessage["collaborations"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
@@ -74,14 +77,24 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const replyContext = source.reply_context ?? row.replyContext;
     // Only the exact canonical user body can switch to its source-backed view.
     // A background read never replaces a live answer or a different draft.
-    const text = row.role === "user" && source.reply_context && row.text === source.text
+    const inputChanged = row.role === "user" && source.role === "user"
+      && (!row.sourceTurnId || source.turn_id === row.sourceTurnId) && typeof source.queue_input_revision === "number"
+      && source.queue_input_revision > (row.queueInputRevision ?? 0);
+    const queueInputRevision = inputChanged ? source.queue_input_revision : row.queueInputRevision;
+    const queueInputCancelled = inputChanged ? source.queue_input_cancelled : row.queueInputCancelled;
+    const queueAnswered = row.queued === true && !row.pending && row.role === "assistant"
+      && Boolean(row.sourceTurnId) && source.role !== "user" && source.origin !== "manager_followup" && source.turn_id === row.sourceTurnId;
+    const queued = queueAnswered ? false : row.queued;
+    const text = inputChanged || queueAnswered ? source.text : row.role === "user" && source.reply_context && row.text === source.text
       ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
       && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
       && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
-      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text) return row;
+      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text
+      && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled && row.queued === queued) return row;
     changed = true;
-    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text };
+    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text,
+      queueInputRevision, queueInputCancelled, ...(queueAnswered ? {queued: false} : {}) };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;
@@ -103,10 +116,15 @@ export function reconcileConversationHistory<T extends ConversationMessage>(
   }
   // A history read can arrive before admission hydrates the optimistic row.
   // Deduplicate only established Session/message identities, never body text.
+  // A live row owns the stream callbacks and controls even when the history
+  // row appeared first. Keep that row when both acquire the same identity.
+  const pendingIdentities = new Set(updated.filter(message => message.pending && message.sourceSessionId && message.sourceMessageId)
+    .map(message => JSON.stringify([message.sourceSessionId, message.sourceMessageId])));
   const identities = new Set<string>();
   const unique = updated.filter((message) => {
     if (!message.sourceSessionId || !message.sourceMessageId) return true;
     const key = JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+    if (pendingIdentities.has(key) && !message.pending) return false;
     if (identities.has(key)) return false;
     identities.add(key);
     return true;

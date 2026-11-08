@@ -1366,6 +1366,37 @@ fields; this does not introduce a new telemetry system or receipt gate.
 及验收成果。费用/采纳未测仍为未知；分页成功或预算扩容不能证明读取—压缩—恢复
 循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
 
+The CLI canary's complete-source oracle follows the current capture's published
+recovery reader, preserving its program, globals, digest and byte cursors. It
+does not evaluate another guard. Original stdout metrics remain unchanged;
+the complete recovered body must also fit the same existing character/line
+ceilings. Receipts separately record navigation, every reader response and body
+bytes. This full fixture traversal is an oracle, not a model read obligation,
+retention proof or a claim that the complete workflow costs less.
+
+CLI canary 的完整来源 oracle 沿当前 capture 公布的 recovery reader 读取，保留原
+程序、全局参数、摘要和字节游标，不重算 guard。原 stdout 指标不改写；恢复的完整
+正文也须满足同一既有字符／行数上限。回执分别记录导航、每次 reader 响应和正文字节。
+此处完整遍历只服务夹具 oracle，不新增模型读取义务，不证明 retention 或完整流程更省。
+
+The complete-body oracle exposed existing quota presentation overruns that the
+navigation-only measurement could not see. On the unchanged 36-Todo / 12-run
+fixture, the recovered quota body is 50,795 JSON characters and the Markdown
+carrier is 16,857 characters, against the previous 43,000 / 10,500 regression
+allowances. The complete Vision-detail body is 58,393 characters against 55,000.
+Preserve those original failures and all collection, per-Todo, line and semantic
+guards. Calibrate only the three presentation ceilings to 51,000 / 17,000 /
+59,000, with bounded headroom for the measured bodies. This does not change a
+transport limit, execution quota, provider IO or a claim that the complete
+workflow costs less.
+
+完整正文 oracle 暴露了仅测导航时看不到的既有 quota 展示超限：同一 36-Todo／12-run
+夹具的恢复正文为 50,795 JSON 字符、Markdown 载体为 16,857 字符，原回归上限分别为
+43,000／10,500；完整 Vision detail 正文为 58,393 字符，原上限为 55,000。保留这些
+原始失败以及全部采集、每 Todo、行数和语义守卫，仅将三项展示回归预算校准为
+51,000／17,000／59,000，并为实测正文保留有界余量。此变更不修改传输硬限制、执行
+配额或 provider IO，也不宣称完整流程成本更低。
+
 ### Budget Failure Decisions
 
 The thin heartbeat's 4,500-character presentation allowance did not cover the
@@ -1817,6 +1848,22 @@ not shorten production commands or qualify long-path output under short-path cap
 独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
 长路径输出冒充短路径预算已通过。
 
+Exposing the validator's stride review citation limit adds 136 characters
+only to the crowded `turn plan` fixture. With the same scenario roots, the
+small/crowded outputs measure 10,553/21,849 before that projection and
+10,553/21,985 after it, on both the integration base and candidate. The
+11,432-character growth exceeded the former 11,400-character allowance.
+The fixed semantic allowance moves from 9,300 to 9,436, preserving 104
+characters of measured headroom, the per-Todo allowance, and the absolute
+character and line ceilings. The added field exposes the existing validator
+limit independently for previous-decision citations and Explore citations.
+
+同一夹具中，集成基线和候选版的 `turn plan` 输出一致。展示 Stride 评审引用上限后，
+小场景仍为 10,553 字符，拥挤场景从 21,849 增至 21,985 字符。实际增长 11,432
+字符，超过原 11,400 字符上限。仅将固定语义预算从 9,300 调到 9,436，保留 104
+字符余量、每条 Todo 的增长预算以及总字符数和行数限制。新增字段分别说明既有的前次
+决策引用上限和 Explore 引用上限。
+
 The PR-review packet's `semantic_alignment` rule consumes this evidence through
 the existing `validation_matrix` and `observable_semantics` rows. It does not
 add a separate budget receipt or approval gate. The result checker verifies
@@ -1949,9 +1996,12 @@ python3 scripts/qualify-doubao-replan-semantic-action-live.py \
 
 The model does not receive a testing-only decision schema, expected command, or
 prebuilt quota packet. Clock and a small set of workspace reads are supported
-for normal heartbeat preflight. Commands are parsed into a strict allowlist
-without invoking a shell; quota and refresh may write only inside the temporary
-fixture, and no external or repository write is allowed. The actor independently
+for normal heartbeat preflight. Typed CLI commands use a strict allowlist;
+Vision/stride drafts use the existing OS-isolated shell after the projected
+frontier is read. Shell composition forwards only the same bounded CLI
+operations. Original inputs, authority stores, host-private
+data and networking remain protected. Quota and refresh may write only inside
+the temporary fixture, and no external or repository write is allowed. The actor independently
 qualifies the selected typed observation before executing it. Evidence-log-only,
 prose-only, pre-quota, equivalent-fingerprint, and ungrounded actions fail. The
 receipt retains only action kinds, command digests, and typed semantic outcomes.
@@ -1981,8 +2031,11 @@ progress observation 的隔离、public-safe 临时 Goal；模型接收正式 th
 heartbeat task body、受限执行环境说明和 `exec_command` tool。真实 quota 必须投影 host coverage context
 与最小 action packet，模型随后提交的 typed semantic delta 还要通过独立语义判定和真实
 写时闸门。若模型选择新 successor，资格门要求它以当前 `obligation_id` 调用真实
-`todo add`，验证 Todo 原子 receipt 与 `host_action=end_current_heartbeat`，且不得在同一
-turn 执行 successor；surface/hypothesis/probe 等结果仍走真实 `refresh-state`。仅读
+`todo add`，验证 Todo 原子 receipt，再由模型编写当前 evidence-linked Vision/stride，
+执行原 Turn 的 bound `refresh-state` 与返回的 spend，确认一次结算后才读取新 Turn；
+不得在同一 turn 执行 successor。surface/hypothesis/probe 等结果也通过同一真实
+写回与结算边界。草稿复用 OS 隔离 shell，原始输入与 authority 不可改写，草稿命令
+仅能组合相同的有界 CLI 操作。仅读
 evidence-log、只换措辞、quota 前动作、等价指纹或未落在当前状态中的 successor 都不算
 通过。receipt 只保留 action kind、command digest 与 typed semantic outcome。
 
@@ -2069,8 +2122,16 @@ The model authors its own decision; the host does not fill semantic fields or
 change evidence. An observed source's evidence id and exact source reference
 identify the same evidence. Checkpoint, one-spend and following-Turn verification
 remain independent of shell success. Receipts disclose native-shell execution
-without persisting raw conversations. Other actors retain their existing host
-and seven-call contracts. Earlier bounded-grammar failures remain failed
+without persisting raw conversations. The narrow semantic-action actor retains
+seven ordinary calls and its separate three-read native-context allowance.
+It now includes model-authored Vision/stride drafts and the original-Turn spend;
+successor creation and refresh alone cannot pass. A bound writer's context
+refusal can authorize its exact captured recovery reader, preserving the
+original Turn. Additional recovery reads consume the ordinary budget; they
+grant no extra calls. The model must reassess the changed facts and author a
+new decision before retrying. Draft authoring requires the same OS isolation
+prerequisite as the full journey. Other actors retain their
+existing host and call limits. Earlier bounded-grammar and missing-decision failures remain failed
 qualifications and are not evidence of core semantic rejection.
 The other turn cases remain
 bounded packet-interpretation checks. Nine core-contract scenarios cover

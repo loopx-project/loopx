@@ -37,6 +37,7 @@ from loopx.slash_command_install import materialize_loopx_entry_skill
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -126,7 +127,7 @@ def test_goal_prompt_projects_goal_only_host_contract() -> None:
                 "quota_should_run.interaction_contract.cli_channel."
                 "runtime_capability_reentry"
             ),
-            "cli_projection_ref": "quota_should_run.runtime_capability_reentry",
+            "cli_projection_ref": "quota_should_run.interaction_contract.cli_channel.runtime_capability_reentry",
             "packet_schema_version": "runtime_capability_reentry_v0",
             "delivery_channel": "quota_tool_result",
             "goal_prompt_mutated": False,
@@ -458,7 +459,7 @@ def _fresh_host_quota_read(
     runtime: Path,
     registry: Path,
 ) -> dict:
-    return run_json_cli(
+    payload = run_json_cli(
         "quota",
         "should-run",
         "--goal-id",
@@ -470,6 +471,7 @@ def _fresh_host_quota_read(
         registry_path=registry,
         runtime_root=runtime,
     )
+    return read_cli_policy_payload(json.dumps(payload), returncode=payload["_returncode"])
 
 
 def test_fresh_host_reconstructs_frontier_from_durable_loopx_state(

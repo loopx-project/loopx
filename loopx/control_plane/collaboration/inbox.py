@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ...file_lock import exclusive_cross_runtime_file_lock
+from ...file_lock import exclusive_cross_runtime_file_lock, write_bytes_atomic
 from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
 from ..todos.contract import TODO_ID_PATTERN
@@ -81,17 +79,14 @@ def _root(runtime_root: Path) -> Path:
 
 
 def _write(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(value, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    # A concurrent status reader on Windows can briefly deny replacement.
+    # Retry only the atomic publication, inside the caller's existing fence.
+    write_bytes_atomic(
+        path,
+        json.dumps(value, ensure_ascii=False).encode("utf-8"),
+        directory_mode=0o700,
+        replace_retry_seconds=0.5,
+    )
 
 
 def _read(path: Path) -> dict:
@@ -524,7 +519,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
-            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work",
+            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
@@ -543,9 +538,16 @@ DELIVERY_STATUSES = set(_delivery_contract["delivery_statuses"])
 DELIVERY_ERRORS = set(_delivery_contract["delivery_errors"])
 
 
-def reply_status(root, row):
+def reply_status(root, row, *, include_result_key=None):
+    """Read current delivery state, optionally selecting result identities first.
+
+    The selector narrows IO only; retained results use the same validation and
+    unreadable-state handling. No result content or status is cached.
+    """
     result = []
     for path in result_paths(_root(root) / "replies" / row["request_id"]):
+        if include_result_key is not None and not include_result_key(path.stem):
+            continue
         phase = "decision" if path.stem == "decision" or path.stem.startswith("decision-") else "conclusion"
         state_path = path.with_name(path.stem + ".delivery.json")
         try:

@@ -6,9 +6,10 @@ No fallback decision kernel runs when the typed owner is unavailable.
 """
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import math
-from typing import Any
 
 TODO_HANDOFF_NOTE_SCHEMA_VERSION = "handoff_note_v0"
 TODO_CONTINUATION_HINT_MAX_CHARS = 280
@@ -19,6 +20,7 @@ def todo_read_source(item: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     facts: list[Any] = []
 
     def encode(value: Any, path: list[Any]) -> Any:
+        result: Any
         if isinstance(value, dict):
             result = {str(key): encode(val, [*path, str(key)]) for key, val in value.items()}
         elif isinstance(value, (list, tuple, set)):
@@ -28,7 +30,12 @@ def todo_read_source(item: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         else:
             result = str(value or "")
         if isinstance(value, (tuple, set, float)) or not isinstance(value, (dict, list, str, bool, int, type(None))):
-            facts.append([path, str(value or ""), repr(value)])
+            scalar_integer: str | None = None
+            try:
+                scalar_integer = str(int(cast(Any, value)))
+            except (TypeError, ValueError, OverflowError):
+                pass
+            facts.append([path, str(value or ""), repr(value), scalar_integer])
         return result
 
     record = encode(item, [])
@@ -86,14 +93,14 @@ def project_handoff_context(sources: list[dict[str, Any]], *,
 
 
 def compact_todo_continuation_hint(item: dict[str, Any]) -> str | None:
-    return project_handoff_context([todo_read_source(item)])[0]["continuation_hint"]
+    return cast(str | None, project_handoff_context([todo_read_source(item)])[0]["continuation_hint"])
 
 
 def build_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,
                             source: str | None = None) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
-    return project_handoff_context([todo_read_source(item, goal_id=goal_id, source=source)])[0]["note"]
+    return cast(dict[str, Any] | None, project_handoff_context([todo_read_source(item, goal_id=goal_id, source=source)])[0]["note"])
 
 
 def attach_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,

@@ -7,6 +7,80 @@ handles credential/file/process IO; `native_policy.ts` owns availability and
 selection. No dotfiles checkout, Personal Apps command or external Python module
 is required.
 
+## Installed provider and transport lifecycle
+
+Version 0.15.1 ships a native provider entrypoint and a packaged
+`native-extension.toml`. Register **loopx-native-account-provider** through the
+existing extension lifecycle. The older permissionless qualification extension
+remains separate: its successful doctor does not certify native accounts or a
+running model transport. Neither registration enables paid API use, selects an
+account, creates another Chat worker, nor authorizes replaying business messages.
+Core's existing optional native account imports and original Lark extension stay
+the execution path; the provider owns only accounts and model transport.
+
+Install a reviewed wheel into an immutable virtual environment outside any
+checkout/worktree. Supply Python 3.11+ and Node with TypeScript stripping support;
+the native doctor actually executes the packaged TS bridge. Use the same
+environment for the existing Core/Chat host and provider entrypoints. Example
+operator sequence (paths and wheel are operator-supplied):
+
+```sh
+python3 -m venv --system-site-packages "$PROVIDER_ENV"
+"$PROVIDER_ENV/bin/python" -m pip install "$REVIEWED_PROVIDER_WHEEL"
+export PATH="$PROVIDER_ENV/bin:$PATH"
+PROVIDER_MANIFEST="$("$PROVIDER_ENV/bin/python" -c 'from importlib.resources import files; print(files("loopx_codex_provider_routing").joinpath("native-extension.toml"))')"
+loopx-native-account-provider --doctor
+loopx extension install --manifest "$PROVIDER_MANIFEST" --execute
+loopx extension doctor loopx-native-account-provider --execute
+```
+
+Keep the existing runtime root, private native-account state, key store and relay
+credentials outside this installation. Preserve original session storage, source
+bindings, grants, limits and LaunchAgent identity. Use Core's normal host installer
+to point that same host at the qualified interpreter, and its normal idle/restart
+boundary to adopt it. Do not retain custom launch scripts or editable imports in a
+temporary worktree. A missing optional channel or its credentials remains an
+explicit unavailable channel; never reconstruct credentials from chat history.
+
+`loopx-native-account-provider` reads this JSON protocol on stdin:
+
+```json
+{"schema_version":"loopx_native_account_provider_v1","operation":"status"}
+```
+
+It returns content-free loaded-build, instance, PID, admission state and active
+request count. `--runtime-root` selects an existing owner; default is `~/.loopx`.
+The doctor distinguishes installation readiness from message delivery, and never
+uses a model or checks an API key against an upstream service. An unstarted relay
+is a valid installation state; a healthy legacy or mismatched running daemon is
+not a qualified installation. Keep original-message acceptance as a separate
+end-to-end check.
+
+For upgrades, install the reviewed target into a new immutable environment and
+invoke its provider with `operation: "reconcile", execute: true`. The model
+transport's ordinary `ensure` also performs this reconciliation. An authenticated
+new-protocol daemon with a different loaded build stops new admissions, drains
+already accepted requests and releases its existing owner lock before one new
+daemon starts. The model, route credentials, key policy and message queue stay
+with their existing owners. A bounded timeout returns `api_relay_drain_pending`;
+read status later instead of forcing exit or replaying a Turn. Old `/health`
+response bytes remain compatible, but do not qualify version adoption.
+
+A pre-0.15.1 daemon has no drain protocol. The explicit reconcile request may
+include `legacy_pid`, requiring same-UID kernel executable/birth identity, exact
+module and runtime arguments, the relay lock and listening-port ownership,
+rechecked before normal SIGINT. Unknown ownership, PID changes and busy draining
+remain held. There is no forced kill. This migration cannot be requested with a
+model transport token; its separate control credential stays in mode-0600 runtime
+state and never enters model transport results.
+
+After successful live reconciliation, use `loopx extension upgrade --manifest
+"$PROVIDER_MANIFEST" --execute`, run the doctor and independently verify the
+original Core service and message returns. Rollback uses the previous immutable
+environment and its normal extension/host rollback paths with the same drain
+boundary. A successful pip install, plugin registration or relay health response
+alone never means pending user questions were answered.
+
 ## The user task
 
 Previously an exhausted account required finding another account, closing clients,
@@ -52,6 +126,14 @@ therefore never sent to the other route. A custom provider must not shadow the
 built-in `openai` provider, and profile overrides remain ineligible because their
 effective provider cannot be bound safely to the transaction.
 
+Every custom provider that can carry the loopback relay credential must declare
+its `base_url` (for example `http://127.0.0.1:57500/v1`). A definition without
+`base_url` resolves to `api.openai.com`; Codex context compaction can use that
+default even while another provider is selected, so the relay-scoped credential
+is presented to OpenAI and rejected with `401 invalid_api_key`. Installers that
+add chat transports should write the relay endpoint into each provider
+definition and verify it on readback.
+
 A local authenticated transport sends the original selected model and Responses
 body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
@@ -62,6 +144,24 @@ completion is added. There are no background paid probes. The transport survives
 the Chat/App restart used for native handoff; disabling stops new admissions and
 drains already accepted requests before its process exits. With the policy off,
 an existing subscription is never routed through this transport.
+
+Version 0.15.2 recognizes the official `credit_balance_exhausted` error in both
+HTTP rejections and typed streaming failures. A streamed rejection cools that
+key for later independently admitted requests; its current stream remains
+unchanged and is never replayed. This is an error observation, not a billing
+balance query or permission to add credits. See the official
+[API error codes](https://developers.openai.com/api/docs/guides/error-codes).
+For an HTTP 429 with this code, the existing quota cooldown (300 seconds when
+no `Retry-After` is supplied) replaces the generic rate-limit cooldown.
+
+Version 0.15.3 tries eligible alternatives before a previously rejected key,
+including when the next independently admitted request arrives after its
+cooldown. Among rejected keys, the oldest observation is tried first; ties and
+keys without a known rejection retain configured order. Model-specific
+permission failures affect only that model. An expired rejection remains
+eligible and a subsequent accepted request clears its preference penalty.
+Selection reuses the existing private runtime observations, adds no probes,
+and never retries an admitted stream or overrides the subscription/API role.
 
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
@@ -115,6 +215,47 @@ Without this additional permission it continues to wait for closed clients.
 It does not implement hot login replacement, job replay or
 resumption of an interrupted turn. If every
 account is unavailable, it waits for the observed reset and checks again.
+
+Version 0.14.1 reconciles selected-slot metadata when the current login uniquely
+matches an existing slot and its configured provider route agrees. Status and
+launch preflight use the existing account locks; a pending transaction, occupied
+lock, ambiguous identity or inconsistent route retains the old selection.
+An invalid or unreadable slot is not skipped to manufacture a unique match.
+This reconciliation never rewrites credentials or configuration, and does not
+prove that an already running client has reloaded its login.
+
+Version 0.15.0 separates a consumer's API role from its model choice. Working
+Agents and Codex App retain subscription-first ordering: `api_fallback` permits
+API only after every allowed subscription has fresh measured exhaustion.
+Unknown allowance never authorizes paid fallback. The account settings also
+offer `steward_api_role`: `primary` prefers the existing API key pool for the
+steward, `fallback` follows subscription fallback, and `disabled` excludes API
+from the steward. An absent field preserves the prior fallback configuration.
+Steward API primary does not require enabling subscription automation.
+
+The steward uses a separate authenticated loopback route and a process-only
+token excluded from shell tool environments. Upstream keys stay in the same private
+key owner. Thread configuration selects this model transport without rewriting
+the desktop login or copying credentials/history into project stores. Explicit
+native provider overrides and independently authenticated project stores retain
+their chosen transport. Changes apply between Turns; they authorize neither
+redispatch nor replay of an interrupted request. A model-list check is not proof
+of inference allowance. Known quota/authentication/permission/rate-limit
+rejections may try another key before output; unknown network effects or an
+already started stream never replay. API primary unavailability allows the
+existing endpoint pool to consider its subscription route; it does not move a
+worker to API. The API role is local vocabulary owned by this optional account
+provider, not a new Core execution authority or Goal state.
+
+In **Settings → Model Provider configuration**, keep the working-Agent checkbox
+for subscription exhaustion. Use **Steward API use → Prefer API** for an
+independent API primary; **Disabled** revokes it, including after the last key
+is removed. The saved selector reads back the choice. These canonical guide
+illustrations use synthetic accounts / 当前操作指南使用合成账号数据：
+
+![Independent account priorities, desktop / 独立账号优先级，桌面](docs/assets/account-workload-primary-desktop.png)
+
+![Independent account priorities, narrow / 独立账号优先级，窄屏](docs/assets/account-workload-primary-narrow.png)
 
 ## Prerequisites and activation
 

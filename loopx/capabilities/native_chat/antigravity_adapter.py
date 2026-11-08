@@ -381,6 +381,117 @@ class AntigravityAdapter:
     adapter_kind = "antigravity_ls"
 
     @staticmethod
+    def interrupted_answer_observation(*, cascade_id: str, request_ref: str, message: str,
+                                       started_at: str, completed_at: str,
+                                       input_anchor: dict[str, Any]) -> dict[str, Any] | None:
+        """Read a stable original segment for a read-only answer review only.
+
+        This proves neither absence of effects nor permission to repeat them.
+        Retain bounded visible tool results, never private reasoning. Unknown,
+        asynchronous, live, truncated or normally answered segments stay held.
+        """
+        try:
+            found = discover_antigravity_language_server()
+            start = input_anchor.get("start_step_index")
+            if found is None or input_anchor.get("thread_id") != cascade_id or type(start) is not int or start < 0:
+                return None
+            def read(method: str, **payload: Any) -> dict[str, Any]:
+                return _rpc_post(found["url"], found["csrf_token"], method,
+                    {"cascadeId": cascade_id, **payload}, timeout=10.0)
+            before = read("GetCascadeTrajectory")
+            total = before.get("numTotalSteps")
+            if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total <= start + 2
+                    or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps")
+            if not isinstance(raw, list):
+                return None
+            indexed, covered = _observed_turn_steps(raw, start, total)
+            if covered != total or not indexed or indexed[0][0] != start:
+                return None
+            end = next((i for i, s in indexed if i > start and s.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"), total)
+            current = [s for i, s in indexed if start <= i < end]
+            if len(current) > 128 or raw != read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps") or before != read("GetCascadeTrajectory"):
+                return None
+            user, terminal = current[0], current[-1]
+            # A cleared historical segment can retain visible answer text while
+            # losing its completion marker and tool payloads. It is not a
+            # verified final or evidence that effects did not occur. Only the
+            # existing restricted answer review may consume this text.
+            cleared_answer = (end < total
+                and terminal.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                and all(step.get("status") == "CORTEX_STEP_STATUS_CLEARED" for step in current))
+            if (user.get("type") != "CORTEX_STEP_TYPE_USER_INPUT"
+                    or not cleared_answer and terminal.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"):
+                return None
+            meta = user["metadata"]
+            execution = meta.get("executionId")
+            prompt = _native_user_input_text(user)
+            if (not isinstance(execution, str) or not execution or prompt is None
+                    or not manager_input_matches(prompt, message=message, request_ref=request_ref)
+                    or hashlib.sha256(prompt.encode()).hexdigest() != input_anchor.get("input_sha256")
+                    or not datetime.fromisoformat(started_at) <= datetime.fromisoformat(meta["createdAt"])
+                    <= datetime.fromisoformat(terminal["metadata"]["createdAt"]) <= datetime.fromisoformat(completed_at)):
+                return None
+            results = []
+            for step in current:
+                step_execution = (step.get("metadata") or {}).get("executionId")
+                if (step.get("status") != ("CORTEX_STEP_STATUS_CLEARED" if cleared_answer else "CORTEX_STEP_STATUS_DONE")
+                        or step_execution != execution and not (not cleared_answer and step is terminal and step_execution is None)):
+                    return None
+                kind = step.get("type")
+                payload = {"CORTEX_STEP_TYPE_USER_INPUT": "userInput", "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
+                    "CORTEX_STEP_TYPE_RUN_COMMAND": "runCommand", "CORTEX_STEP_TYPE_VIEW_FILE": "viewFile",
+                    "CORTEX_STEP_TYPE_ERROR_MESSAGE": "errorMessage"}.get(kind)
+                if cleared_answer:
+                    payload = {"CORTEX_STEP_TYPE_USER_INPUT": "userInput",
+                        "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
+                        "CORTEX_STEP_TYPE_GENERIC": "generic", "CORTEX_STEP_TYPE_CHECKPOINT": "checkpoint",
+                        "CORTEX_STEP_TYPE_SYSTEM_MESSAGE": "systemMessage"}.get(kind)
+                if payload is None or set(step) - {"type", "status", "metadata", payload}:
+                    return None
+                if cleared_answer:
+                    if step is terminal:
+                        planner = step.get("plannerResponse") or {}
+                        text = planner.get("modifiedResponse") or planner.get("response")
+                        if planner.get("toolCalls") or not isinstance(text, str) or not text.strip():
+                            return None
+                        results.append({"visible_response": text})
+                    continue
+                if kind == "CORTEX_STEP_TYPE_RUN_COMMAND":
+                    command = step["runCommand"]
+                    if command.get("blocking") is not True or type(command.get("exitCode")) is not int:
+                        return None
+                    results.append({key: command[key] for key in ("commandLine", "cwd", "exitCode", "combinedOutput")
+                                    if key in command})
+                elif kind == "CORTEX_STEP_TYPE_VIEW_FILE":
+                    # The original provider's visible file result is evidence,
+                    # never a request to open that URI or repeat an operation.
+                    view = step["viewFile"]
+                    uri, content = view.get("absolutePathUri"), view.get("content")
+                    if not isinstance(uri, str) or not isinstance(content, str):
+                        return None
+                    parsed = urlsplit(uri)
+                    if (parsed.scheme != "file" or parsed.netloc or not parsed.path.startswith("/")
+                            or parsed.query or parsed.fragment):
+                        return None
+                    results.append({"file_uri": uri, "content": content})
+                elif kind == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+                    if (step.get("plannerResponse") or {}).get("response") or (step.get("plannerResponse") or {}).get("modifiedResponse"):
+                        return None  # A visible answer requires the existing result adoption owner.
+                elif step is not user and step is not terminal:
+                    return None
+            if not results or len(json.dumps(results, ensure_ascii=False).encode()) > 256 * 1024:
+                return None
+            return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
+                "start_step_index": start, "end_step_index": end, "total_steps": total,
+                "input_sha256": input_anchor["input_sha256"], "input_created_at": meta["createdAt"],
+                "read_only_review": True, "no_final_answer": True, "effects_observed": True,
+                "visible_results": results}
+        except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
+            return None
+
+    @staticmethod
     def quota_failure_observation(*, cascade_id: str, request_ref: str, message: str,
                                   started_at: str, completed_at: str,
                                   input_anchor: dict[str, Any]) -> dict[str, Any] | None:

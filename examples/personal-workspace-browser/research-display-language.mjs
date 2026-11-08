@@ -142,11 +142,11 @@ export const researchDisplayLanguageScenario = {
         assert.deepEqual(await judgments.locator('.research-assessment-verdict').allTextContents(),
           ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据', '有依据', '有依据']);
         const firstJudgment = judgments.locator('.research-assessment').first();
-        await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
-        await page.waitForFunction(element => element.open, await firstJudgment.elementHandle());
+        await firstJudgment.locator(':scope > summary').press('Enter');
+        await page.waitForFunction(() => document.querySelectorAll('.research-effect-evidence .research-assessment')[0]?.open);
         const peerJudgment = judgments.locator('.research-assessment').nth(1);
         await peerJudgment.locator(':scope > summary').click();
-        await page.waitForFunction(element => element.open, await peerJudgment.elementHandle());
+        await page.waitForFunction(() => document.querySelectorAll('.research-effect-evidence .research-assessment')[1]?.open);
         assert.equal(await judgments.locator('.research-assessment[open]').count(), 2, "Independent row expansion is preserved");
         assert.equal(await judgments.locator('.research-assessment-question:visible').count(), 0, "Opening several rationales never repeats the shared question");
         assert.equal(await firstJudgment.locator('.research-assessment-reason').innerText(), capture.analyses.at(-1).outputs.zh.assessments[0].reason);
@@ -243,12 +243,15 @@ export const researchDisplayLanguageScenario = {
         assert.equal(await search.inputValue(), capture.events[0].title, "Language display toggles retain the original query");
         await history.getByRole("button", {name: "查看译文", exact: true}).click();
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
-        assert.equal(await allRecords.locator(".research-history-records > li").count(), capture.events.length);
+        assert.equal(await allRecords.locator(".research-history-records > li").count(), 20, "One entry per unambiguously linked synthetic question");
         await search.fill("finding-0");
-        assert.equal(await allRecords.locator(".research-history-records > li").count(), 2);
+        assert.equal(await allRecords.locator(".research-history-records > li").count(), 1);
         const revision = allRecords.locator(".research-record-entry").last();
         await revision.locator(":scope > summary").click();
-        const comparison = revision.locator(".research-record-comparison");
+        const revisionHistory = revision.locator(".research-record-group-history");
+        await revisionHistory.waitFor();
+        assert.equal(await revisionHistory.locator(":scope > li").count(), 2);
+        const comparison = revision.locator(".research-record-comparison").last();
         const compareEntry = comparison.locator(":scope > summary");
         await compareEntry.focus(); await compareEntry.press("Enter");
         const comparisonText = comparison.locator(".research-comparison-field").nth(1);
@@ -340,8 +343,9 @@ export const researchDisplayLanguageScenario = {
         await allRecords.getByRole("searchbox").fill("finding-0");
         const partialComparison = allRecords.locator(".research-record-entry").last();
         await partialComparison.locator(":scope > summary").click();
-        await partialComparison.locator(".research-record-comparison > summary").click();
-        const partialText = partialComparison.locator(".research-comparison-field").nth(1);
+        const partialVersions = partialComparison.locator(".research-record-comparison").last();
+        await partialVersions.locator(":scope > summary").click();
+        const partialText = partialVersions.locator(".research-comparison-field").nth(1);
         await partialText.waitFor();
         assert.match(await partialText.innerText(), /Keep V18/,
           "A missing translation retains the exact source item beside translated fields");

@@ -7,6 +7,51 @@ These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
+## Authored case studies
+
+A registered pack can include an authored reading companion through
+`trajectory-pack-register --case-study-json case-study.json`. This is an optional
+benchmark-toolkit presentation, qualified by its TypeScript owner. It requires
+no model receipt. Goals with a companion open a case reading view; the existing
+research records and analysis remain accessible. Without one, the existing
+reader is unchanged. The CLI registration is the authoring entrypoint; the
+workbench selects, reads and traces the saved result without model execution.
+For benchmark research, each case is an ordinary child Goal of the benchmark
+Goal using the existing `parent_goal_id`. Register that case's evidence packs
+under its child Goal, not under a parent-level case selector. The parent links
+to child research spaces; each child links back and retains its own records,
+findings, documents and reading versions. Parentage neither merges evidence
+nor grants execution. Navigation stays within the same status source.
+
+The document has `title`, `language` (`zh` or `en`), `summary`, summary
+`citations`, `sections` and `limitations`. Each section has a unique `id`,
+`title`, Markdown `text` and `citations`, and can combine a table
+(`columns`, `rows`), categorical numeric series (`label`, `unit`, `points`
+of `{label, value}` with null for missing measurements), or a timeline
+of `{label, title, text}` entries. Authors choose the order and composition.
+Reading should explain conclusions, unfamiliar domain concepts, competing
+approaches, decisive observations and remaining uncertainty. It does not require
+exercises, actions or note-taking. Charts preserve gaps and show exact values;
+they do not infer interpolation, ranking or comparability.
+
+Citations use the pack's absolute source-line ranges. Registration verifies the
+artifact bytes and qualifies every range, but does not establish entailment or
+scientific validity. The companion becomes part of pack identity; editing it
+requires a new registration and preserves the prior version. It does not change
+the model prompt, analysis key or scoring owner. Source changes preserve the
+registered reading and cited snapshot with a historical warning. Language
+switches show the saved original with a notice, without inventing a translation.
+Rendering uses the existing Markdown renderer and host-owned components, with
+no executable HTML. Porthole is not a runtime dependency of this reader.
+
+Documents are bounded to 160,000 serialized characters and 24 sections, with
+smaller per-block limits. This bounds the existing full-pack HTTP read and DOM
+render without truncating conclusions or evidence. Larger studies should split
+into separate source-scoped packs; rejected documents are not silently shortened.
+Select **Research records and analysis** to return to the original reader;
+this view choice is retained in the URL. Registering a pack without a companion
+does not delete an existing study, historical source or saved result.
+
 ## Researcher synthesis in the existing reader
 
 New registrations using the default configuration and CLI previews request
@@ -159,6 +204,13 @@ Requests without a language retain their original identity and stored artifacts;
 the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
+When the selected language has no result, the reader also checks the same
+registered pack's original, language-unspecified identity. A verified saved
+original remains readable, with its original judgments, citations and usage,
+and is labeled **Saved original**. It does not fill the selected language's
+cache or substitute another language's artifact. New analysis, retry and cancel
+still use the selected language's key and retain that attempt's failure/usage;
+an explicit read-only response disables execution even on the local origin.
 
 ### Native results as explicit analysis context
 
@@ -469,6 +521,13 @@ The base must already belong to the same owner Goal and original Goal/case/run.
 This records an immutable version link; it neither appends to the original
 source nor starts a model. The Agent prepares this link with the input, rather
 than asking the reader to enter internal identifiers.
+
+Use `--preserve-default` when importing another captured version for comparison
+without changing the Goal's current selection. It retains the existing default;
+the first registered capture still becomes the default. Omitting the option
+keeps the existing select-on-registration behavior. New counter reductions need
+their own registered identity and base link; a frozen preview does not establish
+that its capture is available from the live owner.
 
 The existing Goal analysis action becomes **Continue analysis**. Its inline
 version summary identifies added, corrected and removed sources/episodes,
@@ -792,11 +851,13 @@ Omitting `comparison` preserves the previous projection shape and does not
 invent a baseline from the first/best result. Native-only registration still
 does not execute an analysis or alter its key.
 
-The Goal shows one compact **Retained improvement / 已采用成果增量** value before
+The Goal shows one compact **Declared retained change / 声明的保留增量** value before
 the process judgments. Hover, keyboard focus or tap explains the metric;
 expansion exposes both measured endpoints, retention evidence and candidate
 change. Historical/unreadable provenance remains visible. The value describes
-the declared native comparison, not objective completion, a general utility
+the source-declared native comparison. Citation binding does not independently
+verify actual artifact adoption or comparable evaluation conditions; a best
+round alone cannot establish retention. This is not objective completion, a general utility
 score, matched LoopX uplift or causal attribution. Do not add across tasks,
 units, overlapping windows or inherited results. Displayed precision is rounded;
 original endpoint values remain readable in their citations. Pack selection
@@ -1004,6 +1065,39 @@ TypeScript reducer retain ownership, with Python restricted to scoped file
 reading and transport. There is no new telemetry, accounting store or scoring
 policy.
 
+### Inspect and save a Turn range
+
+In Research → Sources and usage → **Find time and input hotspots**, enter the
+first and last chronological Turn numbers to inspect a contiguous portion of the
+selected capture. Sorting changes only the display order; it does not change
+range membership. **All Turns** restores the capture. The summary reports
+selected/completed Turns, missing counter coverage, observed input (including
+its cached subset), output and summed observed Turn intervals. Gaps between
+Turns are excluded from that elapsed sum. Unknown counters stay unknown; an
+unfinished Turn remains incomplete even when some counters are available.
+
+**Download selected usage** saves every selected Turn, including rows beyond the
+current page, as JSON. The file retains the Goal, pack, session, source SHA-256,
+method, capture window, historical/current applicability, original source line
+ranges and limitations. It contains captured counters rather than raw messages
+or a source filesystem location. A failed download can be retried without
+changing the selection or Goal state. Changing the pack/source digest resets
+the range so a previous selection cannot silently refer to different evidence.
+
+This local reading operation needs no model call, new activation, server write
+or CLI/Lark configuration. Close the disclosure to leave the workflow. The file
+is a portable reading snapshot, not an import, billing or acceptance receipt.
+Do not combine overlapping captures, treat partial observations as final costs,
+or infer monetary savings or comparable outcomes from the selected sums.
+
+在研究页的「来源与用量」→「定位耗时与输入最多的轮次」中，输入起止轮次，
+查看同一捕获内连续范围的已观测用量。排序只改变显示顺序；「全部轮次」恢复全量。
+汇总保留完成状态与无计数覆盖，缺失不记零，未完成轮不当作最终用量；耗时合计不含
+轮次间空档。「下载所选用量」导出跨分页的完整所选计数、来源摘要、行号与适用性，
+不导出原始消息或本机路径。下载失败可原地重试，切换捕获或来源摘要会重置范围。
+该操作不调用模型、不写入 Goal，也不增加 CLI/Lark 配置；关闭详情即可退出。
+导出是阅读快照，不是账单、导入或验收凭据，不能据此推断金额、节省或因果收益。
+
 ### Reconcile request and compaction coverage
 
 New usage captures also inspect persisted Codex `token_usage_record` and
@@ -1041,6 +1135,51 @@ existing TypeScript owner; replacement history and response text are excluded.
 Registration retains the source hash, and changed or missing sources mark the
 saved capture historical. Re-registering a source with this additional
 projection can create a new pack identity; old packs are never rewritten.
+
+#### Audit one captured session
+
+Suppose a session records two ordinary requests and one compaction request.
+The three response IDs in this synthetic capture give these counts.
+
+| Captured requests | Input | Cached input (subset) | Output |
+| --- | ---: | ---: | ---: |
+| Two ordinary requests | 140 | 80 | 15 |
+| One compaction request | 20 | 10 | 7 |
+| All three requests | 160 | 90 | 22 |
+
+If **Session counters** show 140 input and 15 output, **Request coverage** can
+verify `ordinary_requests` as the counter basis and show the full 160 input
+and 22 output separately. If the counters already show 160 and 22, coverage
+can verify `all_requests`. The compaction row is already part of those totals.
+The checkpoint's copy of the compaction record shares its response ID. Omit
+the copy in the first capture and the session counters still show 140 and 15.
+**Request coverage** reports unavailable.
+[Reconciliation fixture and readback test](../../tests/capabilities/test_trajectory_assessment_store.py)
+
+Use the same Goal and runtime as registration. Set `PACK_ID` to the pack ID
+returned at registration and `OWNER_GOAL` to its owning Goal.
+
+```sh
+loopx --format json benchmark trajectory-packs --goal-id "$OWNER_GOAL" |
+  jq -e --arg pack "$PACK_ID" '
+    .packs[] | select(.pack_id == $pack) | .solver_usage |
+    {artifact_sha256, applicability, projection: (.projection |
+      {session_id, start, end, input_tokens, cached_input_tokens,
+       output_tokens, request_coverage})}'
+```
+
+Keep the pack ID and source hash with the review. Use **Download selected
+usage** to capture the relevant Turn line ranges, then check the request and
+checkpoint in those ranges of the original JSONL. Replaying model behavior
+also requires the original request inputs and runtime.
+
+以一条合成会话为例，两次普通请求合计 140 个输入 token、15 个输出 token，
+一次压缩用去 20 个输入和 7 个输出。若会话计数只覆盖普通请求，查看「请求覆盖」
+里的全量 160 个输入、22 个输出。若会话计数已覆盖全部请求，压缩用量就是其中
+一部分。压缩记录与检查点副本共用一个响应 ID。缺少关联记录时仍可读到会话计数，
+请求级核对会显示不可用。复核时记录 pack ID 和源文件哈希，用「下载所选用量」
+保存相关轮次的行号，再到同一份 JSONL 中核对。回放模型行为还需要原始请求输入
+和运行环境。
 
 ### LoopX packet share of model input
 
@@ -1139,6 +1278,97 @@ estimate and provider counters; do not add their different units or denominators
 再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
 租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
 不证明状态写入成功或恢复操作可以省略。
+
+#### Whole requests issuing LoopX commands and capture comparison
+
+The same opt-in registration now records
+`solver_usage.projection.loopx_requests.method=codex_ordered_loopx_requests_v1`.
+The TypeScript toolkit owner associates a simple recognized command with the
+next native response receipt only when its return arrives before another
+response in that Turn. Multiple commands in one response count that response
+once. Duplicate response receipts remain deduplicated by the existing request
+reconciler. Late/unmatched calls and unclassified commands stay explicit.
+Python only transports the original line positions, literal argv and return
+metadata; neither command arguments nor returned text enter this projection.
+Code Mode can wrap several operations in one custom tool call. A command
+completion carrying only its own identity and the Turn does not link the
+command to an issuing call or response. These completions do not classify the
+whole call or assign its returned text to LoopX.
+
+When no requests are recognized and any calls are unclassified or unmatched,
+the command-request input shares are unknown (`null`). The saved `tokens`
+object still sums the recognized subset, so an empty sum is zero. Research and
+the comparison reader withhold command token values and deltas in that case,
+including for older packs that saved zero shares. They retain the counts and
+do not rewrite those packs. When some requests are recognized, their sums and
+shares describe only that subset. Without unresolved calls, a measured empty
+subset can show zero.
+
+Keep three overlapping observations separate:
+
+| Observation | Numerator and denominator | Interpretation |
+| --- | --- | --- |
+| Control text, `loopx_input` | Sum of attributed control-text tokens / native input of the same requests | Requires provider attribution or the separately labeled recorded-packet estimate; missing attribution is unknown |
+| Command requests, `loopx_requests` | Whole native input of requests issuing recognized LoopX commands / all native request input | Includes task history; a conservative observed subset, not pure-control tokens or avoidable cost |
+| Appended tool text, `tool_context` | Recognized returned UTF-8 bytes / captured appended input-text bytes | Inventory only, not per-request replay or token accounting |
+
+Cached input is already included in native input, reasoning in native output,
+and compaction mirrors in the reconciled request set. Do not add these subsets
+or the three views. Calls alongside other calls are identified as mixed;
+absence of another recognized call does not prove a pure-control workflow.
+The existing Turn-cost reader retains the broader workflow counters. Model
+generation latency, unreceipted failures, operator/shared-service cost and
+actual charges remain unknown; a configured budget is not a charge.
+
+Research → Sources and usage → **Compare captured usage** uses the same typed
+owner, `trajectory_usage_comparison_v1`. Choose another source-owned capture;
+the reader compares independent sessions only when Goal, case, source revision,
+declared window and usage method agree. It preserves each original run, pack,
+source digest, session and absolute capture time. This is a descriptive
+comparison, **not** qualification that study/arm, model, feedback, budget or
+other experimental conditions match. Unaligned scopes, historical sources and
+unreconciled counters withhold deltas. Input-attribution methods must agree for
+their deltas; partial attribution and zero denominators retain unknown shares.
+All ratios and percentage-point differences are derived by the toolkit from
+request sums, never by averaging percentages in the renderer. A falling share
+with rising absolute input is shown explicitly and is not labeled savings.
+Command-request deltas include input, its cached and uncached subsets, output,
+and uncached-input share in percentage points, all computed by the same owner
+from native sums. The uncached share uses all native input minus cached input
+as its denominator; it remains separate from the share of total input, which
+includes cache. Missing observations
+or changed command methods withhold those deltas. An older response without
+the additive delta fields remains unknown in the reader; it is not recomputed
+by the frontend.
+
+The existing GET reader accepts two explicit `pack_id` / `compare_pack_id`
+identifiers within its registered Goal/source namespace. It verifies both
+sources before calling the builtin `benchmark.trajectory.usage-comparison`;
+the frontend only formats that projection. Loading, cancellation and retry
+are read-only. A failed or cancelled read clears the displayed comparison,
+and a late response cannot replace a different source or reference selection.
+
+This adds no configuration, model request, analysis job, recapture or experiment.
+Reads, language changes, source switches and refresh consume frozen values.
+Old packs keep their exact saved projection; absence of `loopx_requests` is
+uncaptured, not zero. Registering a new frozen observation preserves the original
+capture and its old pack identity. Revert the display/observation change to
+disable it; no ledger migration, source rewrite or runtime activation is needed.
+
+中文：控制文本 token、发出 LoopX 命令的整次请求用量、追加工具返回字节是三个重叠
+视角，不能相加。整次请求含任务历史，仅保守识别简单调用；混合调用、未分类和迟到
+返回保留，不将其认作纯控制、全部开销或可省成本。输入已含缓存、输出已含推理，
+压缩镜像不重复计数；模型耗时与实扣未知。对照沿同一 TS owner 校验原 Goal、案例、
+修订、窗口、方法及独立 Session，并保留原 run/pack/来源和时间，不据此核准科学配对。
+Code Mode 的命令完成记录若缺少外层调用或响应 ID，不能据此归属请求或混合返回文本。
+识别数为零且仍有未分类或未匹配调用时，占比为 `null`；保存的 `tokens` 仅是已识别
+子集之和。研究页与对照会隐藏此时的命令用量和差值，旧包同样按此读取但不改写。
+不平均百分比；归因缺失/部分、方法变化、来源失效或零分母保持未知。比例下降但绝对
+输入增加会明确提示。浏览零模型调用，不重采集、不重写旧包或账本；旧包缺字段不补零。
+既有 GET reader 在注册 Goal/来源命名空间中校验两个显式 pack，调用同一 builtin；
+前端只格式化返回值。取消、失败和重试均为只读，清除旧对照；迟到响应不能覆盖新选择。
+命令请求的输入、其中缓存、未缓存及输出差值均由同一 owner 按原生总和计算；缺测或
+命令方法变化时保持未知。旧响应缺少新增差值字段时，前端保留未知，不自行补算。
 
 ### Recorded Turn packet estimate
 

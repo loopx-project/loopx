@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 
 CONTRACT_ERROR_DIAGNOSTIC_SCHEMA_VERSION = "loopx_contract_error_diagnostic_v0"
@@ -24,7 +24,7 @@ def contract_error_diagnostic(
             if str(item or "").strip()
         }
     )
-    diagnostic = {
+    diagnostic: dict[str, Any] = {
         "schema_version": CONTRACT_ERROR_DIAGNOSTIC_SCHEMA_VERSION,
         "severity": "error",
         "scope": (
@@ -119,7 +119,7 @@ def project_contract_health_for_goal(
     ]
     error_views = contract_error_views(selected_diagnostics)
     summary = (
-        dict(contract.get("summary"))
+        dict(cast(dict[str, Any], contract.get("summary")))
         if isinstance(contract.get("summary"), dict)
         else {}
     )

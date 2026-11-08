@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, Protocol, cast
+
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol
 
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from .contract import normalize_todo_id, normalize_todo_status, todo_done_for_status
@@ -101,7 +102,7 @@ def _indexed_rollout_todo_event(
     goal_id = str(event.get("goal_id") or "").strip()
     if not goal_id or not todo_id:
         return None
-    details = event.get("details") if isinstance(event.get("details"), dict) else {}
+    details = cast(dict[str, Any], event.get("details")) if isinstance(event.get("details"), dict) else {}
     role = str(details.get("role") or "agent").strip().lower()
     if role not in {"user", "agent"}:
         role = "agent"

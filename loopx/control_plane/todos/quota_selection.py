@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any
+from typing import Any, cast
 
-from ..agents.profile import agent_profile_candidate_rank
+import json
+
+from ..agents.profile import AGENT_PROFILE_ACTION_PATTERN, agent_profile_candidate_rank
 from ..effect_runtime import (
     MAX_LOCAL_SNAPSHOT_BYTES, EffectRuntimeRejected, effect_runtime_result,
 )
@@ -114,10 +115,17 @@ def project_quota_planning(
     filter_user_gate_blocks_agent: bool, available_capabilities: Any,
     resolve_capacity: bool = False, current_time: str | None = None,
     summary_kind: str | None = None,
+    consume_display_views: bool = False, request_only: bool = False,
 ) -> dict[str, Any]:
     identity = agent_identity if isinstance(agent_identity, dict) else {}
     profile = identity.get("agent_profile")
     profile = profile if isinstance(profile, dict) and profile else None
+    native_profile = profile is None or all(
+        not isinstance(profile.get(key), list) or all(
+            isinstance(pattern, str) and AGENT_PROFILE_ACTION_PATTERN.fullmatch(pattern)
+            for pattern in profile[key]
+        ) for key in ("avoid_action_kinds", "preferred_action_kinds")
+    )
     agent = normalize_todo_claimed_by(identity.get("agent_id"))
     observed_now = now_utc() if current_time is None else parse_timestamp(current_time)
     if observed_now is None:
@@ -160,18 +168,20 @@ def project_quota_planning(
         except (TypeError, ValueError):
             return None
 
-    resume_request = build_referenced_todo_resume_planning_request(
+    from .summary_item import canonical_todo_source_reference
+    reference = canonical_todo_source_reference(value) if summary_kind else None
+    resume_request = None if reference is not None or request_only else build_referenced_todo_resume_planning_request(
         value,
         agent_id=agent,
         item_limit=8,
         available_capabilities=(available_capabilities or []) if resolve_capacity else None,
     )
-    try:
-        wire = effect_runtime_result("todo.quota_planning.project", {
+    request = {
             "schema_version": "todo_quota_planning_request_v4",
             "current_time": observed_now.isoformat(),
             **({"summary_request": {
-                "kind": summary_kind, "source": todo_read_source(value),
+                "kind": summary_kind,
+                **({"source_reference": reference} if reference is not None else {"source": todo_read_source(value)}),
                 "integer_counts": {"source": integer_text(value.get("completed_without_successor_count")),
                     "warning": integer_text((value.get("todo_succession_warning") or {}).get("count"))
                     if isinstance(value.get("todo_succession_warning"), dict) else None},
@@ -179,9 +189,12 @@ def project_quota_planning(
                     "text": str(value.get("next") or "").strip(),
                     **({"claimed_by": str(value.get("next_claimed_by") or "").strip()}
                        if str(value.get("next_claimed_by") or "").strip() else {})}),
-                "source_rows": {key: [encode(row, include_payload=False) if isinstance(row, dict) else None
-                                      for row in value.get(key, [])]
-                                for key in TODO_SUMMARY_SOURCE_KEYS if isinstance(value.get(key), list)},
+                "materialize_source": native_profile,
+                **({"source_rows": {key: [encode(row, include_payload=False) if isinstance(row, dict) else None
+                    for row in value[key]] for key in TODO_SUMMARY_SOURCE_KEYS if isinstance(value.get(key), list)}}
+                   if not native_profile else {}),
+                "materialize_resume": reference is not None or request_only,
+                "consume_display_views": consume_display_views,
             }} if summary_kind else {}),
             "frontier_deadline": value.get("frontier_deadline"),
             "route_items": build_todo_route_continuation_facts(value, handoff_gates=handoff_gates),
@@ -190,12 +203,14 @@ def project_quota_planning(
                 for gate in handoff_gates],
             "source_contract": _closure_source_facts(value),
             "resume": resume_request,
+            "resume_options": {"agent_id": agent, "item_limit": 8,
+                "available_capabilities": normalize_required_capabilities(available_capabilities) if resolve_capacity else None},
             "selection": {
                 "observed_at": observed_at,
                 "available": normalize_required_capabilities(available_capabilities),
                 "items": [encode(item) for item in all_open_items],
-                "active_items": active("active_next_action_items"),
-                "active_executable_items": active("active_next_action_executable_items"),
+                "active_items": [] if summary_kind and native_profile else active("active_next_action_items"),
+                "active_executable_items": [] if summary_kind and native_profile else active("active_next_action_executable_items"),
                 "agent_id": agent, "profile": profile,
                 "user_gate_scope": filter_user_gate_blocks_agent,
                 "monitor_supported": todo_summary_monitor_writeback_supported(value),
@@ -204,7 +219,15 @@ def project_quota_planning(
                 "frontier_revision_index": value.get("advancement_frontier_revision_index"),
                 "diagnostic_limit": 3, "backlog_limit": 8, "visibility_limit": 16,
             },
-        }, large_local_snapshot=True)
+        }
+    if request_only:
+        return request
+    try:
+        if reference is not None:
+            from .goal_todo_projection import project_todo_read
+            wire = project_todo_read({"kind": "quota_projection", "requests": [request]})["quota_wires"][0]
+        else:
+            wire = effect_runtime_result("todo.quota_planning.project", request, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
     if summary_kind:
@@ -245,7 +268,7 @@ def _decode_quota_summary_wire(wire: Any, source: dict[str, Any]) -> dict[str, A
         if not (isinstance(parent, dict) and isinstance(key, str)
                 or isinstance(parent, list) and type(key) is int):
             raise RuntimeError(error)
-        return parent[key]
+        return parent[cast(int, key)]
 
     try:
         for copy in [*copies, *integers]:

@@ -35,6 +35,72 @@ def test_shared_root_keeps_interleaved_native_sessions_independent(tmp_path, mon
         assert (directory / "session.json").read_bytes() == raw
 
 
+def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {
+        "ok": True,
+        "goal_id": "fixture",
+        "registry": str(tmp_path / "registry.json"),
+        "runtime_root": str(tmp_path / "runtime"),
+        "should_run": True,
+        "selected_todo": {"todo_id": "todo_fixture", "claimed_by": "agent"},
+        "execution_preparation": {
+            "schema_version": "execution_preparation_v0",
+            "state": "claim_required",
+            "todo_id": "todo_fixture",
+            "agent_id": "agent",
+            "claim": {
+                "host_execution_allowed": True,
+                "cli_args": [
+                    "todo", "claim", "--goal-id", "fixture",
+                    "--todo-id", "todo_fixture", "--agent-id", "agent",
+                    "--claimed-by", "agent",
+                ],
+            },
+        },
+        "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
+    }
+    _, wire = project(tmp_path, payload=payload)
+    request = context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    )
+    assert request == {
+        "goal_id": "fixture",
+        "agent_id": "agent",
+        "todo_id": "todo_fixture",
+        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "authority_route": {
+            "registry_path": str(tmp_path / "registry.json"),
+            "runtime_root": str(tmp_path / "runtime"),
+        },
+        "turn_instance_id": "turn-fixture",
+        "source_sha256": wire["recovery"]["sha256"],
+    }
+    child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
+    assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    receipt = {
+        "event": "host_execution_prepared",
+        "todo_id": "todo_fixture",
+        "turn_instance_id": "turn-fixture",
+    }
+    state_before_child = (tmp_path / "session.json").read_bytes()
+    context.record_native_execution_preparation(
+        str(tmp_path), child_event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert (tmp_path / "session.json").read_bytes() == state_before_child
+    context.record_native_execution_preparation(
+        str(tmp_path), event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    ) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["todo_id"] == "todo_fixture"
+
+
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "unknown")
@@ -98,9 +164,9 @@ def project(root, capture_id="one", *, payload=None, generation=None):
     directory.mkdir(mode=0o700)
     if payload is None:
         payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve final stop condition."}
-    result = context.project_codex_context(payload, directory=str(root), capture_directory=directory,
+    result = context.prepare_codex_context(payload, directory=str(root), capture_directory=directory,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=capture_id,
-        continuity_generation=generation)
+        continuity_generation=generation).delivery
     return payload, result
 
 
@@ -118,12 +184,12 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        # The shared selection advice adds about 400 characters to recovery,
-        # avoiding mandatory discovery and duplicate/oversized read batches.
-        # Preserve identity/retention clauses; this is a synthetic regression
-        # allowance, not permission to raise any host output/context limit.
+        # Async handle/error preservation adds 212 characters to the shared
+        # read guide. Retain the complete identity/retention clauses; this
+        # synthetic allowance does not raise any host output/context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 3100
+        assert "session_id" in body and "write_stdin" in body and "functions.wait" in body
+        assert payload["requirements"] not in body and len(body) < 3350
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
@@ -259,13 +325,13 @@ def test_command_workdir_preserves_native_session_delta_and_recovery(tmp_path, m
     script = """
 import json, sys
 from pathlib import Path
-from loopx.control_plane.turn_driver.codex_context import project_codex_context
+from loopx.control_plane.turn_driver.codex_context import prepare_codex_context
 root = Path(sys.argv[1])
 capture = root / 'two'
 capture.mkdir(mode=0o700)
-print(json.dumps(project_codex_context(json.load(sys.stdin), directory=str(root),
+print(json.dumps(prepare_codex_context(json.load(sys.stdin), directory=str(root),
     capture_directory=capture, goal_id='fixture', agent_id='agent',
-    surface='quota_packet', capture_id='two')))
+    surface='quota_packet', capture_id='two').delivery))
 """
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
         input=json.dumps(payload), text=True, capture_output=True,
@@ -1043,8 +1109,8 @@ def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeyp
         return
     assert code == 0 and result["ok"] is True
     activation = result["context_delivery"]
-    expected = expected if setting == "on" else None
-    assert activation["requested"] == (setting or "off")
+    expected = expected if setting != "off" else None
+    assert activation["requested"] == (setting or "auto")
     assert activation["enabled"] is (expected is not None) and activation["scenario"] == expected
     assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal"]
     if expected is None:

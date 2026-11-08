@@ -24,6 +24,19 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+def assert_explicit_off_keeps_legacy_prompt(original, disabled):
+    # Omitted low-level API values keep their old prompt. Explicit OFF must
+    # also fence the new CLI default when the generated guard actually runs.
+    assert "--context-delivery off" in disabled["quota_guard_command"]
+    assert {key: value.replace(" --context-delivery off", "") if isinstance(value, str) else value
+            for key, value in disabled.items() if key != "interface_budget"} == {
+                key: value for key, value in original.items() if key != "interface_budget"}
+    extra = len(" --context-delivery off")
+    assert disabled["interface_budget"]["char_count"] == original["interface_budget"]["char_count"] + extra
+    assert disabled["interface_budget"]["budget_char_count"] == original["interface_budget"]["budget_char_count"] + extra
+    assert disabled["interface_budget"]["max_chars"] == original["interface_budget"]["max_chars"]
+
+
 def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path):
     from loopx.cli import build_parser
     from loopx.control_plane.heartbeat.bootstrap_prompt import goal_bootstrap, host_bootstrap_binding
@@ -82,13 +95,13 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     no_memory = dict(args, reward_memory_enabled=False)
     ordinary = build_heartbeat_prompt(**no_memory)
     captured_only = build_heartbeat_prompt(**no_memory, decision_output_root=tmp_path)
-    assert ordinary['interface_budget']['max_chars'] == 4_900
-    assert captured_only['interface_budget']['max_chars'] == 4_900
+    assert ordinary['interface_budget']['max_chars'] == 5_100
+    assert captured_only['interface_budget']['max_chars'] == 5_100
     oversized = build_heartbeat_prompt(
         **no_memory, decision_output_root=tmp_path, turn_envelope=True,
         agent_scopes=[letter * 320 for letter in 'stuv'],
     )
-    assert oversized['interface_budget']['max_chars'] == 5_300
+    assert oversized['interface_budget']['max_chars'] == 5_500
     assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
@@ -163,7 +176,7 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert '--reward-memory-reflection-json' not in body
         assert str(runtime) in body and str(capture) in body
         assert payload['turn_instance_id'] == TURN_ID
-        assert payload['interface_budget']['max_chars'] == 5_300
+        assert payload['interface_budget']['max_chars'] == 5_500
         assert payload['interface_budget']['within_budget'], payload['interface_budget']
         assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
         assert 'using inline ACK argv' in body
@@ -250,6 +263,9 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         # same worker declarations carried by the native tool environment.
         monkeypatch.setenv('LOOPX_CONTEXT_DELIVERY', 'on')
         monkeypatch.setenv('LOOPX_EXECUTION_MODE', 'heartbeat')
+    else:
+        env['LOOPX_CONTEXT_DELIVERY'] = 'off'
+        monkeypatch.setenv('LOOPX_CONTEXT_DELIVERY', 'off')
     body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=private_handoff)
     # Execute the renderer's actual guard, preserving its route and flags.
     block = body.split('```sh\n', 1)[1].split('```', 1)[0]
@@ -260,16 +276,14 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
     def complete_page(value):
-        if context_delivery:
+        if value.get('schema_version') == 'context_capture_navigation_v1':
             # This compatibility test elects to read the full saved view.
             # A manifest only supplies navigation; it is not delivered body.
             assert value['mode'] == 'full'
-            digest = value['sha256']
-            read = subprocess.run(shlex.split(value['command']), env=env, cwd=project,
+            read = subprocess.run(shlex.split(value['recovery']['command']), env=env, cwd=project,
                 capture_output=True, text=True, check=True)
             value = json.loads(read.stdout)
             assert value['schema_version'] == 'context_capture_page_v1'
-            assert value['sha256'] == digest
         if value.get('schema_version') != 'context_capture_page_v1':
             return value
         digest, body = value['sha256'], b''
@@ -340,7 +354,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         '--todo-id', ALTERNATIVE_TODO_ID, '--turn-instance-id', TURN_ID,
         '--classification', 'validated_progress', '--delivery-batch-scale', 'implementation',
         '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'in_flight_continuation',
-        '--no-global-sync', '--suppress-external-sinks')
+        '--no-global-sync', '--suppress-external-sinks', cwd=project)
     assert rc == 0, refresh
     spend = refresh['settlement_owed']['command']
     for _ in range(2):
@@ -397,7 +411,7 @@ def test_native_context_prompt_rejects_unqualified_on_and_keeps_off_inert(tmp_pa
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile=profile,
                 thin=True)
-    assert build_heartbeat_prompt(**args) == build_heartbeat_prompt(**args, context_delivery="off")
+    assert_explicit_off_keeps_legacy_prompt(build_heartbeat_prompt(**args), build_heartbeat_prompt(**args, context_delivery="off"))
     with pytest.raises(ValueError, match="supported declared run mode"):
         build_heartbeat_prompt(**args, context_delivery="on", codex_context_dir=str(tmp_path / "absent"))
     assert list(tmp_path.iterdir()) == []
@@ -435,7 +449,7 @@ def test_native_context_prompt_keeps_capture_on_reentry(tmp_path, monkeypatch):
 def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, turn_envelope):
     args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_ssh_goal", thin=True)
     original = build_heartbeat_prompt(**args)
-    assert original == build_heartbeat_prompt(**args, context_delivery="off")
+    assert_explicit_off_keeps_legacy_prompt(original, build_heartbeat_prompt(**args, context_delivery="off"))
     assert "--decision-output-root" not in original["quota_guard_command"]
     with pytest.raises(ValueError, match="host-owned"):
         build_heartbeat_prompt(**args, decision_output_root=tmp_path)
@@ -473,7 +487,7 @@ def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envel
         args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="codex_app_ssh_goal",
                     thin=True, **paths)
         ordinary = build_heartbeat_prompt(**args)
-        assert ordinary == build_heartbeat_prompt(**args, context_delivery="off")
+        assert_explicit_off_keeps_legacy_prompt(ordinary, build_heartbeat_prompt(**args, context_delivery="off"))
         enabled = build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
             codex_context_root=str(context), turn_envelope=turn_envelope)
         body, command = enabled["task_body"], shlex.split(enabled["quota_guard_command"])

@@ -1,6 +1,252 @@
-# Three real research checkpoints
+# Real benchmark reference fixtures
 
-The default research-history preview uses three actual EdgeBench checkpoints
+The default read-only preview uses the complete saved Explore log from the
+3 November Grid Turing Robot context-on run. The `research-real-benchmark`
+browser scenario reads both context arms, the Ad and Schema histories below,
+the saved Graph analysis, and Portfolio/Ad native results without saved analysis
+through the real HTTP history owner. It verifies complete original text and append order, download
+readback, source preservation, no writes, and desktop/390px reading. These are
+the core populated-page references; synthetic fixtures cover boundaries such
+as races, artificial paging pressure and missing fields.
+
+| Source | Records | Node / finding records | Recorded interval (UTC) | Original JSONL SHA-256 |
+| --- | ---: | ---: | --- | --- |
+| [Grid context on](../../apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-on-20261103-history.json) | 33 | 8 / 25 | 2026-11-03 06:02:35–15:06:44 | `292f493ee5d88e0f99546776ee2a46958e19517ceae192c10288276f270f404d` |
+| [Grid context off](../../apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-off-20261103-history.json) | 11 | 2 / 9 | 2026-11-03 06:04:18–14:55:52 | `d91047d06aa7ef43249bc79e70d8ba53d37a88240c124dcd17a75034ea524375` |
+
+All saved Explore events are included, without sampling, rewriting or redaction.
+No credentials or private absolute paths were found in the selected display
+state. Native authority/credential stores, session transcripts, evaluator
+internals and task workspaces are excluded. Each fixture carries its original
+run identity and limitations. Both runs retain `runner_invalid`, diagnostic
+scope and `score_countable=false`; displaying their observations does not
+qualify a causal comparison. Recording intervals are not active solver time.
+
+The records expose real reading pressure: long repeated questions, multiple
+measurement scopes, null execution observations, rejected local variants and an
+unresolved timeout. All findings happen to carry the source's `confirmed`
+label; one reports **no measured gain** and another preserves an unknown native
+outcome. The frontend must preserve that distinction rather than infer benefit
+from a status label. Neither log records explicit relationship edges or parents.
+Missing structured decisions now take an on-demand disclosure rather than an
+empty first-screen section. Opening a record reuses the existing observation,
+interpretation and measurement reader, with complete original wording on demand;
+the same layout applies without a generated display analysis. Exported records
+remain original data.
+
+Run `uv run --extra test python examples/personal-workspace-browser/research-history-backend.py`
+after building the Chat bundle to open the default source. Pass `--fixture` with
+the context-off file to inspect it separately. Both sources genuinely use
+`benchmark-goal` in separate runtimes: do not rename or merge them into invented
+Goals. This reader materializes display events in disposable scaffolding; it
+does not restore execution state or observe an installed/live worker.
+
+Run `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-real-benchmark node examples/personal-workspace-browser-smoke.mjs`
+for the core reading journey. The Python history suite independently freezes the
+original JSONL digests and sizes. The two source byte totals are 80,992 and
+20,575; their exact original serialization can be reconstructed as described
+below. No model or solver is called by this scenario.
+
+The attached work-conversation scenario also uses the complete Grid context-on
+fixture as a tool result, replacing repeated invented validation lines. The
+production attached reader and HTTP detail pages must deliver the entire JSON
+object into the packaged conversation, including every original observation and
+its diagnostic/unknown boundaries, at desktop and 390px widths. A single synthetic
+Unicode prefix retains the character-offset regression. The disposable host peer,
+tool call and carrier messages are synthetic; this does not reconstruct a real
+benchmark conversation or qualify model, installed App or original-host adoption.
+The peer registry pins its disposable runtime instead of consulting the operator's
+implicit default roots; conflicting defaults are covered by the HTTP regression.
+The separate artificial paging, transport-failure and heavy-tool stress cases
+remain boundary tests.
+The narrow work view keeps the native source, reply/unknown state and original-App
+action in one status band. Its icon retains the full accessible action name,
+keyboard activation and native failure/recovery path; the original-App action is
+never a substitute for reading the complete record in LoopX.
+
+The same core scenario now includes two record-rich histories from different
+tasks, with all **349 original events** retained:
+
+| Source | Records | Node / finding records | Recording interval (UTC) | Original JSONL SHA-256 |
+| --- | ---: | ---: | --- | --- |
+| [Ad placement](../../apps/presentation/dashboard/src/data/fixtures/edgebench-ad-20261023-history.json) | 255 | 65 / 190 | 22 October 17:31:31–23 October 07:35:25 | `23a55562f8ad9b808a5633c479451b78b13ad5370a35190d04fab407e3824a72` |
+| [Schemathesis](../../apps/presentation/dashboard/src/data/fixtures/edgebench-schema-20261025-history.json) | 94 | 47 / 47 | 23 October 17:50:32–25 October 15:39:04 | `5473191a1f23537a48f38ba82d0dd8ba8ed5ad7daffd944f28910e7d6e19e0ab` |
+
+Selection combines recency with the reading problem. The inspected 26 October
+Ad and Schema captures contain only two and four events. These richer captures
+exercise real pagination, long evidence and updates: one Ad question has **39
+recorded versions**; its 65 node events describe three distinct questions. A
+confirmed finding rejects a variant after a negative local comparison. The
+reader must preserve that original conclusion and make every version reachable.
+The Schema capture retains inherited records and originating Agent/run identities
+across three UTC dates; that recording span does not measure the destination
+solver's active time or invent a parent/child relationship.
+
+Neither history records explicit edges or parent links. Ad remains
+`runner_invalid`; Schema remains `cancelled`; both are score-uncountable. No
+events were sampled, rewritten or redacted. The original byte sizes are 396,701
+and 271,025. The core journey reads all display pages, exports every original
+record, compares the first and last of the 39 Ad versions and returns keyboard
+focus to the selected record at desktop/390px widths. Pass either fixture to
+the same preview's `--fixture` option; their original Goal IDs stay intact.
+These display captures do not include their complete session trajectories or
+qualify installed App adoption, paid analysis or a scientific comparison.
+
+## Captured session archives
+
+The [fixed capture set](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/tree/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories) links the three real display
+fixtures above to all four retained solver-session files:
+
+| Display fixture | Captured session archive |
+| --- | --- |
+| Grid context on | [Grid ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/grid_turing_robot.zip) |
+| Ad placement | [Ad ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/ad_placement_optimization.zip) |
+| Schemathesis | [Schema ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/schemathesis_config_modernization.zip) |
+
+Each fixture's `provenance.trajectory_archive` pins the archive and its SHA-256.
+The [manifest](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/manifest.json) binds native session IDs,
+original/published/compressed hashes, record counts and capture variants; the
+[redaction audit](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/redactions.json) identifies every
+removed opaque encrypted field. All plaintext values and unchanged JSONL lines
+were compared with the source, and all seven published files were read back by
+SHA-256. The 382 Explore records remain byte-identical.
+
+The Schema receiver's alternate runtime capture is a strict prefix missing
+56 tail records; the longer worker-session file is retained. Earlier Schema
+session history keeps its original identity. Complete captured files do not
+establish whole-run coverage or active duration. Invalid/cancelled statuses,
+unknown adoption/cost and unqualified scientific comparisons remain explicit.
+The earlier checkpoint release below remains available at its original version.
+
+中文：三例现有真实展示样例现在关联到同一固定 HF 版本的完整已捕获会话，保留
+原文、身份、取消/无效状态及未知覆盖。Schema 较短副本缺少的 56 条尾部记录已
+由较长原文件保留；清单和逐字段脱敏审计可查，不据此推断科学收益或完整运行覆盖。
+
+## Earlier research checkpoints
+
+### Saved analysis reference
+
+The core scenario also opens the [actual Graph saved analysis](../../apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json)
+from the 11–12 October native run in Chinese and English. Its six purposively
+selected episodes preserve all 36 model judgments, complete explanations,
+negative/unknown verdicts and original pack/run/revision identities. This older
+case supplements the recent Grid logs; it is not another recent complete history.
+The analysis headline preserves the mixed result: five recorded utility tests
+and one unknown, without turning a test into a positive benefit.
+
+The same real saved-analysis reader checks keyboard focus with the opening
+click's animation callbacks held. Enter still opens the focused judgment and
+Escape returns to its metric, in both languages at desktop and 390px widths.
+Region focus is established when React commits the detail; a delayed frame
+cannot take focus away from a reader already navigating its rows.
+
+| Judgment | Yes / no / unknown |
+| --- | --- |
+| Goal alignment | 4 / 0 / 2 |
+| Utility tested | 5 / 0 / 1 |
+| Discrimination | 0 / 2 / 4 |
+| Information gain | 6 / 0 / 0 |
+| Evidence adoption | 2 / 0 / 4 |
+| Avoidable repetition | 0 / 3 / 3 |
+
+The recorded analysis used **447.0 seconds, 53,768 input and 19,278 output
+tokens**. These are analysis costs; solver token usage and money remain unknown.
+The invalid first submission remains missing rather than zero, and the native
+best/retained result remains distinct from the final submitted candidate.
+
+The core reader also uses the actual registered [Portfolio](../../apps/presentation/dashboard/src/data/fixtures/edgebench-portfolio-native-results.json)
+and [Ad placement](../../apps/presentation/dashboard/src/data/fixtures/edgebench-ad-native-results.json)
+analysis Goals. Their six-episode packs have **no saved model result or job**.
+Native measurements remain readable without inventing judgments, analysis usage,
+or an adoption decision:
+
+| Captured native run | First valid comparison | Best valid | Final valid | Retained |
+| --- | --- | --- | --- | --- |
+| Graph | agent-2: 0.8172464473565724 | agent-16: 0.849544264387785 | agent-18: 0.8485288027628158 | agent-16: 0.849544264387785 |
+| Portfolio | agent-1: **0** | agent-7: 10.86 | agent-12: 10.86 | Unknown |
+| Ad placement | agent-1: 49,550,815,819 | agent-13: 49,653,326,363 | agent-16: 49,650,446,168 | Unknown |
+
+Graph's source-bound retained improvement is **+0.032297817031212595 raw**
+against its fixed agent-2 baseline. Its final candidate change is only
++0.03128235540624347. The terminal-result citation identifies agent-16 as retained;
+the last submitted candidate is not silently substituted. This is a native
+comparison, not LoopX's independently isolated causal contribution. Scores have
+different task meanings and are not added across these runs.
+
+The Ad capture exposed a presentation failure: four significant digits displayed
+both best and final as `4.965E10`. Scientific notation now adds only enough digits
+to distinguish the captured values (`4.9653E10` and `4.965E10` here). Equal native
+values still display equally, and full precision remains in the citation reader.
+
+The saved Graph analysis also preserves a negative result from round 11: a
+reported rollback retained round 10 at 0.84213. Round 4 reports local experimental
+follow-through, while rounds 8, 15 and 18 announce restoration or future work
+without establishing completed adoption in their selected excerpts. The later
+terminal retention evidence does not rewrite those earlier model judgments.
+There are no positive discrimination judgments: two are no and four unknown;
+bundled interventions, timing noise and missing controlled contrasts still limit
+explanatory claims. Native evaluation and positive measured benefit remain
+different questions. These statements describe the saved, uncalibrated analysis
+of six purposive episodes, not a new whole-run or causal assessment.
+
+This fixture freezes the real HTTP readbacks, including the Chinese/English
+cache misses and the saved unspecified-language original. The packaged frontend
+must recover that original without inventing a translation, changing its usage
+or invoking a model. The preview replays captured GET responses; it does **not**
+import the original analysis store or qualify the live execution backend. The
+existing synthetic process fixture separately protects that owner boundary.
+Tests pin the original HTTP byte digests and read all 36 explanations in both
+interfaces at desktop/390px widths. All three cases also open each available
+native value's original citation; Graph opens its terminal retention evidence.
+An uncaptured judgment citation fails visibly, followed by a successful captured
+citation read; missing sources never substitute another excerpt.
+The real zero in Portfolio stays zero, and missing retention or analysis usage
+in Portfolio and Ad never borrows Graph's values. The three formally registered
+Goals were additionally read through the production HTTP owner with analysis
+execution disabled; this qualifies reading, not model dispatch or installation.
+
+The Graph fixture bundles its existing native-report-4 range plus baseline,
+best/retained, final and terminal-retention citations. Portfolio and Ad bundle
+their initial, best and final native citations with the exact language-specific
+request identities. Other cited ranges return an explicit unavailable response;
+no transcript or failure stack is substituted. These analysis Goals have no
+Explore logs: their empty histories are preserved, separately from the recent
+real-history cases above.
+
+When saved analysis or native measurements exist without an Explore log, the
+missing-history status stays inline above the results. Goals without saved
+results retain their empty-history entry. Expand the retained-improvement value
+for the full baseline, retained candidate and citations; the compact summary does
+not change those source records.
+
+The same fixture also freezes the original registered feedback snapshot, whose
+native retention is unknown. Select it through **Evaluation scope / 评估范围**:
+the best valid value remains `0.849544264387785` and the last valid candidate
+remains `0.8485288027628158`, while initial and retained results stay unknown.
+No retained-improvement value is supplied by that snapshot. Its saved 36 process
+judgments and analysis usage are identical to the later declaration; neither
+is rerun or relabeled. Switching scope and Back must restore each snapshot's own
+native results, without borrowing a retained value from the other. The additional
+original/Chinese/English responses are captured through the real read-only HTTP
+owner and pinned independently. This is a reader regression, not independent
+verification of the later provider's retention declaration.
+
+The packaged reader keeps the original snapshot's unknown retention visible
+beside its measured best and final values. The narrow view below is scrolled to
+that same result area; it preserves the same values and on-demand sources.
+
+![Original Graph snapshot, desktop](../../docs/development/assets/runtime-source-analysis/original-native-retention-desktop.png)
+
+![Original Graph snapshot, narrow result area](../../docs/development/assets/runtime-source-analysis/original-native-retention-mobile.png)
+
+The original snapshot includes the exact best/final native-result citations and
+the same native-report-4 excerpt as the later snapshot. Other cited ranges return
+an explicit unavailable response; no transcript, failure stack or other snapshot's
+evidence is substituted. The selected Goal has no Explore log: its empty history is preserved.
+Pass `--fixture apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json`
+to the same read-only preview to inspect this case. All mutation verbs are denied.
+
+The broader `research-history` regression explicitly loads three actual EdgeBench checkpoints
 sealed on 15 October 2026 and **restored by subsequent experiments**. It replaces
 the older Squirrel example. The Explore records retain their original text,
 timestamps, IDs, references, append order and scoped findings.
@@ -88,7 +334,7 @@ can only display relationships actually supplied by the native source.
 
 ## Ordinary reading journey
 
-Open the preview to read the complete Portfolio recording interval. Switch
+Open the older three-fixture scenario to read the complete Portfolio recording interval. Switch
 between the three Goals in the existing sidebar. One date or point selection
 opens all corresponding original records, versions, scoped negative evidence
 and references. Refresh and browser Back/Forward preserve context. Reading

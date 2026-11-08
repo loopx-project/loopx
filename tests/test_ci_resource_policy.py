@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,6 +127,50 @@ def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
     qualification = expression(workflow("python-tests")["concurrency"]["group"], event("pull_request"))
     cleanup = expression(workflow("ci-maintenance")["concurrency"]["group"], event("pull_request_target"))
     assert qualification != cleanup
+
+
+@pytest.mark.parametrize("mode", ["delayed", "never", "changed"])
+def test_obsolete_run_cancellation_waits_for_verified_completion(mode: str) -> None:
+    script = workflow("ci-maintenance")["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
+    harness = r'''
+let input = ''; for await (const chunk of process.stdin) input += chunk;
+const {script, mode} = JSON.parse(input);
+let clock = 0; const calls = [], notes = [];
+Date.now = () => clock;
+globalThis.setTimeout = callback => {clock += 1000; callback();};
+const pr = {state:'open', head:{sha:'current', ref:'fixture', label:'owner:fixture', repo:{id:1}}};
+const context = {repo:{owner:'owner', repo:'fixture'}, payload:{number:1, action:'synchronize',
+  before:'old', after:'current', pull_request:pr}};
+const github = {rest:{pulls:{get:async()=>({data:mode==='changed' && clock>=5000
+  ? {...pr,head:{...pr.head,sha:'newer'}} : pr}),list:'pulls'},actions:{listWorkflowRuns:'runs',
+  cancelWorkflowRun:async params=>calls.push(['cancel',params.run_id]),
+  getWorkflowRun:async()=>({data:{status:mode==='delayed' && clock>=35000?'completed':'in_progress'}})}},
+  paginate:async endpoint=>endpoint==='pulls' ? [] : [{id:7,status:'in_progress',head_repository:{id:1},
+    head_branch:'fixture',head_sha:'old',created_at:'2026-01-01T00:00:00Z',pull_requests:[{number:1}]}],
+  request:async(_route,params)=>calls.push(['force',params.run_id])};
+let error = null;
+try {await new (Object.getPrototypeOf(async function(){}).constructor)('github','context','core',script)
+  (github,context,{info:message=>notes.push(message)});} catch(e) {error=e.message;}
+process.stdout.write(JSON.stringify({clock,calls,notes,error}));
+'''
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        input=json.dumps({"script": script, "mode": mode}), text=True,
+        capture_output=True, check=True, timeout=10,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["calls"] == [["cancel", 7], ["force", 7]]
+    if mode == "delayed":
+        assert observed["error"] is None
+        assert 35000 <= observed["clock"] <= 61000
+        assert any("Retired obsolete" in note for note in observed["notes"])
+    elif mode == "never":
+        assert "has not completed" in observed["error"]
+        assert observed["clock"] <= 62000
+    else:
+        assert observed["error"] is None
+        assert observed["clock"] <= 6000
+        assert not any("Retired obsolete" in note for note in observed["notes"])
 
 
 def test_dashboard_unit_coverage_runs_once_while_all_browser_shards_remain_required() -> None:

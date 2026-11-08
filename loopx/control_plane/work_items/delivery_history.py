@@ -28,7 +28,7 @@ def _identifier_fact(value: Any) -> str:
 
 def _run_facts(run: Mapping[str, Any]) -> dict[str, Any]:
     observation = run.get("progress_observation")
-    compact_observation = None
+    compact_observation: dict[str, Any] | None = None
     if isinstance(observation, Mapping):
         compact_observation = {
             **{key: _bounded_text(_text(observation.get(key))) for key in ("schema_version", "result_class")},

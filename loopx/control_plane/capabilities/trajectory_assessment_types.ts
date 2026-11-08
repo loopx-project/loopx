@@ -100,7 +100,22 @@ export interface TrajectorySolverUsage {
   loopx_input?: TrajectoryLoopXInput;
   /** Appended captured text only, never provider-token or replay accounting. */
   tool_context?: TrajectoryToolContext;
+  /** Whole requests issuing recognized commands, never control-text attribution. */
+  loopx_requests?: TrajectoryLoopXRequests;
 }
+
+export type TrajectoryLoopXRequests = {method: 'codex_ordered_loopx_requests_v1'} & (
+  {status: 'observed'; total_requests: number; recognized_requests: number; mixed_call_requests: number;
+    unmatched_calls: number; unclassified_calls: number;
+    /** Sums of the recognized subset; an empty subset does not measure unresolved calls. */
+    tokens: TrajectoryRequestTokens;
+    /** Unknown when no requests are recognized and any calls are unclassified or unmatched. */
+    input_fraction: number | null; uncached_input_fraction: number | null;
+    /** Neither ordered tool records nor token receipts measure generation latency or money. */
+    model_seconds: null; charged_cost: null;
+    requests: Array<{response_id: string; turn_id: string; line: number; call_lines: number[];
+      operations: string[]; other_calls: number; tokens: TrajectoryRequestTokens}>}
+  | {status: 'unavailable'; reason: string});
 
 export type TrajectoryToolContext = {method: 'codex_loopx_tool_context_inventory_v1'} & (
   {status: 'observed'; observed_input_text_bytes: number; loopx_tool_output_bytes: number;

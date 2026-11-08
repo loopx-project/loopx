@@ -680,6 +680,7 @@ class CodexChatAgentSession:
     project_context: dict[str, str] | None = None
     model: str | None = None
     resolved_model: str | None = None
+    native_model_provider: str | None = None
     reasoning_effort: str | None = None
     resolved_reasoning_effort: str | None = None
     service_tier: str | None = None
@@ -715,6 +716,7 @@ class CodexChatAgentSession:
     _host_model_auth: Any = field(default=None, repr=False)
     _public_source_read_context: str = field(default="", repr=False)
     read_only_review: bool = False
+    answer_review: bool = False
     metadata_review: bool = False
     _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
         default=None, repr=False
@@ -732,6 +734,8 @@ class CodexChatAgentSession:
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float | None = None,
         resume_thread_id: str | None = None,
+        fork_thread_id: str | None = None,
+        expected_native_provider: str | None = None,
         execution_mode: bool = False,
         isolate_process_tree: bool = False,
         runtime_profile: str = "restricted",
@@ -739,12 +743,16 @@ class CodexChatAgentSession:
         project_context: dict[str, str] | None = None,
         read_only_review: bool = False,
         metadata_review_context: dict[str, Any] | None = None,
+        answer_review_context: dict[str, Any] | None = None,
+        answer_review_host_read: bool = False,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
         launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        account_runtime_root: Path | None = None,
+        account_consumer: str = "worker",
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -759,52 +767,22 @@ class CodexChatAgentSession:
         root = work_dir.resolve()
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Codex Chat runtime profile")
-        if metadata_review_context is not None:
-            if not read_only_review or project_context is not None or goal_id is not None or execution_mode or dynamic_tools or runtime_profile != "restricted":
-                raise ValueError("metadata review requires a restricted, tools-free steward formatter")
-            from .control_plane.effect_runtime import effect_runtime_result
-            policy = effect_runtime_result("collaboration.steward.session_identity", {
-                "context": metadata_review_context, "metadata_review": True})
-            if Path(policy["context"]["workspace_path"]).resolve() != root:
-                raise ValueError("metadata review workspace does not match its original source")
-        if read_only_review and metadata_review_context is None and (project_context is None or not resume_thread_id or dynamic_tools):
-            raise ValueError("result review must resume the original private thread without dynamic tools")
-        if project_context is not None:
-            from .control_plane.effect_runtime import effect_runtime_result
-
-            if execution_mode or goal_id is not None or runtime_profile != "restricted":
-                raise ValueError("ordinary project runtime cannot borrow Goal or manager authority")
-            policy = effect_runtime_result("collaboration.project.session_identity", {
-                "context": project_context, **({"read_only_review": True} if read_only_review else {})})
-            if Path(policy["context"]["workspace_path"]).resolve() != root:
-                raise ValueError("project runtime workspace does not match its context")
-            selected_sandbox = policy["sandbox"]
-            if sandbox is not None and sandbox != selected_sandbox:
-                raise ValueError("project sandbox does not match its workspace grant")
-        elif execution_mode:
-            if runtime_profile != "restricted":
-                raise ValueError(
-                    "trusted_owner is only valid for the non-execution manager runtime"
-                )
-            selected_sandbox = sandbox or "workspace-write"
-            if selected_sandbox not in {"read-only", "workspace-write"}:
-                raise ValueError("unsupported Codex Chat execution sandbox")
-        else:
-            # The manager profile and its actual host sandbox are one authority
-            # decision.  Callers may assert the derived value, but cannot widen
-            # or narrow it independently at this adapter boundary.
-            selected_sandbox = (
-                "danger-full-access"
-                if runtime_profile == "trusted_owner"
-                else "read-only"
-            )
-            if sandbox is not None and sandbox != selected_sandbox:
-                raise ValueError(
-                    "Codex Chat sandbox does not match the selected runtime profile"
-                )
+        if fork_thread_id and (
+            resume_thread_id or execution_mode or read_only_review or project_context
+            or metadata_review_context or answer_review_context or not expected_native_provider
+        ):
+            raise ValueError("Codex history fork requires an authorized ordinary native thread")
+        existing_thread_id = resume_thread_id or fork_thread_id
+        from .capabilities.native_chat import codex_context
+        policy, selected_sandbox = codex_context.native_conversation_policy(
+            root=root, metadata_review_context=metadata_review_context, answer_review_context=answer_review_context,
+            answer_review_host_read=answer_review_host_read, read_only_review=read_only_review,
+            project_context=project_context, goal_id=goal_id, execution_mode=execution_mode,
+            runtime_profile=runtime_profile, dynamic_tools=dynamic_tools, resume_thread_id=existing_thread_id,
+            sandbox=sandbox)
         # Core owns the optional narrower project filesystem policy. A model,
         # transport or project config cannot substitute a profile of its choice.
-        permissions_profile = policy.get("permissions_profile") if project_context is not None or metadata_review_context is not None else None
+        permissions_profile = policy.get("permissions_profile") if project_context is not None or metadata_review_context is not None or answer_review_context is not None else None
         if permissions_profile:
             host_config = {**(host_config or {}), **policy["host_config"]}
             # Git must not consult private account/system configuration from
@@ -840,7 +818,6 @@ class CodexChatAgentSession:
             .expanduser()
             .resolve()
         )
-        from .capabilities.native_chat import codex_context
         runtime_home = codex_context.codex_home(base_home, policy if project_context is not None else None)
         runtime_env = codex_context.process_environment(runtime_home, isolated=bool(permissions_profile))
         # Select an operator-defined native provider for ordinary Chat only.
@@ -850,6 +827,15 @@ class CodexChatAgentSession:
             runtime_env.get("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "").strip()
             if not execution_mode else ""
         )
+        account_base_config = host_config
+        from .capabilities.native_chat.codex_auth import prepare_api_transport, authenticate_isolated
+        api_transport = prepare_api_transport(account_runtime_root, base_home,
+            isolated_home=runtime_home if runtime_home != base_home else None,
+            eligible=not execution_mode and not provider_override and not (host_config or {}).get("model_provider"),
+            consumer=account_consumer, model=model)
+        if api_transport is not None:
+            runtime_env[api_transport.env_key] = api_transport.token
+            host_config, provider_override = api_transport.configuration(host_config or {}), api_transport.provider
         command = [resolved, "app-server"]
         if permissions_profile:
             # Keep this native store independent even when the account's
@@ -917,6 +903,7 @@ class CodexChatAgentSession:
             sandbox=selected_sandbox,
             permissions_profile=permissions_profile,
             read_only_review=read_only_review,
+            answer_review=answer_review_context is not None,
             metadata_review=metadata_review_context is not None,
             project_context=policy["context"] if project_context is not None else None,
             model=model,
@@ -939,19 +926,7 @@ class CodexChatAgentSession:
             )
             session._notify("initialized", {})
             if permissions_profile:
-                from .capabilities.native_chat.codex_auth import for_isolated_process
-                try:
-                    session._host_model_auth = for_isolated_process(base_home, runtime_home, resolved)
-                    if session._host_model_auth is not None:
-                        credentials = session._host_model_auth.read()
-                        login = session._request("account/login/start", {
-                            "type": "chatgptAuthTokens", **credentials}, request_id=4)
-                        if login.get("type") != "chatgptAuthTokens":
-                            raise ValueError("unexpected native model authentication mode")
-                except Exception:
-                    raise session._runtime_error(
-                        "Trusted-host Codex model authentication is unavailable. "
-                        "Restore the host account and retry this same Session.") from None
+                session._host_model_auth = authenticate_isolated(session, base_home, runtime_home, resolved, api_transport=api_transport)
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
@@ -959,9 +934,9 @@ class CodexChatAgentSession:
             # the account owner has switched back to a subscription (or vice
             # versa). Follow Codex's effective route without selecting accounts,
             # copying auth, restarting clients or replacing the original thread.
-            follow_native_provider = bool(resume_thread_id and not execution_mode
+            follow_native_provider = bool(existing_thread_id and not execution_mode
                 and (not permissions_profile or metadata_review_context is not None) and not provider_override)
-            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider
+            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None
             if read_native_config:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
@@ -974,6 +949,8 @@ class CodexChatAgentSession:
                 effective = config_result.get("config", {})
                 if not isinstance(effective, dict):
                     raise session._runtime_error("Codex returned an invalid project configuration.")
+                if api_transport is not None:
+                    host_config = api_transport.configuration(host_config or {}, effective)
                 if owner_git_write:
                     # Preserve the native workspace policy (including network
                     # and temporary-directory settings). A separate named
@@ -1021,12 +998,15 @@ class CodexChatAgentSession:
                 if any(value is not None and (not isinstance(value, str) or not value.strip())
                        for value in (model, reasoning_effort)):
                     raise session._runtime_error("Codex returned invalid project model settings.")
+            if expected_native_provider and provider_override and provider_override != expected_native_provider:
+                raise session._runtime_error("Codex native history belongs to a different model provider.")
+            thread_method = "thread/fork" if fork_thread_id else "thread/resume" if resume_thread_id else "thread/start"
             thread_result = session._request(
-                "thread/resume" if resume_thread_id else "thread/start",
+                thread_method,
                 {
                     **(
-                        {"threadId": resume_thread_id, "excludeTurns": True}
-                        if resume_thread_id
+                        {"threadId": existing_thread_id, "excludeTurns": True}
+                        if existing_thread_id
                         else {}
                     ),
                     "cwd": str(root),
@@ -1055,16 +1035,17 @@ class CodexChatAgentSession:
                     "approvalPolicy": "never",
                     **(
                         {"dynamicTools": dynamic_tools}
-                        if dynamic_tools and not resume_thread_id
+                        if dynamic_tools and not existing_thread_id
                         else {}
                     ),
                 },
                 request_id=2,
             )
-            if provider_override and thread_result.get("modelProvider") != provider_override:
-                raise session._runtime_error(
-                    "Codex did not apply the requested conversation provider."
-                )
+            codex_context.verify_conversation_provider(session, provider_override, thread_result)
+            native_provider = thread_result.get("modelProvider")
+            session.native_model_provider = native_provider if isinstance(native_provider, str) and native_provider else None
+            if expected_native_provider is not None and session.native_model_provider != expected_native_provider:
+                raise session._runtime_error("Codex native history belongs to a different model provider.")
             if model and thread_result.get("model") not in {None, model}:
                 raise CodexChatAgentError(
                     "Codex did not apply the requested conversation model.",
@@ -1112,6 +1093,20 @@ class CodexChatAgentSession:
                 raise session._runtime_error(
                     "Codex app-server resumed an unexpected thread."
                 )
+            if fork_thread_id:
+                native_thread = thread_result.get("thread")
+                sandbox_type = {
+                    "read-only": "readOnly",
+                    "workspace-write": "workspaceWrite",
+                    "danger-full-access": "dangerFullAccess",
+                }.get(selected_sandbox)
+                applied_sandbox = thread_result.get("sandbox")
+                if (session.thread_id == fork_thread_id or not isinstance(native_thread, dict)
+                        or native_thread.get("forkedFromId") != fork_thread_id
+                        or thread_result.get("cwd") != str(root) or thread_result.get("approvalPolicy") != "never"
+                        or sandbox_type is None or not isinstance(applied_sandbox, dict)
+                        or applied_sandbox.get("type") != sandbox_type):
+                    raise session._runtime_error("Codex did not verify the original thread and policy of its history fork.")
             if permissions_profile:
                 session._public_source_read_context = codex_context.public_source_read_context(host_config or {})
             if read_only_review and session._background_terminals(time.monotonic() + response_timeout_sec):
@@ -1128,7 +1123,7 @@ class CodexChatAgentSession:
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
-            if _compatibility_catalog_path is not None:
+            if _compatibility_catalog_path is not None or fork_thread_id:
                 raise _model_catalog_compatibility_error() from exc
             with _current_builtin_model_catalog(resolved, environment=runtime_env) as catalog_path:
                 return cls.start(
@@ -1140,6 +1135,7 @@ class CodexChatAgentSession:
                     idle_timeout_sec=idle_timeout_sec,
                     hard_timeout_sec=hard_timeout_sec,
                     resume_thread_id=resume_thread_id,
+                    expected_native_provider=expected_native_provider,
                     execution_mode=execution_mode,
                     isolate_process_tree=isolate_process_tree,
                     runtime_profile=runtime_profile,
@@ -1147,12 +1143,16 @@ class CodexChatAgentSession:
                     project_context=project_context,
                     read_only_review=read_only_review,
                     metadata_review_context=metadata_review_context,
+                    answer_review_context=answer_review_context,
+                    answer_review_host_read=answer_review_host_read,
                     codex_home=base_home,
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
-                    host_config=host_config,
+                    host_config=account_base_config if api_transport is not None else host_config,
                     launch_guard=launch_guard,
+                    account_runtime_root=account_runtime_root,
+                    account_consumer=account_consumer,
                     _compatibility_catalog_path=catalog_path,
                 )
         except Exception:
@@ -1230,8 +1230,10 @@ class CodexChatAgentSession:
     def _notify(self, method: str, params: dict[str, Any]) -> None:
         self._write({"method": method, "params": params})
 
-    def _next_message(self, *, deadline: float) -> dict[str, Any]:
+    def _next_message(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
+            if check is not None:
+                check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise self._runtime_error("Codex app-server timed out.")
@@ -1260,14 +1262,16 @@ class CodexChatAgentSession:
         waiter.put(message)
         return True
 
-    def _next_event(self, *, deadline: float) -> dict[str, Any]:
+    def _next_event(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
+            if check is not None:
+                check()
             with self._message_dispatch_lock:
                 try:
                     return self._pending_events.get_nowait()
                 except queue.Empty:
                     pass
-                message = self._next_message(deadline=deadline)
+                message = self._next_message(deadline=deadline, **({"check": check} if check is not None else {}))
                 if self._route_response(message):
                     continue
                 self._observe_command_item(message)
@@ -1476,6 +1480,10 @@ class CodexChatAgentSession:
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
+
+    def compact_history(self, *, check: Callable[[], None] | None = None) -> None:
+        from .capabilities.native_chat.codex_adapter import compact_native_history
+        compact_native_history(self, check=check)
 
     def steer(self, user_message: str, *, expected_turn_id: str) -> str:
         """Inject one user message into the exact active Codex Turn."""
@@ -1725,7 +1733,7 @@ class CodexChatAgentSession:
         text = str(user_message or "")
         if not text.strip():
             raise ValueError("user message is required")
-        if self.read_only_review and not self.metadata_review:
+        if self.read_only_review and not self.metadata_review and not self.answer_review:
             text = (
                 "Review the existing results of the interrupted original request below. "
                 "Its earlier execution may have already changed files or external systems. "
@@ -1777,6 +1785,10 @@ class CodexChatAgentSession:
                 "cwd": str(self.work_dir),
                 **({"model": self.model} if self.model else {}),
                 **({"effort": self.reasoning_effort} if self.reasoning_effort else {}),
+                # Chat renders native summaries, but a resumed thread may have
+                # disabled them. Request the public summary on each Chat Turn;
+                # execution hosts retain their own verbosity configuration.
+                **({"summary": "concise"} if not self.execution_mode else {}),
                 "approvalPolicy": "never",
                 **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
                 **(

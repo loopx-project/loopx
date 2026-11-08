@@ -81,7 +81,9 @@ def test_reader_rejects_budget_too_small_for_reader_program_metadata(
     raw = (json.dumps({"requirements": body}, ensure_ascii=False) + "\n").encode()
     capture.write_bytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    limit = 1600
+    # 1600 bytes can carry a small valid page, depending on command/path length.
+    # This budget fits a rejection but not mandatory first-page metadata.
+    limit = 512
     response = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
          "context-read", "--capture-file", str(capture),
@@ -143,11 +145,11 @@ def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, mon
 @pytest.mark.parametrize("limit,fmt", [(0, "json"), (-1, "json"), (True, "json"), (1.2, "json"), (7000, "markdown")])
 def test_reader_rejects_invalid_output_budget_before_capture_io(monkeypatch, limit, fmt):
     import argparse
-    from loopx.cli_commands import quota_capture
+    from loopx.cli_commands import quota_context_reader
     def unexpected(*args, **kwargs):
         pytest.fail("invalid output budget must fail before capture IO")
-    monkeypatch.setattr(quota_capture, "_read_capture", unexpected)
-    result = quota_capture.read_context_capture(argparse.Namespace(capture_file="missing", capture_sha256="0" * 64,
+    monkeypatch.setattr(quota_context_reader, "_read_capture", unexpected)
+    result = quota_context_reader.read_context_capture(argparse.Namespace(capture_file="missing", capture_sha256="0" * 64,
         offset=0, page_bytes=8192, max_page_output_bytes=limit, format=fmt))
     assert not result["ok"] and "positive integer" in result["reason"]
 
@@ -179,10 +181,13 @@ def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path
     capture = tmp_path / "original.json"
     raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
     capture.write_bytes(raw)
+    # Leave room for the pinned continuation command and still require paging.
+    limit = 2400
     args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
-        offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
+        offset=0, page_bytes=8192, max_page_output_bytes=limit, format="json")
     page = read_context_capture(args)
     assert page["ok"] and not page["eof"]
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
     args.offset = page["next_offset"] + 1
     assert "UTF-8 boundary" in read_context_capture(args)["reason"]
     args.offset = page["next_offset"]
@@ -460,7 +465,8 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
         "retained": {"complete": True, "target": cold["target"]}}, setting="off")
     assert "target" not in disabled and not (disabled_directory / "projection.json").exists()
     ordinary, directory = invoke(None, opt_in=False)
-    assert "target" not in ordinary and not (directory / "projection.json").exists()
+    assert "target" not in ordinary and ordinary["mode"] == "full"
+    assert (directory / "projection.json").exists(), "ordinary defaults present the current source without native continuity"
     assert state.read_bytes() == before_source and _spend_run_count(runtime) == 0
     assert all(path.read_bytes() == raw for path, raw in saved)
 
@@ -640,7 +646,7 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
 @pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota, quota_capture
+    from loopx.cli_commands import quota, quota_context_reader
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
@@ -659,7 +665,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
             pytest.fail("failed native directory preparation must not reach projection")
         if native_failure == "projection":
             raise OSError("native observation unavailable")
-        return {"native_projection": payload}
+        return codex_context.NativeContextPreparation({"native_projection": payload})
 
     def unavailable_directory(**kwargs):
         raise OSError("native directory unavailable")
@@ -668,11 +674,11 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         raise OSError("synthetic reader metadata unavailable")
 
     monkeypatch.setattr(quota, "project_captured_context", competing)
-    monkeypatch.setattr(codex_context, "project_codex_context", native)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
     elif native_failure == "reader_reference":
-        monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable_reference)
+        monkeypatch.setattr(quota_context_reader, "write_context_read_reference", unavailable_reference)
     printed = []
     assert quota._emit_quota_result(original, args, context=None, registry_path=tmp_path / "absent.json",
         heartbeat_turn_id=None, usage_quota_started=0, capture_directory=tmp_path,
@@ -689,28 +695,23 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 
-@pytest.mark.parametrize("scenario", [None, "off"])
-def test_plain_quota_context_default_does_not_touch_transport(tmp_path, monkeypatch, scenario):
-    from loopx.control_plane.turn_driver import codex_context
-    from loopx.cli import build_parser
-
-    def unexpected(*args, **kwargs):
-        pytest.fail("off must not observe native context or create transport state")
-    monkeypatch.setattr(codex_context, "project_codex_context", unexpected)
+def test_explicit_off_returns_inline_guard_without_native_transport(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
         state_path=state, provider="file")
-    args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "off-scenario"]
-    if scenario:
-        args += ["--context-delivery", scenario]
-    code, result = _run_cli(registry, runtime, *args, cwd=project)
-    assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
-    # Absence is distinct from an explicit off so a configured machine default
-    # can be inherited. The ordinary output above still proves default-off.
-    assert build_parser().parse_args(["quota", "should-run"]).context_delivery is None
+    native = tmp_path / "unused-native-root"
+    turn = "explicit-off"
+    code, result = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn,
+        "--codex-context-root", str(native), "--context-delivery", "off", cwd=project, raw_guard=False)
+    assert code == 0 and result["ok"], result
+    assert result["goal_id"] == GOAL_ID and result["heartbeat_receipt"]["turn_instance_id"] == turn
+    assert result["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert "reference_file" not in result and not native.exists()
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("activation", [[], ["--context-delivery", "off"], ["--context-delivery", "on"]])
@@ -983,3 +984,23 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
     # Allow payload growth plus 25% structural headroom over the matched
     # safe-integer workload; count complete requests and results, not deltas alone.
     assert totals[1] / totals[0] <= 1.25 * source_sizes[1] / source_sizes[0]
+
+
+def test_file_delta_requires_a_different_source_even_for_identical_content():
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+
+    scope = dict(goal_id="g", agent_id="a", session_id="s", context_epoch="e")
+    body = {"requirement": "Identical content can belong to two independent captures. " * 1200}
+    def capture(identity, base=None):
+        return prepare_context_delivery(body, scope=scope, capture_id=identity, baseline=base,
+            continuity={"basis": "captured_file", "target": base["target"], "capture_bytes_verified": True}
+            if base else None)
+    old, current = capture("a"), capture("b")
+    warm = capture("b", old)
+    assert warm["mode"] == "delta"
+    assert capture("b", current)["mode"] == "full"
+    # Old producers could emit the same valid empty change tree referencing
+    # the target itself. The receiver has an independent, pinned current file.
+    legacy = {**warm, "base": current["target"]}
+    recovered = restore_context_delivery(legacy, baseline=current, current=current)
+    assert recovered["mode"] == "full" and recovered["context"] == body

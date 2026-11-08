@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ..agents.agent_scope import agent_scope_item_matches_agent_or_unclaimed
@@ -20,7 +21,7 @@ from ..status.autonomous_replan_projection import (
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.quota_summary import (
     select_planning_inventory_source_items,
-    select_quota_todo_summary,
+    select_quota_todo_summaries,
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
@@ -252,7 +253,7 @@ def qualify_replan_writeback(
     )
     registered_agent_ids = registered_agent_ids_for_goal(registry_goal)
     agent_identity = (
-        build_quota_agent_identity(registry_goal, agent_id=safe_agent_id)
+        build_quota_agent_identity(cast(dict[str, Any], registry_goal), agent_id=safe_agent_id)
         if registered_agent_ids
         else {
             "agent_id": safe_agent_id,
@@ -261,16 +262,8 @@ def qualify_replan_writeback(
     )
     raw_user_todos = todo_projection.get("user_todos")
     raw_agent_todos = todo_projection.get("agent_todos")
-    user_todos = select_quota_todo_summary(
-        raw_user_todos,
-        None,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=True,
-    )
-    agent_todos = select_quota_todo_summary(
-        raw_agent_todos,
-        None,
-        agent_identity=agent_identity,
+    user_todos, agent_todos = select_quota_todo_summaries(
+        raw_user_todos, raw_agent_todos, agent_identity=agent_identity,
     )
     agent_todo_source_items = select_planning_inventory_source_items(
         raw_agent_todos,
@@ -331,13 +324,13 @@ def qualify_replan_writeback(
         neutral_replan_ack_classifications=(
             AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS
         ),
-        registered_agent_ids=list(agent_identity["registered_agents"]),
+        registered_agent_ids=list(cast(dict[str, Any], agent_identity)["registered_agents"]),
         goal_status=str((registry_goal or {}).get("status") or "active"),
         receipt_bound_replan_obligation_id=(guard_semantic_replan_obligation_id if guard_scoped else None),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         agent_profile=(
-            agent_identity.get("agent_profile")
-            if isinstance(agent_identity.get("agent_profile"), dict)
+            cast(dict[str, Any], cast(dict[str, Any], agent_identity).get("agent_profile"))
+            if isinstance(cast(dict[str, Any], agent_identity).get("agent_profile"), dict)
             else None
         ),
     )

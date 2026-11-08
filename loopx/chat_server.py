@@ -42,6 +42,7 @@ from .chat.goal_subagent_api import (
     add_goal_subagent_routes,
 )
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
+from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
@@ -496,6 +497,7 @@ class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTP
 class ChatRequestHandler(
     background_api.BackgroundServicesRequestMixin,
     ChatModelSettingsRequestMixin,
+    ChatQueueRequestMixin,
     GoalSourceRequestMixin,
     GoalAcceptanceRequestMixin,
     ZCodeGoalRequestMixin,
@@ -1705,7 +1707,6 @@ class ChatRequestHandler(
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
-            "/api/chat/goal-results": self._goal_results,
             "/api/chat/explore-results": self._explore_results,
             RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
             RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
@@ -1726,10 +1727,10 @@ class ChatRequestHandler(
             SSH_HOST_CATALOG_PATH: self._ssh_hosts,
         }
         if path in get_dispatch:
-            return get_dispatch[path]()
-        result_parts = path.strip("/").split("/")
-        if len(result_parts) == 4 and result_parts[:3] == ["api", "chat", "goal-results"]:
-            return self._goal_result(result_parts[3])
+            with effect_runtime_request_scope():
+                return get_dispatch[path]()
+        if self._dispatch_goal_result_read(path):
+            return
         setup_parts = path.strip("/").split("/")
         if len(setup_parts) == 5 and setup_parts[:4] == ["api", "chat", "lark", "app-setups"]:
             return self._lark_setup_snapshot(setup_parts[4])
@@ -1737,6 +1738,9 @@ class ChatRequestHandler(
         if len(action_parts) == 3 and action_parts[:2] == ["api", "actions"]:
             return self._action_snapshot(action_parts[2])
         session_parts = path.strip("/").split("/")
+        with effect_runtime_request_scope():
+            if self._dispatch_chat_queue(path, apply=False):
+                return
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "native-turn":
             return self._managed_native_turn(session_parts[3])
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "loopx":
@@ -1761,6 +1765,8 @@ class ChatRequestHandler(
         if path == "/api/chat/collaboration":
             return self._project_collaboration(apply=True)
         peer_parts = path.strip("/").split("/")
+        if self._dispatch_chat_queue(path, apply=True):
+            return
         if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
             return self._project_collaboration(peer_parts[3], apply=True)
         if self._dispatch_zcode_goal(path, apply=True):

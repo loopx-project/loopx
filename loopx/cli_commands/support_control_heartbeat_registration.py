@@ -180,13 +180,15 @@ def register_heartbeat_control_commands(
         help="Retain the explicit private Host handoff on generated guards; requires --decision-output-root.",
     )
 
-    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     heartbeat_prompt_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
-        help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
+        help="Auto presents context progressively across hosts, with independent Delta on supported continuity hosts. Off alone keeps full delivery. Pair off with --delta-delivery auto to compare complete documents. Legacy on uses existing declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
+    heartbeat_prompt_parser.add_argument("--delta-delivery", choices=DELTA_DELIVERY_SETTINGS,
+        help="Independently disable cross-Turn Delta or inherit supported-host automatic reuse. This choice is independent of progressive presentation.")
     context_location = heartbeat_prompt_parser.add_mutually_exclusive_group()
     context_location.add_argument(
         "--codex-context-dir",

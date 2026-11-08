@@ -22,7 +22,7 @@ from loopx.capabilities.periodic_report.incremental import read_periodic_report_
 steward = steward_fixture
 
 
-def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01"):
+def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01", *, review_required=False):
     """An ordinary local Goal/Agent Session, with no report-enabled private binding."""
     from loopx.agent_registry import load_goal_from_registry
     from loopx.configure_goal import configure_goal
@@ -46,9 +46,60 @@ def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", s
         "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": start_date}
     config = {"enabled": True, "profile_preset": "weekly-progress", "route_ref": "managed-session:" + session["session_id"],
         "timezone": "UTC", "schedule": schedule}
+    if review_required:
+        config["review_required"] = True
     assert configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
         periodic_report_configuration=config, execute=True)["ok"]
     return session, ManagedSessionReports(runtime), config, task["todo_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lost_after_commit", [False, True])
+def test_review_ready_recovers_after_queue_failure_without_repeating_original_model(steward, tmp_path, monkeypatch, provider, lost_after_commit):
+    from loopx.capabilities.periodic_report import review
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.configure_goal import configure_goal
+    session, reports, config, _ = configured_local_report(steward, tmp_path, monkeypatch, provider, review_required=True)
+    store, runtime, bot, *_ = steward
+    # The existing calendar can start preparation before the user's review time.
+    # A synthetic clock/run proves dispatch mechanics, not a natural deadline SLA.
+    config["timezone"] = config["schedule"]["timezone"] = "Asia/Shanghai"
+    config["schedule"]["rrule"] = "FREQ=DAILY;BYHOUR=8;BYMINUTE=30"
+    assert configure_goal(registry_path=runtime.registry_path, goal_id=session["goal_id"],
+        periodic_report_configuration=config, execute=True)["ok"]
+    sid = session["session_id"]
+    install_model(steward, tmp_path, sid)
+    runtime.project_contexts.conversation_bindings = None
+    original_request = review.request_report_review
+    def interrupted_request(**kwargs):
+        if lost_after_commit:
+            original_request(**kwargs)
+        raise OSError("Synthetic review queue response lost")
+    with monkeypatch.context() as failure:
+        failure.setattr(review, "request_report_review", interrupted_request)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first["status"] == "failed"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    body = (folder / "report.md").read_text()
+    assert not any(row["text"] == body for row in store.messages(sid))
+    calls, writes = steward[5].read_bytes(), list(bot.writes)
+    runtime.close()
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    try:
+        assert not pump_steward_monitors(restarted)
+        scope = dict(registry_path=runtime.registry_path, runtime_root=reports.root, goal_id=session["goal_id"])
+        rows = review.report_review_inventory(**scope)
+        assert len(rows) == 1 and rows[0]["status"] == "open"
+        readback = review.read_report_review(**scope, todo_id=rows[0]["todo_id"])
+        assert readback["generation_id"] == validate_private_generation(folder)["generation_id"]
+        assert readback["source_session_id"] == sid
+        assert len([row for row in store.messages(sid) if row["text"] == body]) == 1
+        assert steward[5].read_bytes() == calls and bot.writes == writes
+    finally:
+        restarted.close()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

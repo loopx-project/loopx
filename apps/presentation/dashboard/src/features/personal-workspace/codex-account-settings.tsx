@@ -12,9 +12,10 @@ type AccountStatus = {
   active_slot?: string | null; selection_revision?: string; action?: string;
   target?: string | null; recovery_required?: boolean; launch_failed?: boolean;
   api_fallback_supported?: boolean; api_active?: boolean;
+  steward_api_role_supported?: boolean;
   observer?: { state: string; checked_at: number | null; next_check_at: number | null };
   policy?: { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean;
-    force_quit_clients?: boolean; api_fallback?: boolean };
+    force_quit_clients?: boolean; api_fallback?: boolean; steward_api_role?: "disabled" | "fallback" | "primary" };
   slots?: string[]; last_checked_at?: number | null; last_switch_at?: number | null;
   accounts?: Array<{ slot: string; availability: string; observed_at: number;
     primary_used: number | null; secondary_used: number | null; reset_at: number | null;
@@ -174,6 +175,7 @@ export function CodexAccountSettings() {
         method: "POST", body: JSON.stringify({ operation, parameters }),
       });
       setStatus(result);
+      if (operation === "configure") await read();
     } catch { await read(); setError(true); }
     finally { setBusy(false); void readInventory(); }
   }
@@ -188,6 +190,11 @@ export function CodexAccountSettings() {
   const appProcesses = new Map<string, number[]>();
   for (const client of appHolders) appProcesses.set(client.process, [...(appProcesses.get(client.process) ?? []), client.pid]);
   return <><OpenAIKeySettings automatic={enabled} supported={status ? status.api_fallback_supported === true : null}
+    stewardSupported={status?.steward_api_role_supported === true}
+    stewardRole={status?.policy?.steward_api_role ?? (status?.policy?.api_fallback ? "fallback" : "disabled")}
+    onStewardRole={value => void act("configure", {
+      expected_revision: status?.revision, enabled, slots: authorizedSlots, steward_api_role: value,
+    })}
     apiEnabled={status?.policy?.api_fallback === true} nativeBusy={busy || ["checking", "restarting", "handoff_pending"].includes(status?.action ?? "")} onToggle={value => void act("configure", {
       expected_revision: status?.revision, enabled, slots: authorizedSlots, api_fallback: value,
     })} /><section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>

@@ -32,6 +32,10 @@ const VISION_TRIGGERS = new Set([
   "vision_successor_required", "required_agent_vision_missing",
 ]);
 const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_acceptance_unbound"]);
+// These review kinds carry no evidence window, capability or lifecycle duty.
+// A vision gap dominates the ordinary outcome gap's discharge policy, so the
+// same scalar receipt can retain a mixed review after its work links change.
+const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap"]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -286,13 +290,13 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   // writeback. The exact receipt retains its typed kind, never raw task prose
   // or an old decision context. Other duties keep their canonical owners.
   const review = object(request.receipt_review);
-  if (request.guard_scoped && review.kind === "goal_outcome_uncovered" &&
+  if (request.guard_scoped && SCALAR_REVIEW_KINDS.has(String(review.kind)) &&
       typeof review.stop_condition === "string" && review.stop_condition.trim() && review.stop_condition.length <= 240 &&
       typeof request.agent_id === "string" && request.agent_id.trim()) {
     return {obligation: {schema_version: "autonomous_replan_obligation_v0",
       required: true, obligation_id: selected, agent_id: request.agent_id,
       stop_condition: review.stop_condition,
-      triggers: [{kind: "goal_outcome_uncovered"}], selection_binding: "heartbeat_receipt"}};
+      triggers: [{kind: review.kind}], selection_binding: "heartbeat_receipt"}};
   }
   throw new EffectRuntimeRequestError(
     "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
@@ -331,7 +335,7 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
-function writebackProjection(required: SemanticOutcome[], externalReview: boolean): JsonObject {
+function writebackProjection(required: SemanticOutcome[], externalReview: boolean, strideEnabled: boolean): JsonObject {
   // This chooses a usable refresh path, not the only legal exit. Successor and
   // terminal alternatives still have their own typed transitions and gates.
   if (externalReview) {
@@ -354,7 +358,8 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
       writeback_contract: {
         preferred_input: "evidence_linked_vision_path",
         vision_authoring: visionAuthoringContract(true),
-        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
+        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs",
+          ...(strideEnabled ? ["agent_vision.stride_decision"] : [])],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
         rule: "First reuse observed evidence valid for current source/acceptance; probe missing, stale or insufficient evidence. Write a JSON file with acceptance summary and evidence-linked path outcome, then run bound refresh and spend. An unchanged reason alone is insufficient. Explicit validation gates and other required_any_of contracts apply.",
       },
@@ -445,21 +450,22 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_review_source") {
     const kinds = triggerKinds(obligation);
     const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-    // Only this plain frontier review has a complete scalar receipt source.
-    // Mixed, restricted, lifecycle and capability obligations must not lose
-    // their source-specific evidence or discharge rules through this route.
+    // Plain vision/outcome reviews share a scalar receipt source. Other mixed,
+    // restricted, lifecycle and capability obligations must retain their
+    // source-specific evidence and discharge rules through their own owners.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
       obligation.required === true && kinds.length > 0 &&
       obligation.trigger_count === triggers.length &&
       typeof request.agent_id === "string" && request.agent_id.trim() &&
       obligation.agent_id === request.agent_id &&
-      kinds.every(kind => kind === "goal_outcome_uncovered") &&
+      kinds.every(kind => SCALAR_REVIEW_KINDS.has(kind)) &&
       obligation.resolution_mode == null && obligation.capability_guard == null &&
       strings(obligation.satisfying_semantic_outcomes).length === 0 &&
       obligation.progress_baseline == null && obligation.progress_window == null &&
       triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
       typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
-      ? {kind: "goal_outcome_uncovered", stop_condition: obligation.stop_condition} : null};
+      ? {kind: kinds.includes("vision_acceptance_gap") ? "vision_acceptance_gap" : "goal_outcome_uncovered",
+        stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
     return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};
@@ -468,7 +474,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
     const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
-    const writeback = writebackProjection(required, externalReview);
+    const writeback = writebackProjection(required, externalReview, strideControl !== null);
     if (requiresStrideDecision(obligation)) {
       const contract = object(writeback.writeback_contract);
       writeback.cli_semantic_args = VISION_CLI_ARGS;

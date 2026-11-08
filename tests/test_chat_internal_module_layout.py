@@ -44,6 +44,7 @@ def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
 
 def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
     for old_module in (
+        "loopx.chat_status_api",
         "loopx.chat_event_cache",
         "loopx.chat_automation_cadence_api",
         "loopx.chat_goal_configuration_api",
@@ -59,7 +60,7 @@ def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
         assert importlib.util.find_spec(old_module) is None
 
 
-def test_public_status_owner_is_nested_without_removing_the_legacy_import() -> None:
+def test_public_status_owner_is_nested_without_a_top_level_shim() -> None:
     assert ChatStatusRequestMixin.__module__ == "loopx.chat.status_api"
     assert goal_read_runtime_root.__module__ == "loopx.chat.status_api"
-    assert importlib.util.find_spec("loopx.chat_status_api") is not None
+    assert importlib.util.find_spec("loopx.chat_status_api") is None

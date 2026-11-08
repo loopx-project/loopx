@@ -115,9 +115,24 @@ Release rollout: publish and qualify the stable runtime before deploying the
 new public bootstrap. The Pages lane checks this dependency and retains the
 previous deployed site if it is unavailable. `runtime-snapshots.yml` builds
 main artifacts; `release-artifacts.yml` reuses the release frontend/wheel lane
-for stable. Main archives and revision-addressed metadata share one dedicated
-`runtime-main` release, keeping product release history and stable-predecessor
-discovery intact; only the latest-channel metadata is replaced. Clean
+for stable. New main archives and revision-addressed metadata use one prerelease
+per revision, `runtime-main-<full SHA>`, so the channel cannot exhaust GitHub's
+1,000-assets-per-release limit. `runtime-main/loopx-runtime.json` remains the
+latest-channel endpoint; only that metadata is replaced, after all immutable
+assets are uploaded and checked. Historical assets in `runtime-main` stay
+available, and current clients fall back to their old SHA address only on HTTP
+404. Older clients can follow the unchanged `main` endpoint, but must update
+before pinning a newly published SHA. Stable release selection still excludes
+these prereleases; the existing all-release pagination grows with snapshot
+history. No historical assets are deleted or moved by this publisher.
+
+中文：新 main 快照各自使用 `runtime-main-<完整 SHA>` 预发布，避免单个 release
+达到 1,000 个资产上限。最新入口仍为 `runtime-main/loopx-runtime.json`，所有不可变
+资产完成后才更新；旧资产不删除、不迁移。新版客户端仅在新 SHA 地址返回 404 时
+回读旧地址。旧客户端可先升级 main，再固定新发布的 SHA。stable 仍排除这些预发布，
+但现有 release 全量分页的开销会随快照历史增长。
+
+Clean
 install/upgrade, package contents, byte size, provenance and
 phase timings are release evidence. A 20 MiB runtime is an evaluation target,
 not a waived dependency check or a global p50/p95 promise.

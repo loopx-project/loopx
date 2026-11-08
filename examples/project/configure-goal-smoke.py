@@ -332,6 +332,8 @@ def main() -> int:
             "count_unit": "effective_turns",
             "count": 6,
             "planning_horizon_goal": True,
+            "stride_strategy": "evidence_conditioned_v1",
+            "yardstick_enabled": False,
         }
         # Goal-scoped cadence is omitted when no explicit override is present;
         # the machine default remains discoverable through the default field.
@@ -547,6 +549,8 @@ def main() -> int:
                 registry_path,
                 "quota",
                 "should-run",
+                "--context-delivery",
+                "off",
                 "--goal-id",
                 GOAL_ID,
                 "--agent-id",
@@ -934,6 +938,8 @@ def main() -> int:
                 registry_path,
                 "quota",
                 "should-run",
+                "--context-delivery",
+                "off",
                 "--goal-id",
                 GOAL_ID,
             )

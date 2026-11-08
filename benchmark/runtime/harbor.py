@@ -22,7 +22,8 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
-from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
+from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
+from .scheduler import phase_work_reserve
 
 
 _PYTHON = f"{_ROOT}/python"
@@ -32,8 +33,6 @@ _PROFILE_HOME = f"{_PROFILE}/home"
 _SHARED_CODEX_HOME = f"{_PROFILE}/codex-home"
 _SHARED_SKILLS = f"{_SHARED_CODEX_HOME}/skills"
 _CLI = f"{_PROFILE}/bin/loopx"
-_REGISTRY = f"{_CONTROL}/registry.json"
-_LOOPX_RUNTIME = f"{_ROOT}/state/runtime"
 _SCHEDULER_STATE = f"{_CONTROL}/scheduler-state.json"
 _TASK_DOC = f"{_CONTROL}/task.md"
 _BASH_ENV = f"{_CONTROL}/bash-env"
@@ -75,6 +74,7 @@ class BenchmarkCodex(CodexOffline):
         planning_timeout_sec=None,
         turn_envelope=False,
         context_delivery=None,
+        native_child_limit=None,
         provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
@@ -96,11 +96,12 @@ class BenchmarkCodex(CodexOffline):
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
+            None if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
             turn_envelope,
             context_delivery,
+            native_child_limit,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -112,7 +113,9 @@ class BenchmarkCodex(CodexOffline):
                 "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
             )
         self.scheduler_timeout = int(scheduler_timeout_sec)
-        if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
+        if self.scheduler_timeout <= 0:
+            raise ValueError("scheduler timeout must be positive")
+        if self.execution.timeout_seconds is not None and self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
                 "scheduler timeout must exceed turn timeout plus cleanup allowance"
             )
@@ -189,6 +192,8 @@ class BenchmarkCodex(CodexOffline):
 
     def _turn_envelope_receipt(self) -> dict:
         return {**turn_envelope_receipt(explicit=self.execution.turn_envelope),
+                **({"native_child_limit": self.execution.native_child_limit}
+                   if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
     def _planning_receipt(self) -> dict:
@@ -365,11 +370,22 @@ class BenchmarkCodex(CodexOffline):
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
             if self.execution_observation is not None:
-                wrapper = (f"#!/bin/sh\nexec env PYTHONPATH={shlex.quote(_SRC)} "
-                           f"{_PYTHON}/bin/python3 -m benchmark.runtime.research_probe \"$@\"\n")
-                await self.exec_as_agent(environment,
-                    command=f"printf %s {shlex.quote(wrapper)} > {_PROFILE}/bin/loopx-research-probe; "
-                            f"chmod 0755 {_PROFILE}/bin/loopx-research-probe", env=self._profile_env())
+                entrypoint = f"{_SRC}/benchmark/runtime/research_probe.py"
+                # Keep the task cwd for candidate paths without importing the
+                # probe or its dependencies from that cwd or user site.
+                bootstrap = (
+                    "import runpy\nimport sys\n"
+                    f"sys.path.insert(0, {_SRC!r})\n"
+                    f"runpy.run_path({entrypoint!r}, run_name='__main__')\n"
+                )
+                launcher = shlex.join([f"{_PYTHON}/bin/python3", "-I", "-c", bootstrap])
+                wrapper = f"#!/bin/sh\nexec {launcher} \"$@\"\n"
+                probe = shlex.quote(f"{_PROFILE}/bin/loopx-research-probe")
+                installed = await self.exec_as_agent(environment, env=self._profile_env(), timeout_sec=30,
+                    command=f"test ! -L {probe} && printf %s {shlex.quote(wrapper)} > {probe} && "
+                            f"chmod 0755 {probe} && {probe} --help")
+                if installed.return_code or "--candidate-file" not in (installed.stdout or ""):
+                    raise RuntimeError("Local execution probe is unavailable to the benchmark worker")
 
         receipt = {
             "loopx_commit": actual_commit,
@@ -477,8 +493,18 @@ class BenchmarkCodex(CodexOffline):
         )
         if pending.return_code == 0:
             raise RuntimeError("Resolve the pending Turn before entering another task phase")
+        # Check explicitly requested capacity before replacing any task document.
+        registry_exists = (await self._registry_exists(environment)
+                           if self.execution.native_child_limit is not None else None)
+        if registry_exists:
+            retained = await self._loopx(
+                environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
+            )
+            self._verify_native_child_configuration(retained.get("after") or retained.get("before") or {})
         await self._write_task_document(environment, instruction)
-        if not await self._registry_exists(environment):
+        if registry_exists is None:
+            registry_exists = await self._registry_exists(environment)
+        if not registry_exists:
             await self._loopx(
                 environment,
                 [
@@ -499,6 +525,8 @@ class BenchmarkCodex(CodexOffline):
                     "--write-scope",
                     "**",
                     "--no-global-sync",
+                    *(["--spawn-allowed", "--max-children", str(self.execution.native_child_limit)]
+                      if self.execution.native_child_limit is not None else []),
                 ],
                 cwd=cwd,
             )
@@ -544,10 +572,16 @@ class BenchmarkCodex(CodexOffline):
         if self.execution.task_entry == "seeded-todo":
             await self._seed_phase(environment, cwd=cwd)
 
+        await self._verify_phase_configuration(environment, cwd=cwd)
+
+    async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
+        """Read the treatment without reconfiguring a restored Goal or its queue."""
+        key, _, expected = self._replan_configuration()
         cadence = await self._loopx(
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
+        self._verify_native_child_configuration(configured_state)
         configured = configured_state.get("execution_profile", {}).get(key)
         if configured != expected:
             raise RuntimeError(
@@ -561,6 +595,15 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
+
+    def _verify_native_child_configuration(self, configured_state: dict) -> None:
+        if self.execution.native_child_limit is None:
+            return
+        orchestration = configured_state.get("orchestration") or {}
+        if (orchestration.get("mode") != "multi_subagent"
+                or orchestration.get("spawn_allowed") is not True
+                or orchestration.get("max_children") != self.execution.native_child_limit):
+            raise RuntimeError("Native child authorization differs from the existing Goal; use a new trial")
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
@@ -635,6 +678,11 @@ class BenchmarkCodex(CodexOffline):
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                # A trial's explicit None must not inherit a container opt-in.
+                "LOOPX_NATIVE_CHILD_LIMIT": (
+                    str(self.execution.native_child_limit)
+                    if self.execution.native_child_limit is not None else ""
+                ),
                 **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
@@ -642,7 +690,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
                     self.execution.validation_command
                 ),
-                "LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds),
+                **({"LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds)}
+                   if self.execution.timeout_seconds is not None else {}),
                 "CODEX_BIN": "/usr/local/bin/codex",
                 "MODEL_NAME": (self.model_name or "").split("/", 1)[-1],
                 "REASONING_EFFORT": str(
@@ -808,7 +857,7 @@ class BenchmarkCodex(CodexOffline):
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
                 remaining = int(deadline - time.monotonic())
-                if remaining <= 160:
+                if remaining <= phase_work_reserve(self.execution.mode):
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
                     environment,
@@ -831,18 +880,20 @@ class BenchmarkCodex(CodexOffline):
                 if entry["status"] == "blocked":
                     return
             remaining = int(deadline - time.monotonic())
-            if remaining <= 160:
+            reserve = phase_work_reserve(self.execution.mode)
+            if remaining <= reserve:
                 raise TimeoutError("Task budget exhausted before execution handoff")
-            # Planning consumes the phase budget, including when the host later resumes.
-            # Keep ten seconds for scheduler startup before the worker checks
-            # its execution window plus the existing 150-second settlement reserve.
-            host_timeout = min(self.execution.timeout_seconds, remaining - 160)
-            env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
+            # Planning, admission and work share one absolute phase clock.
+            host_timeout = remaining - reserve
+            if self.execution.timeout_seconds is not None:
+                host_timeout = min(self.execution.timeout_seconds, host_timeout)
+                env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
             from .scheduler import worker_command
 
             command = worker_command(
                 env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                 state_file=_SCHEDULER_STATE, host_timeout=host_timeout,
+                resume_budget_stop=self._phase_number > 1,
             )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
             shell = (

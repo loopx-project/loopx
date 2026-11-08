@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..effect_runtime import effect_runtime_result
 from ..todos.completion_validation_projection import (
@@ -156,13 +157,13 @@ def completion_validation_spend_error(
     queue_item = next(
         (
             item
-            for item in queue_items if isinstance(queue_items, list)
+            for item in cast(list[Any], queue_items) if isinstance(queue_items, list)
             if isinstance(item, dict) and item.get("goal_id") == goal_id
         ),
         {},
     )
     project_asset = (
-        queue_item.get("project_asset")
+        cast(dict[str, Any], queue_item.get("project_asset"))
         if isinstance(queue_item.get("project_asset"), dict)
         else {}
     )

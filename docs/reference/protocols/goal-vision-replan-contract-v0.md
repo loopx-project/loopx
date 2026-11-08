@@ -179,6 +179,29 @@ Required write-path behavior:
 4. Keep the latest bounded packet visible in status/quota so agents can reason
    without reading private scratchpads or chat history.
 
+Prepare reports independent text and list-budget violations together. For
+budget-only failures, the first error keeps its code, message and compact suggestion; optional typed
+request-error `details` carry further numeric diagnostics through the runtime
+without expanding its 240-character primary message. Details are bounded to 128
+entries of 240 characters; overflow is explicit. Vision's fixed field/list
+limits fit this carrier. Oversized lists reject before inspecting their contents;
+their partial usage is never reported as a complete aggregate. Correct the
+authored packet deliberately and retry: diagnostics neither rewrite it nor grant
+write/settlement authority. Structural/privacy failures encountered during
+normalization still reject directly before writes, even when earlier budget
+findings were collected. Other path-delta consumers retain fail-fast behavior.
+Same-field enum decoding follows that field's budget check: an oversized
+`advancement_policy` keeps its budget error; a short invalid value keeps its
+enum rejection.
+
+Prepare 一次报告可独立发现的文本与列表预算问题；首条错误的 code、正文和建议兼容保留，
+后续数值诊断通过 typed request-error 的可选 `details` 传递。主消息仍限 240 字符；
+明细最多 128 条、每条 240 字符，超出时明确标识。Vision 的固定字段／列表范围可完整容纳。
+超数量列表仍先拒绝数量，不扫描内容，也不把部分用量当作整包总量。调用者应审阅并主动
+修正原包；诊断不改写意图、不授予写入或结算权限。归一化中遇到结构错误或私有内容仍
+直接在写入前拒绝，即使之前已经收集到预算问题；其他 path-delta 调用者保留首错即返。
+同字段先查预算再解码枚举：超长 `advancement_policy` 保留预算错误，短非法值保留枚举拒绝。
+
 The normal lightweight CLI write boundary is `loopx refresh-state` with inline
 vision patch fields:
 
@@ -616,6 +639,11 @@ exact `replan-decision-*` id and separately records:
 - `information_gain`: new evidence, repeated evidence or unknown;
 - `goal_gain`: improved, flat, regressed or unknown;
 - delivered evidence references and the bounded lesson for the next experiment.
+
+The authoring contract exposes `review_reference_limit` (3). It applies separately
+to `previous_review.evidence_refs` and `explore_review.considered_refs`.
+
+编写契约的 `review_reference_limit`（3）分别限制上述两个引用列表。
 
 A claim needs evidence references; unavailable evidence remains unknown. These
 are explicit Agent assessments, not host certification of scientific truth.

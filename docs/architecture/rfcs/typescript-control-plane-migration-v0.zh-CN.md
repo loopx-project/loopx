@@ -617,6 +617,11 @@ Legacy/File/SQLite 重试与负例只验收这个边界。较大错误与省掉 
 token／重试成本、source-mode 修复和常规短上下文／replan 完整历史仍是分别待验证的
 问题；不代表长目标或 provider 性能验收完成。
 
+Vision prepare 在既有 TypeScript owner 中集中报告可独立发现的数值预算问题；共享运行时
+传输可选、有界的 request-error 明细，Python 只展示，不复制校验规则。原有限制、原包内容、
+首条错误兼容性和写前拒绝保持。File/SQLite CLI 拒绝、修正包独立回读与固定调用者的
+base/head 对照只验收该恢复边界；模型采纳、账单、已安装行为与持续长程收益分别保留待验收。
+
 ### 交付语义：先修正规则，再迁移
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
@@ -2108,3 +2113,8 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 - 完整全局摘要与门禁读取事务：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.zh-CN.md)。
 - 完整全局风险读取所有权：[2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.zh-CN.md)。
 - 完整 durable-completion 证据读取：[2026-11-02 owner 与调用边界记录](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.zh-CN.md)。
+- 完整 status 任务图组合：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-status-task-graph.zh-CN.md)。
+- 完整自适应子 Agent 准入决策：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-adaptive-child-admission.zh-CN.md)。
+- 进度评审 receipt 资格判定：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.zh-CN.md)。
+- Global Todo 就绪分类完整 owner 切换（两个消费者）：[2026-11-02 记录](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.zh-CN.md)。
+- 当前 Todo 来源读取并入上下文事务：[2026-11-04](ledger/typescript-control-plane-migration-v0/2026-11-04-selected-context-source-read.zh-CN.md).

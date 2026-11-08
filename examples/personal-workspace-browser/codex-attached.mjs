@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {resolve} from 'node:path';
 import {createInterface} from 'node:readline';
+import {readFile} from 'node:fs/promises';
 import {repoRoot, outputDir} from './fixture.mjs';
 import {openWorkspacePage} from './scenario-context.mjs';
 import {testPythonCommand} from '../../scripts/test-python.mjs';
@@ -556,20 +557,52 @@ async function runConversation(browser, uncertain) {
     assert.equal(new Set(sentOperations).size,6);
     assert.equal(await direct.getByRole('textbox',{name:'回复 worker',exact:true}).inputValue(),'');
     await page.screenshot({path:resolve(outputDir,'attached-codex-owner-conversation.png'),animations:'disabled'});
+    // Keep the real display state intact through the production attached
+    // reader, HTTP detail pages and rendered tool record. Host execution is a
+    // disposable protocol peer, not the original benchmark/model conversation.
+    const benchmarkReference = JSON.parse(await readFile(resolve(repoRoot,
+      'apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-on-20261103-history.json'), 'utf8'));
     await page.request.post(new URL('/fixture/work-records',url).href);
     await direct.getByText('工作结果已返回。',{exact:true}).waitFor();
     const toolResult = direct.locator('article[data-role="tool"]').filter({hasText:'工具结果'});
     await expandActivity(toolResult);
     await toolResult.locator('summary').click();
-    assert.equal(await toolResult.getByText('COMPLETE TOOL RESULT',{exact:false}).count(),0);
-    await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).click();
-    await toolResult.getByText('COMPLETE TOOL RESULT',{exact:false}).waitFor();
+    const recordId = await toolResult.getAttribute('data-record-id');
+    let detailPages = 0;
+    while (await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).count()) {
+      const before = await toolResult.locator('pre').textContent();
+      await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).click();
+      await page.waitForFunction(({id, previous}) => {
+        const text = document.querySelector(`article[data-record-id="${CSS.escape(id)}"] pre`)?.textContent;
+        return text != null && text !== previous;
+      }, {id: recordId, previous: before});
+      await toolResult.getByRole('button',{name:'正在读取…',exact:true}).waitFor({state:'hidden'});
+      assert.ok(++detailPages <= 32, 'The bounded reference must finish reading');
+    }
+    assert.ok(detailPages > 0, 'The genuine reference crosses a detail-page boundary');
     assert.equal(await toolResult.getByRole('button',{name:'继续读取完整内容',exact:true}).count(),0);
     // Unicode detail offsets must count source characters, not JS UTF-16 units.
-    assert.equal(await toolResult.locator('pre').textContent(),'Validation output\n' + '🧭验证结果\n'.repeat(6000) + 'COMPLETE TOOL RESULT');
+    const body = await toolResult.locator('pre').textContent();
+    assert.ok(body.startsWith('🧭\n'));
+    assert.deepEqual(JSON.parse(body.slice('🧭\n'.length)), benchmarkReference,
+      'Every real observation, original wording, negative/unknown result and provenance survives native paging');
+    await page.screenshot({path:resolve(outputDir,'attached-codex-benchmark-detail-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    assert.ok(await page.locator('body').evaluate(node => node.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path:resolve(outputDir,'attached-codex-benchmark-detail-narrow.png'),animations:'disabled'});
+    await page.setViewportSize({width:1512,height:982});
     await toolResult.locator('summary').click();
     await toolResult.locator('xpath=ancestor::details[contains(@class,"attached-record-group")]').locator(':scope > summary').click();
     await page.screenshot({path:resolve(outputDir,'attached-codex-work-timeline.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    const connection = direct.locator('.attached-connection-status');
+    assert.ok(await connection.getByRole('status').isVisible(), 'The native reply or unknown state stays visible');
+    await connection.getByRole('button',{name:'在 Codex App 中打开',exact:true}).focus();
+    assert.ok(await connection.getByRole('button',{name:'在 Codex App 中打开',exact:true})
+      .evaluate(node => document.activeElement === node), 'The compact original-App action remains keyboard reachable');
+    assert.ok(await page.locator('body').evaluate(node => node.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path:resolve(outputDir,'attached-codex-work-timeline-narrow.png'),animations:'disabled'});
+    await page.setViewportSize({width:1512,height:982});
     await scrollHistory(page, direct, 1);
     await direct.getByText('工作结果已返回。',{exact:true}).waitFor();
     assert.equal(await direct.getByRole('button',{name:/^(读取更早的消息|较新记录|回到最新)$/}).count(),0,'History needs no pagination controls');
@@ -689,9 +722,21 @@ async function runConversation(browser, uncertain) {
     assert.ok(await panel.locator('article').count() <= 300);
     // Returning through newer tool pages must preserve the same disclosure and
     // keep every original row reachable, rather than remounting a closed group.
+    const settledTranscript = panel.locator('.attached-conversation-messages[aria-busy="false"]');
     for (let pageNumber = 0; pageNumber < 5 && !await longDialogue.count(); pageNumber++) {
-      const read = page.waitForResponse(response => new URL(response.url()).searchParams.has('after'));
-      await scrollHistory(page,panel,1); await read;
+      // A prior read may still be applying its retained window. Scroll after
+      // the transcript is ready to consume another page gesture.
+      await settledTranscript.waitFor();
+      const read = page.waitForResponse(response => {
+        const source = new URL(response.url());
+        return source.pathname === '/api/chat/codex-attached' && source.searchParams.has('after');
+      });
+      await scrollHistory(page,panel,1);
+      const response = await read;
+      assert.ok(response.ok(), 'The original source returns the requested newer page');
+      const tail = (await response.json()).messages.at(-1);
+      if (tail) await transcript.locator(`article[data-record-id="${tail.id}"]`).waitFor({state:'attached'});
+      await settledTranscript.waitFor();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await expandedGroup.evaluate(node => node.isConnected && node.open),true,'Newer pages preserve the expanded group');
     }

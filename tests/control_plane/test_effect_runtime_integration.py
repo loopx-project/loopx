@@ -27,6 +27,7 @@ from loopx.control_plane.coordination.runtime_shadow import (
     read_coordination_runtime_shadow_todo_candidate,
     rollback_coordination_runtime_shadow,
 )
+from loopx.control_plane.runtime import private_permissions
 
 
 _TURN_KEY = "sha256:" + "a" * 64
@@ -2128,14 +2129,16 @@ def test_controller_snapshot_retains_private_file_and_method_guards(
     assert info is not None
     with tempfile.TemporaryDirectory(prefix="loopx-effect-", dir=tmp_path) as directory:
         root = Path(directory)
+        private_permissions.protect_private_path(root, directory=True)
         params = root / "params.json"
         sink = root / "response.json"
         decision = _envelope(should_run=True)
         decision["work_context"] = {"text": "G" * 2_420_000}
-        params.write_text(json.dumps({"operation": "disposition", "decision": decision, "receipt": None}))
+        params.touch()
         sink.touch()
-        params.chmod(0o600)
-        sink.chmod(0o600)
+        private_permissions.protect_private_path(params)
+        private_permissions.protect_private_path(sink)
+        params.write_text(json.dumps({"operation": "disposition", "decision": decision, "receipt": None}))
         ref = {"schema_version": "loopx_effect_runtime_snapshot_v0", "path": str(params),
                "byte_count": params.stat().st_size, "sha256": hashlib.sha256(params.read_bytes()).hexdigest()}
 
@@ -2354,3 +2357,16 @@ def test_invalid_remote_error_envelope_fails_as_bounded_internal_error() -> None
     assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
     assert error.diagnostic_code == "invalid_error_envelope"
     assert "/private/path" not in str(error)
+
+
+def test_remote_request_details_preserve_first_message_and_reject_malformed_transport() -> None:
+    payload = {"kind": "request_rejected", "code": "invalid_request", "message": "first failure",
+               "details": ["second failure", "third failure"]}
+    error = effect_runtime._remote_runtime_error(payload)
+    assert isinstance(error, effect_runtime.EffectRuntimeRejected)
+    assert str(error) == "first failure"
+    assert error.details == ("second failure", "third failure")
+    for malformed in (None, "detail", [1], ["x" * 241], ["x"] * 129):
+        error = effect_runtime._remote_runtime_error(payload | {"details": malformed})
+        assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
+        assert error.diagnostic_code == "invalid_error_envelope"

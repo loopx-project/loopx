@@ -56,7 +56,9 @@ def delivered_context(request, digest):
                 delivered[offset] = value
     if not delivered:
         return ""
-    assert set(delivered) == set(range(len(delivered)))
+    assert set(delivered) == set(range(len(delivered))), (
+        f"Non-contiguous native context: received {len(delivered)} bytes; "
+        f"first offset {min(delivered, default=None)}, last offset {max(delivered, default=None)}")
     raw = bytes(delivered[i] for i in range(len(delivered)))
     assert hashlib.sha256(raw).hexdigest() == digest
     return raw.decode().rstrip("\n")
@@ -100,22 +102,27 @@ def native_process_continuation(request, identity, *, code_mode=False):
         for part in reversed(parts):
             if not isinstance(part, str):
                 continue
+            pending_session = None
             try:
                 wrapper = json.loads(part)
+                if (isinstance(wrapper, dict) and type(wrapper.get("session_id")) is int
+                        and wrapper.get("exit_code") is None):
+                    pending_session = wrapper["session_id"]
                 if isinstance(wrapper, dict) and isinstance(wrapper.get("output"), str):
                     part = wrapper["output"]
             except ValueError:
                 pass
             match = re.search(r"(?m)^Process running with session ID (\d+)\s*$", part)
-            if match:
-                options = {"session_id": int(match[1]), "chars": "", "yield_time_ms": 1000,
+            if match or pending_session is not None:
+                options = {"session_id": int(match[1]) if match else pending_session, "chars": "", "yield_time_ms": 1000,
                            "max_output_tokens": 30000}
                 base = {"id": f"fc_process_{identity}", "call_id": f"call_process_{identity}"}
                 if code_mode:
+                    from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
                     options["max_output_tokens"] = 22000
                     return {**base, "type": "custom_tool_call", "name": "exec",
-                            "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.write_stdin('
-                                + json.dumps(options) + ')).output);'}
+                            "input": '// @exec: {"max_output_tokens":24000}\nconst result=await tools.write_stdin('
+                                + json.dumps(options) + ');' + CODE_MODE_EXEC_RESULT_FORWARDER + ';'}
                 return {**base, "type": "function_call", "name": "write_stdin", "arguments": json.dumps(options)}
         return None  # Never borrow a session from an older result.
     return None
@@ -123,6 +130,8 @@ def native_process_continuation(request, identity, *, code_mode=False):
 
 def reference_metadata_oracle(view):
     """Inspect complete metadata as an oracle, never as a model read receipt."""
+    if view.get("schema_version") == "context_capture_selection_page_v1":
+        view = view["navigation"]
     if view.get("schema_version") == "context_capture_navigation_v1":
         from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 
@@ -142,6 +151,8 @@ def read_cli_policy_payload(stdout, *, returncode):
     )
 
     payload = json.loads(stdout)
+    if returncode == 0 and payload.get("schema_version") == "context_capture_selection_page_v1":
+        payload = payload["navigation"]
     if returncode == 0 and payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
         recovery = payload["recovery"]
         if "reference_file" in recovery:
@@ -182,8 +193,13 @@ class NativeContextReader:
         if continuation := native_process_continuation(request, f"{self.identity}_{self.calls + 1}"):
             self.calls += 1
             return continuation
-        page = last_context_page(request, allow_reference=True)
+        page = last_context_page(request, allow_reference=True, allow_selection=True)
         assert page and page["ok"], "Native reader output must reach the model intact"
+        if page.get("schema_version") == "context_capture_selection_page_v1":
+            # The initial read carries a selected view and a separate navigation
+            # reference. Only complete delivery of the latter earns byte coverage.
+            page = page["navigation"]
+            assert page["ok"] and page["schema_version"] == "context_capture_navigation_v1"
         if page.get("schema_version") != "context_capture_page_v1":
             assert self.pending["descriptor"] is None and "reference" not in self.pending
             # This fixture voluntarily reads the complete saved input for its
@@ -246,6 +262,29 @@ def native_context_command(request, *, todo_id=None):
     if todo_id:
         argv += ["--todo-id", todo_id]
     return shlex.join(argv)
+
+def native_capture_wire(descriptor, *, recovery=None):
+    """Independent saved-byte oracle; full delivery needs no duplicate wire file.
+
+    Native requests must still consume every returned page. This fixture reads
+    the exact capture separately to verify those actual model-visible bytes.
+    """
+    import hashlib
+    from pathlib import Path
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery
+
+    raw = Path(descriptor["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == descriptor["sha256"]
+    if descriptor["mode"] != "full":
+        return json.loads(raw)
+    target = descriptor["target"]
+    wire = prepare_context_delivery(json.loads(raw),
+        scope={key: target[key] for key in ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation")
+            if key in target}, capture_id=target["capture_id"], surface=target["surface"])
+    assert wire["target"] == target
+    wire["recovery"] = recovery if recovery is not None else descriptor["recovery"]
+    return wire
+
 
 @contextmanager
 def local_inference_provider(response_builder=None, usage_builder=None):

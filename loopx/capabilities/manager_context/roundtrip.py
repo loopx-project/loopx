@@ -310,7 +310,14 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
-            for item in reply_status(root, route):
+            # A legacy/unmatched row can require the exhaustive route fallback.
+            # Match immutable result keys before reading potentially long reply
+            # bodies and delivery sidecars for off-page results. The existing
+            # result owner still validates every selected status on this read.
+            for item in reply_status(
+                root, route,
+                include_result_key=lambda key: "handoff." + _hash([request_id, key]) in pending_message_ids,
+            ):
                 message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
                     continue
@@ -450,6 +457,9 @@ def _return_transaction(host, path, phase, request):
 
 def _return_provider(plan, source, sender, record_attempt):
     route, session, turn = (source[key] for key in ("route", "session", "turn"))
+    # The typed transaction owns the canonical result identity. Transports may
+    # verify a mirror of this message, never guess its identity from its body.
+    route = {**route, "return_message_id": plan["message_id"]}
     attachments = plan.get("attachments") or []
     if attachments:
         if getattr(sender, "supports_result_files", False) is not True:
@@ -472,6 +482,11 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
+        # A provider outbox may already own publication. Its adapter records the
+        # existing attempt before returning a readback, including unavailable
+        # or mismatched results, through the ordinary verification state machine.
+        return {"kind": "verified", "verification": sent["verification"]}
     return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
             "external_write_performed": sent.get("external_write_performed"),
             "idempotency_key": sent.get("idempotency_key")}

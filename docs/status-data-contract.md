@@ -1376,8 +1376,11 @@ capability-ready Todo. That request is a pending selection, not a committed
 receipt identity. Quota first re-runs current lane arbitration and eligibility;
 a newly due hard-priority monitor, blocking user gate, or other preemption
 defers the request and keeps the receipt identity-less. A qualified request does
-not need to have appeared in the bounded suggestions. Only the upgraded response
-restores delivery and its settlement plan. If there is only one admitted action,
+not need to have appeared in the bounded suggestions. A qualified selection with
+a missing hard lease binds the same Todo/Turn for preparation only: delivery stays
+denied and the only action is the ordinary claim. The same-Turn guard must observe
+`execution_preparation.state=ready` before restoring delivery and its settlement
+plan. If there is only one admitted action,
 no portfolio selection phase is added.
 
 When selected work has meaningful typed lineage, waiting, sibling, or
@@ -1403,6 +1406,37 @@ exposes the larger bounded `todo_planning_inventory_detail_v0` projection;
 completeness counters remain authoritative for omissions. Consumers that need
 the complete open source follow `detail_refs.full_todo_list` rather than
 assuming either bounded projection is exhaustive.
+
+After a new Turn has selected one Todo, `quota should-run` also checks that
+Todo's canonical hard lease. `execution_preparation_v0` is `ready` only for a
+matching active lease. A missing, released, or expired lease produces
+`claim_required` with one ordinary managed claim and
+`host_execution_allowed=true`; a capable Host may execute it before launching
+the model, then must rerun the guard and observe the same Todo as `ready`.
+The read-only guard never acquires authority itself, and the claim still
+atomically rechecks current ownership, write scopes, physical workspace and
+lease generation. Foreign ownership, conflicting leases, or unreadable
+canonical authority fail closed. Explicit action selection must bind one Todo
+before preparation. Receipt-bound recovery rechecks that same Todo and Turn, so
+the post-claim guard can prove `ready` without replacing their identities. Hosts
+without this integration expose only the claim command for
+the Agent to execute, avoiding unrelated context reads or delivery work first.
+
+For enabled native Codex App/SSH context delivery, the existing trusted
+`SessionStart` / `PostToolUse` lifecycle hook is a capable Host executor. The
+private session journal retains only the exact projected claim identity beside
+the immutable guard capture, including the absolute authority route that
+produced it. The hook uses that retained route even when its process runs from
+another project; it never rediscovers Goal authority from the hook cwd. The
+hook accepts only
+`host_execution_allowed=true`, executes the ordinary managed claim, reruns the
+guard for the same Todo and receipt-bound Turn, and injects a compact `ready`
+receipt before the next model step. A successful receipt suppresses repeated
+preparation for that capture; session resume rechecks it because the lease may
+have expired while the model was absent. Malformed, foreign, moved-workspace,
+timed-out, or failed preparation preserves the original explicit claim/recheck
+fallback and never erases context-recovery output. Context delivery remains an
+opt-in transport; it does not make a read-only guard itself acquire authority.
 
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota

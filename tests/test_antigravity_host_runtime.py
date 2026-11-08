@@ -2,6 +2,7 @@
 
 from argparse import Namespace
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -200,12 +201,91 @@ def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
     assert json.loads(result.stdout) == {}
 
 
-def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp_path):
+def test_stop_hook_recovers_a_non_ascii_event_under_a_locale_codec(tmp_path):
+    expected = "继续授权的工作"
+    script = f'''
+import sys
+from loopx.agy_goal_mode import host_runtime
+
+def native_input(args, text):
+    return ("frozen-input", "RUNNING", 1) if text == {expected!r} else None
+
+host_runtime._native_input = native_input
+host_runtime._admitted = lambda args: True
+sys.argv = [
+    "host_runtime", "stop-hook",
+    "--goal-id", "work", "--agent-id", "worker",
+    "--conversation-id", "native-chat", "--state-dir", sys.argv[1],
+]
+raise SystemExit(host_runtime.main())
+'''
+    payload = json.dumps(event(lastUserInput=expected), ensure_ascii=False).encode("utf-8")
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "gbk",
+        "PYTHONUTF8": "0",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "recovery")],
+        input=payload,
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert json.loads(result.stdout.decode("utf-8"))["decision"] == "continue"
+    assert result.stderr == b""
+
+
+def test_admission_decodes_utf8_core_output_under_a_locale_codec(tmp_path):
+    fake_cli = tmp_path / "fake_core.py"
+    fake_cli.write_text(
+        "import json, sys\n"
+        "sys.stdout.buffer.write(json.dumps("
+        "{'should_run': True, 'note': '继续授权的工作'}, ensure_ascii=False"
+        ").encode('utf-8'))\n",
+        encoding="utf-8",
+    )
+    script = '''
+import argparse
+import sys
+from loopx.agy_goal_mode import host_runtime
+
+host_runtime._core_args = lambda args, command: [sys.executable, sys.argv[1]]
+assert host_runtime._admitted(argparse.Namespace()) is True
+'''
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "gbk",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0",
+        "LC_ALL": "C",
+        "LANG": "C",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(fake_cli)],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert result.stdout == b""
+
+
+@pytest.mark.parametrize("context_delivery", ["on", "off"])
+def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(
+    tmp_path, monkeypatch, context_delivery,
+):
     from examples.control_plane.quota_plan_fixtures import (
         SCOPED_AGENT_ID,
         write_cli_fixture,
     )
 
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_delivery)
     registry, runtime_root, _ = write_cli_fixture(tmp_path / "core", scoped_agents=True)
     data = json.loads(registry.read_text())
     for goal in data["goals"]:
@@ -226,6 +306,7 @@ def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp
     ):
         args.goal_id = goal
         assert runtime._admitted(args) is expected
+        assert os.environ["LOOPX_CONTEXT_DELIVERY"] == context_delivery
 
 
 def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):

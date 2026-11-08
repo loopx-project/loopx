@@ -23,6 +23,7 @@ from typing import IO, Any, Literal, TypeAlias
 
 from ..file_lock import process_is_alive
 from .runtime.file_reads import iter_binary_file_reads
+from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
     HOST_PERMISSION_RECOMMENDATION,
     MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
@@ -69,6 +70,7 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
+_RUNTIME_SOURCE_PATHS = frozenset({"runtime/private_permissions.py"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 _SOURCE_DIGEST_SCHEMA_VERSION = "loopx_effect_runtime_source_digest_v1"
 _SOURCE_DIGEST_MAX_BYTES = 4096
@@ -119,6 +121,11 @@ class _RequestRuntimeRevision:
         self._revision: _RuntimeRevision | None = None
         self._scope_count = 1
         self._closed = False
+        # The Todo context handler is a pure lens over supplied records. Share
+        # its exact results only inside this already revision-pinned request;
+        # authority reads, clocks, mutation and settlement never enter here.
+        self._todo_context: dict[bytes, bytes] = {}
+        self._todo_context_bytes = 0
 
     def try_join(self) -> bool:
         with self._lock:
@@ -141,11 +148,31 @@ class _RequestRuntimeRevision:
             if self._scope_count == 0:
                 self._closed = True
                 self._revision = None
+                self._todo_context.clear()
+                self._todo_context_bytes = 0
+
+    def todo_context_result(self, key: bytes) -> bytes | None:
+        with self._lock:
+            return None if self._closed else self._todo_context.get(key)
+
+    def remember_todo_context(self, key: bytes, result: bytes) -> None:
+        with self._lock:
+            size = len(key) + len(result)
+            if (not self._closed and key not in self._todo_context
+                    and self._todo_context_bytes + size <= MAX_REQUEST_BYTES):
+                self._todo_context[key] = result
+                self._todo_context_bytes += size
 
 
 _REQUEST_RUNTIME_REVISION: ContextVar[_RequestRuntimeRevision | None] = (
     ContextVar("loopx_effect_runtime_request_revision", default=None)
 )
+
+
+def todo_projection_request_identity() -> object | None:
+    """Bind a source codec to its current logical request, never to a TTL."""
+    state = _REQUEST_RUNTIME_REVISION.get()
+    return state if state is not None and not state._closed else None
 
 
 class EffectRuntimeRemoteError(RuntimeError):
@@ -171,12 +198,14 @@ class EffectRuntimeRejected(EffectRuntimeRemoteError):
         message: str,
         *,
         diagnostic_code: str = "invalid_request",
+        details: tuple[str, ...] = (),
     ) -> None:
         super().__init__(
             message,
             error_kind="request_rejected",
             diagnostic_code=diagnostic_code,
         )
+        self.details = details
 
 
 class EffectRuntimeConflict(EffectRuntimeRemoteError):
@@ -301,11 +330,14 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
-        if relative_directory == ".":
-            relative_directory = ""
+        relative_prefix = (
+            "" if relative_directory == "." else relative_directory.replace(os.sep, "/") + "/"
+        )
         for filename in sorted(filenames):
+            relative = relative_prefix + filename
             dot = filename.rfind(".")
-            if dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES:
+            if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
+                    and relative not in _RUNTIME_SOURCE_PATHS):
                 continue
             source = Path(directory, filename)
             try:
@@ -318,7 +350,7 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
             except ValueError:
                 continue
             if stat.S_ISREG(metadata.st_mode):
-                snapshot.append((Path(relative_directory, filename).as_posix(),
+                snapshot.append((relative,
                     metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
     return tuple(sorted(snapshot))
 
@@ -954,9 +986,13 @@ def _request_with_info(
                     diagnostic_code="invalid_request",
                 )
             directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-")))
+            protect_private_path(directory, directory=True)
             response_sink = directory / "response.json"
             descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.close(descriptor)
+            try:
+                protect_private_path(response_sink)
+            finally:
+                os.close(descriptor)
             request["response_sink"] = str(response_sink)
             encoded = _encode_rpc_json(request) + b"\n"
             if len(encoded) > MAX_REQUEST_BYTES:
@@ -969,6 +1005,7 @@ def _request_with_info(
                 params_path = directory / "params.json"
                 descriptor = os.open(params_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(descriptor, "wb") as file:
+                    protect_private_path(params_path)
                     file.write(params_bytes)
                 request.pop("params")
                 request["params_ref"] = {
@@ -1158,8 +1195,10 @@ def _read_local_snapshot_response(
                 or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
                 or BARE_SHA256_PATTERN.fullmatch(digest) is None):
             raise ValueError("invalid local snapshot reference")
+        require_private_path(sink.parent, directory=True)
         descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as file:
+            require_private_path(sink, descriptor=file.fileno())
             metadata = os.fstat(file.fileno())
             if (not os.path.isfile(sink) or metadata.st_size != size
                     or (hasattr(os, "getuid") and
@@ -1200,7 +1239,14 @@ def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
     )
     rendered = rendered[:240] or "TypeScript Effect runtime request failed"
     if kind == "request_rejected":
-        return EffectRuntimeRejected(rendered, diagnostic_code=code)
+        details = value.get("details", [])
+        if (not isinstance(details, list) or len(details) > 128
+                or any(not isinstance(detail, str) or len(detail) > 240 for detail in details)):
+            return EffectRuntimeInternalError(
+                "TypeScript Effect runtime returned invalid request validation details",
+                diagnostic_code="invalid_error_envelope",
+            )
+        return EffectRuntimeRejected(rendered, diagnostic_code=code, details=tuple(details))
     if kind == "conflict":
         return EffectRuntimeConflict(rendered, diagnostic_code=code)
     if kind == "io_transient":
@@ -1378,6 +1424,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         environment["LOOPX_EFFECT_RUNTIME_TOKEN"] = token
         # Fixed daemon context, never a model-supplied executable argument.
         environment["LOOPX_EFFECT_RUNTIME_PYTHON"] = sys.executable
+        # Windows snapshot ACL facts use this parent-selected interpreter only.
+        environment["LOOPX_EFFECT_RUNTIME_PYTHON_BIN"] = sys.executable
         # Capture stderr so a rejected startup can publish a typed
         # startup diagnostic instead of a bare exit status. The capture
         # is an unlinked temporary file, so it cannot deadlock the child on a
@@ -1559,13 +1607,48 @@ def effect_runtime_result(
     retry_safe: bool = True,
     large_local_snapshot: bool = False,
 ) -> Any:
-    return effect_runtime_request(
+    state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
+    def validate_result(result: Any) -> Any:
+        # A caller must explicitly request a bundle. A request scope or a small
+        # source does not establish that it will consume additional views.
+        if set(params) == {"summary_display_views"} and (not isinstance(result, dict) or any(
+            not isinstance(result.get(view), list)
+            or any(not isinstance(row, dict) for row in result[view])
+            for view in ("summary", "planning", "terminal")
+        )):
+            raise RuntimeError("invalid TypeScript Todo source views")
+        return result
+
+    key = None
+    if state is not None:
+        # Preserve JSON order and scalar types, including bool/int, signed zero
+        # and exact integers. Do not infer equality from a digest or Todo id.
+        try:
+            key = json.dumps([params, timeout, retry_safe, large_local_snapshot],
+                             ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass  # Invalid/non-JSON input still reaches the original validator.
+        if key is not None:
+            prior = state.todo_context_result(key)
+            if prior is not None:
+                return validate_result(json.loads(prior))  # A caller cannot mutate another view.
+    result = effect_runtime_request(
         method,
         params,
         timeout=timeout,
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
+    validate_result(result)
+    if state is not None and key is not None and isinstance(result, dict):
+        try:
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
+                                 separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass
+        else:
+            state.remember_todo_context(key, encoded)
+    return result
 
 
 def effect_runtime_projection_result(method: str, params: Mapping[str, Any]) -> Any:

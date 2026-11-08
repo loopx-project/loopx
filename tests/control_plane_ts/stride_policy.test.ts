@@ -94,6 +94,25 @@ test("Explore review keeps bare lowercase digest revisions and unavailable null 
   }
 });
 
+test("each authored review list advertises and enforces its own three-reference bound", () => {
+  const control = strideControlContract({stride_strategy: "evidence_conditioned_v1"})!;
+  assert.equal(control.review_reference_limit, 3);
+  const evidence = ["evidence:first", "evidence:second", "evidence:third"];
+  const review = {reference_decision_ref: "replan-decision-" + "b".repeat(24), adoption: "unknown",
+    information_gain: "unknown", goal_gain: "unknown", lesson: "Interpret three observations together.",
+    evidence_refs: evidence};
+  const explore = {revision: "a".repeat(64), disposition: "used", considered_refs: evidence, reason: "Compared three findings."};
+  const decision = {...proposal, previous_review: review, explore_review: explore};
+  assert.deepEqual(normalizeStrideDecision(decision)[0]!.previous_review, review);
+  for (const extra of ["evidence:fourth", "evidence:first"]) {
+    const refs = extra === "evidence:first" ? [extra, extra] : [...evidence, extra];
+    assert.throws(() => normalizeStrideDecision({...decision, previous_review: {...review, evidence_refs: refs}}),
+      /previous_review\.evidence_refs requires at most 3 distinct/);
+    assert.throws(() => normalizeStrideDecision({...decision, explore_review: {...explore, considered_refs: refs}}),
+      /explore_review\.considered_refs requires at most 3 distinct/);
+  }
+});
+
 test("concrete independent plans retain action choice and fit the shared vision budget", () => {
   for (const basis of ["unexplained_gap", "uncertain_evidence", "supported_progress"]) {
     const decision = normalizeStrideDecision({...proposal, basis})[0]!;
@@ -426,6 +445,23 @@ test("shared replan guidance retains stride-off isolation and bounded enabled au
   assert.equal(normalizeStrideDecision(example)[0]!.action, "verify");
   const prepared = buildVisionCheckpoint({...request, agent_vision_packet: {...packet, stride_decision: example}});
   assert.ok(Number(((prepared.agent_vision as Record<string, unknown>).vision_budget as Record<string, unknown>).total_usage) < 1800);
+});
+
+test("fresh Vision authoring advertises the stride decision its validator requires", () => {
+  for (const kind of ["required_agent_vision_missing", "vision_acceptance_gap"]) {
+    for (const strategy of ["off", "evidence_conditioned_v1"]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+        replan_context: {stride_strategy: strategy, context_id: contextId}};
+      const requirements = projectReplanSemantics({operation: "requirements", obligation});
+      const fields = (requirements.writeback_contract as {required_fields: string[]}).required_fields;
+      const {stride_decision, ...vision} = packet;
+      const without = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+      const withDecision = projectReplanSemantics({operation: "qualify", obligation,
+        agent_vision: {...vision, stride_decision}});
+      assert.equal(fields.includes("agent_vision.stride_decision"), without.reason_code === "stride_decision_required", kind);
+      assert.equal(withDecision.accepted, true, kind);
+    }
+  }
 });
 
 test("all decision codecs reject non-string reference identities without coercion", () => {

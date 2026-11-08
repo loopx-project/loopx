@@ -12,7 +12,7 @@ type FieldCopy = Record<string, Readonly<{ description?: string; label: string; 
 
 const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
   en: {
-    context_delivery: {displayName: "Differential context", description: "Reuse unchanged context across supported Agent turns. A missing retained baseline keeps the full context."},
+    context_delivery: {displayName: "Progressive context", description: "Read current requirements before supporting material. Supported hosts can reuse unchanged context independently."},
     codex_chat: {displayName: "Codex Goal conversation defaults", description: "Choose the native Codex profile, model, speed tier and reasoning effort for new Goal conversations. Existing conversations keep their original history. This does not start or reconfigure an active Agent Loop, worker or steward."},
     decision_context: {displayName: "Find evidence", description: "Find advisory evidence with a temporary private profile. OpenViking and BM25 are retrieval implementations; this page does not save a binding or enable automatic memory."},
     content_ops: {displayName: "Content production", description: "Prepare source-backed outlines, compose local videos or generate cloud images and footage with the optional media provider. Review the result before sharing."},
@@ -82,7 +82,7 @@ const capabilityCopy: Record<WorkspaceLocale, Record<string, LocalizedCopy>> = {
     },
   },
   "zh-CN": {
-    context_delivery: {displayName: "差分上下文", description: "在支持的 Agent 轮次间复用未变化的上下文；无法确认基线保留时使用完整上下文。"},
+    context_delivery: {displayName: "渐进上下文", description: "先展示当前目标与约束，按需读取材料；支持的宿主可独立复用跨轮上下文。"},
     codex_chat: {displayName: "Codex Goal 对话默认值", description: "分别选择 Codex 配置来源、模型、速度档和推理强度，作用于本机的新 Goal 对话。已有对话保留原历史；不会启动或重配正在运行的 Agent Loop、工作 Agent 或管家。"},
     decision_context: {displayName: "资料召回", description: "通过临时私有配置查找参考证据。OpenViking、BM25 是检索实现；本页不保存绑定，也不启用自动记忆。"},
     content_ops: {displayName: "内容制作", description: "准备有来源的提纲，使用可选媒体扩展制作本机视频、生成云端图像与镜头，检查作品后再分享。"},
@@ -166,6 +166,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_reasoning_effort: { label: "Reasoning effort", description: "Optional reasoning effort for the selected executor. Leave blank to keep the executor's own default." },
     count_unit: { label: "Review after", description: "Work Turns require accepted settlement; polls and retries do not count.", options: { completed_todos: "Completed Todos", effective_turns: "Settled work Turns" } },
     planning_horizon_goal: { label: "Show Goal in planning horizon", description: "Default on. Keep the original Goal and acceptance visible before choosing work. Turn off for rollback or comparisons; replan, stride and execution authority are unchanged." },
+    yardstick_enabled: { label: "Review measurement criteria", description: "Default off. Review measurement scope and feedback using available Explore evidence. Requires Explore evidence; does not enable it or authorize execution." },
     stride_strategy: { label: "Stride strategy", description: "Structured work scope, route and validation proposals are required for enabled fresh Vision reviews. Does not grant execution authority.", options: { off: "Off", evidence_conditioned_v1: "Evidence-conditioned · v1" } },
     count: { label: "Number between reviews", description: "Settled work Turns: 1–6; completed Todos: 1–5. Goal overrides take precedence over device defaults." },
     allowed_domains: { label: "Allowed responsibility domains", description: "Enter one bounded, public-safe domain per line." },
@@ -178,6 +179,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     composition_mode: { label: "Composition policy", description: "Replan requires an exact experiment successor or typed result; it grants no execution authority.", options: {disabled: "Off", explicit_only: "Explicit candidates"} },
     composition_scope_id: { label: "Research coverage scope", description: "An opaque scope id required by the explicit-only composition policy." },
     profile_preset: { label: "Report profile", description: "Capability-owned report profile, such as weekly-progress." },
+    review_required: { label: "Request review when ready", description: "For reports returned to this Goal's original conversation. Each edition stays on Home until you handle its review." },
     wait_for_ci: { label: "Wait for CI", description: "Disable to use local validation without querying or waiting for CI. Merge authority is unchanged." },
     review_order: { label: "Review direction", description: "Forward visits other authors first and oldest first. Reverse inverts the whole actionable queue." },
     agent_orders: { label: "Agent review directions", description: "Use the Goal default or choose a direction for each registered Agent." },
@@ -202,6 +204,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     executor_reasoning_effort: { label: "推理档位", description: "所选执行器使用的推理档位，可留空；留空表示沿用执行器自身的默认档位。" },
     count_unit: { label: "复核计数依据", description: "有效工作 Turn 须完成结算；轮询和重复重试不计数。", options: { completed_todos: "已完成 Todo", effective_turns: "已结算工作 Turn" } },
     planning_horizon_goal: { label: "在规划视野中显示 Goal", description: "默认开启，选择工作前可见原目标与验收要求。可为回滚或对照实验关闭；不改变复盘、步幅策略或执行权限。" },
+    yardstick_enabled: { label: "复核衡量标准", description: "默认关闭。使用已有 Explore 证据复核测量范围与反馈；需有可用的 Explore 证据，不会自动启用它或授予执行权限。" },
     stride_strategy: { label: "步幅策略", description: "启用后，新的 Vision 路线复盘须提交工作大小、路线及验证范围的结构化提案，不授予执行权限。", options: { off: "关闭", evidence_conditioned_v1: "依据证据调整 · v1" } },
     count: { label: "两次复核间的数量", description: "已结算工作 Turn 为 1–6，已完成 Todo 为 1–5；Goal 显式设置优先于设备默认值。" },
     allowed_domains: { label: "允许的职责域", description: "每行填写一个有边界、可公开的职责域。" },
@@ -214,6 +217,7 @@ const fieldCopy: Record<WorkspaceLocale, FieldCopy> = {
     composition_mode: { label: "组合策略", description: "重新规划需要精确的实验后继或类型化结果；它不授予执行权限。", options: {disabled: "关闭", explicit_only: "仅显式候选"} },
     composition_scope_id: { label: "研究覆盖范围", description: "显式组合策略要求填写不含私有内容的范围标识。" },
     profile_preset: { label: "报告 Profile", description: "由该能力管理的报告 profile，例如 weekly-progress。" },
+    review_required: { label: "材料就绪后请求验收", description: "适用于回到本 Goal 原工作对话的报告。每个版本独立提醒，处理审阅后从首页移除。" },
     wait_for_ci: { label: "等待 CI", description: "关闭后使用本地验证，不查询或等待 CI；不改变合并权限。" },
     review_order: { label: "审阅方向", description: "正向先审其他作者，同层先审较早就绪的 PR；反向将整个可执行队列倒序。" },
     agent_orders: { label: "Agent 审阅方向", description: "每个注册 Agent 可继承 Goal，或单独选择正向、反向。" },
@@ -247,13 +251,13 @@ export function localizeCapability(
 
 export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capabilityId?: string): FieldCopy {
   if (capabilityId === "context_delivery") return {...fieldCopy[locale], mode: locale === "zh-CN" ? {
-    label: "Codex", description: "仅作用于支持的 Codex 心跳；显式关闭的实验保持关闭。", options: {off: "关闭", on: "开启"},
+    label: "渐进读取", description: "适用于各宿主；关闭后保留完整内联输入。", options: {off: "关闭", on: "开启"},
   } : {
-    label: "Codex", description: "Applies only to supported Codex heartbeats; explicitly disabled runs stay disabled.", options: {off: "Off", on: "On"},
-  }, antigravity_mode: locale === "zh-CN" ? {
-    label: "Antigravity", description: "仅作用于强能力 Antigravity 管家的交付历史渐进读取；关闭时保持完整内联。", options: {off: "关闭", on: "开启"},
+    label: "Progressive reads", description: "Applies across hosts; off keeps full inline input.", options: {off: "Off", on: "On"},
+  }, delta_delivery: locale === "zh-CN" ? {
+    label: "跨轮差分", description: "仅在支持连续性的宿主自动启用；可独立关闭，保留渐进读取。", options: {off: "关闭", auto: "自动"},
   } : {
-    label: "Antigravity", description: "Applies only to progressive history reads in trusted-owner Antigravity manager sessions; off keeps full inline input.", options: {off: "Off", on: "On"},
+    label: "Cross-Turn Delta", description: "Automatic only on supported continuity hosts; off preserves progressive reads.", options: {off: "Off", auto: "Automatic"},
   }};
   if (capabilityId === "codex_chat") return {...fieldCopy[locale], ...(locale === "zh-CN" ? {
     codex_profile: {label: "Codex 配置来源", description: "选择已有本机配置，例如 codex-gpt。账户和凭据留在原目录，不复制；留空继承服务配置。"},

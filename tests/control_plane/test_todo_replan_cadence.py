@@ -234,3 +234,23 @@ def test_quota_uses_cadence_without_bypassing_a_goal_pause(threshold, paused):
         if completed_gaps:
             assert completed_gaps[0]["completed_todo_threshold"] == threshold
             assert result["goal_frontier_projection"]["replan_required"] is True
+
+
+def test_cli_yardstick_boolean_and_clear_preserve_the_independent_cadence(tmp_path):
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [{"id": "example", "status": "active",
+        "execution_profile": {"replan_after_effective_turns": 3}}]}))
+    prefix = ["--registry", str(registry), "--format", "json", "--runtime-root", str(tmp_path / "runtime"),
+              "configure-goal", "--goal-id", "example"]
+    for flag, expected in [("--execution-yardstick-enabled", True), ("--no-execution-yardstick-enabled", False),
+                           ("--clear-execution-yardstick-enabled", None)]:
+        preview = run_source_cli([*prefix, flag], check=True)
+        assert json.loads(preview.stdout)["ok"]
+        run_source_cli([*prefix, flag, "--execute"], check=True)
+        profile = json.loads(registry.read_text())["goals"][0]["execution_profile"]
+        assert profile["replan_after_effective_turns"] == 3
+        assert profile.get("yardstick_enabled") is expected
+    before = registry.read_bytes()
+    result = run_source_cli([*prefix, "--execution-yardstick-enabled", "--clear-execution-yardstick-enabled", "--execute"], check=False)
+    assert result.returncode != 0
+    assert registry.read_bytes() == before

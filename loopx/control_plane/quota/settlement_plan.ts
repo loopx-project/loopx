@@ -81,7 +81,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     validation.precondition = claimHint + "validate the original Todo deliverable; when complete, run ordinary Todo completion " +
       "with its original declaration and current lease before writeback/spend. Use --evidence for " +
       "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
-      "not merely a Todo validator. No invented successor " +
+      "not merely a Todo validator. Link known follow-up work with --successor-todo-id <existing-id>. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn. " +
       "Keep an unfinished Todo open with its original declaration.";
   }

@@ -210,24 +210,31 @@ export const configurationBackupScenario = {
         const settings = page.getByRole("button", {name: "Settings", exact: true});
         if (await settings.count()) await settings.click();
         await page.locator(".personal-settings-tabs").getByRole("button", {name: /Capabilit/}).click();
-        await page.getByRole("button", {name: /Differential context/}).click();
-        return page.getByRole("switch", {name: "Use differential context in Codex", exact: true});
+        await page.getByRole("button", {name: /Progressive context/}).click();
+        return page.getByRole("switch", {name: "Read context progressively", exact: true});
       }
       let contextSwitch = await openContextSettings();
       await page.screenshot({path: resolve(outputDir, "context-default-on-desktop.png"), animations: "disabled"});
       assert.equal(await contextSwitch.isChecked(), true, "Unconfigured Codex must show its effective on default");
-      await page.getByText("Default on; native setup and use unverified.", {exact: true}).waitFor();
+      assert.equal(await page.locator(".personal-capability-detail [role=switch]").count(), 2);
       await page.setViewportSize({width: 390, height: 844});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       await contextSwitch.scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "context-default-on-mobile.png"), animations: "disabled"});
       await page.setViewportSize({width: 1512, height: 982});
       await contextSwitch.click();
-      await page.getByText("Off for Codex.", {exact: true}).waitFor();
+      await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
       const storedSettings = () => readFile(join(root, "runtime/machine/configuration.json"), "utf8").then(JSON.parse);
-      assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off");
+      const deltaOnly = (await storedSettings()).namespaces.context_delivery;
+      assert.deepEqual([deltaOnly.schema_version, deltaOnly.mode, deltaOnly.delta_delivery],
+        ["context_delivery_machine_defaults_v1", "off", "auto"]);
       contextSwitch = await openContextSettings();
       assert.equal(await contextSwitch.isChecked(), false, "A saved off must survive reload and the new on default");
+      const deltaSwitch = page.getByRole("switch", {name: "Use cross-turn delta automatically on supported hosts"});
+      assert.equal(await deltaSwitch.isChecked(), true);
+      await deltaSwitch.click();
+      await page.getByText("Cross-turn delta preference saved.", {exact: true}).waitFor();
+      assert.equal(await contextSwitch.isChecked(), false);
       const applyRoute = "**/api/chat/machine-configuration/apply";
       await page.route(applyRoute, route => route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({ok: false, error: "Fixture unavailable"})}));
       await contextSwitch.click();
@@ -235,9 +242,10 @@ export const configurationBackupScenario = {
       assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off", "Failed apply must preserve saved off");
       await page.unroute(applyRoute);
       await contextSwitch.click();
-      await page.getByText("On; native setup and use unverified.", {exact: true}).waitFor();
+      await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
       const afterSettings = await storedSettings();
-      assert.equal(afterSettings.namespaces.context_delivery.mode, "on");
+      assert.deepEqual([afterSettings.namespaces.context_delivery.mode, afterSettings.namespaces.context_delivery.delta_delivery],
+        ["on", "off"]);
       assert.equal(afterSettings.namespaces.goal_storage.new_goal_provider, "sqlite", "The opt-out/on transaction must preserve sibling settings");
       return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: `Actual settings backend: Codex default on, saved off/reload, failed apply and explicit on; Packaged configuration recovery and full archive inspection; real ${backend.source_provider} head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport`};
     } finally {

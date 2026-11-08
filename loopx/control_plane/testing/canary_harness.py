@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -44,6 +45,9 @@ def run_json_cli(
         command,
         cwd=cwd or REPO_ROOT,
         check=False,
+        # This helper consumes machine JSON. Keep model-facing transport in
+        # the parent; native-context fixtures declare it explicitly in argv.
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
     )
@@ -86,6 +90,9 @@ def run_json_cli_result(
         command,
         cwd=cwd or REPO_ROOT,
         check=False,
+        # Match run_cli: machine consumers need the raw projection, not the
+        # model-facing navigation wrapper. Explicit argv can still opt in.
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
     )

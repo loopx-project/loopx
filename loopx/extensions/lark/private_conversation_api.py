@@ -4,6 +4,7 @@ from collections.abc import Mapping
 import logging
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 PRIVATE_CONVERSATIONS_PATH = "/api/chat/lark/private-conversations"
 
@@ -36,6 +37,26 @@ class PrivateConversationRequestMixin:
         current = bindings.read()
         titles = {row["project_ref"]: Path(row["workspace_path"]).name
                   for row in self.server.runtime_controller.project_contexts.available()}
+        # Source adapters revalidate this projection before publication. They
+        # need current grants, not listener probes or historical delivery scans.
+        # This read grants nothing; the caller retains its own identity, Turn,
+        # revocation, publication fence and compare-and-swap checks.
+        view = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True).get("view")
+        if view is not None:
+            if view != ["authorization"]:
+                self._send_error("Unknown private conversation view", status=400)
+                return
+            if bindings.read() != current:
+                self._send_error("Conversation bindings changed during the read", status=409)
+                return
+            self._send_json({"ok": True, "revision": current["revision"], "connections": [
+                {"binding_id": row["binding_id"], "app_ref": row["transport_ref"],
+                 "context_kind": row["context_kind"], "project_ref": row["project_ref"],
+                 "context_available": row["project_ref"] in titles,
+                 "executor_endpoint_id": row["executor_endpoint_id"], "grant": row["grant"],
+                 "audience": row.get("audience", "owner")}
+                for row in current["bindings"]]})
+            return
         health = self.server.lark_goal_topic_runtime.health_snapshot()
         composed = getattr(self.server, "conversation_transports", None)
         lark_profiles = set(health) - set(composed.transports if composed is not None else {})
@@ -58,10 +79,7 @@ class PrivateConversationRequestMixin:
                 and hasattr(self.server.lark_private_conversations, "ingress") else {}),
              **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
-             **({"managed_steward": {
-                    **self.server.lark_private_conversations.managed_steward.health(row["binding_id"]),
-                    **({"execution_available": False, "execution_error_code": "unsupported_executor"}
-                       if row["executor_endpoint_id"] != "codex" else {})}}
+             **({"managed_steward": self.server.lark_private_conversations.managed_steward.health(row["binding_id"])}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner"
                 and (row["executor_endpoint_id"] == "codex" or row.get("managed_actor"))
                 and hasattr(self.server.lark_private_conversations, "managed_steward") else {}),

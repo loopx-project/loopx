@@ -353,7 +353,7 @@ def test_namespace_restart_cannot_certify_failed_exit_observation(tmp_path, monk
     assert effect_runtime.restart_effect_runtime()["status"] == "stopped"
 
 
-@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "WNOWAIT"), reason="POSIX child exit observation")
+@pytest.mark.skipif(os.name != "posix", reason="POSIX child reaping")
 def test_namespace_shutdown_reaps_exited_child_before_disposal(tmp_path, monkeypatch):
     child = subprocess.Popen(
         [sys.executable, "-c", "import sys; sys.stdin.read()"],
@@ -365,10 +365,9 @@ def test_namespace_shutdown_reaps_exited_child_before_disposal(tmp_path, monkeyp
     def shutdown(_info, **kwargs):
         requests.append(kwargs["method"])
         assert effect_runtime._pid_is_alive(child.pid)
+        # Signal real exit without polling or reaping in the fixture. The
+        # shutdown caller must observe exit and reap this child itself.
         child.stdin.close()
-        # Wait for the shutdown response's real exit without reaping the child.
-        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
-        assert effect_runtime._pid_is_alive(child.pid)
         return {}
 
     monkeypatch.setattr(effect_runtime, "_request_with_info", shutdown)

@@ -7,7 +7,8 @@ This neither proves retained model input nor grants execution authority.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 import json
 import os
@@ -18,7 +19,7 @@ import uuid
 from .decision_capture import (
     write_decision_capture, capture_context_projection, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
-    CONTEXT_CAPTURE_SELECTION_GUIDANCE,
+    CONTEXT_CAPTURE_SELECTION_GUIDANCE, CONTEXT_CAPTURE_CODE_MODE_GUIDANCE,
     context_capture_read_command,
 )
 from .native_context_profile import (
@@ -26,16 +27,24 @@ from .native_context_profile import (
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
+from .codex_execution_preparation import compact_execution_preparation_request
 
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.
-CONTEXT_DELIVERY_SETTINGS = ("off", "on")
+CONTEXT_DELIVERY_SETTINGS = ("off", "on", "auto")
+DELTA_DELIVERY_SETTINGS = ("off", "auto")
 CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal")
 CONTEXT_LIFECYCLE_HOOKS = ("SessionStart", "PreCompact", "PostCompact", "PostToolUse", "Interrupt")
 
 
 class NativeContextSessionUnavailable(ValueError):
     """No native identity for a session journal; explicit file reads still work."""
+
+
+def native_context_event_eligible(event: Mapping[str, Any]) -> bool:
+    """Reject subagent hooks before parent-session context or lease effects."""
+    agent_id = event.get("agent_id")
+    return not (isinstance(agent_id, str) and agent_id)
 
 
 def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool = False) -> dict[str, Any]:
@@ -46,29 +55,35 @@ def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool 
         "trae_app" if getattr(args, "trae_app", False) else None,
         "antigravity_app" if getattr(args, "antigravity_app", False) else None) if value is not None]
     setting = getattr(args, "context_delivery", None)
-    setting = "off" if setting is None else setting
+    setting = ("off" if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off" else "auto") if setting is None else setting
+    delta = getattr(args, "delta_delivery", None)
     if len(profiles) > 1:
-        return context_delivery_activation(setting)
+        return context_delivery_activation(setting, delta_delivery=delta)
     return context_delivery_activation(setting, runtime_profile=profiles[0] if profiles else None,
         scheduler_execution_context=fields if any(fields.values()) else None,
         benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
             if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None,
-        codex_machine_preference=codex_machine_preference)
+        codex_machine_preference=codex_machine_preference, delta_delivery=delta)
 
 
 def context_delivery_activation(setting: str, *, runtime_profile: str | None = None,
                                 scheduler_execution_context: dict[str, Any] | None = None,
                                 benchmark_mode: str | None = None,
-                                codex_machine_preference: bool = False) -> dict[str, Any]:
+                                codex_machine_preference: bool = False,
+                                delta_delivery: str | None = None) -> dict[str, Any]:
     from ..scheduler.execution_context import (
         ExecutionMode, HostSurface, SchedulerOwner, resolve_scheduler_execution_context,
         scheduler_execution_context_for_runtime_profile,
     )
 
     if setting not in CONTEXT_DELIVERY_SETTINGS:
-        raise ValueError("context-delivery must be off or on")
+        raise ValueError("context-delivery must be off, on or auto")
+    if delta_delivery is not None and delta_delivery not in DELTA_DELIVERY_SETTINGS:
+        raise ValueError("delta-delivery must be off or auto")
     scenario = None
-    if setting == "on":
+    # A lone legacy off is raw. An explicit pair can qualify Delta on the
+    # full document without opting into progressive presentation.
+    if delta_delivery == "auto" or (delta_delivery is None and setting != "off"):
         # Conflicting declarations cannot activate transport. The scheduler
         # owner still validates execution; this adapter does not repair it.
         if runtime_profile is not None and scheduler_execution_context is not None:
@@ -88,21 +103,21 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
                 HostSurface.CLAUDE_CODE, HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI,
                 HostSurface.LOCAL_SCHEDULER,
             }:
-                return context_delivery_activation("off")
-            if (context.host_surface is HostSurface.CODEX_APP
+                context = None
+            if (context is not None and context.host_surface is HostSurface.CODEX_APP
                     and context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
                     and context.execution_mode is ExecutionMode.HOSTED_AUTOMATION):
                 scenario = "codex_app_heartbeat"
-            elif (context.host_surface is HostSurface.CODEX_APP_SSH
+            elif (context is not None and context.host_surface is HostSurface.CODEX_APP_SSH
                     and context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
                     and context.execution_mode is ExecutionMode.INTERACTIVE):
                 scenario = "codex_app_ssh_goal"
-            elif (context.host_surface is HostSurface.GENERIC_CLI
+            elif (context is not None and context.host_surface is HostSurface.GENERIC_CLI
                     and context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
                     and context.execution_mode is ExecutionMode.INTERACTIVE
                     and benchmark_mode == "heartbeat"):
                 scenario = "codex_benchmark_heartbeat"
-        if scenario is None:
+        if scenario is None and setting == "on":
             raise ValueError(
                 "--context-delivery on requires a supported declared run mode: "
                 "Codex App heartbeat (--codex-app or --runtime-profile codex_app_heartbeat), "
@@ -111,7 +126,8 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
                 "declarations are rejected; use --context-delivery off for ordinary full delivery."
             )
     return {"requested": setting, "enabled": scenario is not None, "scenario": scenario,
-        "reason": "supported_declared_run_mode" if scenario else "disabled",
+        "progressive_enabled": setting != "off", "delta_delivery": "auto" if scenario else "off",
+        "reason": "supported_declared_run_mode" if scenario else "progressive_only" if setting != "off" else "disabled",
         "supported_scenarios": list(CONTEXT_DELIVERY_SCENARIOS)}
 
 
@@ -194,6 +210,46 @@ def _save(root: Path, state: dict[str, Any]) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
 
 
+def record_native_claim_source(
+    payload: Mapping[str, Any], digest: str, *, directory: str | None, context_root: str | None,
+) -> None:
+    """Remember the live guard's latest eligible capture outside its JSON."""
+    preparation = compact_execution_preparation_request(payload)
+    session = os.environ.get("CODEX_THREAD_ID") or None
+    if not preparation or not preparation.get("turn_instance_id") or (not session and directory is None):
+        return
+    location = codex_context_directory(directory=directory, root=context_root, session=session, create=True)
+    if location is None:
+        return
+    with _locked(location) as root:
+        active_session = _state(root).get("session_id")
+        if session and active_session not in (None, session):
+            return
+        # A caller outside the Host can explicitly select its private directory.
+        # The journal identifies that session even without an ambient thread ID.
+        write_decision_capture(root / "claim-source.json",
+            {"session_id": session or active_session, "sha256": digest}, publish=os.replace)
+
+
+def _original_native_claim_source(
+    root: Path, session: str, digest: object, *, bind_unattached: bool = False,
+) -> bool:
+    if not isinstance(digest, str):
+        return False
+    try:
+        path = root / "claim-source.json"
+        saved = _read(path)
+    except (OSError, ValueError):
+        return False
+    bound = {"session_id": session, "sha256": digest}
+    if bind_unattached and saved == {**bound, "session_id": None}:
+        # An explicit private directory can receive a guard before startup.
+        # Adopt it once from the live session while holding its journal lock.
+        write_decision_capture(path, bound, publish=os.replace)
+        return True
+    return saved == bound
+
+
 def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_id: str | None) -> tuple[str, str]:
     """Select an original capture after a lost hook; never assert retention.
 
@@ -254,10 +310,10 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "--max-page-output-bytes", str(page_output_bytes)])
     return (
         _context_continuation_instructions(command) +
-        CONTEXT_CAPTURE_NAVIGATION_GUIDANCE +
+        CONTEXT_CAPTURE_NAVIGATION_GUIDANCE + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE +
         ("The generated native configuration supports 64000-byte context-read outputs and a 20000-token history limit. "
          + _NATIVE_CONTEXT_OUTPUT_GUIDANCE +
-         "Read one continuation per tool call; in code-mode, forward successful stdout directly with text(result.output). "
+         "Read one continuation per tool call. "
          if page_output_bytes == NATIVE_CONTEXT_LARGE_OUTPUT_BYTES else "") +
         "For code-mode reads, size batches against both direct-result and retained-history output limits; "
         "max_output_tokens alone does not establish the latter. Read one output at a time with "
@@ -270,7 +326,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
                                  cli_argv: list[str], scenario: str, session_root: bool = False,
-                                 inherit_machine: bool = False) -> dict[str, Any]:
+                                 inherit_machine: bool = False, progressive_enabled: bool = True) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -285,9 +341,11 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         raise ValueError("context configuration requires exact goal-id and agent-id")
     directory = str(_private_root(directory))
     option = "--codex-context-root" if session_root else "--codex-context-dir"
+    activation_args = ["--context-delivery", "on"] if progressive_enabled else [
+        "--context-delivery", "off", "--delta-delivery", "auto"]
     handler = {"type": "command", "command": shlex.join([
         *cli_argv, "--format", "json", "quota", "context-hook",
-        *([] if inherit_machine else ["--context-delivery", "on"]),
+        *([] if inherit_machine else activation_args),
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
@@ -320,7 +378,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     name, session = event.get("hook_event_name"), event.get("session_id")
     if not isinstance(session, str) or not session:
         return {}
-    if isinstance(event.get("agent_id"), str) and event["agent_id"]:
+    if not native_context_event_eligible(event):
         return {}  # no parent recovery reference may escape to a subagent
     pages = _context_pages(event.get("tool_response")) if name == "PostToolUse" else []
     if name == "PostToolUse" and not pages:
@@ -336,12 +394,14 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     recovery = state.get("recovery")
                     if name == "PostToolUse":
                         pages = _verified_context_pages(state, pages)
-                        read_state = observe_native_read(state, event, pages)
+                        read_state = observe_native_read(state, event,
+                            [page for page in pages if "read_sections" not in page])
                 updated = update_native_context_lifecycle(read_state, event,
                     new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
                     resume_verified=name == "SessionStart" and native_resume_verified(state, event))
                 if name == "PostToolUse":
-                    checkpoint_native_read(read_state, updated, event, pages)
+                    checkpoint_native_read(read_state, updated, event,
+                        [page for page in pages if "read_sections" not in page])
                 if updated != state:
                     _save(root, updated)
                 saved = updated.get("recovery")
@@ -368,6 +428,80 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
             + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
     return {}
+
+
+def native_execution_preparation_request(
+    directory: str | None, event: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Read one compact Host action from this exact native session journal."""
+
+    if (directory is None or not native_context_event_eligible(event)
+            or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}):
+        return None
+    session, cwd = event.get("session_id"), event.get("cwd")
+    if not isinstance(session, str) or not session or not isinstance(cwd, str) or not cwd:
+        return None
+    try:
+        with _locked(directory) as root:
+            state = _state(root)
+            if state.get("session_id") != session or state.get("cwd") != cwd:
+                return None
+            recovery = state.get("recovery")
+            if not isinstance(recovery, dict):
+                return None
+            request = recovery.get("execution_preparation")
+            source_sha256 = recovery.get("sha256")
+            if not isinstance(request, dict) or not isinstance(source_sha256, str):
+                return None
+            previous = state.get("host_execution_preparation")
+            if (
+                event.get("hook_event_name") != "SessionStart"
+                and isinstance(previous, dict)
+                and previous.get("source_sha256") == source_sha256
+                and previous.get("state") == "ready"
+            ):
+                return None
+            action = {**request, "source_sha256": source_sha256}
+            if not _original_native_claim_source(root, session, action.get("claim_source_sha256")):
+                action.pop("claim_source_sha256", None)
+            return action
+    except (OSError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def record_native_execution_preparation(
+    directory: str | None,
+    event: dict[str, Any],
+    *,
+    source_sha256: str,
+    receipt: Mapping[str, Any],
+) -> None:
+    """Record a ready receipt only while its source/session is still current."""
+
+    if (directory is None or not native_context_event_eligible(event)
+            or receipt.get("event") != "host_execution_prepared"):
+        return
+    with _locked(directory) as root:
+        state = _state(root)
+        recovery = state.get("recovery")
+        if (
+            state.get("session_id") != event.get("session_id")
+            or state.get("cwd") != event.get("cwd")
+            or not isinstance(recovery, dict)
+            or recovery.get("sha256") != source_sha256
+        ):
+            raise ValueError("execution-preparation source moved before receipt publication")
+        state["host_execution_preparation"] = {
+            "source_sha256": source_sha256,
+            "state": "ready",
+            "todo_id": receipt.get("todo_id"),
+            **(
+                {"turn_instance_id": receipt["turn_instance_id"]}
+                if receipt.get("turn_instance_id")
+                else {}
+            ),
+        }
+        _save(root, state)
 
 
 def _context_pages(value: object) -> list[dict[str, Any]]:
@@ -397,7 +531,7 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
             return pages
     if not isinstance(value, dict):
         return []
-    if value.get("schema_version") == "context_capture_page_v1":
+    if value.get("schema_version") in ("context_capture_page_v1", "context_capture_selection_page_v1"):
         return [value]
     if isinstance(value.get("output"), str):
         pages = _context_pages(value["output"])
@@ -424,8 +558,21 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
     files: dict[str, bytes] = {}
     result = []
     for page in pages:
-        if any(key in page for key in ("selection_sha256", "selected_pointers", "list_fields")):
-            continue  # A directory/detail read makes no full-delivery claim.
+        # These observations originate only below, after byte/source checks.
+        page = {key: value for key, value in page.items() if key not in ("read_sections", "source_sha256")}
+        source = state.get("source_recovery")
+        if (any(key in page for key in ("selection_sha256", "selected_pointers", "list_fields", "reference_file"))
+                or isinstance(source, dict) and page.get("sha256") == source.get("sha256")
+                and page.get("sha256") != (state.get("recovery") or {}).get("sha256")):
+            from .native_context_selection import verified_context_selection
+
+            try:
+                observed = verified_context_selection(state, page)
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                observed = None
+            if observed is not None:
+                result.append(observed)
+            continue  # Never promote a selected read to full-delivery proof.
         reference = next((value for value in references if value.get("sha256") == page.get("sha256")), None)
         if reference is None or page.get("ok") is not True:
             result.append(page)  # the typed owner handles failures and unrelated reads
@@ -455,7 +602,7 @@ def _discard_recovery(root: Path) -> None:
     path.unlink()
 
 
-def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+def _native_context_request(state: dict[str, Any], scope: dict[str, Any], capture_id: str) -> dict[str, Any]:
     """Compare verified durable versions independently of model retention.
 
     The same session's last full capture is a file baseline after partial reads
@@ -465,6 +612,11 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     """
     request: dict[str, Any] = {"scope": scope}
     previous = state.get("recovery")
+    target = previous.get("target") if isinstance(previous, dict) else None
+    if isinstance(target, dict) and target.get("capture_id") == capture_id:
+        # Publishing an offer does not mean a reader saw it. A retry may use
+        # the original predecessor, but never this offer as its own baseline.
+        previous = previous.get("comparison_base")
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -479,46 +631,69 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any]) -> None:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *,
+                                 hook_session: str | None = None) -> dict[str, Any] | None:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
-        return
+        return None
     with _locked(directory) as root:
         state = _state(root)
         pending = state.get("pending")
         if (not isinstance(pending, dict) or pending.get("target") != view["target"]
-                or state.get("session_id") != os.environ.get("CODEX_THREAD_ID")):
+                or state.get("session_id") != (hook_session or os.environ.get("CODEX_THREAD_ID"))):
             raise ValueError("native page view does not match the current pending capture")
         pending.update(path=view["path"], sha256=view["sha256"], total_bytes=view["total_bytes"],
-            ancestry=view.get("ancestry", 0))
+            ancestry=view.get("ancestry", 0),
+            read_sections=pending.get("full_read_sections", {}) if view.get("mode") == "full" else {})
         _save(root, state)
+        observed = pending.get("observed_first_read")
+        return observed if isinstance(observed, dict) else None
 
 
-def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
+@dataclass(frozen=True)
+class NativeContextPreparation:
+    """One invocation's wire and optional read plan; never native journal state."""
+
+    delivery: dict[str, Any]
+    initial_read_plan: dict[str, Any] | None = None
+
+
+def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
-                          continuity_generation: str | None = None) -> dict[str, Any]:
+                          continuity_generation: str | None = None,
+                          include_initial_read_plan: bool = True,
+                          progressive_enabled: bool | None = None,
+                          selection_command_args_template: str | None = None,
+                          captured_decision_path: str | None = None,
+                          hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
 
     Serialization prevents invalidation from moving the epoch during preparation.
     Full fallback must recover this capture or refuse lookup, never an older one.
     Saved-file comparison is independent of any complete model-read observation.
     """
+    from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
     from ..quota.turn_envelope import prepare_context_delivery
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
     if directory is None:
-        return payload
+        if not progressive_enabled:
+            return NativeContextPreparation(payload)
+        from .decision_capture import capture_progressive_context
+
+        return NativeContextPreparation(capture_progressive_context(
+            payload, directory=capture_directory, surface=surface)[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False
             try:
                 state = _state(root)
                 session, epoch = state.get("session_id"), state.get("context_epoch")
-                native_session = os.environ.get("CODEX_THREAD_ID")
+                native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
-                    return payload  # Do not replace a different native session's recovery.
+                    return NativeContextPreparation(payload)  # Do not replace another session's recovery.
                 # Native lifecycle events own workspace identity and epoch.
                 # A shell tool may run in another checkout without changing
                 # the host session or losing its previously delivered context.
@@ -529,17 +704,30 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 scope = dict(goal_id=goal_id, agent_id=agent_id, session_id=session, context_epoch=epoch)
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
-                request = _native_context_request(state, scope)
-                recovery = capture_context_projection(payload, directory=capture_directory,
-                    read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                selected = payload.get("selected_todo")
+                read_scope = {**scope, "surface": surface,
+                    "todo_id": selected.get("todo_id") if isinstance(selected, dict) else None}
+                if state.get("read_scope") != read_scope:
+                    for key in ("consumed_pointers", "confirmed_read_sections", "section_reads"):
+                        state.pop(key, None)
+                state["read_scope"] = read_scope
+                request = _native_context_request(state, scope, capture_id)
+                recovery = capture_context_projection(
+                    payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
+                state.pop("section_reads", None)  # partial reads of an older source are not current coverage
                 page_bytes, output_bytes = native_context_page_budget()
+                preparation = compact_execution_preparation_request(payload)
+                if preparation and _original_native_claim_source(root, session, capture_id, bind_unattached=True):
+                    preparation = compact_execution_preparation_request(payload, claim_source_sha256=capture_id)
 
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=current_loopx_cli_argv())
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
-                        "total_bytes": Path(reference["path"]).stat().st_size}
+                        "total_bytes": Path(reference["path"]).stat().st_size,
+                        **({"execution_preparation": preparation} if preparation else {})}
                     state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
                         "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
                     _save(root, state)
@@ -548,36 +736,67 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 # or encoding can be interrupted. Never recover its predecessor.
                 publish_recovery(recovery)
                 recovery_committed = True
+                # Legacy direct native callers omitted the presentation option.
+                progressive = progressive_enabled is not False
+                presentation = progressive or selection_command_args_template is not None
                 try:
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
                         retained=request.get("retained"), continuity=request.get("continuity"),
-                        native_projection={
+                        include_initial_read_plan=include_initial_read_plan and progressive, native_projection={
                             "path": recovery["path"], "sha256": recovery["sha256"],
+                            "source_path": recovery["path"],
+                            **({"selection_command_args_template": selection_command_args_template}
+                                if selection_command_args_template is not None else {}),
+                            **({"captured_decision_path": captured_decision_path}
+                                if captured_decision_path is not None else {}),
+                            **({"progressive_enabled": False} if not progressive else {}),
                             "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                                 page_bytes=page_bytes, max_page_output_bytes=output_bytes)
                                 + " --select '<supporting_material_pointer>/sources'",
-                        })
-                except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
-                    return payload
-                if transaction["projected"]:
+                        } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
+                        observe_first_read=progressive)
+                except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+                    if captured_decision_path is not None and isinstance(payload.get("replan_read_path"), str):
+                        raise QuotaDecisionTransportError(
+                            "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."
+                        ) from exc
+                    return NativeContextPreparation(payload)
+                if presentation and transaction["projected"]:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                     publish_recovery(recovery)
-                result: dict[str, Any] = transaction["delivery"]
+                result: dict[str, Any] = transaction["delivery"] if presentation else transaction
+                read_sections = transaction["read_sections"] if progressive else {}
                 result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
                     result["baseline_reference"] = request["baseline_reference"]
                 if result.get("schema_version") == "context_delivery_v1":
                     state["recovery"]["target"] = result["target"]
                     state["recovery"]["continuity_basis"] = "captured_file"
-                    state["pending"].update(target=result["target"], ancestry=result["ancestry"])
+                    if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
+                        base = request["baseline_reference"]
+                        state["recovery"]["comparison_base"] = {
+                            "path": base["path"], "sha256": base["sha256"], "target": result["base"]}
+                    state["pending"].update(target=result["target"], ancestry=result["ancestry"],
+                        full_read_sections=read_sections,
+                        read_sections=read_sections if result["mode"] == "full" else {})
+                    if plan := transaction.get("observed_first_read"):
+                        from .native_first_read import observed_first_read_reference
+
+                        reference = observed_first_read_reference(directory, result["target"], recovery,
+                            transaction["context"], plan, transaction.get("initial_read_plan"))
+                        if reference is not None:
+                            state["pending"]["observed_first_read"] = reference
                     _save(root, state)
-                return result
+                read_plan = transaction.get("initial_read_plan")
+                if read_plan is not None:
+                    read_plan = {**read_plan, "capture": {key: recovery[key] for key in ("path", "sha256")}}
+                return NativeContextPreparation(result, read_plan)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 if not recovery_committed:
                     _discard_recovery(root)
-                return payload
+                return NativeContextPreparation(payload)
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
         # No safe fallback if the old selector cannot be invalidated under lock.
         raise QuotaDecisionTransportError(

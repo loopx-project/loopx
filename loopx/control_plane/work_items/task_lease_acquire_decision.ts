@@ -1,3 +1,5 @@
+import {canonicalWriteScope, characterClassEnd} from "./write_scope_codec.ts";
+export {canonicalWriteScope, TODO_WRITE_SCOPE_MAX_CHARS} from "./write_scope_codec.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {leaseWorkspace, sameLeaseWorkspace, sameLeaseCheckout, type LeaseWorkspace} from "./task_lease_workspace.ts";
 /** Shared acquire/reclaim admission. IO and durable receipts belong to callers. */
@@ -10,7 +12,6 @@ import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection, repositoryScopesMayOverlap} from "./task_lease_repository.ts";
 
-export const TODO_WRITE_SCOPE_MAX_CHARS = 160;
 
 export interface AcquireDecisionLease {
   present: boolean;
@@ -66,52 +67,6 @@ function stringValue(value: unknown, label: string): string {
     throw new EffectRuntimeRequestError(`${label} must be a string`);
   }
   return value;
-}
-
-function characterClassEnd(pattern: string, start: number): number {
-  let end = start + 1;
-  if (pattern[end] === "!") end += 1;
-  if (pattern[end] === "]") end += 1;
-  return pattern.indexOf("]", end);
-}
-
-/**
- * Canonicalize one repository-relative scope without resolving it against a
- * host filesystem. Glob character classes retain their own slash semantics.
- */
-export function canonicalWriteScope(value: string): string | null {
-  const scope = value.trim();
-  if (
-    scope.length === 0 || scope.length > TODO_WRITE_SCOPE_MAX_CHARS ||
-    scope.startsWith("/") || scope.startsWith("~") || scope.includes("\\") ||
-    /[\s<>]/u.test(scope)
-  ) {
-    return null;
-  }
-  const parts: string[] = [];
-  let start = 0;
-  for (let index = 0; index < scope.length; index += 1) {
-    if (scope[index] === "[") {
-      const closing = characterClassEnd(scope, index);
-      if (closing >= 0) {
-        index = closing;
-        continue;
-      }
-    }
-    if (scope[index] !== "/") continue;
-    parts.push(scope.slice(start, index));
-    start = index + 1;
-  }
-  parts.push(scope.slice(start));
-  const trailingSlash = scope.endsWith("/");
-  const canonical: string[] = [];
-  for (const part of parts) {
-    if (part.length === 0 || part === ".") continue;
-    if (part === "..") return null;
-    canonical.push(part);
-  }
-  if (canonical.length === 0) return trailingSlash ? "./" : null;
-  return `${canonical.join("/")}${trailingSlash ? "/" : ""}`;
 }
 
 /**
@@ -180,14 +135,14 @@ type GlobToken =
   | {kind: "literal"; folded: string}
   | {kind: "star"}
   | {kind: "question"}
-  | {kind: "class"; body: string; negated: boolean};
+  | {kind: "class"; body: string; negated: boolean; members?: CharacterClass};
 
-function globTokens(pattern: string): GlobToken[] {
+function globTokens(pattern: string, fold = true): GlobToken[] {
   const tokens: GlobToken[] = [];
   let literal = "";
   const flushLiteral = () => {
     if (literal.length === 0) return;
-    tokens.push({kind: "literal", folded: caseFold(literal)});
+    tokens.push({kind: "literal", folded: fold ? caseFold(literal) : literal});
     literal = "";
   };
   for (let index = 0; index < pattern.length; index += 1) {
@@ -207,9 +162,10 @@ function globTokens(pattern: string): GlobToken[] {
       if (end >= 0) {
         flushLiteral();
         let body = pattern.slice(index + 1, end);
+        const normalized = fold ? {} : fnmatchCharacterClass(body);
         const negated = body.startsWith("!");
         if (negated) body = body.slice(1);
-        tokens.push({kind: "class", body, negated});
+        tokens.push({kind: "class", body, negated, ...normalized});
         index = end;
         continue;
       }
@@ -224,6 +180,44 @@ type CharacterClass = {
   literals: readonly string[];
   ranges: readonly (readonly [number, number])[];
 };
+
+/** Python fnmatch discards reversed ranges before interpreting a leading !.
+ * Keep chunk-internal hyphens literal; only chunk boundaries denote ranges.
+ * Folded lease overlap retains its separate, existing class interpretation.
+ */
+function fnmatchCharacterClass(body: string): {members: CharacterClass; negated: boolean} {
+  const symbols = [...body], chunks: string[][] = [];
+  let start = 0, search = symbols[0] === "!" ? 2 : 1;
+  for (let dash = symbols.indexOf("-", search); dash >= 0; dash = symbols.indexOf("-", search)) {
+    chunks.push(symbols.slice(start, dash));
+    start = dash + 1;
+    search = dash + 3;
+  }
+  if (start < symbols.length) chunks.push(symbols.slice(start));
+  else if (chunks.length) chunks[chunks.length - 1].push("-");
+  for (let index = chunks.length - 1; index > 0; index -= 1) {
+    const left = chunks[index - 1], right = chunks[index];
+    if (left.at(-1)!.codePointAt(0)! > right[0].codePointAt(0)!) {
+      chunks[index - 1] = [...left.slice(0, -1), ...right.slice(1)];
+      chunks.splice(index, 1);
+    }
+  }
+  const negated = chunks[0]?.[0] === "!";
+  if (negated) chunks[0].shift();
+  if (chunks.length > 1 && chunks[0].length === 0) {
+    // Removing ! can leave a range separator at the start of the class.
+    // Python treats that leading hyphen as a literal, not a missing endpoint.
+    chunks.shift();
+    chunks[0].unshift("-");
+  }
+  const literals: string[] = [], ranges: Array<readonly [number, number]> = [];
+  for (const [index, chunk] of chunks.entries()) {
+    literals.push(...chunk.slice(index === 0 ? 0 : 1,
+      index === chunks.length - 1 ? chunk.length : -1));
+    if (index > 0) ranges.push([chunks[index - 1].at(-1)!.codePointAt(0)!, chunk[0].codePointAt(0)!]);
+  }
+  return {members: {literals, ranges}, negated};
+}
 
 /** Class members are code points, and a range keeps its original interval bounds. */
 function characterClass(body: string): CharacterClass {
@@ -372,9 +366,9 @@ function classHasMatch(body: string, negated: boolean): boolean {
  * No multi-symbol character fold crosses that slash, so the existing character
  * transitions also decide prefix reachability without splitting a folded atom.
  */
-function fnmatchcase(value: string, pattern: string, descendants = false): boolean {
-  const symbols = [...caseFold(value)];
-  const tokens = globTokens(pattern);
+function fnmatchcase(value: string, pattern: string, descendants = false, fold = true): boolean {
+  const symbols = [...(fold ? caseFold(value) : value)];
+  const tokens = globTokens(pattern, fold);
   const suffixPossible: boolean[] = [];
   if (descendants) {
     suffixPossible[tokens.length] = true;
@@ -402,12 +396,13 @@ function fnmatchcase(value: string, pattern: string, descendants = false): boole
       } else if (valueIndex === symbols.length) {
         result = false;
       } else if (token.kind === "question") {
-        result = singleCharacterMatchLengths(symbols, valueIndex)
+        result = (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1])
           .some((length) => match(valueIndex + length, tokenIndex + 1));
       } else if (token.kind === "class") {
-        const lengths = classMatchLengths(token.body, symbols, valueIndex);
+        const lengths = fold ? classMatchLengths(token.body, symbols, valueIndex)
+          : classContains(token.members ?? characterClass(token.body), symbols[valueIndex]) ? [1] : [];
         result = token.negated
-          ? singleCharacterMatchLengths(symbols, valueIndex).some((length) =>
+          ? (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1]).some((length) =>
             !lengths.includes(length) && match(valueIndex + length, tokenIndex + 1))
           : lengths.some((length) => match(valueIndex + length, tokenIndex + 1));
       } else {
@@ -784,4 +779,108 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
     acquired_at: at, updated_at: at,
     expires_at: new Date(now.valueOf() + command.ttl_seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, "Z"),
     status: "active"};
+}
+
+/** Goal allow scopes use case-sensitive fnmatch, unlike folded lease overlap. */
+export function schedulingWriteScopeAllowed(required: string, allowed: readonly string[]): boolean {
+  if (!required || allowed.includes(required)) return true;
+  if (allowed.length === 0) return false;
+  // A literal requirement still uses the existing path matcher. A glob denotes
+  // all possible writes, including files that have not been created yet.
+  if (!/[?*[]/u.test(required)) return allowed.some(pattern => fnmatchcase(required, pattern, false, false));
+  return scopeLanguageCovered(required, allowed);
+}
+
+type ScopeInterval = readonly [number, number];
+type ScopeTransition = readonly ScopeInterval[] | null;
+
+/** Compile case-sensitive fnmatch tokens to an epsilon-NFA. null is a star. */
+function scopeTransitions(pattern: string): ScopeTransition[] {
+  return globTokens(pattern, false).flatMap((token): ScopeTransition[] => {
+    if (token.kind === "star") return [null];
+    if (token.kind === "question") return [[[0, 0x10ffff]]];
+    if (token.kind === "literal") return [...token.folded].map(character => {
+      const code = character.codePointAt(0)!;
+      return [[code, code]];
+    });
+    const members = token.members ?? characterClass(token.body);
+    const ranges: ScopeInterval[] = [...members.ranges,
+      ...members.literals.map(character => [character.codePointAt(0)!, character.codePointAt(0)!] as const)]
+      .filter(([low, high]) => low <= high).sort(([a], [b]) => a - b);
+    if (!token.negated) return [ranges];
+    const complement: ScopeInterval[] = [];
+    let start = 0;
+    for (const [low, high] of ranges) {
+      if (start < low) complement.push([start, low - 1]);
+      start = Math.max(start, high + 1);
+    }
+    if (start <= 0x10ffff) complement.push([start, 0x10ffff]);
+    return [complement];
+  });
+}
+
+/** Search required × complement(union(grants)) for a counterexample path.
+ * Alphabet intervals make wide/negated Unicode classes exact without scanning
+ * characters or the filesystem. Each grant has its own accepting state.
+ */
+function scopeLanguageCovered(required: string, allowed: readonly string[]): boolean {
+  const tokens = scopeTransitions(required);
+  const requiredEnd = tokens.length;
+  tokens.push([]); // accepting states have no outgoing transition
+  const starts: number[] = [], grantEnds = new Set<number>();
+  for (const pattern of new Set(allowed)) {
+    starts.push(tokens.length);
+    tokens.push(...scopeTransitions(pattern));
+    grantEnds.add(tokens.length);
+    tokens.push([]);
+  }
+  const boundaries = new Set([0, 0x110000]);
+  for (const ranges of tokens) for (const [low, high] of ranges ?? []) {
+    boundaries.add(low);
+    boundaries.add(high + 1);
+  }
+  const alphabet = [...boundaries].filter(code => code < 0x110000).sort((a, b) => a - b);
+  const closure = (positions: readonly number[]): number[] => {
+    const result = new Set(positions);
+    for (const position of result) if (tokens[position] === null) result.add(position + 1);
+    return [...result].sort((a, b) => a - b);
+  };
+  const step = (positions: readonly number[], code: number): number[] => closure(positions.flatMap(position => {
+    const ranges = tokens[position];
+    if (ranges === null) return [position];
+    return ranges.some(([low, high]) => low <= code && code <= high) ? [position + 1] : [];
+  }));
+  const initial: [number[], number[]] = [closure([0]), closure(starts)];
+  const key = (left: number[], right: number[]) => `${left.join(",")}|${right.join(",")}`;
+  const queue = [initial], seen = new Set([key(...initial)]);
+  // Subset construction can be exponential. Unproven coverage must never grant
+  // authority; callers can narrow pathological declarations to concrete scopes.
+  let remaining = 100_000;
+  for (let index = 0; index < queue.length; index += 1) {
+    const [left, right] = queue[index];
+    if (left.includes(requiredEnd) && !right.some(position => grantEnds.has(position))) return false;
+    for (const code of alphabet) {
+      if (--remaining < 0) return false;
+      const nextLeft = step(left, code);
+      if (nextLeft.length === 0) continue;
+      const nextRight = step(right, code), nextKey = key(nextLeft, nextRight);
+      if (!seen.has(nextKey)) {
+        if (seen.size >= 4096) return false;
+        seen.add(nextKey);
+        queue.push([nextLeft, nextRight]);
+      }
+    }
+  }
+  return true;
+}
+
+/** Batch coverage checks through the scope owner used by admission and hints. */
+export function evaluateWriteScopeCoverage(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "write-scope coverage");
+  if (!Array.isArray(input.checks)) throw new EffectRuntimeRequestError("checks must be an array");
+  return {covered: input.checks.map((raw, index) => {
+    const check = requireJsonObject(raw, `checks[${index}]`);
+    return schedulingWriteScopeAllowed(stringValue(check.required, "required"),
+      decisionStringArray(check.allowed, "allowed"));
+  })};
 }

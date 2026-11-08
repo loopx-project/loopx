@@ -131,17 +131,31 @@ def assert_registry_boundary_degrades_without_git(root: Path, runtime: Path) -> 
     no_git_registry = root / "no-git-project" / ".loopx" / "registry.json"
     write_json(no_git_registry, registry_payload(no_git_registry.parent.parent, runtime))
     original_run = registry_module.subprocess.run
+    original_popen = registry_module.subprocess.Popen
+
+    def reject_git(argv: Any) -> None:
+        if isinstance(argv, list) and argv and argv[0] == "git":
+            raise FileNotFoundError("git")
 
     def run_without_git(command: Any, *args: Any, **kwargs: Any) -> Any:
-        if isinstance(command, list) and command and command[0] == "git":
-            raise FileNotFoundError("git")
+        reject_git(command)
         return original_run(command, *args, **kwargs)
 
+    def popen_without_git(command: Any, *args: Any, **kwargs: Any) -> Any:
+        reject_git(command)
+        return original_popen(command, *args, **kwargs)
+
+    # The probe reaches Git through both seams: subprocess.run for the short
+    # queries and subprocess.Popen (#8115) for the tree-killable probe. A
+    # no-git fixture that patches only one of them silently reports a healthy
+    # git.available, so the fail-closed branch never runs.
     registry_module.subprocess.run = run_without_git
+    registry_module.subprocess.Popen = popen_without_git
     try:
         payload = inspect_registry_boundary(no_git_registry)
     finally:
         registry_module.subprocess.run = original_run
+        registry_module.subprocess.Popen = original_popen
 
     assert payload["ok"] is True, payload
     assert payload["classification"] == "project_local_private_registry", payload

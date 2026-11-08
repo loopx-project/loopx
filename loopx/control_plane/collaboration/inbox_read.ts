@@ -55,11 +55,21 @@ function readRecord(path: string): JsonObject {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) fail("invalid manager context record");
-    if (stat.size > 128_000) fail("manager context record too large");
-    const buffer = Buffer.alloc(128_001);
+    const limit = 128_000;
+    if (stat.size > limit) fail("manager context record too large");
+    // Most receipts are small. Read one byte past the observed size so an
+    // in-place append still gets the same bounded read through EOF.
+    let buffer = Buffer.alloc(stat.size + 1);
     let size = 0, count: number;
-    while (size < buffer.length && (count = readSync(fd, buffer, size, buffer.length - size, null)) > 0) size += count;
-    if (size > 128_000) fail("manager context record too large");
+    while ((count = readSync(fd, buffer, size, buffer.length - size, null)) > 0) {
+      size += count;
+      if (size > limit) fail("manager context record too large");
+      if (size === buffer.length) {
+        const expanded = Buffer.alloc(limit + 1);
+        buffer.copy(expanded);
+        buffer = expanded;
+      }
+    }
     const bytes = buffer.subarray(0, size);
     let parsed: unknown;
     try {
@@ -148,7 +158,7 @@ function resultObservation(key: string, reply: JsonObject): JsonObject {
   if (/[\uD800-\uDFFF]/u.test(text)) fail("invalid reply text encoding");
   return {key, value: Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
     "decision", "result_key", "previous_result_key", "update_id", "attachments", "request_revision",
-    "request_revision_digest", "recipient", "requester", "remaining_work"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
+    "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
   text_chars: [...text].length, text_sha256: createHash("sha256").update(text).digest("hex")};
 }
 function receiptState(root: string, row: JsonObject): JsonObject {

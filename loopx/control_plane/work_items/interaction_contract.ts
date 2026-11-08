@@ -13,13 +13,15 @@ import {
   optionalNonEmptyString,
   jsonObject,
 } from "../runtime_decode.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS, AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
-import { pendingAutomaticResumeCondition } from "../goals/vision_wait_coverage.ts";
+import { pendingAutomaticResumeCondition } from "../todos/automatic_resume.ts";
 import {compactTodoContextSource} from "../quota/context_delivery.ts";
+import {compactPythonWhitespace} from "../coordination/python_whitespace.ts";
 
 function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
@@ -33,22 +35,24 @@ function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): Js
 }
 
 /** Share the resume owner's source proof; a Turn binding retains supervision. */
-function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
+function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject | null): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
     !("settlement_identity" in receipt) && !("pending_action_selection" in receipt));
+  if (!unbound || typeof request.agent_id !== "string" || !request.agent_id) return null;
+  if (!wait) {
+    const scoped = jsonObject(request.scope_wait_todo);
+    return scoped ? pendingAutomaticResumeCondition(scoped, request.agent_id) : null;
+  }
   const count = wait.waiting_todo_count;
   const complete = typeof count === "number" && Number.isSafeInteger(count) && count > 0 &&
     (wait.pending_resume_count === undefined ? count === 1 : wait.pending_resume_count === count);
-  if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
-      wait.agent_id === request.agent_id && complete) {
-    return pendingAutomaticResumeCondition({todo_id: wait.selected_todo_id,
-      status: wait.selected_todo_status, claimed_by: wait.selected_todo_claimed_by,
-      resume_when: wait.resume_when, resume_monitor_generation: wait.resume_monitor_generation,
-      resume_condition: wait.resume_condition}, request.agent_id);
-  }
-  return null;
+  if (!complete || wait.agent_id !== request.agent_id) return null;
+  return pendingAutomaticResumeCondition({todo_id: wait.selected_todo_id,
+    status: wait.selected_todo_status, claimed_by: wait.selected_todo_claimed_by,
+    resume_when: wait.resume_when, resume_monitor_generation: wait.resume_monitor_generation,
+    resume_condition: wait.resume_condition}, request.agent_id);
 }
 
 /** A proven pending automatic successor needs only fresh source rechecks.
@@ -432,6 +436,10 @@ export function projectInteractionExecution(value: unknown): InteractionExecutio
     mode = "terminal_no_followup";
   } else if (action === EffectiveAction.PEER_COORDINATION_BLOCKED) {
     mode = action;
+  } else if (scopedFallback && action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    // The fallback proves gate independence, not permission to edit here.
+    // Keep the selected repair and its canonical delivery boundary visible.
+    mode = action;
   } else if (scopedFallback) {
     mode = "scoped_user_gate_fallback";
   } else if (notificationSuppressed) {
@@ -599,13 +607,13 @@ export function projectSchedulerArbitration(value: unknown): JsonObject {
     disposition === "monitor_wait" && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP;
   const condition = !errors.length && waiting &&
     !facts.must_attempt && !facts.user_required && facts.quiet_noop_allowed &&
-    !facts.spend_allowed_now && !facts.spend_after_validation && wait
+    !facts.spend_allowed_now && !facts.spend_after_validation
     ? pendingAutomaticSuccessor(request, wait) : null;
   // The resume-condition owner has verified both timestamps and a future target.
   // This private duration bounds host rechecks; it grants no execution/spend.
-  const scheduled = disposition === "agent_scope_wait" && condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(
-    (Date.parse(String(condition.scheduled_for)) - Date.parse(String(condition.evaluated_at))) / 1000,
-  )} : {};
+  const scheduled = condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(Number(
+    parseTodoTimestampMicros(String(condition.scheduled_for))! - parseTodoTimestampMicros(String(condition.evaluated_at))!
+  ) / 1_000_000)} : {};
   const dependency = condition && ["todo_done", "monitor_changed"].includes(String(condition.kind))
     ? {pending_dependency_wait: true} : {};
   return {mode, errors: [...new Set(errors)],
@@ -731,6 +739,28 @@ function readArgument(value: unknown, label: string): string | null {
   return text;
 }
 
+/** Current executable obligations must not disappear during projection.
+ * Historical readers keep their original permissive codec; this validates
+ * the complete-source boundary without treating a pending read as fulfilled.
+ */
+export function assertInteractionRequiredReads(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new EffectRuntimeRequestError("required reads must be an array");
+  for (const raw of value) {
+    const read = requireJsonObject(raw, "required read");
+    // Complete sources also carry prose-only obligations. Keep their original
+    // instructions; only explicit executable coordinates require a command.
+    if (!Object.hasOwn(read, "command") && !Object.hasOwn(read, "ordering")) continue;
+    requireNonEmptyString(read.command, "required read command");
+    readArgument(read.command, "required read command");
+    // Reuse the existing pre-work ordering. An omitted historical coordinate
+    // remains compatible; a new explicit execution order is not optional data.
+    if (read.ordering !== undefined) {
+      requireStringLiteral(read.ordering, ["before_work"], "required read ordering");
+    }
+  }
+}
+
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -757,8 +787,9 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
 
 // These are source-owned obligations; native material projection replaces only
 // this exact generated clause, preserving other independently applicable reads.
-export const FULL_OUTCOME_READ_GUIDANCE = "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
-export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+const OUTCOME_MAINTENANCE_GUIDANCE = "When a direct user correction changes what counts as success, persist it in the matching outcome requirements before dependent work; chat, peer acknowledgements and Vision alone do not update acceptance. Use goal-acceptance refine and its complete readback. Revise the Goal objective through its existing owner route only when the overall purpose changes. Preserve unaffected requirements, permissions and stops; explicitly reconcile conflicting retained requirements rather than declaring both satisfied. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+export const FULL_OUTCOME_READ_GUIDANCE = "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. " + OUTCOME_MAINTENANCE_GUIDANCE;
+export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. " + OUTCOME_MAINTENANCE_GUIDANCE;
 
 /** Generate the shared pre-work reads after final admission. Hosts consume this
  * list; transport projections must not independently infer requirements.
@@ -831,6 +862,7 @@ export function planInteractionWorkContext(request: JsonObject): JsonObject {
       && packet.effective_action !== EffectiveAction.HEARTBEAT_SETTLED_SKIP};
 }
 
+
 export function assertGoalContextDelivered(channel: JsonObject): void {
   const reads = Array.isArray(channel.required_reads) ? channel.required_reads : [];
   if (reads.some(read => jsonObject(read)?.source === "goal_state")) {
@@ -849,8 +881,87 @@ export function assertGoalContextDelivered(channel: JsonObject): void {
   }
 }
 
-/** Deliver full registered sources once. Ordinary mixed Goals retain progressive
- * reads; native delivery can require the complete original. */
+async function readSelectedTodoContext(source: JsonObject, todoId: unknown): Promise<JsonObject> {
+  if (typeof todoId !== "string" || !todoId) return {error_code: "context_source_unavailable"};
+  const {readCanonicalSnapshot, CANONICAL_SNAPSHOT_PAGE_REQUEST} =
+    await import("../coordination/canonical_snapshot_page.ts");
+  const {normalizedTodoTextRevision} = await import("../todos/read_codec.ts");
+  const matches: JsonObject[] = [];
+  let after: unknown = null;
+  let page: JsonObject;
+  do {
+    page = await readCanonicalSnapshot({schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST,
+      runtime_root: requireNonEmptyString(source.runtime_root, "runtime_root"),
+      goal_id: requireNonEmptyString(source.goal_id, "goal_id"),
+      include_leases: false, projection_readback: null, after});
+    if (page.status !== "page" || !Array.isArray(page.todos)) return {error_code: "context_source_unavailable"};
+    matches.push(...(page.todos as JsonObject[]).filter(todo =>
+      todo.todo_id === todoId && todo.archive_state !== "archive"));
+    after = page.next;
+  } while (after !== null);
+  const todo = matches.length === 1 ? {...matches[0]} : null;
+  if (todo !== null) {
+    if (!Object.hasOwn(todo, "status")) todo.status = todo.done === true ? "done" : "open";
+    if (typeof todo.text === "string") {
+      const revision = normalizedTodoTextRevision(compactPythonWhitespace(todo.text));
+      if (revision) todo.content_revision = revision;
+    }
+  }
+  return {content: {ok: true, matched: matches.length === 1, ambiguous: matches.length > 1, todo,
+    source: page.source_authority,
+    authority_read: {source_authority: page.source_authority,
+      provider_revision: (page.snapshot as JsonObject).provider_revision,
+      decision_read_from_provider: true, legacy_fallback_used: false}}};
+}
+
+export async function readAndProjectInteractionWorkContext(request: JsonObject): Promise<JsonObject> {
+  if (request.source_context === undefined) return projectInteractionWorkContext(request);
+  if (!Array.isArray(request.required_reads) || !Array.isArray(request.source_results)) {
+    throw new EffectRuntimeRequestError("context reads and source results must be arrays");
+  }
+  const reads = request.required_reads.map(value => requireJsonObject(value, "required read"))
+    .filter(read => read.source === "selected_todo");
+  if (reads.length === 0) return projectInteractionWorkContext(request);
+  const source = requireJsonObject(request.source_context, "work context source");
+  const selected = jsonObject(request.selected_todo);
+  const observed = await readSelectedTodoContext(source, selected?.todo_id);
+  return projectInteractionWorkContext({...request, source_results: [
+    ...request.source_results, ...reads.map(read => ({command: read.command, ...observed})),
+  ]});
+}
+
+/** Completion binds to the admitted body, including whitespace, never a live
+ * reread or display prefix. Both complete contracts and historical journals
+ * use this resolver; absence of the old witness retains receipt recovery. */
+export function capturedTodoTextSha256(
+  selected: JsonObject, contextValue: unknown, recommendedAction: unknown, todoId: unknown,
+): string | null {
+  if (!Object.hasOwn(selected, "text_source_verified")) return null;
+  if (selected.text_source_verified !== true || selected.todo_id !== todoId) {
+    throw new EffectRuntimeRequestError("Turn task source does not match its selected Todo");
+  }
+  const context = contextValue == null ? {} : jsonObject(contextValue);
+  if (context === null || (context.sources !== undefined && !Array.isArray(context.sources))) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  const records = (Array.isArray(context.sources) ? context.sources : [])
+    .map(value => jsonObject(value)).filter(source => source?.source === "selected_todo")
+    .map(source => jsonObject(jsonObject(source!.content)?.todo))
+    .filter(record => record?.todo_id === todoId && typeof record?.text === "string");
+  if (records.length > 1) throw new EffectRuntimeRequestError("Turn task source is ambiguous");
+  let text = records.length ? records[0]!.text : undefined;
+  if (text === undefined && (!Object.keys(context).length || context.selected_todo_ref === "selected_todo")) {
+    text = selected.text;
+    if (text == null && selected.text_ref === "action.recommended_action") text = recommendedAction;
+  }
+  if (typeof text !== "string" || !text) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Deliver full registered sources once. Unowned mixed Goal documents remain
+ * progressive reads; failed/changed sources forbid dependent work. */
 export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   if (request.require_full_goal_source !== undefined && typeof request.require_full_goal_source !== "boolean") {
     throw new EffectRuntimeRequestError("Goal source delivery requirement must be boolean");

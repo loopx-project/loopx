@@ -185,7 +185,6 @@ def assert_decisions(provider: str) -> None:
         assert approve["dreaming_decision"]["todo_added"] is True, approve
         state_after_approve = state_path.read_text(encoding="utf-8")
         assert "[P1] Implement the approved dreaming follow-up" in state_after_approve
-        assert "dreaming_fixture_approve" in state_after_approve
         assert approve["side_effects"]["active_state_mutated"] is True, approve
         assert approve["side_effects"]["runtime_history_appended"] is True, approve
         assert approve["side_effects"]["quota_spent"] is False, approve
@@ -197,6 +196,9 @@ def assert_decisions(provider: str) -> None:
         promoted = next(row for row in approved['todos'] if row['todo_id'] == todo_id)
         assert promoted['text'] == '[P1] Implement the approved dreaming follow-up as normal delivery.'
         assert promoted['status'] == 'open' and promoted['task_class'] == 'advancement_task'
+        assert promoted['evidence'] == 'dreaming_proposal:dreaming_fixture_approve'
+        decision_record = json.loads(index_path.read_text(encoding="utf-8").splitlines()[-1])
+        assert decision_record["dreaming_decision"] == approve["dreaming_decision"]
         original_ids = {row['todo_id'] for row in original['todos']}
         assert [row for row in approved['todos'] if row['todo_id'] in original_ids] == original['todos']
 

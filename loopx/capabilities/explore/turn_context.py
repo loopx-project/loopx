@@ -1,5 +1,7 @@
 """Read adapters for Explore's typed, bounded turn context and existing hooks."""
 
+from typing import Any, cast
+
 from collections.abc import Mapping
 from pathlib import Path
 import shlex
@@ -11,6 +13,7 @@ from ...control_plane.capability_hooks import (
     dispatch_interaction_projection_hooks,
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
+    TurnStartContextProjector,
     dispatch_turn_start_hooks,
 )
 from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
@@ -27,7 +30,7 @@ from .todo_branch_plan import (
 )
 
 
-def _policy(registry_path, goal_id, runtime_root=None):
+def _policy(registry_path: Path, goal_id: str, runtime_root: Path | None = None) -> tuple[dict[str, Any], Any, dict[str, Any]]:
     goal = load_goal_from_registry(registry_path, goal_id)
     if goal is None:
         raise ValueError(f"Goal {goal_id!r} is not registered")
@@ -45,8 +48,8 @@ def _policy(registry_path, goal_id, runtime_root=None):
     return goal, graph, gate
 
 
-def read_replan_explore_context(*, source_status: Mapping, goal_id: str, agent_id: str | None,
-                               review_pages=None):
+def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: str, agent_id: str | None,
+                               review_pages: Any = None) -> dict[str, Any] | None:
     """Outer read adapter; the replan owner invokes it only for enabled reviews.
 
     Unavailable IO is distinct from an empty or disabled evidence source. No
@@ -69,14 +72,16 @@ def explore_turn_context(
     result_limit: int = 3, result_offset: int = 0,
     result_node: str | None = None, result_revision: str | None = None,
     include_finding_digests: bool = False,
-    review_pages=None, todo_id: str | None = None,
-):
+    review_pages: Any = None, todo_id: str | None = None,
+) -> dict[str, Any]:
     if type(include_finding_digests) is not bool:
         raise ValueError("include_finding_digests must be an explicit boolean")
     goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     require_registered_agent_id(
         registry_path=registry_path, goal_id=goal_id, agent_id=agent_id
     )
+    from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+    yardstick = work_yardstick_enabled(goal, runtime_root)
     projection, plan, focus, todos = {}, {}, {}, {}
     page_tasks = {row["todo_id"] for row in review_pages
                   if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
@@ -90,7 +95,7 @@ def explore_turn_context(
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
         )
-    if gate["enabled"] or graph and (todo_id is not None or page_tasks):
+    if gate["enabled"] or graph and (todo_id is not None or page_tasks or yardstick):
         todos = list_goal_todos(
             registry_path=registry_path,
             goal_id=goal_id,
@@ -126,7 +131,7 @@ def explore_turn_context(
         "--format",
         "json",
     ]
-    return effect_runtime_result(
+    return cast(dict[str, Any], effect_runtime_result(
         "explore.turn_context",
         {
             "goal_id": goal_id,
@@ -135,6 +140,9 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
+            **({"yardstick_enabled": True, "work_todos": [{key: row[key] for key in (
+                "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
+                for row in todos.get("todos", [])]} if yardstick else {}),
             **focus,
             **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,
@@ -145,25 +153,57 @@ def explore_turn_context(
             **({"include_finding_digests": True} if include_finding_digests else {}),
             **({"review_pages": review_pages} if review_pages is not None else {}),
         },
-    )
+    ))
+
+
+def turn_context_projector(
+    *, registry_path: Path, runtime_root: Path, goal_id: str,
+    agent_id: str | None, todo_id: str | None = None,
+) -> TurnStartContextProjector | None:
+    """Bind an entrypoint's existing read request after governing selection.
+
+    Merely enabling a Goal or supplying unrelated hooks cannot request this
+    read. The decision owner supplies facts; this adapter changes no admission.
+    """
+    if not agent_id:
+        return None
+
+    def project(payload: Mapping[str, Any], dispatch: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+        selected = payload.get("selected_todo") or {}
+        focus = (selected.get("todo_id") if payload.get("normal_delivery_allowed") is True
+                 and channel.get("delivery_allowed") is True and selected.get("status") == "open" else None)
+        return extend_turn_start_dispatch(dict(dispatch or {}),
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, selected_todo_id=focus)
+
+    return project
 
 
 def extend_turn_start_dispatch(
-    dispatch,
+    dispatch: dict[str, Any] | None,
     *,
     registry_path: Path,
     runtime_root: Path,
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None = None,
-):
+    selected_todo_id: str | None = None,
+) -> dict[str, Any] | None:
     if not agent_id:
         return dispatch
-    _, graph, gate = _policy(registry_path, goal_id, runtime_root)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not graph and not gate["enabled"]:
         return dispatch
+    if selected_todo_id is not None:
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
 
-    def produce():
+        # This optional policy's current-work card follows the resolved work
+        # identity. With the policy off, preserve the caller's original scope.
+        if work_yardstick_enabled(goal, runtime_root):
+            todo_id = selected_todo_id
+
+    def produce() -> dict[str, Any]:
         return {
             "schema_version": TURN_START_HOOK_RESULT_SCHEMA_VERSION,
             "hook_id": "explore.turn_context",
@@ -225,7 +265,7 @@ def extend_turn_start_dispatch(
     return result
 
 
-def project_settlement_attachment(plan, *, registry_path: Path, runtime_root: Path | None = None):
+def project_settlement_attachment(plan: dict[str, Any], *, registry_path: Path, runtime_root: Path | None = None) -> dict[str, Any]:
     """Compose the existing optional result option into a Todo-bound CLI plan.
 
     Registry access and hook dispatch are adapters. The typed Explore owner
@@ -235,7 +275,7 @@ def project_settlement_attachment(plan, *, registry_path: Path, runtime_root: Pa
     if not identity.get("todo_id") or not identity.get("agent_id"):
         return plan
 
-    def produce():
+    def produce() -> dict[str, Any]:
         _, graph, _ = _policy(registry_path, identity["goal_id"], runtime_root)
         return {
             "schema_version": INTERACTION_PROJECTION_HOOK_RESULT_SCHEMA_VERSION,

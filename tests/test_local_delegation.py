@@ -35,13 +35,17 @@ from loopx.file_lock import lock_holder_host_label  # noqa: E402
 HOST = '''import json, os, sys, time
 from pathlib import Path
 from loopx.control_plane.turn_driver.host_candidate import build_result
+from loopx.control_plane.quota.turn_envelope import turn_host_lineage
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import return_result
+# The generic Host protocol sends UTF-8 over a pipe, whose Python 3.11
+# Windows default is a locale codec rather than the console's UTF-8 mode.
+sys.stdin.reconfigure(encoding='utf-8')
 request = json.load(sys.stdin)
 workspace = Path.cwd()
 root = Path(sys.argv[1])
-envelope = request['turn_envelope']
-actor = envelope['agent_id']
+identity = turn_host_lineage(request)
+actor = identity['agent_id']
 counter = workspace / 'host-invocations'
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
 if (root / 'ignore-term').exists():
@@ -55,8 +59,8 @@ if (root / 'hold').exists():
     while not (root / 'release').exists(): time.sleep(0.1)
 delegation = json.loads((workspace / 'DELEGATION.json').read_text())
 if not (root / 'skip-adoption').exists():
-    acknowledge(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
-    return_result(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
+    acknowledge(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
+    return_result(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
 print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.', 'work_evidence':['artifact:delegation-output'], 'validation_evidence':['check:independent-member-result']}, host_name='Fixture')))
 '''
 
@@ -84,7 +88,7 @@ def service(tmp_path, request, monkeypatch):
     config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [{
         "id": "analysis", "agent_id": "analyst", "todo_id": "todo_analyst-initial", "requesters": ["lead"],
         "workspace": str(root / "analyst" / "initial"), "timeout_seconds": 60, "output_refs": ["output.json"],
-        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-command-json",
+        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
                       json.dumps([sys.executable, str(host), str(root)])],
     }]}))
     return root, Delegations(root / "runtime", root / "registry.json", demo.GOAL, "lead", config)
@@ -95,6 +99,35 @@ def brief():
             "context": "Use the initial filing and preserve the period distinction.",
             "constraints": ["No external actions"], "inputs": [], "acceptance": ["Pinned task validation"],
             "return_requirement": "Return the independently checked artifact"}
+
+
+def test_fixture_host_revalidates_utf8_input_under_a_non_utf8_pipe(service):
+    """The fixture must reach task validation with the original UTF-8 identity."""
+    root, runner = service
+    host = root / "fixture-host.py"
+    # Model the Windows Python 3.11 pipe default without changing the parent
+    # transport or requiring a platform-dependent locale on the test runner.
+    host.write_text("import sys; sys.stdin.reconfigure(encoding='cp1252')\n"
+                    + host.read_text(encoding="utf-8"), encoding="utf-8")
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}", encoding="utf-8")
+    request = {**brief(), "context": "Read the synthetic résumé: 报告 € → evidence."}
+    runner.start("analysis", "analysis-1", request)
+    rejected = wait(runner)
+    assert rejected["status"] == "rejected", rejected
+    assert "task_failure" in rejected, rejected
+    assert rejected["task_failure"]["resume_mode"] == "revalidate_cached_result"
+    turn_key = rejected["task_failure"]["turn_key"]
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
+
+    output.write_bytes(saved)
+    runner.revalidate("analysis-1")
+    accepted = wait(runner)
+    assert accepted["status"] == "accepted", accepted
+    assert "task_failure" not in accepted
+    assert json.loads(runner.path("analysis-1").read_text())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -396,7 +429,12 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
                 assert json.loads(inventory.content[0].text)["projection_envelope"]["complete"]
-                assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
+                tools = (await session.list_tools()).tools
+                assert "stop_delegation" in {tool.name for tool in tools}
+                start = next(tool for tool in tools if tool.name == "start_delegation")
+                assert "complete goal, relevant corrections, intended reader, language and original result destination" in start.description
+                assert "negative results and unknowns" in start.description
+                assert "No worker is launched" not in start.description
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
                 assert not result.isError
@@ -1261,7 +1299,9 @@ def test_lost_turn_reply_with_damaged_history_never_restarts_host(service, monke
         path.write_text("{damaged", encoding="utf-8")
     else:
         damaged = json.loads(original)
-        damaged["plan"]["turn_envelope"]["agent_id"] = "foreign-agent"
+        assert damaged["plan"]["schema_version"] == "loopx_turn_plan_v1"
+        assert "turn_envelope" not in damaged["plan"]
+        damaged["plan"]["work_contract"]["agent_identity"]["agent_id"] = "foreign-agent"
         path.write_text(json.dumps(damaged), encoding="utf-8")
     monkeypatch.setattr(runner, "_record_turn_result", record)
     runner.execute("analysis-recovery")

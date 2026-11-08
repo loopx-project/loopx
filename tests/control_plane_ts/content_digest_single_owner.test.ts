@@ -86,6 +86,10 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "legacy patterns are carried by the contract record, not by this module",
   },
+  "control_plane/todos/quota_selection.ts": {
+    count: 1,
+    reason: "anchored wildcard matcher from a validated quota action pattern, not a digest matcher",
+  },
   "control_plane/todos/read_codec.ts": {
     count: 2,
     reason: "Todo reference boundaries and legacy task classification, not digest matchers",
@@ -153,6 +157,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/governed_capability.ts",
   "control_plane/presentation/action_review_plan.ts",
   "control_plane/presentation/goal_source_links.ts",
+  "control_plane/presentation/report_review.ts",
   "control_plane/quota/refresh_external_delivery.ts",
   "control_plane/quota/turn_envelope.ts",
   "control_plane/runtime/checkpoint_artifacts.ts",

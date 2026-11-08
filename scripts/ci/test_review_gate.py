@@ -127,7 +127,7 @@ class GateTests(unittest.TestCase):
 import assert from 'node:assert/strict';
 const script = JSON.parse(process.argv[1]);
 const execute = new (Object.getPrototypeOf(async function(){}).constructor)(
-  'github', 'context', 'core', 'setTimeout', script);
+  'github', 'context', 'core', 'setTimeout', 'Date', script);
 const pr = {state:'closed', closed_at:'2026-01-02T00:00:00Z',
   head:{repo:{id:7}, ref:'fix', label:'contributor:fix', sha:'head'}};
 const old = {id:1, status:'queued', head_repository:{id:7}, head_branch:'fix',
@@ -138,7 +138,9 @@ async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=f
                     eventSource=first.head, beforeForce=current,
                     beforeCancelOpen=open, beforeForceOpen=beforeCancelOpen,
                     refreshFailure=false}={}) {
-  const cancelled=[], forced=[], queries=[]; let reads=0;
+  const cancelled=[], forced=[], queries=[]; let reads=0, clock=0;
+  // Advancing the fake timer must also advance deadline-based readback.
+  class Clock extends Date {static now() {return clock;}}
   let branchScope=open, openReads=0;
   const github = {rest:{pulls:{get:async()=>({data:reads++ ? (reads > 2 ? beforeForce : current) : first}), list:'pulls'},
     actions:{listWorkflowRuns:'runs',
@@ -157,7 +159,7 @@ async function run({first=pr, current=first, open=[], runs=[old], ordinaryDone=f
       'POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel'); forced.push(p.run_id);}};
   await execute(github, {repo:{owner:'owner',repo:'repo'},payload:{number:17,action,
     before:eventBefore,after:eventAfter,pull_request:{head:{...eventSource,sha:eventHead}}}},
-    {info:()=>{}}, fn=>fn());
+    {info:()=>{}}, (fn, delay)=>{clock+=delay; fn();}, Clock);
   return {cancelled,forced,queries};
 }
 const selected = await run({runs:[old,
@@ -232,7 +234,8 @@ await assert.rejects(run({stuck:true}),/has not completed/);
 await assert.rejects(run({failure:true}),/provider failure/);
 await assert.rejects(run({first:{...pr,head:{...pr.head,repo:null}}}),/no verifiable source/);
 """
-        subprocess.run(["node", "--input-type=module", "-e", harness, json.dumps(script)], check=True)
+        subprocess.run(["node", "--input-type=module", "-e", harness, json.dumps(script)],
+                       check=True, timeout=15)
 
     def test_summary_runs_the_real_renderer_without_changing_the_gate_verdict(self):
         root = Path(__file__).resolve().parents[2]

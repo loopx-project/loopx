@@ -182,3 +182,42 @@ node --experimental-strip-types --test \
 The suite exercises the real CLI and missing versus zero scores, replacements,
 unique-case incidents, incompatible normalization, known-invalid exclusions and
 qualification contradictions, configuration heterogeneity and unknown fields.
+
+Append `--score-curves` to also write a self-contained local HTML report.
+Choose a case and normalization by its section. The default chart shows the
+running best from the first observed score, with a new step on improvement.
+Expand **All score observations** for the full range, including unsuccessful
+iterations. Each chart uses its own labeled score axis. Lines end at observed
+samples. The figure is descriptive and includes provisional runs.
+
+For fixed-duration comparisons, set `duration_policy.target_ms` and list the arm IDs
+permitted to finish a verified Goal early in `duration_policy.allow_goal_completion`.
+For each selected logical run, supply `active_intervals` with observed solver start
+and end times in Unix milliseconds and an `evidence_ref` per interval. Include only
+verified continuations of that run. Omit the field when coverage is unknown. An
+empty array explicitly records zero observed runtime. Overlapping intervals count
+once and downtime between intervals contributes zero.
+
+The JSON and Markdown reports cover every selected case and arm. A short terminal
+run enters `needs_makeup`, even with a valid score or a successful process exit.
+Only a matching completed run with an audited normal end and a satisfied Goal
+can use the early-finish allowance. Incomplete and unverified durations exclude a
+case from the duration-qualified comparison. Retain raw results for diagnosis.
+
+An operator can explicitly set `duration_policy.makeup_tolerance_ms` when small
+terminal shortfalls do not warrant another run. It defaults to zero and must be
+a nonnegative safe integer smaller than `target_ms`. For example, a tolerance of
+`900000` waives at most fifteen minutes. After unioning the verified active
+intervals, a terminal run with a positive observed duration and a remaining gap
+at or below that tolerance is marked `within_tolerance`, rather than `covered`.
+The report retains the actual `active_ms`, `remaining_ms` and selected policy.
+Unknown duration still needs verification; short planned/running rows retain
+their status, and no runtime deadline or stopping rule changes.
+
+`within_tolerance` satisfies only the report's declared duration condition. It
+does not change run status, scores, integrity/countability, or matched-comparison
+eligibility. A cancelled result stays out of the descriptive comparison, and an
+uncountable score stays out of `qualified_common_n` even when its duration qualifies.
+The Markdown report labels the waiver and its threshold. Callers should use this
+same projection when selecting makeup work rather than rounding the raw duration
+or inventing a second threshold.

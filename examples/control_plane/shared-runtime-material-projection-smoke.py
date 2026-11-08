@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
+
 from loopx import dreaming  # noqa: E402
 from loopx import operator_gate as operator_gate_module  # noqa: E402
 from loopx import project_map  # noqa: E402
@@ -137,7 +139,8 @@ def run_cli(registry: Path, runtime: Path, *args: str, runtime_override: bool = 
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_RUNTIME_ROOT": str(runtime)},
     )
     assert result.returncode == expected_code, result.stdout + result.stderr
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def append_dreaming_proposal(runtime: Path) -> str:

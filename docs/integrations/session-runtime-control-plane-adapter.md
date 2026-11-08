@@ -618,6 +618,28 @@ composer, without recording an uncertain delivery for an attempt that was never
 dispatched. A genuinely uncertain request still retries its exact durable identity.
 This does not widen project grants or authorize another Session.
 
+Pending web inputs offer **Edit** and **Cancel queued message** in the queue's
+existing actions. Editing preserves attachments and the original text in the
+message's edit history. Cancellation retains the sent history and never calls
+the active Turn's interrupt operation. External, bound, collaboration and LoopX
+execution inputs continue through their original source entry.
+
+The existing paged history reader returns visible input and `queue_input_revision`
+from the same canonical user message, retaining original-source audience projection.
+`POST /api/chat/sessions/{session_id}/queue/{turn_id}/input` accepts an
+`action` (`edit` or `cancel`), `operation_id`, `expected_revision`, and text for
+an edit. The typed queue owner checks the revision and unclaimed Turn under the
+same Session/Turn fences as consumption and steering. A started Turn rejects a
+late change; an already applied operation replays its own receipt without
+changing newer input. A partially written operation reserves the item until its
+original identity finishes transcript/event publication. It cannot be steered
+or dispatched meanwhile. The browser retains unconfirmed operations and edit
+drafts per Session/Turn; **Check change** resolves the original operation rather
+than resending a message. A draft's revision remains fixed while editing, so a
+concurrent edit requires reconciliation instead of silently overwriting it.
+History reads show the confirmed edited text and a pre-start cancellation marker;
+Session metadata invalidates cached history without inventing worker activity.
+
 Queued acknowledgements do not show execution duration or completion. Short
 answers and steering instructions reconcile their canonical message identities
 and timestamps as well as long answers; an admission/history race cannot add

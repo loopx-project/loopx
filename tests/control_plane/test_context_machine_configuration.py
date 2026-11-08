@@ -12,7 +12,9 @@ from contextlib import redirect_stdout
 
 import pytest
 
-from loopx.capabilities.machine_configuration.context_delivery import CONTEXT_DELIVERY_MACHINE_SCHEMA
+from loopx.capabilities.machine_configuration.context_delivery import (
+    CONTEXT_DELIVERY_MACHINE_SCHEMA, INDEPENDENT_CONTEXT_SCHEMA,
+)
 from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
@@ -57,9 +59,12 @@ def test_rejected_context_snapshot_uses_private_generic_transport_without_native
         assert read_context_capture_file(result["path"], result["sha256"], private=True)[2] == value
         assert sorted(p.name for p in root.iterdir()) == sorted([path.parent.name, Path(other["path"]).parent.name])
 
-def configure(registry, runtime, root, mode):
+def configure(registry, runtime, root, mode, *, delta=None):
     config = root / "context-setting.json"
-    config.write_text(json.dumps({"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode}))
+    value = {"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode}
+    if delta is not None:
+        value.update(schema_version=INDEPENDENT_CONTEXT_SCHEMA, delta_delivery=delta)
+    config.write_text(json.dumps(value))
     args = ["--namespace", "context_delivery", "--config-json", str(config)]
     code, preview = _run_cli(registry, runtime, "machine-config", "preview", *args)
     if code:
@@ -74,9 +79,9 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert code == 0 and catalog["schema_version"] == "machine_configuration_catalog_v0", catalog
     contexts = [item for item in catalog["namespaces"] if item["namespace"] == "context_delivery"]
     assert len(contexts) == 1
-    assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
+    assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA, INDEPENDENT_CONTEXT_SCHEMA]
     assert contexts[0]["configuration_template"] == {
-        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on", "antigravity_mode": "on",
+        "schema_version": INDEPENDENT_CONTEXT_SCHEMA, "mode": "on", "delta_delivery": "auto",
     }
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not (runtime / "context-delivery").exists()
@@ -115,6 +120,33 @@ def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     code, result = configure(registry, runtime, tmp_path, invalid)
     assert code != 0 and not result["ok"]
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native session continuity requires POSIX")
+@pytest.mark.parametrize("mode", ["off", "on"])
+@pytest.mark.parametrize("delta", ["off", "auto"])
+def test_independent_machine_switches_and_explicit_cli_agree(tmp_path, monkeypatch, mode, delta):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    args = ["quota", "context-config", "--codex-app", "--goal-id", "fixture", "--agent-id", "worker"]
+    code, explicit = _run_cli(registry, runtime, *args, "--context-delivery", mode, "--delta-delivery", delta)
+    assert code == 0, explicit
+    assert configure(registry, runtime, tmp_path, mode, delta=delta)[1]["readback_verified"]
+    code, saved = _run_cli(registry, runtime, *args)
+    assert code == 0, saved
+    for result in (explicit, saved):
+        activation = result["context_delivery"]
+        assert activation["progressive_enabled"] is (mode == "on")
+        assert activation["enabled"] is (delta == "auto")
+        assert activation["delta_delivery"] == delta
+    if mode == "off" and delta == "auto":
+        command = shlex.split(explicit["native_config"]["hooks"]["SessionStart"][0]["hooks"][0]["command"])
+        assert command[command.index("--context-delivery") + 1] == "off"
+        assert command[command.index("--delta-delivery") + 1] == "auto"
+        assert command[command.index("--registry") + 1] == str(registry)
+        assert command[command.index("--runtime-root") + 1] == str(runtime)
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+        code, inherited = _run_cli(registry, runtime, *args)
+        assert code == 0 and not inherited["context_delivery"]["enabled"]
 
 
 def test_machine_on_preserves_existing_worker_environment_off(tmp_path, monkeypatch):
@@ -207,14 +239,16 @@ def test_native_options_share_registry_runtime_without_explicit_root(
 @pytest.mark.parametrize("host", [[], ["--runtime-profile", "codex_cli"],
     ["--codex-app", "--runtime-profile", "codex_app_heartbeat"],
     ["--host-surface", "codex_app"], ["--runtime-profile", "generic_cli"]])
-def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, monkeypatch, host):
+def test_inherited_progressive_does_not_invent_unknown_native_continuity(tmp_path, monkeypatch, host):
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     code, result = _run_cli(registry, runtime, "quota", "context-config", *host,
         "--goal-id", "fixture", "--agent-id", "worker")
-    assert code != 0 and not result["ok"], result
+    assert code == 0 and result["ok"], result
+    assert result["context_delivery"]["progressive_enabled"] is True
+    assert result["context_delivery"]["enabled"] is False and "native_config" not in result
     assert not (runtime / "context-delivery").exists() and not registry.exists()
     assert _spend_run_count(runtime) == 0
 
@@ -349,7 +383,7 @@ def test_bootstrap_reloads_machine_setting_and_preserves_explicit_off(tmp_path, 
     args = ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     code, enabled = _run_cli(registry, runtime, *args)
-    assert code == 0 and "--context-delivery on" in enabled["task_body"], enabled
+    assert code == 0 and "--context-delivery auto" in enabled["task_body"], enabled
     code, bootstrap = _run_cli(registry, runtime, *args, "--bootstrap")
     assert code == 0, bootstrap
     assert "--context-delivery" not in bootstrap["task_body"]

@@ -364,7 +364,12 @@ export const researchHistoryScenario = {
       assert.doesNotMatch(await native.locator('.research-native-scope').innerText(), /T00:00:00Z/);
       assert.equal(await native.locator('.research-native-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
-      assert.equal(await nativePage.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(), true, 'Measured progress remains readable before model analysis; the unknown analysis is contextual help');
+      const pendingScope = nativePage.locator('.research-progress-scope');
+      assert.equal(await pendingScope.innerText(), '尚无分析器判读', 'Prepared input counts cannot be mistaken for completed judgments');
+      const pendingHelp = nativePage.getByRole('button', {name: '所选范围尚未分析', exact: true});
+      await pendingHelp.focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /分析输入 · \d+ 个片段/);
+      await nativePage.keyboard.press('Escape');
       assert.equal(await nativePage.locator('.research-progress > header .context-help-trigger').count(), 1, 'Result state and interpretation share one heading help entry');
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
       await native.getByRole('button', {name: /首次提交.*查看原始证据/}).click();
@@ -745,7 +750,9 @@ export const researchHistoryScenario = {
       await synthesisOwner.close();
     }
     const capture = JSON.parse(await readFile(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json")));
-    let owner = await startHistoryOwner();
+    let owner = await startHistoryOwner([
+      "edgebench-research-history.json", "edgebench-graph-checkpoint-history.json", "edgebench-ad-checkpoint-history.json",
+    ].map(name => resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures", name)));
     let collisionOwner, emptyOwner, temporary;
     let context;
     const pages = [];
@@ -766,7 +773,12 @@ export const researchHistoryScenario = {
           if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
           const query = new URL(route.request().url()).searchParams;
           const language = query.get('output_language');
-          assert(['zh', 'en'].includes(language), 'Every analysis and original-citation read binds the interface language');
+          if (language === null && new URL(route.request().url()).pathname === '/api/chat/research-analysis') {
+            const original = analysisReadback(["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a");
+            original.pack.result = null; original.pack.job = null;
+            return route.fulfill({json: original});
+          }
+          assert(['zh', 'en'].includes(language), 'Language-scoped analysis and citation reads retain their requested language');
           if (new URL(route.request().url()).pathname.endsWith('/citation')) {
             if (holdCitation) {citationStarted(); await new Promise(resolve => {releaseCitation = resolve;});}
             if (failedCitation) return route.fulfill({status: 503, json: {error: 'Synthetic citation transport unavailable'}});
@@ -1512,10 +1524,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       const basis = progress.locator('.research-progress-basis');
       assert.equal(await basis.evaluate(e => e.open), false);
-      const improvement = progress.getByRole('region', {name: '已采用成果增量', exact: true});
+      const improvement = progress.getByRole('region', {name: '声明的保留增量', exact: true});
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '+4');
       await improvement.getByRole('button', {name: '成果增量说明', exact: true}).focus();
       await improvement.getByRole('tooltip').waitFor({state: 'visible'});
+      assert.match(await improvement.getByRole('tooltip').innerText(), /不证明实际文件采用/, 'Source-declared retention does not establish independent artifact adoption');
       await page.keyboard.press('Escape');
       await improvement.locator('summary').click();
       await improvement.getByRole('button', {name: '查看原文', exact: true}).click();
@@ -1667,6 +1680,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.getByRole("combobox").focus();
       await progress.getByRole("combobox").selectOption("c".repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
+      assert.match(await progress.locator('.research-progress-scope').innerText(), /1 个片段 · .*未校准/, 'Stored judgments retain their visible coverage and calibration boundary');
       assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.locator('.research-usage-heading').first().innerText(), /未采集|Not captured/);
@@ -1705,6 +1719,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert(await unfinishedHelp.evaluate(element => element === document.activeElement));
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
+      assert.equal(await progress.locator('.research-progress-scope').innerText(), '尚无分析器判读');
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
@@ -1722,12 +1737,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.getByRole('button', {name: '重试读取', exact: true}).click();
       await analysis.getByRole('alert').waitFor({state: 'hidden'});
       assert(await analysis.getByRole('button', {name: '分析所选范围', exact: true}).isEnabled(), 'A successful owner read restores the existing explicit analysis action');
+      assert.match(await analysis.locator('.analysis-scope').innerText(), /\d+ 个输入片段/);
       await analysis.press('Escape');
+      await analysis.waitFor({state: 'hidden'});
       await basis.locator(':scope > summary').click();
       assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'Native facts do not require an analyzer result');
       assert.match(await nativeResults.innerText(), /部分窗口 · 起点未知/);
       assert.match(await nativeResults.locator('[data-native-point="initial"]').innerText(), /未知/);
-      const nativeCitation = nativeResults.getByRole('button', {name: /原生保留结果.*查看原始证据/});
+      const nativeCitation = nativeResults.locator('[data-native-point="retained"]').getByRole('button');
       await nativeCitation.focus(); await nativeCitation.press('Enter');
       await citedOriginal.waitFor();
       await citedOriginal.press('Escape');
@@ -1752,6 +1769,7 @@ print(json.dumps([
           text: completeTask, explore_result_node_refs: ["question"]}]}));
       emptyOwner = await startHistoryOwner([emptyFixture, taskFixture]);
       const previousOwner = owner; owner = emptyOwner; await previousOwner.close();
+      analysisFixture = false;
       await page.reload({waitUntil: "networkidle"});
       await history.getByRole("status").filter({hasText: "0 / 0"}).waitFor();
       const emptyHistory = history.locator('.research-history-empty');
@@ -1759,7 +1777,15 @@ print(json.dumps([
       await emptyHistory.getByRole('button', {name: '查看研究模式', exact: true}).click();
       assert(await page.locator("[data-testid='goal-research-mode']").evaluate(element => element.contains(document.activeElement)),
         'The empty-state action focuses the existing research-mode control');
+
+      analysisFixture = true;
+      await page.reload({waitUntil: "networkidle"});
+      await progress.locator(':scope > header select').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+      await history.getByRole('status').filter({hasText: '0 / 0'}).waitFor();
+      assert.equal(await emptyHistory.count(), 0,
+        'Saved measurements remain readable without a redundant empty-history setup card');
+      assert.match(await history.locator('.research-history-coverage').innerText(), /这个 Goal 尚无研究历程/);
 
       comparisonFixture = true;
       await progress.locator(':scope > header select').selectOption('a'.repeat(64));

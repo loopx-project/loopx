@@ -9,7 +9,7 @@ import { workspaceAgentTodoFromItem } from "../src/features/personal-workspace/p
 import { ContextDrawer } from "../src/features/personal-workspace/context-drawer.tsx";
 import { WorkspaceI18nProvider, useWorkspaceI18n } from "../src/features/personal-workspace/i18n.tsx";
 import { ChatApiError } from "../src/data/chat.ts";
-import { todoCompletionPreviewFeedback } from "../src/features/personal-workspace/todo-completion-feedback.ts";
+import { completedActionFeedback, todoCompletionPreviewFeedback } from "../src/features/personal-workspace/todo-completion-feedback.ts";
 import { RunRow } from "../src/features/personal-workspace/cards/run-row.tsx";
 
 // A Goal's default executor is not evidence that a Todo has been claimed.
@@ -21,6 +21,17 @@ try {
     const render = (component, props) => renderToStaticMarkup(createElement(
       WorkspaceI18nProvider, null, createElement(component, props),
     ));
+    function CompletedFeedback({proposal}) {
+      return completedActionFeedback(proposal, useWorkspaceI18n().t);
+    }
+    const fullTask = "Review all evidence before external execution. ".repeat(50);
+    assert.equal(render(CompletedFeedback, {proposal: {actionKind: "todo.update", todoOperation: "complete", title: fullTask}}),
+      locale === "en" ? "Marked complete" : "已标记完成");
+    for (const proposal of [{actionKind: "todo.update", todoOperation: "cancel"},
+      {actionKind: "todo.create", todoOperation: "complete"}, {actionKind: "todo.update"}]) {
+      assert.ok(render(CompletedFeedback, {proposal: {...proposal, title: "complete"}}).includes("complete"),
+        "Only the typed completion operation changes result wording; titles never classify actions");
+    }
     const completionRequest = {actionKind: "todo.update", normalizedParameters: {operation: "complete"}};
     function CompletionFeedback({error, request}) {
       return todoCompletionPreviewFeedback(error, request, useWorkspaceI18n().t);

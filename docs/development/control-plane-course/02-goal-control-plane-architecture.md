@@ -241,83 +241,16 @@ issue body、raw check log、凭据或本地路径。GitHub 仍是权威来源�
 完整案例见 [Issue-Fix 能力](../../../loopx/capabilities/issue_fix/README.zh-CN.md) 和
 [State Kernel × Domain State 案例](../../../loopx/capabilities/issue_fix/docs/state-kernel-domain-state-case-study.zh-CN.md)。
 
-## Showcase B：Multi-Agent Auto Research
+## Showcase B：Multi-Agent 研究团队
 
-Auto Research 的产品承诺是：多个研究 Agent 围绕同一 research contract 持续提出假设、
-执行实验、评价证据并形成 promotion、retirement 或 retry 候选。研究树可以被投影出来，
-但不需要一个拥有整棵树的 coordinator agent。
+研究协作复用 Goal、Todo、claim、lease、证据与独立验收。角色只声明自己的研究工作与
+写入边界；创建任务或发送消息不等于启动 worker，也不授予实验、推广或发布权限。
 
-```mermaid
-flowchart LR
-  C["Research contract<br/>metric · baseline · protected scope"] --> H["Hypothesis todos"]
-  H --> Q["Per-agent quota + frontier"]
-  Q --> E["Isolated executor turn"]
-  E --> P["Typed evidence packet<br/>dev · holdout · boundary"]
-  P --> G["Evidence graph"]
-  G --> D["promotion / retirement / retry"]
-  D --> S["role-scoped successor todos"]
-  S --> Q
-```
-
-默认角色不是层级，而是写入不同 typed record 的 equal peers：
-
-| Role | 主要产物 | 不能做什么 |
-| --- | --- | --- |
-| Curator | research contract、metric、protected scope | 选择赢家或修改受保护 evaluator |
-| Hypothesis proposer | 有 grounding 和 todo lineage 的 hypothesis | 用同一材料同时声称独立 novelty |
-| Executor | 隔离实验、dev/holdout result、evidence packet | 自行 promotion 或隐藏失败尝试 |
-| Evaluator / promoter | promotion、retirement、retry candidate | 把 dev-only lift 当成最终证据 |
-| Product narrator | public-safe evidence graph 与案例叙事 | 发明指标或改写 source state |
-
-### 没有中央研究经理，研究怎样继续
-
-`run_auto_research_worker_loop()` 只轮询一组可见 lane。每个 worker turn 都重新读取当前
-agent 的 quota 和 research frontier，再执行一个被选中的 todo：
-
-```python
-for agent_id in agent_ids:
-    turn = run_auto_research_worker_turn(
-        goal_id=goal_id,
-        agent_id=agent_id,
-        ...,
-    )
-if no_lane_has_action:
-    stop_reason = "no_runnable_frontier"
-```
-
-真正的选择发生在 `load_auto_research_worker_frontier()`：它先调用
-`build_quota_should_run(..., agent_id=agent_id)`，再把 rollout evidence 投影成该 agent
-可见的 research frontier。worker 不拥有全局 executor queue，也不能因为看见一个假设就
-越过 claim 和 quota。
-
-另一端，`build_research_decision_candidates()` 根据 evidence graph 产生有限结果：
-
-| 证据状态 | 下一步 |
-| --- | --- |
-| dev 改善但缺少 holdout | 创建或暴露 holdout successor |
-| holdout 改善且 boundary clean | 进入 promotion review 或满足目标策略 |
-| negative / guardrail evidence | 形成 retirement candidate |
-| 尝试未计分但可恢复 | 保留 retry candidate 与 artifact ref |
-| 无 runnable frontier 且完成条件满足 | quiet completion |
-
-低层调用路径可以这样读：
-
-```text
-build_auto_research_preset_summary
-  -> role profiles + initial todos
-  -> run_auto_research_worker_loop
-  -> run_auto_research_worker_turn
-  -> build_auto_research_evidence_packet + rollout append
-  -> build_research_evidence_graph_from_rollout_events
-  -> build_research_decision_candidates
-  -> build_auto_research_completion_status
-  -> role-scoped successor / promotion gate / quiet completion
-```
-
-Auto Research 是建立在通用 multi-agent kernel 上的 thin preset：preset 提供角色、领域默认值
-和 successor hints；goal、todo、claim、quota、evidence、handoff 与完成语义仍由 Kernel
-拥有。更完整的角色合同见
-[Auto Research Lane Contract](../../reference/protocols/auto-research-lane-contract-v1.md)。
+当前可运行示例见
+[managed research team](../../../examples/managed-research-team/README.md)，
+通用交付示例见
+[collaboration delivery](../../../examples/collaboration-delivery/README.md)。
+旧 tmux Auto Research 演示已退役，其源码与演示合同保留在 Git 历史中。
 
 ## Showcase C：Single-Agent Auto ML
 
@@ -588,9 +521,6 @@ runtime event、cancel 和 retry。接入 LoopX 时，只需对齐四个面：
 | ML 候选怎样形成默认关闭的 advisory packet | `build_ml_experiment_advisory_packet` | `examples/ml-experiment-domain-pack-smoke.py` |
 | Explore evidence 与资源怎样形成只读组合建议 | `build_explore_worker_branch_plan`、`resolve_explore_harness_gate` | `examples/explore-worker-plan-gate-smoke.py` |
 | Explore finding 怎样形成可重建拓扑 | `append_explore_result_events`、`build_explore_graph_view` | `examples/explore-result-layer-smoke.py` |
-| Auto Research role 怎样声明 | `build_auto_research_preset_summary` | `examples/auto-research-dev-thin-preset-smoke.py` |
-| 每个研究 lane 怎样重新进入 Kernel | `load_auto_research_worker_frontier`、`run_auto_research_worker_turn` | `examples/auto-research-worker-turn-smoke.py` |
-| 研究证据怎样形成决策 | `build_research_decision_candidates`、`build_auto_research_completion_status` | `examples/auto-research-layered-e2e-acceptance-smoke.py` |
 | 通用 Kernel 怎样选择本轮动作 | `build_quota_should_run`、`build_interaction_contract` | 第 6 讲的 quota smokes |
 | 一轮结果怎样写回并恢复 | `run_loopx_turn_once`、`refresh-state` | 第 7、8 讲的 transaction / refresh smokes |
 

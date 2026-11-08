@@ -826,7 +826,9 @@ def test_private_capture_support_matches_uid_boundary(
 def test_settlement_command_uses_private_capture_support() -> None:
     # The generated command and the CLI's private-capture check must share one
     # platform qualification; a POSIX-looking host without getuid is unsupported.
-    with patch.object(quota_effect_program, "private_capture_supported", return_value=False):
+    # The settlement kernel resolves the predicate at its owner, because keeping
+    # capture IO out of the plan module's cold import is itself a guard.
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=False):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
@@ -835,7 +837,7 @@ def test_settlement_command_uses_private_capture_support() -> None:
         assert command is not None
         assert "--max-page-output-bytes" not in command
 
-    with patch.object(quota_effect_program, "private_capture_supported", return_value=True):
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=True):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
@@ -856,6 +858,8 @@ def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> No
     assert command is not None
     argv = shlex.split(command)
     assert "--no-follow-up" not in argv
+    assert "--successor-todo-id" in validation["precondition"]
+    assert "--successor-todo-id" not in argv
     assert "--next-agent-todo" not in argv
     assert argv[argv.index("--todo-id") + 1] == TODO_ID
     assert argv[argv.index("--agent-id") + 1] == AGENT_ID
@@ -871,7 +875,7 @@ def test_in_flight_validation_conditions_completion_on_original_deliverable() ->
     validation = plan["ordered_steps"][0]
     assert validation["command_condition"] == "todo_deliverable_complete"
     assert "conditional" not in validation
-    assert "keep the Todo open with its original declaration" in validation["precondition"]
+    assert "Keep an unfinished Todo open with its original declaration." in validation["precondition"]
     command = settlement_step_command(plan, SettlementStepKind.VALIDATION)
     assert command is not None
     argv = shlex.split(command)

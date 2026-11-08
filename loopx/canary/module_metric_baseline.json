@@ -26,25 +26,28 @@
       "any_count": 5,
       "dict_any_count": 0
     },
+    "loopx/capabilities/issue_fix/pr_lifecycle.py": {
+      "lines": 2056
+    },
     "loopx/chat_actions.py": {
       "any_count": 52,
       "dict_any_count": 0
     },
     "loopx/chat_agent.py": {
-      "lines": 2031
+      "lines": 2043
     },
     "loopx/chat_runtime.py": {
-      "any_count": 37,
+      "any_count": 38,
       "dict_any_count": 0,
-      "lines": 2398
+      "lines": 2488
     },
     "loopx/chat_server.py": {
       "any_count": 25,
       "dict_any_count": 0,
-      "lines": 2039
+      "lines": 2046
     },
     "loopx/chat_store.py": {
-      "lines": 2113
+      "lines": 2141
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,
@@ -59,11 +62,11 @@
       "dict_any_count": 0
     },
     "loopx/control_plane/goals/goal_frontier/terminal.py": {
-      "any_count": 15,
+      "any_count": 22,
       "dict_any_count": 0
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 107,
       "dict_any_count": 0
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
@@ -71,14 +74,17 @@
       "dict_any_count": 0
     },
     "loopx/extensions/lark/presentation/explore_results.py": {
-      "any_count": 68,
+      "any_count": 78,
       "dict_any_count": 0,
-      "lines": 2276
+      "lines": 2458
     },
     "loopx/extensions/lark/presentation/kanban.py": {
-      "any_count": 95,
+      "any_count": 100,
       "dict_any_count": 0,
-      "lines": 2791
+      "lines": 2760
+    },
+    "loopx/extensions/lark/private_conversations.py": {
+      "lines": 2024
     },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,
@@ -90,7 +96,7 @@
       "dict_any_count": 0
     },
     "loopx/pr_review.py": {
-      "any_count": 49,
+      "any_count": 50,
       "dict_any_count": 0
     },
     "loopx/presentation/renderers/status_markdown.py": {
@@ -103,7 +109,7 @@
       "lines": 1999
     },
     "loopx/slash_command_install.py": {
-      "any_count": 11,
+      "any_count": 12,
       "dict_any_count": 0
     },
     "loopx/state_refresh.py": {

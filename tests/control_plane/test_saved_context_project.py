@@ -13,7 +13,8 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
-def test_saved_projection_checks_original_before_any_publication(tmp_path, failure):
+@pytest.mark.parametrize("setting", [None, "auto", "off"])
+def test_saved_projection_checks_original_before_any_publication(tmp_path, failure, setting):
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
         "heartbeat_receipt": {"turn_instance_id": "saved-turn"}, "requirement": "保留完整要求🙂" * 100}
     path = tmp_path / "original.json"
@@ -27,26 +28,47 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         path.symlink_to(source)
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
         "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn"]
+    if setting is not None:
+        args.extend(("--context-delivery", setting))
     for name in ("digest", "goal", "agent", "turn"):
         if failure == name:
             option = {"digest": "--capture-sha256", "goal": "--goal-id", "agent": "--agent-id", "turn": "--turn-instance-id"}[name]
             args[args.index(option) + 1] = "0" * 64 if name == "digest" else "foreign"
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
-    assert not registry.exists() and not runtime.exists()
+    assert not registry.exists()
+    if failure or setting == "off":
+        assert not runtime.exists()
+    else:
+        # Main's default Progressive presentation may create private transport;
+        # it may not create authority, evaluate a guard or debit the saved Turn.
+        if runtime.exists():
+            assert {item.name for item in runtime.iterdir()} <= {"context-delivery"}
     if failure:
         assert code != 0 and not result["ok"] and "command" not in result
     else:
-        assert code == 0 and result["ok"] and result["mode"] == "full"
-        assert result["path"] == str(path) and result["sha256"] == digest
-        assert result["recovery"]["path"] == str(path)
-        command = shlex.split(result["command"])
-        code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
-        assert code == 0 and page["content"].encode() == path.read_bytes()[:page["next_offset"]]
+        assert code == 0 and result["ok"]
+        if setting == "off":
+            assert result["mode"] == "full"
+            assert result["path"] == str(path) and result["sha256"] == digest
+            assert result["recovery"]["path"] == str(path)
+            command = shlex.split(result["command"])
+            code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
+            assert code == 0 and page["content"].encode() == path.read_bytes()[:page["next_offset"]]
+        else:
+            from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+            assert read_cli_policy_payload(json.dumps(result), returncode=code) == original
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
 
 
 @pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
-def test_enabled_cache_preparation_failure_returns_error_with_original_reference(tmp_path, monkeypatch, root_kind):
+@pytest.mark.parametrize(("opening_args", "recovery_limit"), [
+    ([], 64000), (["--initial-read"], 64000),
+    (["--initial-read", "--max-page-output-bytes", "12000"], 12000),
+], ids=["linked", "attached", "explicit"])
+def test_enabled_cache_preparation_failure_returns_error_with_original_reference(
+        tmp_path, monkeypatch, root_kind, opening_args, recovery_limit):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
 
@@ -73,10 +95,13 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context)])
+        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(context), *opening_args])
     result = project_saved_context_capture(args)
     assert result["ok"] is False and result["error_code"] == "quota_decision_transport_failed"
     assert result["recovery"]["path"] == str(path) and result["recovery"]["sha256"] == digest
+    recovery = shlex.split(result["recovery"]["command"])
+    assert int(recovery[recovery.index("--max-page-output-bytes") + 1]) == recovery_limit
     assert "prior.json" not in json.dumps(result)
     assert path.read_bytes() == raw and stale.read_bytes() == stale_bytes
 
@@ -348,7 +373,7 @@ def test_saved_projection_recovery_failure_returns_typed_error_and_current_refer
             'Read the saved original decision/receipt; do not rerun admission.'
         )
 
-    monkeypatch.setattr(codex_context, "project_codex_context", refuse_recovery)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", refuse_recovery)
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
@@ -391,6 +416,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
         assert argv[argv.index("--capture-sha256") + 1] == "a" * 64
         assert "should-run" not in argv and "spend-slot" not in argv
     assert commands[0][commands[0].index("--turn-instance-id") + 1] == "original-turn"
+    assert "--initial-read" in commands[0]
     assert "--decision-output-root" not in commands[0]
 
 
@@ -437,9 +463,15 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
     body = capture_before_replan(env, receipt, "Current work.")
-    source = wake / "checkpoint-start-view.json"
-    raw = source.read_bytes()
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
+    if enabled:
+        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+        source = Path(command[command.index("--capture-file") + 1])
+        assert source.parent != wake and source.is_relative_to(wake)
+        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(source.read_bytes()).hexdigest()
+    else:
+        source = wake / "checkpoint-start-view.json"
+    raw = source.read_bytes()
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
@@ -466,12 +498,11 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             assert rc == 0, page
 
     if enabled:
-        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         command.extend(("--max-page-output-bytes", "32000"))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
-        assert rc == 0 and cold["mode"] == "full", cold
+        assert rc == 0 and cold["navigation"]["mode"] == "full" and cold["offset"] == 0, cold
         assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
-        presented = consume(cold)
+        presented = consume(cold["navigation"])
         if compacted:
             codex_context_hook(str(native), {**event, "hook_event_name": "PreCompact"})
     else:
@@ -489,9 +520,13 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     if enabled:
         assert bound["mode"] == ("full" if compacted else "delta"), bound
         assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+        current = Path(machine_reference_oracle(bound)["recovery"]["path"])
+        captured = json.loads(current.with_name("decision.json").read_bytes())
+        required = json.loads(current.read_bytes())
+        assert json.dumps(required["quota"], sort_keys=True) == json.dumps(captured["quota"], sort_keys=True)
         delivered = consume(bound)
         if not compacted:
-            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold)["target"]["capture_id"]
+            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
@@ -500,13 +535,14 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_code_mode_async", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
     from tests.control_plane.codex_checkpoint_fixture import (
         last_context_page, local_inference_provider, native_process_continuation,
+        selected_context_values,
     )
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
     from tests.control_plane.test_codex_context_capture import _delivered
@@ -521,6 +557,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     large_capture = host == "app_progressive_large"
     routed_program = host.endswith("_program_route")
     code_mode = host.startswith("app_code_mode")
+    force_async = host == "app_code_mode_async"
     if routed_program and os.name == "nt":
         pytest.skip("POSIX console alias and controlled PATH")
     unicode_requirement = "保留原始目标、范围与停止条件🙂\n" * 120
@@ -587,16 +624,26 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
     read_offsets = {}
+    visible_choices = {}
     actual_turn = None
     rejected_read = False
     reading_initial = False
     initial_content = {}
+    read_gate = workspace / "reader-may-finish"
+    read_gate_armed = False
+    async_observed = False
 
     def response(request, number, message):
-        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial
+        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial, read_gate_armed, async_observed
         try:
             if continuation := native_process_continuation(request, f"projection_{number}",
                     code_mode=code_mode):
+                if read_gate_armed:
+                    # The child cannot finish before its handle reaches this
+                    # next real native request. No timing luck decides success.
+                    async_observed = True
+                    read_gate.touch()
+                    read_gate_armed = False
                 return continuation
             if reading_initial:
                 name = phase.removesuffix("_read")
@@ -605,7 +652,6 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 initial_content[name] += page["content"].encode()
                 assert len(initial_content[name]) == (page["total_bytes"] if page["eof"] else page["next_offset"])
                 if page["eof"]:
-                    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
                     assert selected_context_values(initial_content[name].decode())["/goal_id"] == GOAL_ID
                     reading_initial = False
                 else:
@@ -622,7 +668,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             elif phase in ("cold", "warm"):
                 if benchmark:
                     from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
-                    assert CONTEXT_CAPTURE_NAVIGATION_GUIDANCE in _input_text(request)
+                    guide = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE.strip()
+                    developer_text = [request.get("instructions") or ""]
+                    developer_text.extend(part.get("text", "") for item in request["input"]
+                        if item.get("role") == "developer" for part in item.get("content", []))
+                    assert any(guide in text for text in developer_text)
+                    wake_prompt = next(part["text"] for item in reversed(request["input"])
+                        if item.get("role") == "user" for part in item.get("content", [])
+                        if " quota context-project " in part.get("text", ""))
+                    assert guide not in wake_prompt
                     command = [line for line in _input_text(request).splitlines() if " quota context-project " in line][-1]
                     argv = shlex.split(command)
                     actual_turn = argv[argv.index("--turn-instance-id") + 1]
@@ -630,6 +684,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     sources.append((source, source.read_bytes()))
                     receipts = _heartbeat_receipt_count(runtime, actual_turn)
                     assert hashlib.sha256(source.read_bytes()).hexdigest() == argv[argv.index("--capture-sha256") + 1]
+                    assert "--initial-read" in argv
+                    if progressive:
+                        command = shlex.join([word for word in argv if word != "--initial-read"] + [
+                            "--select", "/goal_id", "--select", "/heartbeat_receipt",
+                            "--select", "/interaction_contract/cli_channel/selection_command",
+                            "--select", "/action_portfolio/suggested_actions/0/todo_id",
+                            "--select", "/action_portfolio/suggested_actions/1/todo_id"])
                     command += " --max-page-output-bytes 32000"
                 else:
                     source, raw = sources[0 if phase == "cold" else 1]
@@ -646,6 +707,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if isinstance(output, list):
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 navigation = json.loads(output.split("\nOutput:\n", 1)[-1])
+                if benchmark and name in ("cold", "warm"):
+                    page = navigation
+                    assert page["ok"] and len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+                    assert page["offset"] == 0 and page["content"]
+                    navigation = page["navigation"]
+                    if progressive:
+                        assert page["eof"]
+                        values = selected_context_values(page["content"])
+                        assert values["/goal_id"] == GOAL_ID and values["/heartbeat_receipt"]["turn_instance_id"] == actual_turn
                 descriptor = machine_reference_oracle(navigation)
                 # A selectively read large capture cannot become a retained
                 # full baseline; its next projection must remain full.
@@ -675,9 +745,17 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
-                    queue = [navigation["recovery"]["command"] + " --list", navigation["recovery"]["command"]
-                        + " --select /goal_id --select /heartbeat_receipt"
-                        + (" --select /retained_material/requirement" if large_capture else "")]
+                    reader = navigation["recovery"]["command"]
+                    select = " --select /goal_id --select /heartbeat_receipt"
+                    if benchmark and name in ("cold", "warm"):
+                        select += (" --select /interaction_contract/cli_channel/selection_command"
+                            " --select /action_portfolio/suggested_actions/0/todo_id"
+                            " --select /action_portfolio/suggested_actions/1/todo_id")
+                    if large_capture:
+                        select += " --select /retained_material/requirement"
+                    # The benchmark receiver knows these paths. Other native
+                    # scenarios exercise index discovery and digest recovery.
+                    queue = ([] if benchmark else [reader + " --list"]) + [reader + select]
                     if large_capture:
                         # Reject a different digest through the real native CLI,
                         # then continue with the unchanged original reference.
@@ -691,6 +769,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         argv[index] = str(damaged)
                         queue.insert(0, shlex.join(argv))
                         rejected_read = True
+                if benchmark and progressive and name in ("cold", "warm"):
+                    queue.clear()  # The first tool result already contains the requested facts.
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -701,7 +781,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 page = last_context_page(request, allow_selection=progressive)
                 assert page and page["ok"]
                 if progressive:
-                    values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+                    values = selected_context_values(page["content"])
                     assert values["/goal_id"] == GOAL_ID
                     assert values["/heartbeat_receipt"]["turn_instance_id"] == (
                         actual_turn if benchmark else "saved-native-turn")
@@ -710,6 +790,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         assert len(page["content"].encode()) == page["total_bytes"]
                         assert values["/retained_material/requirement"] == unicode_requirement
                         assert "资料🙂" not in _input_text(request)
+                    if benchmark:
+                        if name.endswith("_bound"):
+                            bound_id = values["/heartbeat_receipt"]["settlement_identity"]["todo_id"]
+                            assert bound_id == visible_choices[name.removesuffix("_bound")]
+                        else:
+                            slot = 0 if name == "cold" else 1
+                            visible_choices[name] = values[f"/action_portfolio/suggested_actions/{slot}/todo_id"]
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
@@ -725,9 +812,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
-                    presented = json.loads(Path(descriptor["recovery"]["path"]).read_text())
-                    selection = presented["interaction_contract"]["cli_channel"]["selection_command"]
-                    command = selection["route_prefix"] + " " + selection["command_args_template"].replace("{todo_id}", TODO_ID)
+                    if progressive:
+                        assert page["offset"] == 0 and page["eof"]
+                        selection = values["/interaction_contract/cli_channel/selection_command"]
+                        todo_id = visible_choices[name]
+                    else:
+                        presented = json.loads(Path(descriptor["recovery"]["path"]).read_text())
+                        selection = presented["interaction_contract"]["cli_channel"]["selection_command"]
+                        todo_id = TODO_ID
+                    command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=todo_id)
                     argv = shlex.split(command)
                     assert argv[argv.index("--context-delivery") + 1] == "on"
                     assert argv[argv.index("--codex-context-dir") + 1] == str(home / "loopx-context")
@@ -744,14 +837,23 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         return message
                     return response(request, number, message)
             arguments = {"cmd": command, "max_output_tokens": 22000}
+            if force_async and not async_observed and " quota context-read " in command:
+                wait_code = ("import pathlib,time; p=pathlib.Path(" + repr(str(read_gate)) + "); "
+                    "deadline=time.monotonic()+20\n"
+                    "while not p.exists() and time.monotonic()<deadline: time.sleep(.05)\n"
+                    "assert p.exists(), 'native output handle was not delivered'")
+                arguments["cmd"] = shlex.join([sys.executable, "-c", wait_code]) + " && " + command
+                arguments["yield_time_ms"] = 1000
+                read_gate_armed = True
             if routed_program:
                 # A login shell may replace the controlled PATH before it
                 # executes the otherwise unchanged generated reader command.
                 arguments["login"] = False
             if code_mode:
+                from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
-                        + json.dumps(arguments) + ')).output);'}
+                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\nconst result=await tools.exec_command('
+                        + json.dumps(arguments) + ');' + CODE_MODE_EXEC_RESULT_FORWARDER + ';'}
             # Match the generated native profile's 64000-byte page transport;
             # the old 3000-token tool cap truncated its valid JSON first page.
             return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
@@ -808,10 +910,14 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
     assert not errors and phase == "done", (errors, phase, wrong_runtime.exists())
+    if force_async:
+        assert async_observed and read_gate.is_file()
     if routed_program:
         assert set(initial_content) == {"cold"} and not wrong_runtime.exists()
     if benchmark:
         turns = [json.loads(raw)["heartbeat_receipt"]["turn_instance_id"] for _, raw in sources]
+        if progressive:
+            assert visible_choices["cold"] == TODO_ID and visible_choices["warm"] != TODO_ID
         assert len(set(turns)) == 2
         assert all(_heartbeat_receipt_count(runtime, turn) == 2 for turn in turns)  # original guard + selection
         assert _spend_run_count(runtime) == 1  # only the explicit inter-wake settlement above
@@ -847,11 +953,18 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
-            for option in ("--context-delivery", "--codex-context-dir", "--max-page-output-bytes"):
-                for command_words in (words, original_words):
-                    if option in command_words:
-                        index = command_words.index(option)
-                        del command_words[index:index + 2]
+            transport = {
+                "--decision-output-root": str(home / "loopx-context"),
+                "--context-delivery": "on",
+                "--delta-delivery": "auto",
+                "--codex-context-dir": str(home / "loopx-context"),
+                "--max-page-output-bytes": "32000",
+            }
+            for option, value in transport.items():
+                assert option not in original_words and words.count(option) == 1
+                index = words.index(option)
+                assert words[index + 1] == value
+                del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
             # Main already deduplicates identical Todo rows within this exact
@@ -920,7 +1033,8 @@ def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp
     assert not list(home.rglob("*.pack")), "discovery must not clone a plugin catalog"
 
 
-def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize("setting", [None, "off"])
+def test_saved_projection_default_delta_off_ignores_available_native_cache(tmp_path, monkeypatch, setting):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
     from loopx.control_plane.turn_driver import codex_context
@@ -930,11 +1044,439 @@ def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, m
         "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
     path.write_bytes(raw)
     def unexpected(*args, **kwargs):
-        pytest.fail("default-off saved presentation must not inspect/create native state")
+        pytest.fail("stateless/disabled presentation must not inspect/create native state")
     monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
-    args = build_parser().parse_args(["quota", "context-project", "--capture-file", str(path),
+    argv = ["quota", "context-project", "--capture-file", str(path),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
-        "--turn-instance-id", "t", "--codex-context-dir", str(root), "--decision-output-root", str(root)])
+        "--turn-instance-id", "t", "--codex-context-dir", str(root), "--decision-output-root", str(root)]
+    if setting is not None:
+        argv.extend(("--context-delivery", setting))
+    args = build_parser().parse_args(argv)
     result = project_saved_context_capture(args)
-    assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
+    assert result["ok"]
+    if setting == "off":
+        assert result["mode"] == "full" and result["path"] == str(path)
+    else:
+        assert result == json.loads(raw)
     assert not root.exists() and path.read_bytes() == raw
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native session continuity uses a private POSIX journal")
+def test_retry_lost_navigation_uses_original_predecessor(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    journal = tmp_path / "native"
+    journal.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "retry-session")
+    event = {"hook_event_name": "SessionStart", "source": "startup",
+             "session_id": "retry-session", "cwd": str(tmp_path)}
+    codex_context_hook(str(journal), event)
+    registry, runtime = tmp_path / "absent-registry", tmp_path / "absent-runtime"
+
+    def present(turn):
+        body = {"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+                "heartbeat_receipt": {"turn_instance_id": turn},
+                "requirement": "Preserve this independently recoverable requirement. " * 1900}
+        path = tmp_path / (turn + ".json")
+        if not path.exists():
+            path.write_text(json.dumps(body))
+        rc, view = _run_cli(registry, runtime, "quota", "context-project", "--capture-file", str(path),
+            "--capture-sha256", hashlib.sha256(path.read_bytes()).hexdigest(), "--goal-id", "g",
+            "--agent-id", "a", "--turn-instance-id", turn, "--context-delivery", "on",
+            "--codex-app", "--codex-context-dir", str(journal), cwd=tmp_path)
+        assert rc == 0, view
+        return machine_reference_oracle(view)
+
+    cold = present("cold")
+    assert cold["mode"] == present("cold")["mode"] == "full"
+    # No model read or PostToolUse receipt: the caller may have lost the notification.
+    warm = present("warm")
+    retry = present("warm")
+    for view in (warm, retry):
+        assert view["mode"] == "delta"
+        wire = json.loads(Path(view["path"]).read_bytes())
+        assert wire["base"] == cold["target"] and wire["target"] != wire["base"]
+        assert json.loads(Path(view["recovery"]["path"]).read_bytes())["heartbeat_receipt"] == {"turn_instance_id": "warm"}
+    # Loss of the actual predecessor or a new epoch must recover this source independently.
+    Path(warm["baseline_reference"]["path"]).unlink()
+    assert present("warm")["mode"] == "full"
+    codex_context_hook(str(journal), {**event, "hook_event_name": "PreCompact"})
+    codex_context_hook(str(journal), {**event, "source": "compact"})
+    assert present("warm")["mode"] == "full"
+    assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize(("repeat", "limit", "staged", "page_bytes", "paged"), [
+    (1, None, False, None, False), (480, None, True, None, False),
+    (480, 6400, True, None, False), (480, 64000, False, None, False),
+    (1100, 40000, True, 40000, False), (98, 12000, False, 900, True),
+], ids=["small", "unknown", "lower", "sufficient", "explicit-reader-window", "tight-reader-window"])
+def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selection(
+        tmp_path, monkeypatch, repeat, limit, staged, page_bytes, paged):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    runtime, registry, context = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
+        "session_id": "session", "cwd": str(tmp_path)})
+    receipt = {"turn_instance_id": "t"}
+    text = "Keep the original requirement. 保留原要求🙂\n" * repeat
+    saved_limit = 32000 if repeat > 1 else None
+    selection_args = "quota should-run --todo-id {todo_id}"
+    if saved_limit is not None:
+        selection_args += f" --max-page-output-bytes {saved_limit}"
+    # The paged case must exceed the window even before supporting context.
+    stop = "Stop before publishing. " * 100 if paged else None
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": receipt, "effective_action": "normal_run",
+        **({"goal_boundary": {"stop": stop}} if stop is not None else {}),
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "cli_channel": {"selection_command": {"command_args_template": selection_args}}, "agent_channel": {
+            "work_context": {"sources": [{"source": "goal_state", "ordering": "before_work",
+                "content": {"text": text, "state_file": "goal.md"}}]}}}}, ensure_ascii=False))
+    raw = original.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    project = ["quota", "context-project", "--capture-file", str(original), "--capture-sha256", digest,
+        "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", "t", "--codex-app",
+        "--context-delivery", "on", "--codex-context-dir", str(context)]
+    if limit is not None:
+        project += ["--max-page-output-bytes", str(limit)]
+
+    def cli(*args):
+        return _run_cli(registry, runtime, *args, cwd=tmp_path)
+
+    def follow(command):
+        words = shlex.split(command)
+        code, page = cli(*words[words.index("quota"):])
+        assert code == 0 and page["ok"], page
+        return page
+
+    code, reference = cli(*project)
+    assert code == 0 and "content" not in reference
+    assert reference["instruction"].startswith("Start with first_read_command")
+    window = ["--page-bytes", str(page_bytes)] if page_bytes is not None else []
+    code, first = cli(*project, "--initial-read", *window)
+    assert code == 0 and first["offset"] == 0 and first["eof"] is not paged
+    assert list(first).index("content") < list(first).index("navigation")
+    navigation = first["navigation"]
+    assert "top-level content" in navigation["instruction"]
+    assert "first_read_command only to recover" in navigation["instruction"]
+    assert "without reading an older baseline" in navigation["instruction"]
+    assert "Start with first_read_command" not in navigation["instruction"]
+    assert ("remaining_read_command" in navigation) == staged
+    assert ("navigation.remaining_read_command" in first["read_instruction"]) == staged
+    if staged:
+        assert "Before work" in first["read_instruction"]
+    assert ("next_command" in first) is paged
+    if page_bytes is not None:
+        for command in (navigation["first_read_command"], navigation.get("remaining_read_command"),
+                        first.get("next_command")):
+            if command is not None:
+                words = shlex.split(command)
+                assert int(words[words.index("--page-bytes") + 1]) == page_bytes
+    # Read the saved same-Turn selection recipe from the committed projection.
+    # An implicit cap for this page does not become an explicit guard option.
+    operation = follow(navigation["recovery"]["command"] + " --select /interaction_contract/cli_channel/selection_command")
+    assert operation["eof"]
+    template = json.loads(operation["content"])["selections"][0]["value"]["command_args_template"]
+    words = shlex.split(template)
+    budget = int(words[words.index("--max-page-output-bytes") + 1]) if "--max-page-output-bytes" in words else None
+    assert budget == (limit if limit is not None else saved_limit)
+    recovery_limit = limit if limit is not None else 64000
+    limit = limit if limit is not None else 12000
+    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+
+    def finish(page, *, limit=None, content_limit=None):
+        body = bytearray()
+        while True:
+            assert page["offset"] == len(body)
+            if limit is not None:
+                assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+            content = page["content"].encode()
+            if content_limit is not None:
+                assert len(content) <= content_limit
+            body.extend(content)
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                return bytes(body)
+            assert page["next_offset"] == len(body)
+            page = follow(page["next_command"])
+
+    # A client that forwards only navigation discards the bounded first page.
+    # It can recover this same selection using the separate offset-zero recipe.
+    assert "content" not in navigation and "next_command" not in navigation
+    if staged:
+        codex_context_hook(str(context), {"hook_event_name": "PreCompact", "source": "startup",
+            "session_id": "session", "cwd": str(tmp_path)})
+    files = set(context.rglob("*"))
+    journal = (context / "session.json").read_bytes()
+    body = finish(first, content_limit=page_bytes)
+    assert finish(follow(navigation["first_read_command"]), content_limit=page_bytes) == body
+    selected = {item["pointer"]: item["value"] for item in json.loads(body)["selections"]}
+    assert selected["/heartbeat_receipt"] == receipt
+    assert selected["/effective_action"] == "normal_run"
+    if stop is not None:
+        assert selected["/goal_boundary"] == {"stop": stop}
+    requirement = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    if staged:
+        assert requirement not in selected and "Before work" in navigation["instruction"]
+        remaining = finish(follow(navigation["remaining_read_command"]), content_limit=page_bytes)
+        detail = {item["pointer"]: item["value"] for item in json.loads(remaining)["selections"]}
+        assert not selected.keys() & detail.keys()
+        assert detail[requirement] == text
+    else:
+        assert selected[requirement] == text
+    # Clients that receive navigation before the initial read use the same
+    # transport budget even when the capture has much more required content.
+    recipe = shlex.split(reference["first_read_command"])
+    assert int(recipe[recipe.index("--max-page-output-bytes") + 1]) == limit
+    for view in (reference, navigation):
+        recovery = shlex.split(view["recovery"]["command"])
+        assert int(recovery[recovery.index("--max-page-output-bytes") + 1]) == recovery_limit
+    linked = json.loads(finish(follow(reference["first_read_command"]), limit=limit))["selections"]
+    fields = {item["pointer"]: item["value"] for item in linked}
+    assert fields[requirement] == text and fields["/heartbeat_receipt"] == receipt
+    assert original.read_bytes() == raw and (context / "session.json").read_bytes() == journal
+    assert set(context.rglob("*")) == files
+    if repeat == 1:
+        code, detail = cli(*project, "--select", "/heartbeat_receipt")
+        assert code == 0 and detail["eof"] and "next_command" not in detail
+        assert "first_read_command only to recover" in detail["navigation"]["instruction"]
+        assert json.loads(detail["content"])["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+        code, rejected = cli(*project, "--select", "/missing")
+        assert code and not rejected["ok"] and "recovery_command" in rejected
+        assert not ({"content", "next_command", "navigation"} & rejected.keys())
+        code, too_small = cli(*project, "--initial-read", "--max-page-output-bytes", "256")
+        assert code and not too_small["ok"] and not ({"content", "next_command", "navigation"} & too_small.keys())
+        assert too_small["heartbeat_receipt"] == receipt and too_small["capture_sha256"] == digest
+        recovered = Path(too_small["recovery"]["path"]).read_bytes()
+        assert hashlib.sha256(recovered).hexdigest() == too_small["recovery"]["sha256"]
+        view = json.loads(recovered)
+        recipe = view["interaction_contract"]["cli_channel"]["selection_command"]
+        # The recovery view may bind the same-Turn command's transport. All
+        # other decided values, including the original receipt, are exact.
+        assert shlex.split(recipe["command_args_template"])[:4] == shlex.split(selection_args)
+        recipe["command_args_template"] = selection_args
+        assert view == json.loads(raw)
+    assert not registry.exists() and not runtime.exists()
+
+
+def test_attached_selected_page_uses_the_same_window_as_its_reader(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    context = tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
+        "session_id": "session", "cwd": str(tmp_path)})
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    source = tmp_path / "decision.json"
+    work = {"constraint": "Keep this source verbatim. 保留原文🙂" * 75}
+    raw = json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}, "work": work}, ensure_ascii=False).encode()
+    source.write_bytes(raw)
+    project = ["quota", "context-project", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
+        "--turn-instance-id", "t", "--codex-app", "--context-delivery", "on",
+        "--codex-context-dir", str(context), "--select", "/work", "--max-page-output-bytes", "12000"]
+    before = {path: path.read_bytes() for path in context.rglob("*") if path.is_file()}
+    for invalid in ("255", "12001"):
+        code, rejected = _run_cli(registry, runtime, *project, "--page-bytes", invalid, cwd=tmp_path)
+        assert code and not rejected["ok"] and "--page-bytes" in rejected["reason"]
+    assert {path: path.read_bytes() for path in context.rglob("*") if path.is_file()} == before
+
+    code, page = _run_cli(registry, runtime, *project, "--page-bytes", "800", cwd=tmp_path)
+    assert code == 0 and not page["eof"]
+    content = bytearray()
+    while True:
+        assert page["ok"] and page["offset"] == len(content)
+        data = page["content"].encode()
+        assert 0 < len(data) <= 800
+        content.extend(data)
+        if page["eof"]:
+            assert len(content) == page["total_bytes"]
+            break
+        args = shlex.split(page["next_command"])
+        assert args[args.index("--page-bytes") + 1] == "800"
+        code, page = _run_cli(registry, runtime, *args[args.index("quota"):], cwd=tmp_path)
+        assert code == 0
+    assert json.loads(content)["selections"] == [{"pointer": "/work", "value": work}]
+    assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
+@pytest.mark.parametrize(("tool_tokens", "history_tokens", "byte_limit", "code_mode"), [
+    (6000, 20000, None, False), (22000, 3000, 6400, False), (6000, 20000, None, True),
+], ids=["tool-limited", "history-limited", "code-mode"])
+def test_bounded_initial_read_survives_the_actual_native_tool_limit(
+        tmp_path, tool_tokens, history_tokens, byte_limit, code_mode):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
+    from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
+    from tests.control_plane.codex_checkpoint_fixture import (
+        last_context_page, local_inference_provider, native_process_continuation, selected_context_values,
+    )
+    from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture
+
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
+    context = workspace / "context"
+    context.mkdir(mode=0o700)
+    cli = [os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))]
+    cli += ["--registry", str(workspace / "absent-registry.json"), "--runtime-root", str(workspace / "absent-runtime")]
+    configuration = codex_context_configuration(str(context), goal_id="g", agent_id="a", cli_argv=cli,
+        scenario="codex_app_heartbeat")
+    (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
+    source = workspace / "original.json"
+    requirement = "".join(f"Criterion {i:04}: preserve exact scope before touching outside paths.\n" for i in range(650))
+    raw = json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}, "effective_action": "normal_run",
+        "goal_boundary": {"stop": "Stop before publishing."}, "interaction_contract": {
+            "schema_version": "loopx_interaction_contract_v0", "agent_channel": {"work_context": {
+                "instruction": "Read the exact requirement before acting.",
+                "sources": [{"source": "goal_state", "ordering": "before_work",
+                    "content": {"text": requirement, "state_file": "goal.md"}}]}}}}).encode()
+    source.write_bytes(raw)
+    project = shlex.join([*cli, "--format", "json", "quota", "context-project", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
+        "--turn-instance-id", "t", "--codex-app", "--context-delivery", "on",
+        "--codex-context-dir", str(context), "--initial-read"])
+    phase, errors, detail = "start", [], bytearray()
+
+    def latest_output(request):
+        output = next(item["output"] for item in reversed(request["input"])
+            if item.get("type") in ("function_call_output", "custom_tool_call_output"))
+        return output if isinstance(output, str) else next(part["text"] for part in reversed(output)
+            if part.get("type") == "input_text")
+
+    def response(request, number, message):
+        nonlocal phase
+        try:
+            if wait := native_process_continuation(request, str(number), code_mode=code_mode):
+                if code_mode:
+                    wait["input"] = wait["input"].replace('"max_output_tokens": 22000',
+                        f'"max_output_tokens": {tool_tokens}')
+                else:
+                    wait["arguments"] = json.dumps({**json.loads(wait["arguments"]), "max_output_tokens": tool_tokens})
+                return wait
+            page = last_context_page(request, allow_selection=True)
+            if phase == "start":
+                command, phase = project + " --max-page-output-bytes 64000", "truncated"
+            elif phase == "truncated":
+                assert page is None and "context_capture_selection_page_v1" in latest_output(request)
+                command = project + (f" --max-page-output-bytes {byte_limit}" if byte_limit else "")
+                phase = "opening"  # The same original receipt and source.
+            elif phase == "opening":
+                assert page and page["ok"] and page["offset"] == 0 and page["eof"]
+                assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= (byte_limit or 12000)
+                values = selected_context_values(page["content"])
+                assert values["/goal_boundary/stop"] == "Stop before publishing."
+                assert values["/heartbeat_receipt/turn_instance_id"] == "t"
+                command, phase = page["navigation"]["remaining_read_command"], "remaining"
+            elif phase == "remaining":
+                assert page and page["ok"] and page["offset"] == len(detail)
+                detail.extend(page["content"].encode())
+                assert len(detail) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+                if not page["eof"]:
+                    command = page["next_command"]
+                else:
+                    text = selected_context_values(detail.decode())[
+                        "/interaction_contract/agent_channel/work_context/sources/0/content/text"]
+                    assert text == requirement
+                    command, phase = shlex.join(["printf", "%s", text.splitlines()[-1]]), "work"
+            else:
+                assert latest_output(request).split("\nOutput:\n", 1)[-1].strip() == requirement.splitlines()[-1]
+                phase = "done"
+                return message
+            call = {"id": f"fc_{number}", "call_id": f"call_{number}"}
+            arguments = json.dumps({"cmd": command, "max_output_tokens": tool_tokens, "yield_time_ms": 10000})
+            if code_mode:
+                return {**call, "type": "custom_tool_call", "name": "exec",
+                    "input": '// @exec: {"max_output_tokens": 12000}\nconst result=await tools.exec_command('
+                        + arguments + ');' + CODE_MODE_EXEC_RESULT_FORWARDER + ';'}
+            return {**call, "type": "function_call", "name": "exec_command", "arguments": arguments}
+        except Exception as exc:
+            errors.append(exc)
+            return message
+
+    with local_inference_provider(response) as (url, _, _):
+        _configure_provider(home, url)
+        config = home / "config.toml"
+        native_config = {**configuration["config_overrides"], "tool_output_token_limit": history_tokens}
+        overrides = "".join(f"{key}={json.dumps(value)}\n" for key, value in native_config.items())
+        text = config.read_text()
+        if code_mode:
+            text = text.replace("[features]\n", "[features]\ncode_mode=true\n")
+        config.write_text(overrides + text + "[sandbox_workspace_write]\nnetwork_access=true\n")
+        _app_server(binary, env, workspace, home, True, sandbox="workspace-write", turn_timeout_sec=120)
+    assert not errors and phase == "done", (errors, phase)
+    assert source.read_bytes() == raw
+    assert not (workspace / "absent-registry.json").exists() and not (workspace / "absent-runtime").exists()
+
+
+def test_saved_page_continues_and_replays_after_compaction_without_republication(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    runtime, registry, context = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    monkeypatch.chdir(tmp_path)
+    event = {"source": "startup", "session_id": "session", "cwd": str(tmp_path)}
+    codex_context_hook(str(context), {**event, "hook_event_name": "SessionStart"})
+    value = "scope and stops: 保留原要求。" * 1200
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}, "instructions": value}, ensure_ascii=False))
+    digest = hashlib.sha256(original.read_bytes()).hexdigest()
+    project = ["quota", "context-project", "--capture-file", str(original), "--capture-sha256", digest,
+        "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", "t", "--codex-app",
+        "--context-delivery", "on", "--codex-context-dir", str(context), "--max-page-output-bytes", "6400"]
+    def cli(*args):
+        return _run_cli(registry, runtime, *args, cwd=tmp_path)
+    initial_files = set(context.rglob("*"))
+    for invalid in (["--initial-read", "--select", "/instructions"], ["--offset", "1", "--select", "/instructions"],
+                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"],
+                    ["--delta-delivery", "off", "--initial-read", "--page-bytes", "3200"]):
+        code, error = cli(*project, *invalid)
+        assert code and not error["ok"] and "content" not in error
+    code, error = cli(*project, "--select", "/instructions", "--page-bytes", "255")
+    assert code and not error["ok"] and "--page-bytes must be between 256 and" in error["reason"]
+    assert set(context.rglob("*")) == initial_files
+    window = 3200
+    code, first = cli(*project, "--select", "/instructions", "--page-bytes", str(window))
+    assert code == 0 and first["offset"] == 0 and not first["eof"]
+    assert first["navigation"]["mode"] == "full"
+    codex_context_hook(str(context), {**event, "hook_event_name": "PreCompact"})
+    journal = (context / "session.json").read_bytes()
+    files = set(context.rglob("*"))
+    def read_selection(*, resume):
+        result = bytearray()
+        if resume:
+            result.extend(first["content"].encode())
+            assert len(result) <= window
+            words = shlex.split(first["next_command"])
+            args = words[words.index("quota"):]
+        else:
+            args = ["quota", "context-read", "--reference-file", first["reference_file"],
+                    "--max-page-output-bytes", "6400"]
+        while True:
+            code, page = cli(*args)
+            assert code == 0 and page["offset"] == len(result)
+            content = page["content"].encode()
+            if resume:
+                assert len(content) <= window
+            result.extend(content)
+            if page["eof"]:
+                assert len(result) == page["total_bytes"]
+                return json.loads(result)["selections"][0]["value"]
+            words = shlex.split(page["next_command"])
+            args = words[words.index("quota"):]
+    with ThreadPoolExecutor(2) as pool:
+        replay = pool.submit(read_selection, resume=False)
+        continuation = pool.submit(read_selection, resume=True)
+        assert replay.result() == continuation.result() == value
+    assert (context / "session.json").read_bytes() == journal and set(context.rglob("*")) == files
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == digest
+    assert not registry.exists() and not runtime.exists()

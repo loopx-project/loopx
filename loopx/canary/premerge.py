@@ -900,6 +900,7 @@ def build_premerge_validation_gate(
     catalog_path: Path | None = None,
 ) -> dict[str, Any]:
     target_repo_root = (repo_root or REPO_ROOT).resolve()
+    base_ref = (base_ref or "origin/main").strip() or "origin/main"
     files = _dedupe(list(changed_files or []))
     if files:
         catalog_path = resolve_canary_catalog_path(catalog_path, repo_root=target_repo_root)
@@ -968,6 +969,7 @@ def build_premerge_validation_gate(
             timeout_seconds=timeout_seconds,
             fail_fast=fail_fast,
             progress_callback=catalog_progress if execute else None,
+            cli_output_base_ref=base_ref,
         )
         _emit_section_progress(
             catalog_progress,
@@ -1024,6 +1026,7 @@ def build_premerge_validation_gate(
             timeout_seconds=timeout_seconds,
             fail_fast=fail_fast,
             progress_callback=risk_progress if execute else None,
+            cli_output_base_ref=base_ref,
         )
         _emit_section_progress(
             risk_progress,
@@ -1088,7 +1091,7 @@ def build_premerge_validation_gate(
         "ok": ok,
         "schema_version": PREMERGE_GATE_SCHEMA_VERSION,
         "repo_root": str(target_repo_root),
-        "base_ref": (base_ref or "origin/main").strip() or "origin/main",
+        "base_ref": base_ref,
         "tier": tier if tier in PREMERGE_TIERS else "standard",
         "dry_run": not execute,
         "executes_checks": execute,

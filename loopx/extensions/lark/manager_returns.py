@@ -75,6 +75,40 @@ def _resolve_return(
     return snapshot, routing, target_config
 
 
+def _private_return_authority(*, root: Path, registry: Path, route: dict[str, Any],
+                              session: dict[str, Any], turn: dict[str, Any],
+                              cancelled: Callable[[], bool], private_transport: Any) -> None:
+    if cancelled():
+        raise ValueError("manager return service stopped")
+    grant = authority(root, registry, session, turn)
+    target = {k: route[k] for k in ("goal_id", "agent_id")}
+    if (target not in grant["targets"] or grant.get("source_id") != route["source_id"]
+            or private_transport is None):
+        raise ReturnResolutionBlocked(
+            "return_authorization_unavailable", "private return authority unavailable"
+        )
+
+
+def _web_return(*, root: Path, registry: Path, route: dict[str, Any], session: dict[str, Any],
+                turn: dict[str, Any], text: str, cancelled: Callable[[], bool], private_transport: Any,
+                attempt: Mapping[str, str | None] | None = None,
+                record_attempt: Callable[[Mapping[str, str | None]], None] | None = None) -> dict[str, Any]:
+    arguments = dict(root=root, registry=registry, route=route, session=session, turn=turn,
+                     cancelled=cancelled, private_transport=private_transport)
+    _private_return_authority(**arguments)
+    try:
+        result = private_transport.verify_web_return(route=route, session=session, turn=turn,
+            text=text, attempt=attempt, record_attempt=record_attempt)
+    except ReturnResolutionBlocked:
+        raise
+    except (KeyError, ValueError, OSError) as exc:
+        raise ReturnResolutionBlocked("original_route_unavailable", "original App return source unavailable") from exc
+    # Provider readback can outlast a grant or a stop. It grants no publication
+    # authority and must not mark a revoked request as delivered.
+    _private_return_authority(**arguments)
+    return result
+
+
 def _return_inbox(*, root: Path, registry: Path, snapshot_provider: Callable[[], dict[str, Any]],
                   route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
                   cancelled: Callable[[], bool], private_transport: Any) -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
@@ -82,15 +116,8 @@ def _return_inbox(*, root: Path, registry: Path, snapshot_provider: Callable[[],
     source_verifier: Callable[[], bool] | None
     destination: object
     if isinstance(session.get("steward_context"), dict):
-        if cancelled():
-            raise ValueError("manager return service stopped")
-        grant = authority(root, registry, session, turn)
-        target = {k: route[k] for k in ("goal_id", "agent_id")}
-        if (target not in grant["targets"] or grant.get("source_id") != route["source_id"]
-                or private_transport is None):
-            raise ReturnResolutionBlocked(
-                "return_authorization_unavailable", "private return authority unavailable"
-            )
+        _private_return_authority(root=root, registry=registry, route=route, session=session,
+            turn=turn, cancelled=cancelled, private_transport=private_transport)
         try:
             config_path, record = private_transport.return_inbox(route=route, session=session, turn=turn)
             # The original Inbox belongs to the private Chat transport. Its
@@ -140,6 +167,11 @@ def send_return(
     private_transport: Any = None,
 ) -> dict[str, Any]:
     text = present_lark_conversation_text(text)
+    if isinstance(session.get("steward_context"), dict) and turn.get("origin") == "web":
+        result = _web_return(root=root, registry=registry, route=route, session=session, turn=turn,
+            text=text, cancelled=cancelled, private_transport=private_transport,
+            record_attempt=delivery_attempt_recorder)
+        return {**result, "verification": result, "external_write_performed": False}
     def resolve() -> tuple[Path, Path, Callable[[], bool] | None, object, str]:
         return _return_inbox(
             root=root,
@@ -229,6 +261,9 @@ def verify_return(
     private_transport: Any = None,
 ) -> dict[str, Any]:
     text = present_lark_conversation_text(text)
+    if isinstance(session.get("steward_context"), dict) and turn.get("origin") == "web":
+        return _web_return(root=root, registry=registry, route=route, session=session, turn=turn,
+            text=text, cancelled=cancelled, private_transport=private_transport, attempt=attempt)
     project, config_path, source_verifier, destination, message_id = _return_inbox(
         root=root,
         registry=registry,

@@ -60,7 +60,7 @@ def managed(tmp_path, monkeypatch):
         label = Path(args[-1]).stem if verb == "bootstrap" else args[-1].split("/")[-1]
         if verb == "print":
             text = "arguments = {\n" + "\n".join(loaded[label]["ProgramArguments"]) + "\n}\npid = 900\n" if label in loaded else ""
-            return subprocess.CompletedProcess(args, 0 if label in loaded else 1, text, "")
+            return subprocess.CompletedProcess(args, 0 if label in loaded else 113, text, "")
         calls.append((verb, label))
         if fail and (verb, label) == fail[0]:
             fail.pop(0)
@@ -93,6 +93,100 @@ def test_pair_adopts_target_without_changing_routes_or_cli_and_is_idempotent(man
     calls.clear()
     assert align_managed_runtime(str(target))["restarted_services"] == []
     assert calls == []
+
+
+def test_mutable_cli_alias_cannot_hide_a_new_runtime_from_the_pair(managed):
+    _, agents, target, loaded, calls, _ = managed
+    alias = target.parent.parent / "installed alias" / "loopx"
+    alias.parent.mkdir()
+    alias.symlink_to(target)
+    for path in agents.glob("*.plist"):
+        payload = _retarget(plistlib.loads(path.read_bytes()), str(alias), sys.executable)
+        path.write_bytes(plistlib.dumps(payload))
+        loaded[path.stem] = payload
+    original_routes = {label: managed_runtime._launcher(payload)[0][1:] for label, payload in loaded.items()}
+
+    result = align_managed_runtime(str(alias))
+
+    assert result["readiness_verified"] is True
+    assert calls == [("bootout", "com.loopx.status"), ("bootout", "com.loopx.chat"),
+        ("bootstrap", "com.loopx.status"), ("bootstrap", "com.loopx.chat")]
+    for label, payload in loaded.items():
+        executable, *args = managed_runtime._launcher(payload)[0]
+        assert executable == str(target.resolve())
+        assert args == original_routes[label]
+    assert alias.is_symlink() and alias.resolve() == target.resolve()
+    calls.clear()
+    assert align_managed_runtime(str(alias))["restarted_services"] == []
+    assert calls == []
+
+
+def test_relative_alias_does_not_gain_activation_authority(managed, monkeypatch):
+    _, agents, target, loaded, calls, _ = managed
+    alias = target.parent.parent / "relative-alias"
+    alias.symlink_to(target)
+    before = {path: path.read_bytes() for path in agents.glob("*.plist")}
+    monkeypatch.chdir(alias.parent)
+    with pytest.raises(ValueError, match="service_runtime_unverified"):
+        align_managed_runtime(alias.name)
+    assert not calls and len(loaded) == 2
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_async_bootout_finishes_before_replacement_or_rollback(managed, monkeypatch, rollback):
+    _, agents, target, loaded, _, _ = managed
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    run = subprocess.run
+    unloading = {}
+    observations = []
+
+    def launchctl(args, **kwargs):
+        if args[0] != "launchctl":
+            return run(args, **kwargs)
+        verb = args[1]
+        label = Path(args[-1]).stem if verb == "bootstrap" else args[-1].split("/")[-1]
+        if verb == "bootout":
+            payload = loaded[label]
+            result = run(args, **kwargs)
+            loaded[label] = payload
+            unloading[label] = 2
+            return result
+        if verb == "print" and label in unloading:
+            observations.append(label)
+            if unloading[label]:
+                unloading[label] -= 1
+            else:
+                unloading.pop(label)
+                loaded.pop(label)
+        if verb == "bootstrap" and label in loaded:
+            return subprocess.CompletedProcess(args, 5, b"", b"job still unloading")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(activation.subprocess, "run", launchctl)
+    if rollback:
+        def unavailable(*_):
+            raise RuntimeError("service_runtime_alignment_failed")
+        monkeypatch.setattr(managed_runtime, "_verify_services", unavailable)
+        with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+            align_managed_runtime(str(target))
+        assert {p: p.read_bytes() for p in before} == before
+        assert loaded == {p.stem: plistlib.loads(content) for p, content in before.items()}
+    else:
+        assert align_managed_runtime(str(target))["status"] == "aligned"
+    assert len(observations) == (12 if rollback else 6)
+    assert not unloading
+    assert not (agents / ".loopx-runtime-activation.json").exists()
+
+
+@pytest.mark.parametrize("returncode", [1, 0])
+def test_unload_requires_proved_absence_and_has_a_deadline(monkeypatch, returncode):
+    monkeypatch.setattr(activation.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, returncode, b"", b"unproved"))
+    clock = iter([0, 10])
+    monkeypatch.setattr(managed_runtime.time, "monotonic", lambda: next(clock))
+    with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+        managed_runtime._wait_unloaded("gui/1/com.loopx.chat")
 
 
 def test_pending_chat_prevents_both_service_changes(managed):
@@ -163,6 +257,49 @@ def test_recovery_rejects_a_journal_with_changed_role_or_data_route(managed):
         align_managed_runtime(str(target))
     assert calls == [] and len(loaded) == 2
     assert path.read_bytes() == original and journal.exists()
+
+
+def test_recovery_reads_a_utf8_journal_under_a_locale_codec(tmp_path):
+    journal = tmp_path / "handoff.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_managed_runtime_handoff_v1",
+                "note": "继续授权的工作",
+                "services": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    script = '''
+import sys
+from pathlib import Path
+from loopx.hosts.managed_service_runtime import _recover_alignment
+
+try:
+    _recover_alignment(Path(sys.argv[1]))
+except ValueError as exc:
+    raise SystemExit(0 if str(exc) == "service_runtime_route_unverified" else 1)
+raise SystemExit(2)
+'''
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "gbk",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0",
+        "LC_ALL": "C",
+        "LANG": "C",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(journal)],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
 
 
 def test_failed_second_bootstrap_restores_original_loaded_pair(managed):
@@ -244,9 +381,13 @@ def test_damaged_handoff_stops_before_any_service_mutation(managed, saved, monke
 def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, monkeypatch):
     _, agents, target, loaded, calls, _ = managed
     align_managed_runtime(str(target))
+    replacement = target.parent.parent / "next release" / "loopx"
+    replacement.parent.mkdir()
+    replacement.write_text(target.read_text().replace("new-revision", "next-revision"))
+    replacement.chmod(0o700)
     installed = agents.parents[1] / ".local/bin/loopx"
     installed.parent.mkdir(parents=True)
-    installed.symlink_to(target)
+    installed.symlink_to(replacement)
     other = agents / "com.loopx.project.status.plist"
     other.write_bytes(plistlib.dumps({"Label": other.stem, "ProgramArguments": ["/project/loopx", "serve-status"]}))
     loaded[other.stem] = plistlib.loads(other.read_bytes())
@@ -259,7 +400,7 @@ def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, 
     assert calls[-1] == ("kickstart", other.stem)
     assert loaded[other.stem]["ProgramArguments"] == ["/project/loopx", "serve-status"]
     for kind in ("status", "chat"):
-        assert str(installed) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
+        assert str(replacement.resolve()) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
 
 
 @pytest.mark.parametrize("shell", ["exec /old/loopx $(touch /tmp/no)",

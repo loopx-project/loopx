@@ -6,6 +6,88 @@ import {openWorkspacePage} from "./scenario-context.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 import {withManagedFixture} from "./managed-fixture-process.mjs";
 
+async function verifyQueuedEditor({page, origin, sessionId, turnId, composer, control}) {
+  const nativeStarts = (await control("inspect")).calls_after_setup.filter(call => call.method === "turn/start").length;
+  const source = "# Source note\nPreserve the original attachment.\n";
+  const attachment = {id: "queue-source", name: "source.md", mime_type: "text/markdown",
+    size: Buffer.byteLength(source), data_url: `data:text/markdown;base64,${Buffer.from(source).toString("base64")}`};
+  const path = `/api/chat/sessions/${sessionId}`;
+  const submitted = await page.request.post(`${origin}${path}/turns`, {
+    data: {message: "Read the source before the next handoff.", attachments: [attachment],
+      client_turn_id: "managed-queue-editor", delivery: "queue"},
+  });
+  assert.equal(submitted.status(), 202);
+  const queuedId = (await submitted.json()).turn_id;
+  const inputPath = `${path}/queue/${queuedId}/input`;
+  const posts = [];
+  const observe = request => {if (request.method() === "POST" && new URL(request.url()).pathname.startsWith(path)) posts.push(request.url());};
+  page.on("request", observe);
+  try {
+    const row = page.locator(".personal-conversation-queue li");
+    const menu = row.getByRole("button", {name: "更多操作：待处理消息 1", exact: true});
+    await menu.click();
+    await row.getByRole("button", {name: "编辑", exact: true}).click();
+    const editor = row.getByRole("textbox", {name: "编辑待处理消息 1", exact: true});
+    const draft = "先核对原始材料，再继续下一步。\n保留这份独立的队列修改草稿和原附件。";
+    await editor.fill(draft);
+    await composer.fill("另一份尚未发送的主输入框草稿");
+    await menu.click();
+    await menu.dispatchEvent("keydown", {key: "Escape", isComposing: true});
+    assert.equal(await menu.getAttribute("aria-expanded"), "true", "IME Escape does not close the menu or discard the edit");
+    await page.keyboard.press("Escape");
+    assert.equal(await menu.getAttribute("aria-expanded"), "false");
+    assert.equal(await editor.inputValue(), draft);
+    assert.equal(await menu.evaluate(node => node === document.activeElement), true);
+    // Dismissing a menu is independent of storage availability. It must never
+    // call the editor's destructive discard path, even if that path would fail.
+    await page.evaluate(() => {window.queueRemoveItem = Storage.prototype.removeItem;
+      Storage.prototype.removeItem = function() {throw new Error("isolated storage failure");};});
+    try {
+      await menu.click(); await page.keyboard.press("Escape");
+      assert.equal(await menu.getAttribute("aria-expanded"), "false");
+      assert.equal(await editor.inputValue(), draft);
+      assert.equal(await row.getByRole("alert").count(), 0);
+    } finally {await page.evaluate(() => {Storage.prototype.removeItem = window.queueRemoveItem; delete window.queueRemoveItem;});}
+    assert.deepEqual(posts, [], "Menu dismissal neither edits, cancels, steers nor sends a message");
+    await page.screenshot({path: resolve(outputDir, "queue-editor-native-desktop.png")});
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path: resolve(outputDir, "queue-editor-native-narrow.png")});
+    await page.reload({waitUntil: "domcontentloaded"});
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), draft, "Reload retains the edit under its original queued Turn");
+    assert.equal(await composer.inputValue(), "另一份尚未发送的主输入框草稿");
+    const before = await (await page.request.get(`${origin}${path}/queue`)).json();
+    assert.equal(before.active_turn_id, turnId);
+    assert.deepEqual(before.turns.map(turn => [turn.turn_id, turn.input_revision, turn.attachment_count]), [[queuedId, 0, 1]]);
+    const saved = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === inputPath);
+    await editor.press("Meta+Enter");
+    assert.equal((await (await saved).json()).input_revision, 1);
+    await editor.waitFor({state: "hidden"});
+    const history = await (await page.request.get(`${origin}${path}?turn_id=${queuedId}&message_limit=200`)).json();
+    const input = history.messages.find(message => message.role === "user" && message.turn_id === queuedId);
+    assert.equal(input.text, draft);
+    assert.deepEqual(input.attachments, [attachment]);
+    await menu.click();
+    await row.getByRole("button", {name: "编辑", exact: true}).click();
+    await editor.fill("明确放弃的修改");
+    await editor.press("Escape");
+    await editor.waitFor({state: "hidden"});
+    assert.equal(posts.length, 1, "Escape with no open menu still discards only the local edit");
+    await menu.click();
+    const cancelled = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === inputPath);
+    await row.getByRole("button", {name: "取消排队", exact: true}).click();
+    assert.equal((await (await cancelled).json()).input_revision, 2);
+    await row.waitFor({state: "hidden"});
+    const after = await (await page.request.get(`${origin}${path}/queue`)).json();
+    assert.equal(after.active_turn_id, turnId);
+    assert.deepEqual(after.turns, []);
+    assert.equal(posts.length, 2, "Only explicit save and cancel mutate the original queued input");
+    assert.equal((await control("inspect")).calls_after_setup.filter(call => call.method === "turn/start").length, nativeStarts,
+      "Queue editing adds no native execution");
+  } finally {page.off("request", observe);}
+}
+
 async function verifyManagedTurnObservers({page, origin, sessions, panel, chooser, composer, control}) {
   const {session_id: sessionId} = await control("observer-session");
   const before = (await control("inspect")).calls_after_setup.filter(row => row.method === "turn/start").length;
@@ -49,19 +131,74 @@ async function verifyManagedTurnObservers({page, origin, sessions, panel, choose
     await page.reload({waitUntil: "domcontentloaded"});
     await chooser.selectOption(`managed:${sessionId}`);
     await panel.getByText("Review the release checklist before the next handoff.", {exact: true}).waitFor();
-    const accepted = page.waitForResponse(response => response.request().method() === "POST"
-      && response.url() === `${origin}/api/chat/sessions/${sessionId}/turns`);
-    await composer.fill("Review the remaining release steps; wait for interrupt.");
-    await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
-    await composer.press("Enter");
-    const ownTurn = (await (await accepted).json()).turn_id;
+    const admissionPath = `/api/chat/sessions/${sessionId}/turns`;
+    let releaseAdmission, admitted;
+    const heldAdmission = new Promise(resolve => {releaseAdmission = resolve;});
+    const admissionReady = new Promise(resolve => {admitted = resolve;});
+    const admissionMatch = url => url.origin === origin && url.pathname === admissionPath;
+    const holdAdmission = async route => {
+      if (route.request().method() !== "POST") {await route.fallback(); return;}
+      const response = await route.fetch();
+      admitted((await response.json()).turn_id);
+      await heldAdmission;
+      await route.fulfill({response});
+    };
+    await page.route(admissionMatch, holdAdmission);
+    let ownTurn, admissionTimeout;
+    try {
+      const accepted = page.waitForResponse(response => response.request().method() === "POST"
+        && response.url() === origin + admissionPath);
+      await composer.fill("Review the remaining release steps; wait for interrupt.");
+      await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+      await composer.press("Enter");
+      ownTurn = await Promise.race([admissionReady, new Promise((_, reject) => {
+        admissionTimeout = setTimeout(() => reject(new Error("The original admission did not reach its owning backend")), 12_000);
+      })]);
+      clearTimeout(admissionTimeout);
+      // History can discover this active native Turn before the original ACK.
+      // Its composer already owns observation: recovery must not add a stream.
+      await afterHistoryPoll(ownTurn);
+      assert.equal(requests.length, 0, "An original admission in flight must not acquire a recovery observer");
+      assert.equal(await pending.count(), 1, "The original pending reply survives active history discovery");
+      releaseAdmission();
+      assert.equal((await (await accepted).json()).turn_id, ownTurn);
+    } finally {
+      clearTimeout(admissionTimeout);
+      releaseAdmission();
+      await page.unroute(admissionMatch, holdAdmission);
+    }
     await afterHistoryPoll(ownTurn);
     await page.screenshot({path: resolve(outputDir, "managed-observer-desktop.png")});
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({path: resolve(outputDir, "managed-observer-narrow.png")});
     await assertSingleObserver(ownTurn, 1);
+    const managedUrl = page.url();
+    await composer.fill("Retain this original Session's unsent draft across work views.");
+    await page.setViewportSize({width: 1512, height: 982});
+    for (const view of ["概览", "任务", "研究", "成果"]) {
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: view, exact: true}).click();
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
+      assert.equal(await page.locator(".personal-manager-conversation-tray").count(), 0,
+        "An observed managed Turn stays on Chat without covering a reading view");
+    }
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path: resolve(outputDir, "managed-observer-background-narrow.png")});
+    await page.setViewportSize({width: 1512, height: 982});
+    await page.locator(".personal-manager-link").click();
+    assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 0,
+      "Another conversation never inherits the Goal's managed Turn activity");
+    for (let step = 0; step < 5; step += 1) await page.goBack();
+    await page.waitForURL(managedUrl);
+    await pending.waitFor();
+    assert.equal(await composer.inputValue(), "Retain this original Session's unsent draft across work views.");
+    await assertSingleObserver(ownTurn, 1);
+    await page.setViewportSize({width: 1440, height: 900});
+    await verifyQueuedEditor({page, origin, sessionId, turnId: ownTurn, composer, control});
     await interrupt(ownTurn);
+    await page.getByRole("status", {name: "正在回复", exact: true}).waitFor({state: "hidden"});
 
     // Start through the same real ingress while another Session is selected.
     // Entering the original must recover it without a composer-owned observer.
@@ -149,13 +286,57 @@ export const managedAgentSessionsScenario = {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await panel.getByText("Original managed question 1", {exact: true}).count(), 0);
         assert.equal(await composer.inputValue(), "Retained draft for second Session");
-        await composer.fill("Owner correction only to second Session");
-        await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
-        await composer.press("Enter");
-        await panel.getByText("Runtime response.", {exact: true}).waitFor().catch(async error => {
-          console.log(JSON.stringify({diagnostic: await control("inspect"), body: await page.locator("body").innerText(), ui: await composer.evaluate(node => ({value: node.value, disabled: node.disabled, readOnly: node.readOnly, form: node.closest("form")?.outerHTML.slice(-1000)})), errors: context.errors, stderr: fixture.stderr}));
+        // The owning backend may finish and publish history before its original
+        // admission response reaches the composer. Hold that real response,
+        // rather than forging a second message or loosening the reply selector.
+        let releaseAdmission, releaseSnapshots;
+        const admissionHeld = new Promise(resolve => {releaseAdmission = resolve;});
+        const snapshotsHeld = new Promise(resolve => {releaseSnapshots = resolve;});
+        let holdSnapshots = false;
+        const sessionPath = "/api/chat/sessions/" + sessions[1];
+        const snapshotMatch = url => url.origin === origin && url.pathname === sessionPath;
+        const admissionMatch = url => url.origin === origin && url.pathname === sessionPath + "/turns";
+        const holdSnapshot = async route => {
+          const response = await route.fetch();
+          if (holdSnapshots) await snapshotsHeld;
+          await route.fulfill({response});
+        };
+        const holdAdmission = async route => {
+          if (route.request().method() !== "POST") {await route.fallback(); return;}
+          const response = await route.fetch();
+          await admissionHeld;
+          await route.fulfill({response});
+        };
+        await page.route(snapshotMatch, holdSnapshot);
+        await page.route(admissionMatch, holdAdmission);
+        try {
+          await composer.fill("Owner correction only to second Session");
+          await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+          await composer.press("Enter");
+          await panel.getByText("Runtime response.", {exact: true}).waitFor({timeout: 12_000});
+          const streamResponse = page.waitForResponse(response => new URL(response.url()).origin === origin
+            && new URL(response.url()).pathname.startsWith(sessionPath + "/turns/")
+            && new URL(response.url()).pathname.endsWith("/events"), {timeout: 12_000});
+          // Keep the canonical-identity follow-up read outstanding while the
+          // original stream completes. Both legal orderings must show one reply.
+          holdSnapshots = true;
+          releaseAdmission();
+          assert.equal((await streamResponse).status(), 200);
+          await panel.locator(".personal-message-pending").waitFor({state: "hidden"});
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          await panel.getByText("Runtime response.", {exact: true}).waitFor();
+          assert.equal(await panel.getByText("Runtime response.", {exact: true}).count(), 1,
+            "History before the original admission ACK must not duplicate the same native reply");
+          assert.equal(await panel.locator(".personal-message").count(), (await control("inspect")).messages[sessions[1]].length,
+            "The settled UI contains exactly the owning Session's saved messages");
+        } catch (error) {
+          console.log(JSON.stringify({diagnostic: await control("inspect"), body: await page.locator("body").innerText(), errors: context.errors}));
           throw error;
-        });
+        } finally {
+          releaseAdmission(); releaseSnapshots();
+          await page.unroute(admissionMatch, holdAdmission);
+          await page.unroute(snapshotMatch, holdSnapshot);
+        }
         const accepted = await control("inspect");
         assert.equal(accepted.sessions, 4, "Continuing uses the original Session, without replacements");
         assert.ok(!accepted.messages[sessions[0]].some(row => row.text === "Owner correction only to second Session"));

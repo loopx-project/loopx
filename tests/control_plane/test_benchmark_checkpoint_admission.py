@@ -78,7 +78,19 @@ if started == 0:
     assert env.get("FIXTURE_BOUND_WORK") and guard["heartbeat_receipt"]["closeout_required"] is True
     Path("checkpoint-closeout-guard.json").write_text(json.dumps(guard))
 else:
-    assert started == 1 and "resume" in sys.argv and sys.argv[-2] == "benchmark-original-session"
+    import argparse
+    native = argparse.ArgumentParser()
+    native.add_argument("-c", action="append")
+    native.add_argument("-C")
+    native.add_argument("--skip-git-repo-check", action="store_true")
+    native.add_argument("--model")
+    native.add_argument("--json", action="store_true")
+    native.add_argument("entry", choices=["exec"])
+    native.add_argument("operation", choices=["resume"])
+    native.add_argument("session")
+    native.add_argument("input")
+    resumed = native.parse_intermixed_args(sys.argv[1:])
+    assert (started, resumed.session, resumed.input) == (1, "benchmark-original-session", "-")
     guard = json.loads(Path(env["FIXTURE_HELD_QUOTA"]).read_text())
     assert env["LOOPX_TURN"] == guard["heartbeat_receipt"]["turn_instance_id"]
     assert env["LOOPX_TURN"] != env["FIXTURE_OUTER_TURN"]
@@ -99,12 +111,31 @@ if guard["heartbeat_receipt"].get("settlement_identity") is None:
 Path("checkpoint-business.json").write_text(json.dumps({"sum":sum(json.loads(Path("retained-input.json").read_text()))}))
 evidence = "checkpoint-business:" + hashlib.sha256(Path("checkpoint-business.json").read_bytes()).hexdigest()
 vision = Path("checkpoint-vision.json").resolve()
-vision.write_text(json.dumps({"schema_version":"goal_vision_replan_contract_v0","agent_id":env["LOOPX_AGENT_ID"],
+vision_packet = {"schema_version":"goal_vision_replan_contract_v0","agent_id":env["LOOPX_AGENT_ID"],
     "state":"active", "vision_patch":{"acceptance_summary":"Validate the retained inputs and keep remaining validation work.",
         "advancement_policy":"as_needed"}, "path_delta":{"schema_version":"goal_path_delta_v0","outcome":"continue",
         "prior_assumption":"The retained inputs still require a concrete validation probe.",
-        "observed_reality":"The retained inputs sum to five; this does not validate the other open tasks.",
-        "retained":["The remaining independent validation work"],"evidence_refs":[evidence]}}))
+        "observed_reality":"The retained inputs sum to five; the other work remains open.",
+        "retained":["The remaining independent validation work"],"evidence_refs":[evidence]}}
+control = (guard.get("replan_action_packet") or {}).get("stride_control")
+if control:
+    decision = control["minimal_example"].copy()
+    decision.update(basis="uncertain_evidence", action="verify", axes={
+        "work_slice": {"plan":"Validate the remaining fixture input in one work wake.",
+                       "reason":"The retained result qualifies only the original input."},
+        "route_distance": {"plan":"Keep the deterministic sum and compare an independent result.",
+                           "reason":"The original result matched the independent sum."},
+        "validation_scope": {"plan":"Check the new input and separately verify the retained result.",
+                             "reason":"A new check must preserve the original accepted evidence."}},
+        next_probe={"scope":"One remaining input and its validation.",
+                    "prediction":"The independent and retained arithmetic agree.",
+                    "adoption_criterion":"Both sums match the fixture oracle.",
+                    "cost_bound":"One work wake and its validation.",
+                    "minimum_evidence":"Input, result bytes and independent arithmetic."})
+    if "explore_review" in decision:
+        decision["explore_review"]["reason"] = "The synthetic scope uses the retained input and exact sum evidence."
+    vision_packet.update(state="vision_patch_proposed", stride_decision=decision)
+vision.write_text(json.dumps(vision_packet))
 actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
 refresh = next(command for command in actions if "refresh-state" in command)
 for old,new in [("<validated_progress>","retained_inputs_validated"),
@@ -119,8 +150,11 @@ if "--agent-vision-json" in refresh_args:
 else:
     refresh_args += ["--agent-vision-json",str(vision)]
 updated = cli(*refresh_args)
-spend = rendered(next(command for command in actions if "spend-slot" in command))
-spent, replay = cli(*spend), cli(*spend)
+if "--settle-turn" in refresh_args:
+    spent, replay = updated, cli(*refresh_args)
+else:
+    spend = rendered(updated["settlement_owed"]["command"])
+    spent, replay = cli(*spend), cli(*spend)
 Path("checkpoint-settlement.json").write_text(json.dumps({"refresh":updated,"spend":spent,"replay":replay}))
 '''
 

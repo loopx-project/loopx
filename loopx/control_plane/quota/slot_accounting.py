@@ -1,11 +1,12 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from .effective_action import EffectiveAction
 
 import json
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
 
 from ..agents.workspace_guard import (
     build_delivery_workspace_guard,
@@ -25,6 +26,7 @@ from .scheduler_ack import QUOTA_SCHEDULER_ACK_CLASSIFICATION
 from ...paths import validate_goal_id_path_segment as _validate_goal_id_path_segment
 from ..effect_program import SettlementBindingKind
 from .settlement import (
+    SettlementFailure,
     SettlementFailureKind,
     SettlementIdentity,
     SettlementResult,
@@ -79,7 +81,7 @@ def _todo_binding_error(
     delivery_run: dict[str, Any] | None = None,
 ) -> str | None:
     selected = (
-        before.get("selected_todo")
+        cast(dict[str, Any], before.get("selected_todo"))
         if isinstance(before.get("selected_todo"), dict)
         else {}
     )
@@ -156,7 +158,7 @@ def _resolve_preview_settlement(
     goal_ref: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if turn_instance_id and source not in TURN_SCOPED_SLOT_SPEND_SOURCES:
-        result = SettlementResult.failed(
+        result: SettlementResult[Any] = SettlementResult.failed(
             kind=SettlementFailureKind.INVALID_IDENTITY,
             step_kind=SettlementStepKind.VALIDATION,
             reason=(
@@ -164,7 +166,7 @@ def _resolve_preview_settlement(
                 "visible-goal spend"
             ),
         )
-        return {"reason": result.failure.reason, "result": result}
+        return {"reason": cast(SettlementFailure, result.failure).reason, "result": result}
     if turn_instance_id and not raw_runtime_root:
         return {"reason": "status payload does not include runtime_root"}
     if source not in TURN_SCOPED_SLOT_SPEND_SOURCES or not raw_runtime_root:
@@ -239,7 +241,7 @@ def _unbound_visible_goal_settlement_failure(
     ):
         return None
     selected = (
-        before.get("selected_todo")
+        cast(dict[str, Any], before.get("selected_todo"))
         if isinstance(before.get("selected_todo"), dict)
         else {}
     )
@@ -299,8 +301,8 @@ def _repair_settlement_workspace_causality(
 
 
 def _queue_item_for_goal(status_payload: dict[str, Any], *, goal_id: str) -> dict[str, Any]:
-    queue = status_payload.get("attention_queue") if isinstance(status_payload.get("attention_queue"), dict) else {}
-    queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    queue = cast(dict[str, Any], status_payload.get("attention_queue")) if isinstance(status_payload.get("attention_queue"), dict) else {}
+    queue_items = cast(list[Any], queue.get("items")) if isinstance(queue.get("items"), list) else []
     return next(
         (
             item
@@ -312,18 +314,18 @@ def _queue_item_for_goal(status_payload: dict[str, Any], *, goal_id: str) -> dic
 
 
 def _set_quota_for_goal(status_payload: dict[str, Any], *, goal_id: str, quota: dict[str, Any]) -> None:
-    run_history = status_payload.get("run_history") if isinstance(status_payload.get("run_history"), dict) else {}
-    run_goals = run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+    run_history = cast(dict[str, Any], status_payload.get("run_history")) if isinstance(status_payload.get("run_history"), dict) else {}
+    run_goals = cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     for goal in run_goals:
         if isinstance(goal, dict) and str(goal.get("id") or "") == goal_id:
             goal["quota"] = dict(quota)
 
-    queue = status_payload.get("attention_queue") if isinstance(status_payload.get("attention_queue"), dict) else {}
-    queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    queue = cast(dict[str, Any], status_payload.get("attention_queue")) if isinstance(status_payload.get("attention_queue"), dict) else {}
+    queue_items = cast(list[Any], queue.get("items")) if isinstance(queue.get("items"), list) else []
     for item in queue_items:
         if isinstance(item, dict) and str(item.get("goal_id") or "") == goal_id:
             item["quota"] = dict(quota)
-            project_asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
+            project_asset = cast(dict[str, Any], item.get("project_asset")) if isinstance(item.get("project_asset"), dict) else {}
             if project_asset:
                 project_asset["quota"] = dict(quota)
 
@@ -406,7 +408,7 @@ def _latest_unspent_turn_settlement_run(
         delivery_outcome = normalize_delivery_outcome(run.get("delivery_outcome"))
         if qualifies_turn_scoped_settlement(
             delivery_outcome,
-            run.get("progress_observation")
+            cast(dict[str, Any], run.get("progress_observation"))
             if isinstance(run.get("progress_observation"), dict)
             else None,
             work_item_id=normalize_todo_id(run.get("todo_id")),
@@ -624,7 +626,7 @@ def build_quota_slot_preview_for_decision(
             "agent_id": safe_requested_agent_id,
             "appended": False,
             "registry_mutated": False,
-            "reason": unbound_visible_goal_failure.failure.reason,
+            "reason": cast(SettlementFailure, unbound_visible_goal_failure.failure).reason,
             "settlement_result": settlement_result_payload(
                 unbound_visible_goal_failure
             ),
@@ -759,7 +761,7 @@ def build_quota_slot_preview_for_decision(
         }
     safe_bypass_spend = safe_bypass_requested
     raw_delivery_workspace = (
-        delivery_completion_run.get("delivery_workspace")
+        cast(dict[str, Any], delivery_completion_run.get("delivery_workspace"))
         if isinstance(delivery_completion_run, dict)
         and isinstance(delivery_completion_run.get("delivery_workspace"), dict)
         else None
@@ -886,7 +888,7 @@ def build_quota_slot_preview_for_decision(
             "before": before,
             "after": None,
         }
-    before_quota = before.get("quota") if isinstance(before.get("quota"), dict) else {}
+    before_quota = cast(dict[str, Any], before.get("quota")) if isinstance(before.get("quota"), dict) else {}
     if not before_quota:
         return {
             "ok": False,

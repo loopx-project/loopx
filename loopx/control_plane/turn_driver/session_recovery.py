@@ -14,6 +14,9 @@ from .driver import (
 HOST_RECOVERY_SCHEMA_VERSION = "loopx_turn_host_recovery_v0"
 HOST_RECOVERY_KINDS = frozenset({"resume_session"})
 
+# Receive the checked complete decision for a current request, or its original
+# envelope for historical input. The provider resolves its existing Session;
+# the shared lineage owner below still decides whether that binding matches.
 SessionBindingResolver = Callable[
     [Mapping[str, Any]],
     Mapping[str, Any] | None,
@@ -101,10 +104,20 @@ def assess_failed_turn_retry_request(
             "binding_resolver_unavailable",
             "failed-Turn session recovery has no binding resolver",
         )
-    envelope_value = request.get("turn_envelope")
-    envelope = dict(envelope_value) if isinstance(envelope_value, Mapping) else {}
     try:
-        session_binding = session_binding_resolver(envelope)
+        from ..quota.turn_envelope import (
+            COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+            complete_turn_host_source,
+        )
+
+        # Validate any supplied complete source before provider IO, but retain
+        # the recorded v0 callback input even when it has a complete sidecar.
+        complete_turn_host_source(request)
+        source_value = (request["work_contract"]
+            if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA
+            else request.get("turn_envelope"))
+        source = dict(source_value) if isinstance(source_value, Mapping) else {}
+        session_binding = session_binding_resolver(source)
     except Exception:  # noqa: BLE001 - provider boundary fails closed
         return rejected(
             "binding_resolution_failed",

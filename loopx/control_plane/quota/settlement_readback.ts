@@ -109,6 +109,7 @@ interface ReadbackRequest {
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
+  include_record_bodies: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
@@ -220,6 +221,9 @@ function decodeRequest(
       typeof request.resolve_original_binding !== "boolean") {
     throw new EffectRuntimeRequestError("resolve_original_binding must be a boolean");
   }
+  if (request.include_record_bodies !== undefined && typeof request.include_record_bodies !== "boolean") {
+    throw new EffectRuntimeRequestError("include_record_bodies must be a boolean");
+  }
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
@@ -278,6 +282,7 @@ function decodeRequest(
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
+    include_record_bodies: request.include_record_bodies !== false,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
@@ -1033,8 +1038,9 @@ function resolveIdentity(
   );
 }
 
-function bundle(result: SettlementResult): ResultBundle {
-  return { result, payload: settlementResultPayload(result) };
+function bundle(result: SettlementResult, includeRecordBody = true): ResultBundle {
+  return {result: includeRecordBody ? result : {...result, value: null},
+    payload: settlementResultPayload(result)};
 }
 
 function failedAfterIdentity(
@@ -1335,31 +1341,37 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
+  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  // The combined caller consumes controls and receipts after verification.
+  // Keep original bodies by default and throughout any pending recovery,
+  // including the same Runs carried by the four result bundles. Identity,
+  // controls and receipts remain complete; projection cannot settle a Turn.
+  const includeRecords = request.include_record_bodies || progress.state !== "settled";
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
     found: true,
     identity: bundle(identityResult),
-    writeback: bundle(writeback),
-    spend: bundle(spend),
-    delivery: bundle(withWriteback),
-    settlement: bundle(settled),
+    writeback: bundle(writeback, includeRecords),
+    spend: bundle(spend, includeRecords),
+    delivery: bundle(withWriteback, includeRecords),
+    settlement: bundle(settled, includeRecords),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
-    progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind),
+    progress,
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
-    writeback_run: writebackRun,
+    writeback_run: includeRecords ? writebackRun : null,
     refresh_recovery: recovery,
     external_delivery: request.refresh_retry === null ? null : refreshExternalDelivery(
       request.refresh_retry.external_delivery ?? null, identity, events,
       recovery?.decision !== "reject" && recovery?.decision !== "repair_receipt",
     ),
-    spend_run: spendRun,
-    heartbeat_receipt: heartbeatReceipt,
-    writeback_event: writebackEvent,
-    spend_event: spendEvent,
-    completion_event: completionEvent,
+    spend_run: includeRecords ? spendRun : null,
+    heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    writeback_event: includeRecords ? writebackEvent : null,
+    spend_event: includeRecords ? spendEvent : null,
+    completion_event: includeRecords ? completionEvent : null,
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     successor_replan_pending: replayPhase === "open" &&
@@ -1422,6 +1434,11 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     return prepareBlockedWait(value);
   }
   const request = decodeRequest(value);
+  const spendPrecheck = jsonObject(value)?.spend_precheck;
+  if (spendPrecheck !== undefined && typeof spendPrecheck !== "boolean") {
+    throw new EffectRuntimeRequestError("spend_precheck must be a boolean");
+  }
+  if (spendPrecheck) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
     ? withBorrowedQuotaAccountingOwner
     : withQuotaAccountingOwner;
@@ -1441,7 +1458,19 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
           "a stored Monitor poll may already have committed its observation; recover the exact monitor-poll before an unavailable closeout",
         );
       }
-      return result;
+      if (!spendPrecheck || result.found !== true) return result;
+      // Preview still needs a fresh full read. The earlier replay check needs
+      // only its receipts and whether a spend Run already needs receipt repair.
+      const settlement = requireJsonObject(result.settlement, "quota settlement bundle");
+      const outcome = requireJsonObject(settlement.result, "quota settlement result");
+      return {
+        schema_version: result.schema_version,
+        found: true,
+        identity: result.identity,
+        settlement: {...settlement, result: {...outcome, value: null}},
+        progress: result.progress,
+        spend_run_present: jsonObject(result.spend_run) !== null,
+      };
     },
   );
 }

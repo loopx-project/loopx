@@ -123,13 +123,26 @@ analysis artifacts and refuses a stale physical identity.
 An Agent prepares the connection within the owner's authority. Do not require
 the owner to discover runtime paths, write a manifest or copy a tunnel command.
 Links survive ordinary registry synchronization and App restart. Ambiguous Goal
-ids, unknown parents and source replacement are refused instead of borrowing
+views, unknown parents and source replacement are refused instead of borrowing
 another Goal's state. Native execution/configuration remains on the original
 runtime; the local App does not acquire those writes through a display link.
 
+When separate runtimes use the same native Goal id, the link may specify a
+unique `workspace_goal_id`. This is only a local routing identity: the source
+object, physical namespace, native Task/run ids, history and analysis scope
+retain the original Goal id. `source_access.original_goal_id` exposes that
+identity on aliased views. A workspace id cannot replace a local Goal or another
+source; the same physical source cannot be linked twice. Removing an aliased
+link uses its workspace id and current physical namespace. Linked-source research
+opens native history by default; an authored case reading remains optional.
+When a complete linked history read has no Explore records, show that limit
+alongside any retained strategy and a route to the original Tasks. A failed
+read still offers recovery, and a linked reader never offers to enable research
+mode on the original Goal.
+
 Each linked Goal carries `source_access` in the workspace projection. Its
 original Goal id, tasks, explicit graph edges and native measurements remain
-intact; the local link owns only parent organization. Source identity pins
+intact; the local link owns parent organization and optional workspace routing. Source identity pins
 history and analysis requests. First-layer reads invoke no model. Optional
 second-layer artifacts use the existing toolkit store beneath the local
 runtime's `goal-sources/<physical-namespace>` and remain bound to that original
@@ -251,6 +264,13 @@ producer; the second also checks the shared reader inside original delegations.
 Both check read-only browsing. Source/receipt negatives live in
 `tests/test_manager_context_roundtrip.py`; captures and limits are described in
 [the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
+
+When a later history page loses its transport, the existing read retry retains
+the verified prefix in browser memory and resumes its next cursor. Partial text
+never becomes a readable snapshot or enables sending. Each recovery rechecks
+the current source; source conflicts, invalid cursors/pages and permission
+denials discard the checkpoint. Reload and explicit refresh start a new read.
+See [the repeated-interruption evidence](../assets/personal-workspace/history-recovery/README.md).
 
 ### Workspace reading and request continuity / 工作区阅读与请求连续性
 

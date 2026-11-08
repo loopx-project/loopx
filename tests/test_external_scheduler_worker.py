@@ -22,6 +22,19 @@ if str(SCRIPTS) not in sys.path:
 import external_scheduler_worker as worker  # noqa: E402
 
 
+def test_quota_subprocess_keeps_machine_json_with_presentation_enabled(monkeypatch):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    probe = (
+        "import json, os; "
+        "print(json.dumps({'should_run': False, 'scheduler_hint': {'interval': 20}} "
+        "if os.environ.get('LOOPX_CONTEXT_DELIVERY') == 'off' "
+        "else {'reference_file': 'model-reader.json'}))"
+    )
+    payload = worker.run_quota_should_run([sys.executable, "-c", probe], timeout_seconds=10)
+    assert payload == {"should_run": False, "scheduler_hint": {"interval": 20}}
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == "on"
+
+
 def test_default_registry_follows_single_runtime_route(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

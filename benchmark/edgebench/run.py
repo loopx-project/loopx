@@ -14,6 +14,7 @@ import logging
 import ipaddress
 import os
 import signal
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -36,10 +37,10 @@ from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
-from benchmark.runtime.source import source_pins
+from benchmark.runtime.source import archive_source, source_pins
 from benchmark.edgebench.prompts import (
-    blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
-    checkpoint_research_instructions,
+    blind_task_prompt, best_only_task_prompt, native_task_instructions,
+    research_artifact_instructions,
 )
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
@@ -119,16 +120,29 @@ def main(argv=None):
     parser.add_argument("--worker", choices=PROFILES, required=True)
     parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="native",
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
+    parser.add_argument("--managed-run-json", type=Path,
+                        help="Opt-in private binding for native terminal proof, consumed by the controller")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--execution-observation", choices=("local_probe",),
+                        help="Optional local execution probe for heartbeat workers")
+    parser.add_argument("--native-child-limit", type=int,
+                        help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--native-readiness-total-seconds", type=float,
+                        help="Opt-in fresh native receiver setup budget, at most 75s and clipped to "
+                             "the existing outer allowance; only read-only account timeouts retry")
+    parser.add_argument("--native-readiness-attempt-seconds", type=float,
+                        help="Per-attempt cap for explicit native readiness setup, at most 25s; "
+                             "omitted keeps 25s (not a model retry)")
+    # Preserve the existing unique abbreviation after adding --managed-run-json.
+    parser.add_argument("--model", "--m", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
                         help="Host API gateway HTTP 429 retry window for new trials; "
@@ -150,10 +164,12 @@ def main(argv=None):
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
+    parser.add_argument("--preserve-failed-worker", action="store_true",
+                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
-                        help="Explicit complete checkpoint to continue under fresh native/Goal identities")
+                        help="Explicit complete checkpoint to continue the retained Goal/Agent in an isolated replacement")
     parser.add_argument("--restore-sha256")
     retention = parser.add_mutually_exclusive_group()
     retention.add_argument("--checkpoint-retention-policy", type=Path,
@@ -169,9 +185,11 @@ def main(argv=None):
     parser.add_argument("--restore-research-component", action="append", default=[],
                         help="Opt-in captured file component ID to restore at its original research path; repeat per component")
     parser.add_argument("--restore-fresh-replan", action="store_true",
-                        help="Start a fresh conversation before checkpoint preparation and the first current replan")
+                        help="Start a fresh conversation before the retained pending replan while preserving full Goal state")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
+    parser.add_argument("--restore-phase-remaining-cap-seconds", type=int,
+                        help="Only reduce the warm continuation allowance to the audited remaining solver time")
     parser.add_argument("--eval-interval", type=int,
                         help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
     parser.add_argument("--submission-cooldown", type=int,
@@ -182,10 +200,36 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_child_limit is not None and (
+            args.native_child_limit < 1 or args.feedback != "native"):
+        parser.error("--native-child-limit requires a positive limit and native feedback")
+    managed_binding = None
+    if args.managed_run_json is not None:
+        if args.feedback != "native":
+            parser.error("--managed-run-json requires native feedback")
+        from benchmark.edgebench.managed_run import (
+            persist_managed_run, publish_managed_terminal, read_managed_run, retain_managed_solver,
+        )
+        try:
+            managed_binding = read_managed_run(args.managed_run_json, run_id=args.run_id, task_id=args.task)
+        except OSError:
+            parser.error("Could not read the private managed run binding")
+        except ValueError as error:
+            parser.error(str(error))
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
         parser.error("OPENAI_BASE_URL requires OPENAI_API_KEY; no login fallback")
+    from benchmark.runtime.codex_readiness import native_readiness_budget
+    try:
+        readiness_budget = native_readiness_budget(
+            args.native_readiness_total_seconds, args.native_readiness_attempt_seconds)
+    except ValueError as error:
+        parser.error(str(error))
+    if readiness_budget is not None and (
+        args.worker in {"official", "single"} or api_base_url or args.restore_checkpoint is not None
+    ):
+        parser.error("Native readiness budget requires a fresh native Goal or heartbeat worker")
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
     args.eval_interval = (0 if args.feedback == "native" and args.eval_interval is None else
                          _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300))
@@ -201,6 +245,8 @@ def main(argv=None):
         args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.execution_observation is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--execution-observation requires a heartbeat worker")
     if args.provider_request_admission:
         if not args.worker.startswith("heartbeat-"):
             parser.error("--provider-request-admission requires a heartbeat worker")
@@ -228,6 +274,10 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.preserve_failed_worker and not handoff:
+        parser.error("Failed-worker preservation requires full native controller capture")
+    if args.preserve_failed_worker and args.eval_interval != 0:
+        parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
         if not handoff:
             parser.error("Checkpoint export storage requires full controller capture")
@@ -238,10 +288,13 @@ def main(argv=None):
     restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
-        parser.error("Warm continuation requires checkpoint, digest, config, fresh Goal/Agent and source Todo together")
+        parser.error("Warm continuation requires checkpoint, digest, config, source Goal/Agent and source Todo together")
     if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
             (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
+    if args.restore_phase_remaining_cap_seconds is not None and (
+            not 0 <= args.restore_phase_remaining_cap_seconds < 2 ** 53 or not args.restore_checkpoint):
+        parser.error("A non-negative phase cap requires an explicit warm checkpoint continuation")
     if args.restore_research_component and not args.restore_checkpoint:
         parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_fresh_replan and not args.restore_checkpoint:
@@ -253,6 +306,9 @@ def main(argv=None):
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
+    if (managed_binding is not None
+            and trial.resolve() != args.log_dir.resolve() / "runs" / args.run_id / args.task):
+        parser.error("Managed run requires its exact physical attempt directory")
     if args.restore_checkpoint is None:
         trial.mkdir(parents=True, exist_ok=False)
     else:
@@ -266,8 +322,27 @@ def main(argv=None):
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
+    if args.restore_checkpoint is not None:
+        # Activating the native capsule starts its remaining phase clock.
+        # Qualify the actual install archives first, including ignored assets;
+        # the adapter still checks them again when staging the worker.
+        with tempfile.TemporaryDirectory(prefix="benchmark-restore-source-") as directory:
+            archive_source(product, pins[0], Path(directory) / "source.tar")
+            if runner != product:
+                archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    if args.native_child_limit is not None and task.game_mode:
+        parser.error("--native-child-limit requires a non-game task with workspace instructions")
+    if managed_binding is not None and task.task_id != args.task:
+        parser.error("Managed run task specification differs from the selected task")
+    research_sidecar = args.feedback == "native" and not task.game_mode
+    if research_sidecar:
+        from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
+        validate_research_scope(task.cwd, task.submit_paths)
+        if checkpoint_request is not None:
+            declaration = with_research_capture(declaration)
+            checkpoint_request = json.dumps(declaration).encode("utf-8")
     blind_endpoint = None
     feedback_prompt = None
     workspace_instructions = None
@@ -291,14 +366,11 @@ def main(argv=None):
         native_policy = dict(submission_cooldown=args.submission_cooldown,
             eval_interval=args.eval_interval, internet=task.internet,
             selection=task.judge.selection, score_direction=task.judge.score_direction)
-        feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        if checkpoint_request is not None:
-            research = checkpoint_research_instructions(declaration, task.cwd)
-            workspace_instructions += research
-            # Keep the exact policy prefix shared with AGENTS.md; the original
-            # task remains the separately owned Goal objective.
-            feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
+        workspace_instructions += research_artifact_instructions(checkpoint=checkpoint_request is not None)
+        # All native arms get the same storage policy. Checkpoint coverage is
+        # explicit; neither collection nor a sidecar changes native submissions.
+        feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
     config = replace(
         load_config(),
@@ -335,7 +407,8 @@ def main(argv=None):
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component), args.restore_fresh_replan,
-            destination_config=args.restore_model_config)
+            destination_config=args.restore_model_config, research_sidecar=research_sidecar,
+            native_child_limit=args.native_child_limit)
         metadata = candidate.verify(task.cwd)
         if args.restore_model_config is not None:
             from loopx.hosts.codex_checkpoint import checkpoint_destination_config
@@ -349,15 +422,21 @@ def main(argv=None):
         clock = attempt / "restored-phase-deadline"
         warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
-                         warm_start=warm_start,
+                         warm_start=warm_start, research_sidecar=research_sidecar,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
+                         native_child_limit=args.native_child_limit,
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"execution_observation": args.execution_observation}
+                            if args.execution_observation is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
+                         **({"native_readiness_total_seconds": readiness_budget[0],
+                             "native_readiness_attempt_seconds": readiness_budget[1]}
+                            if readiness_budget is not None else {}),
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
@@ -387,13 +466,20 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
                        if args.checkpoint_export_root is not None else trial / "checkpoints")
+        terminal = None
+        if args.preserve_failed_worker:
+            from benchmark.edgebench.terminal_capture import terminal_components
+            terminal = terminal_components(declaration, task.cwd)
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
-                                          retention_enabled=not args.no_checkpoint_retention)
+                                          retention_enabled=not args.no_checkpoint_retention,
+                                          terminal_components=terminal,
+                                          terminal_receipt=(trial / "terminal-preservation.json") if terminal else None)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      docker_host_bridge=args.docker_host_bridge,
+                                     research_sidecar=research_sidecar,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -401,7 +487,8 @@ def main(argv=None):
     if warm_start is not None:
         activated = restore(args.checkpoint_controller_file, root=capsule,
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
-            phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds)
+            phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds,
+            phase_remaining_cap_seconds=args.restore_phase_remaining_cap_seconds)
         epoch = int(clock.read_text())
         warm_start = replace(candidate, deadline_epoch=epoch)
         reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
@@ -424,6 +511,8 @@ def main(argv=None):
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"execution_observation": args.execution_observation}
+           if args.execution_observation is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
@@ -432,10 +521,13 @@ def main(argv=None):
         "status": "starting", "score_countable": False,
         **({"restore_phase_extension_seconds": args.restore_phase_extension_seconds}
            if args.restore_phase_extension_seconds else {}),
+        **({"restore_phase_remaining_cap_seconds": args.restore_phase_remaining_cap_seconds}
+           if args.restore_phase_remaining_cap_seconds is not None else {}),
         **({"restore_fresh_replan": True} if args.restore_fresh_replan else {}),
         **({"restored_checkpoint_sha256": warm_start.sha256,
             "original_deadline_epoch": warm_start.deadline_epoch,
-            "receiver_preparation_cadence": 1, "normal_replan_cadence": warm_start.normal_cadence}
+            "restored_loopx_state": True,
+            "normal_replan_cadence": warm_start.normal_cadence}
            if warm_start is not None else {}),
         **({"online_admission_epoch": sampler.epoch, "offline_scoring_complete": False}
            if sampler is not None else {}),
@@ -452,9 +544,14 @@ def main(argv=None):
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
+        **({"preserve_failed_worker": True} if args.preserve_failed_worker else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
-    receipt_path.write_text(json.dumps(receipt, indent=2))
+    managed_launch = None
+    if managed_binding is not None:
+        managed_launch = persist_managed_run(trial, managed_binding, receipt=receipt, game_mode=task.game_mode)
+    else:
+        receipt_path.write_text(json.dumps(receipt, indent=2))
     try:
         result, was_interrupted, elapsed = _observe_run(lambda: run_agent(
             task_spec=task, agent=agent, config=config, backend=backend,
@@ -502,7 +599,19 @@ def main(argv=None):
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback,
                                native_goal_outcome=native.get("native_goal_outcome"))
-    receipt_path.write_text(json.dumps(receipt, indent=2))
+    if managed_launch is None:
+        receipt_path.write_text(json.dumps(receipt, indent=2))
+    else:
+        try:
+            solver_retained = retain_managed_solver(trial, managed_binding, managed_launch, receipt=receipt, result=result)
+        except (OSError, TypeError, ValueError) as error:
+            logger.warning("Managed solver evidence unavailable (%s)", type(error).__name__)
+        else:
+            try:
+                if not solver_retained or not publish_managed_terminal(trial, execute=True):
+                    logger.warning("Managed terminal proof withheld: native solver termination or grading drain unconfirmed")
+            except (OSError, TypeError, ValueError) as error:
+                logger.warning("Managed terminal proof unavailable (%s)", type(error).__name__)
     print(json.dumps(receipt))
     return 0 if status == "terminal" else 130 if status == "cancelled" else 1
 

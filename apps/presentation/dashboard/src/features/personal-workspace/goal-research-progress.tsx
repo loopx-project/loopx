@@ -1,5 +1,5 @@
 import {ArrowUpRight, ChevronDown, CircleHelp, FileText, TriangleAlert, X} from "lucide-react";
-import {useId, useRef, useState} from "react";
+import {useId, useLayoutEffect, useRef, useState} from "react";
 import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
@@ -7,6 +7,7 @@ import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
 import {ResearchTurnCosts} from "./research-turn-costs";
 import {ToolContextInventory} from "./goal-tool-context";
+import {LoopXRequestFootprint, ResearchUsageComparison, type ReadUsageComparison} from "./research-usage-comparison";
 import "./goal-research-progress.css";
 
 // Read models from benchmark-toolkit. This view formats existing counts and
@@ -108,12 +109,12 @@ export function episodeQuestionGroups<T extends {episode_id: string}>(result: Tr
 
 // Keep headline values readable without rounding a nonzero measurement to zero.
 // Full native precision remains available in the existing evidence/details.
-function formatNativeMeasurement(value: number, zh: boolean, signed = false) {
+function formatNativeMeasurement(value: number, zh: boolean, signed = false, significantDigits = 4) {
   const magnitude = Math.abs(value);
   const scientific = magnitude > 0 && (magnitude < 0.0001 || magnitude >= 1_000_000);
   return new Intl.NumberFormat(zh ? "zh-CN" : "en", {
     maximumFractionDigits: 4,
-    ...(scientific ? {notation: "scientific", maximumSignificantDigits: 4} : {}),
+    ...(scientific ? {notation: "scientific", maximumSignificantDigits: significantDigits} : {}),
     signDisplay: signed ? "exceptZero" : "auto",
   }).format(value === 0 ? 0 : value);
 }
@@ -124,18 +125,19 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
   const outcomes = native.projection, improvement = outcomes.retained_improvement;
   if (!improvement) return null;
   const format = (value: number) => formatNativeMeasurement(value, zh, true);
-  const label = zh ? "已采用成果增量" : "Retained improvement";
+  const label = zh ? "声明的保留增量" : "Declared retained change";
   return <section className="research-retained-improvement" aria-label={label}>
     <div className="research-progress-title"><h4>{label}</h4><ContextHelp label={zh ? "成果增量说明" : "About retained improvement"}>
-      <p>{zh ? "固定基线与实际保留结果的原生指标差值，正数表示改善。越低越好的指标反向计算；回退到基线为零，缺少基线或保留证据为未知。" : "Native change from a fixed baseline to the actually retained result. Positive means improvement; lower-is-better metrics reverse the subtraction. Returning to baseline is zero; missing baseline or retention evidence is unknown."}</p>
+      <p>{zh ? "按来源声明的固定基线与保留结果计算原生指标差值，正数表示改善。越低越好的指标反向计算；回退到基线为零，缺少基线或保留证据为未知。" : "Native change between the source-declared fixed baseline and retained result. Positive means improvement; lower-is-better metrics reverse the subtraction. Returning to baseline is zero; missing baseline or retention evidence is unknown."}</p>
+      <p>{zh ? "引用绑定不证明实际文件采用或比较条件已独立核验；最佳轮次不能替代保留证据。" : "Citation binding does not independently verify artifact adoption or comparable conditions; a best round cannot establish retention."}</p>
       <p>{zh ? "只代表所选比较，不是 LoopX 的独立贡献或原目标已达成；不能跨题、跨单位或重叠窗口相加。展开数值可看原文。" : "This comparison alone does not establish LoopX's causal contribution or objective completion. Do not sum across tasks, units or overlapping windows. Expand the value for original evidence."}</p>
     </ContextHelp></div>
     {native.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获 · 当前结果未核验" : "Historical capture · current result unverified"}</p> : null}
     <details><summary aria-label={`${label}: ${improvement.value === null ? (zh ? "未知" : "Unknown") : `${format(improvement.value)} ${outcomes.metric.unit}`}`}>
       <strong data-retained-improvement>{improvement.value === null ? "—" : format(improvement.value)}</strong>
-      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}{improvement.baseline ? ` · ${zh ? "基线" : "baseline"} ${formatNativeMeasurement(improvement.baseline.value, zh)}` : ""}</span><ChevronDown size={14} aria-hidden/>
+      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit}</span><ChevronDown size={14} aria-hidden/>
     </summary><dl>
-      {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "实际保留" : "Actually retained"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
+      {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "声明保留" : "Declared retained result"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
       <div><dt>{zh ? "保留依据" : "Retention evidence"}</dt><dd>{improvement.retention_citation ? <button type="button" onClick={event => onCitation(improvement.retention_citation!, event.currentTarget)}>{zh ? "查看原文" : "Read original evidence"}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未采集" : "Uncaptured")}</dd></div>
       <div><dt>{zh ? "最后候选差值" : "Final candidate change"}</dt><dd>{improvement.final_candidate_delta === null ? (zh ? "未知" : "Unknown") : `${format(improvement.final_candidate_delta)} ${outcomes.metric.unit}`} · {zh ? "不代表已采用收益" : "not realized retention"}</dd></div>
     </dl></details>
@@ -146,14 +148,23 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
   const outcomes = native?.projection;
   if (!native || !outcomes) return <ContextHelp label={zh ? "原生测量未采集" : "Native measurements not captured"} icon={CircleHelp}><p className="research-native-empty">{zh ? "原生测量 · 未采集" : "Native measurements · not captured"}</p></ContextHelp>;
   const historical = native.applicability === "historical";
-  const points = [["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["initial", "首次提交", "Initial submission"], ["final_valid", "最后有效提交", "Final valid submission"], ["retained", "原生保留结果", "Native retained result"]] as const;
+  const points = [["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["initial", "首次提交", "Initial submission"], ["final_valid", "最后有效提交", "Final valid submission"], ["retained", "来源声明的保留结果", "Source-declared retained result"]] as const;
+  // The real Ad capture has distinct best/final values that both round to
+  // 4.965E10. Keep the compact notation, increasing precision only until the
+  // distinct scientific measurements remain distinguishable (up to double precision).
+  const scientificValues = [...new Set(points.flatMap(([key]) => {
+    const point = outcomes[key], magnitude = Math.abs(point?.value ?? 0);
+    return point && magnitude > 0 && (magnitude < 0.0001 || magnitude >= 1_000_000) ? [point.value] : [];
+  }))];
+  let significantDigits = 4;
+  while (significantDigits < 17 && new Set(scientificValues.map(point => formatNativeMeasurement(point, zh, false, significantDigits))).size < scientificValues.length) significantDigits++;
   const period = new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {timeZone: "UTC", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
     ...(new Date(outcomes.start).getUTCFullYear() !== new Date(outcomes.end).getUTCFullYear() ? {year: "numeric"} : {})});
   const value = ([key, cn, en]: typeof points[number]) => {
     const point = outcomes[key];
     return <div key={key} className={key === "best_valid" ? "research-native-best" : undefined} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ?
       <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)} aria-label={`${zh ? cn : en}: ${String(point.value)} ${outcomes.metric.unit} · ${zh ? "查看原始证据" : "Read original evidence"}`}>
-        <strong>{formatNativeMeasurement(point.value, zh)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
+        <strong>{formatNativeMeasurement(point.value, zh, false, significantDigits)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
       </button> : <span className="research-native-unknown">{zh ? "未知" : "Unknown"}{key === "best_valid" ? <span className="research-native-unit"> · {outcomes.metric.unit}</span> : null}</span>}</dd></div>;
   };
   return <section className="research-native-results" aria-label={zh ? "原生测量" : "Native measurements"}>
@@ -176,7 +187,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
         <div><dt>{zh ? "来源" : "Source"}</dt><dd>{native.artifact}<br/><code>{native.artifact_sha256}</code></dd></div></dl>
       <dl>{points.map(([key, cn, en]) => {
         const point = outcomes[key];
-        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
+        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "观测时间" : "Observed at"}: <time dateTime={point.observed_at}>{point.observed_at}</time></dd></div> : null;
       })}</dl>
       <ul>{outcomes.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul>
     </details></div>
@@ -187,6 +198,14 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   const [selected, setSelected] = useState<TrajectoryMetric | null>(null);
   const panelId = useId(), panel = useRef<HTMLDivElement>(null);
   const origin = useRef<HTMLButtonElement | null>(null);
+  // Focus the committed region before the next interaction, even when the
+  // animation clock is suspended. A later frame must not steal a row's Enter.
+  useLayoutEffect(() => {
+    if (selected && panel.current) {
+      panel.current.focus({preventScroll: true});
+      panel.current.scrollIntoView({block: "nearest"});
+    }
+  }, [selected]);
   const result = p.result;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
@@ -210,7 +229,6 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
         onClick={event => {
           if (selected === metric) {close(); return;}
           origin.current = event.currentTarget; setSelected(metric);
-          requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "nearest"});});
         }}>
         <span className="research-effect-title">{label[zh ? 0 : 1]}<ChevronDown size={13} aria-hidden/></span>
         <strong className="research-effect-number">{row?.eligible ? <>{number(row.yes)}<span> / {number(row.eligible)}</span></> : "—"}</strong>
@@ -254,7 +272,7 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   </div>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, onUsageTurn, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onUsageTurn?: (turnId: string, origin: HTMLButtonElement) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, onUsageTurn, onUsageComparison, usageComparisonScope, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: (Pick<ResearchProgressPack, "pack_id" | "title"> & Partial<ResearchProgressPack>)[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onUsageComparison?: ReadUsageComparison; usageComparisonScope?: string; onUsageTurn?: (turnId: string, origin: HTMLButtonElement) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
   const historical = p?.applicability === "historical";
   const resultHelp = historical ? (result ? (zh ? "历史分析 · 当前判断未核验" : "Historical analysis · Current judgments unverified")
@@ -263,19 +281,27 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
   const incomplete = usage?.incomplete_turn;
   const coverage = usage?.request_coverage;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
+  const scope = p ? `${number(p.episode_count)} ${zh ? "个片段" : "episodes"} · ${p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}` : "";
   const duration = (s: number) => `${number(s / 60)} ${zh ? "分钟" : "min"}`;
   const stamp = (s: string) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}).format(new Date(s));
   return <section className="research-progress" aria-label={zh ? "长程效果与用量" : "Long-horizon results and usage"}>
     <header><div className="research-progress-heading"><div className="research-progress-title"><h3>{p?.native_outcomes ? (zh ? "研究结果" : "Research results") : (zh ? "研究效果判读" : "Research effectiveness")}</h3><ContextHelp label={resultHelp} icon={historical ? TriangleAlert : p && !result ? CircleHelp : undefined}>
       {historical ? <p>{zh ? "来源或方法已变化；历史捕获与判读不能当作当前结果。" : "The source or method changed; historical captures and judgments cannot establish current results."}</p> : null}
-      {p && !result ? <p>{zh ? "可先浏览已采集的测量与记录；深度分析需单独点击，不会随浏览自动运行。" : "Captured measurements and records remain readable. Deep analysis requires a separate action and never runs while browsing."}</p> : null}
+      {p && !result ? <>
+        <p>{zh ? "分析输入" : "Analysis input"} · {scope}</p>
+        <p>{zh ? "可先浏览已采集的测量与记录；深度分析需单独点击，不会随浏览自动运行。" : "Captured measurements and records remain readable. Deep analysis requires a separate action and never runs while browsing."}</p>
+      </> : null}
       {p ? <p>{p.title}</p> : null}
-      <p>{zh ? "分析器判读未校准，仅限所选片段；范围外或未捕获的工作未纳入。数字为“是 / 适用片段”，未知仍在分母中；点选指标可看依据。" : "Uncalibrated judgments of selected episodes only; work outside this scope or not captured is excluded. Counts are yes / eligible episodes, including unknowns. Select a metric for evidence."}</p>
-      <p>{zh ? "不适用来自原始片段的明确取样规则，不算“否”或“未知”；展开指标可看被排除的片段。" : "Ineligible episodes follow the source's explicit selection, not a no or unknown judgment. Expand a metric to identify them."}</p>
-      <p>{zh ? "收益检验的“是”不保证收益为正；无益重复的“是”表示发现问题。六项分别判断，不合成总分、成功率或原生收益。" : "Yes for benefit testing does not imply positive utility; yes for repetition identifies a problem. The six judgments are not a total score, success rate or native utility."}</p>
-      <p>{p?.selection.exhaustive ? (zh ? "仅覆盖声明的固定分析范围，不等于覆盖全部研究。" : "Covers the declared fixed analysis scope, not necessarily the whole study.") : p?.selection.population_episodes == null ? (zh ? "定向抽样，全程覆盖未知。" : "Purposive sample; whole-run coverage is unknown.") : (zh ? "定向抽样，不代表全程。" : "Purposive sample, not the whole run.")}</p>
-      <p>{zh ? "原生测量缺失时保持未采集；分析器判读不能补成实际收益。完整取样规则与版本在“来源与用量”中。" : "Missing native measurements remain uncaptured; judgments cannot supply realized utility. Full selection rules and revisions are under Sources and usage."}</p>
-    </ContextHelp></div>{p ? <p className="research-progress-scope" data-pack-id={p.pack_id}>{number(p.episode_count)} {zh ? "个片段" : "episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}{result ? (zh ? " · 未校准" : " · Uncalibrated") : ""}</p> : null}</div>{packs.length > 1 ? <label>{zh ? "评估范围" : "Evaluation scope"}<select value={selectedId} onChange={e => onSelect(e.target.value)}>{packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}</select></label> : null}</header>
+      {result ? <>
+        <p>{zh ? "分析器判读未校准，仅限所选片段；范围外或未捕获的工作未纳入。数字为“是 / 适用片段”，未知仍在分母中；点选指标可看依据。" : "Uncalibrated judgments of selected episodes only; work outside this scope or not captured is excluded. Counts are yes / eligible episodes, including unknowns. Select a metric for evidence."}</p>
+        <p>{zh ? "不适用来自原始片段的明确取样规则，不算“否”或“未知”；展开指标可看被排除的片段。" : "Ineligible episodes follow the source's explicit selection, not a no or unknown judgment. Expand a metric to identify them."}</p>
+        <p>{zh ? "收益检验的“是”不保证收益为正；无益重复的“是”表示发现问题。六项分别判断，不合成总分、成功率或原生收益。" : "Yes for benefit testing does not imply positive utility; yes for repetition identifies a problem. The six judgments are not a total score, success rate or native utility."}</p>
+      </> : null}
+      {p ? <>
+        <p>{p.selection.exhaustive ? (zh ? "仅覆盖声明的固定分析范围，不等于覆盖全部研究。" : "Covers the declared fixed analysis scope, not necessarily the whole study.") : p.selection.population_episodes == null ? (zh ? "定向抽样，全程覆盖未知。" : "Purposive sample; whole-run coverage is unknown.") : (zh ? "定向抽样，不代表全程。" : "Purposive sample, not the whole run.")}</p>
+        <p>{zh ? "原生测量缺失时保持未采集；分析器判读不能补成实际收益。完整取样规则与版本在“来源与用量”中。" : "Missing native measurements remain uncaptured; judgments cannot supply realized utility. Full selection rules and revisions are under Sources and usage."}</p>
+      </> : <p>{zh ? "当前没有可读的分析范围。" : "No analysis scope is available."}</p>}
+    </ContextHelp></div>{p ? <p className="research-progress-scope" data-pack-id={p.pack_id}>{result ? `${scope}${zh ? " · 未校准" : " · Uncalibrated"}` : (zh ? "尚无分析器判读" : "No analyzer judgments yet")}</p> : null}</div>{packs.length > 1 ? <label>{zh ? "评估范围" : "Evaluation scope"}<select value={selectedId} onChange={e => onSelect(e.target.value)}>{packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}</select></label> : null}</header>
     {p ? <>
       {p.native_outcomes ? <NativeResults native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
       {p.native_outcomes ? <RetainedImprovement native={p.native_outcomes} zh={zh} onCitation={onCitation}/> : null}
@@ -335,7 +361,9 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </> : null}
           </div> : null}
           </div>
-          {usage && onUsageTurn ? <ResearchTurnCosts key={p.pack_id} usage={usage} zh={zh} onRead={onUsageTurn}/> : null}
+          {usage ? <LoopXRequestFootprint usage={usage} zh={zh}/> : null}
+          <ResearchUsageComparison key={`${usageComparisonScope}:${p.pack_id}:${measured?.artifact_sha256}`} pack={p} packs={packs} zh={zh} onRead={onUsageComparison}/>
+          {usage && onUsageTurn ? <ResearchTurnCosts key={`${p.pack_id}:${measured?.artifact_sha256}`} usage={usage} source={{pack_id: p.pack_id, goal_id: p.scope.goal_id, artifact_sha256: measured!.artifact_sha256, applicability: measured!.applicability}} zh={zh} onRead={onUsageTurn}/> : null}
           {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
             <dl className="research-usage-basis">
               <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>

@@ -119,15 +119,30 @@ export function normalizeStewardContext(value: unknown): Record<string, unknown>
 
 export function stewardConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeStewardContext(input.context);
-  if (input.metadata_review === true) {
+  if (input.metadata_review === true && input.answer_review === true) throw new Error("steward review modes are exclusive");
+  if (input.metadata_review === true || input.answer_review === true) {
     // Reuse the narrower native result-review policy without turning a
-    // portfolio grant into project execution authority. Only frozen text is
-    // supplied; host instructions, network, tools and delegation stay off.
+    // portfolio grant into project execution authority. Default to the existing
+    // workspace-only frozen reads. The host may retain its already-authorized
+    // trusted-owner read subset below; no writes or network are permitted.
     const review = projectConversationIdentity({context: {...context,
       kind: "project_workspace", grant: "workspace_read"}, read_only_review: true});
     const config = review.host_config as Record<string, unknown>;
     config.features = {...config.features as object, shell_tool: false,
       apply_patch_freeform: false};
+    if (input.answer_review === true && input.answer_review_host_read === true) {
+      // The host derives this subset from the original trusted-owner runtime,
+      // never from the portfolio grant, model text or provider availability.
+      // Preserve its host reads while denying every write and network effect.
+      const profiles = config.permissions as Record<string, Record<string, unknown>>;
+      const narrow = profiles.loopx_workspace_only_read;
+      const profile = "loopx_steward_host_read";
+      review.permissions_profile = profile;
+      config.default_permissions = profile;
+      config.features = {...config.features as object, shell_tool: true};
+      config.permissions = {[profile]: {...narrow,
+        filesystem: {...narrow.filesystem as object, ":root": "read"}, network: {enabled: false}}};
+    }
     return {...review, context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
   }
   return {context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
@@ -199,4 +214,21 @@ export function resolveConversationScope(input: Record<string, unknown>): Conver
     return {kind: "external_audience", goal_ids: [], private_conversation: false};
   }
   return {kind: "unavailable", goal_ids: [], private_conversation: false};
+}
+
+/** One executor match for bound input and native work; provider/source admission remains separate. */
+export function boundConversationExecutorMatches(row: Record<string, unknown>, session: Record<string, unknown>): boolean {
+  if (session.agent_id === row.executor_endpoint_id && session.executor_endpoint_id === row.executor_endpoint_id) return true;
+  const allocation = session.manager_executor_allocation as Record<string, unknown> | undefined;
+  return row.context_kind === "steward" && row.audience !== "group"
+    && row.executor_endpoint_id === "antigravity" && session.agent_id === "codex"
+    && session.executor_endpoint_id === "codex" && allocation?.schema_version === "manager_executor_allocation_v0"
+    && allocation.selection_policy === "flexible" && allocation.configured_endpoint === "antigravity"
+    && allocation.executor_endpoint === "codex" && allocation.allocation_reason === "flexible_availability_fallback"
+    && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
+    && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
+    && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
+    && Array.isArray(session.upstream_context_history) && session.upstream_context_history.some(value =>
+      value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).agent_id === "antigravity"
+      && typeof (value as Record<string, unknown>).thread_id === "string");
 }

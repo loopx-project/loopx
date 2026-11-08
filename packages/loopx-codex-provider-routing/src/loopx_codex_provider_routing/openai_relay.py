@@ -6,25 +6,70 @@ upstream API keys, never subscription credentials, prompts or response logs.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import secrets
 import re
 import socket
 import subprocess
-import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 
 from .native import NativeAccounts, atomic, private_read
 from .native_host import HostError
-from .openai_keys import NoRedirect
+from .openai_keys import NoRedirect, api_policy
 
 SCHEMA = "codex_openai_api_relay_v1"
 API_SLOT = "openai-api"
+RUNTIME_SCHEMA = "codex_openai_api_relay_runtime_v1"
+# Loaded once. Replacing an installed wheel cannot make its old daemon claim
+# the newly installed implementation. No credential or request data is hashed.
+BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for name in (
+    "openai_relay.py", "relay_lifecycle.py", "provider.py", "native.py", "native_host.py",
+    "native_policy.ts", "native_policy_bridge.ts", "openai_keys.py",
+    "openai_policy.ts", "openai_policy_bridge.ts", "native-extension.toml"))).hexdigest()
+
+
+class _StreamOutcome:
+    """Bounded, transient SSE framing; the existing TS owner classifies errors."""
+    def __init__(self):
+        self.buffer = b""
+        self.discard = False
+        self.finished = False
+
+    def feed(self, chunk: bytes):
+        if self.finished:
+            return None
+        self.buffer += chunk
+        while match := re.search(rb"\r?\n\r?\n", self.buffer):
+            frame, self.buffer = self.buffer[:match.start()], self.buffer[match.end():]
+            skipped, self.discard = self.discard, False
+            if skipped or len(frame) > 65536:
+                continue
+            data = b"\n".join(line[5:].removeprefix(b" ") for line in frame.splitlines()
+                              if line.startswith(b"data:"))
+            try:
+                event = json.loads(data)
+                # Ordinary token events need no policy subprocess or retained payload.
+                if not isinstance(event, dict) or event.get("type") not in ("error", "response.failed"):
+                    continue
+                outcome = api_policy({"operation": "stream-outcome", "event": event})
+            except (ValueError, OSError, HostError, subprocess.SubprocessError):
+                continue  # Observation failure never changes the original response.
+            if outcome is not None:
+                self.finished = True
+                self.buffer = b""
+                return outcome
+        if len(self.buffer) > 65536:
+            # Keep a possible split delimiter while skipping this oversized event.
+            self.buffer, self.discard = self.buffer[-3:], True
+        return None
 
 
 def route(owner: NativeAccounts) -> dict:
@@ -34,16 +79,27 @@ def route(owner: NativeAccounts) -> dict:
     return value
 
 
-def healthy(value: dict) -> bool:
-    request = urllib.request.Request(f"http://127.0.0.1:{value['port']}/health", headers={"Authorization": "Bearer " + value["token"]})
+def consumer_token(value: dict, consumer: str) -> str:
+    token = value.get("steward_token" if consumer == "steward" else "token")
+    if not isinstance(token, str) or not token or consumer == "steward" and token == value.get("token"):
+        raise HostError("api_relay_upgrade_required")
+    return token
+
+
+def healthy(value: dict, consumer: str = "worker") -> bool:
+    prefix = "/steward" if consumer == "steward" else ""
     try:
+        request = urllib.request.Request(f"http://127.0.0.1:{value['port']}{prefix}/health", headers={
+            "Authorization": "Bearer " + consumer_token(value, consumer)})
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=1) as response:
             return response.read(128) == b'{"ok":true}'
     except (OSError, HostError):
         return False
 
 
-def ensure(owner: NativeAccounts) -> dict:
+def ensure(owner: NativeAccounts, *, consumer: str = "worker") -> dict:
+    if consumer not in ("worker", "steward"):
+        raise HostError("invalid_policy")
     with owner._lock(name="api-relay-state.lock", wait_seconds=5):
         path = owner.root / "api-relay.json"
         if not path.exists():
@@ -52,18 +108,16 @@ def ensure(owner: NativeAccounts) -> dict:
                 port = sock.getsockname()[1]
             atomic(path, {"schema_version": SCHEMA, "port": port, "token": "sk-loopx-relay-" + secrets.token_urlsafe(32)})
         value = route(owner)
-        if not healthy(value):
-            # Independent of a Chat/App process that the handoff may restart.
-            subprocess.Popen([sys.executable, "-m", "loopx_codex_provider_routing.openai_relay",
-                              "--runtime-root", str(owner.root.parents[1])],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and not healthy(value):
-                time.sleep(.1)
-            if not healthy(value):
-                raise HostError("api_relay_unavailable")
-        return {"slot": API_SLOT, "api_key": value["token"], "base_url": f"http://127.0.0.1:{value['port']}/v1"}
+        if consumer == "steward" and "steward_token" not in value:
+            # Independent random credentials: a worker token must not be able
+            # to derive the steward's API-primary transport credential.
+            value["steward_token"] = "sk-loopx-relay-" + secrets.token_urlsafe(32)
+            atomic(path, value)
+        from .relay_lifecycle import reconcile
+        reconcile(owner, value, consumer=consumer)
+        prefix = "/steward" if consumer == "steward" else ""
+        return {"slot": API_SLOT, "api_key": consumer_token(value, consumer),
+                "base_url": f"http://127.0.0.1:{value['port']}{prefix}/v1"}
 
 
 class RelayServer(ThreadingHTTPServer):
@@ -71,9 +125,36 @@ class RelayServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, owner: NativeAccounts, value: dict, *, opener=None):
-        self.owner, self.token = owner, value["token"]
+        self.owner, self.value = owner, value
         self.opener = opener or urllib.request.build_opener(NoRedirect())
+        self.instance_id = secrets.token_hex(16)
+        self._admission_lock = threading.Lock()
+        self.draining, self.active_requests = False, 0
+        self.started = time.monotonic()
         super().__init__(("127.0.0.1", value["port"]), RelayHandler)
+
+    def runtime(self):
+        with self._admission_lock:
+            return {"schema_version": RUNTIME_SCHEMA, "build": BUILD,
+                    "instance_id": self.instance_id, "pid": os.getpid(),
+                    "accepting": not self.draining, "active_requests": self.active_requests}
+
+    def begin_drain(self, instance_id):
+        with self._admission_lock:
+            if instance_id != self.instance_id:
+                return False
+            if not self.draining:
+                self.draining = True
+                # shutdown must run outside serve_forever's serving thread.
+                threading.Thread(target=self.shutdown, daemon=True).start()
+        return True
+
+    def service_actions(self):
+        if time.monotonic() - self.started > 10:
+            policy = self.owner._load()["policy"]
+            if policy.get("steward_api_role") != "primary" and (
+                    not policy.get("enabled") or not policy.get("api_fallback")):
+                self.begin_drain(self.instance_id)
 
 
 class RelayHandler(BaseHTTPRequestHandler):
@@ -92,13 +173,23 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _authorized(self):
-        return not self.headers.get("Origin") and hmac.compare_digest(
-            self.headers.get("Authorization", ""), "Bearer " + self.server.token)
+        self.consumer = "steward" if self.path.startswith("/steward/") else "worker"
+        try:
+            return not self.headers.get("Origin") and hmac.compare_digest(
+                self.headers.get("Authorization", ""), "Bearer " + consumer_token(self.server.value, self.consumer))
+        except HostError:
+            return False
 
     def _admitted(self):
         state = self.server.owner._load()
         policy = state["policy"]
         native = state.get("native", {})
+        if self.consumer == "steward":
+            role = policy.get("steward_api_role")
+            if role == "primary":
+                return True
+            if role == "disabled":
+                return False
         selecting_api = state.get("intent", {}).get("target") == API_SLOT if state.get("intent") else False
         return (policy.get("enabled") is True and policy.get("api_fallback") is True
                 and (native.get("active_slot") == API_SLOT or selecting_api))
@@ -107,7 +198,14 @@ class RelayHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, "relay_auth_required")
             return
-        if self.path == "/health":
+        if self.path in ("/runtime", "/steward/runtime"):
+            data = json.dumps(self.server.runtime()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        elif self.path in ("/health", "/steward/health"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", "11")
@@ -117,10 +215,39 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._json(404, "unsupported_route")
 
     def do_POST(self):
+        if self.path == "/control/drain":
+            token = self.server.value.get("control_token")
+            if (self.headers.get("Origin") or not isinstance(token, str) or not token or not hmac.compare_digest(
+                    self.headers.get("Authorization", ""), "Bearer " + token)):
+                self._json(401, "relay_auth_required")
+                return
+            # No body is read: the pinned instance is a bounded header value.
+            if not self.server.begin_drain(self.headers.get("X-LoopX-Instance")):
+                self._json(409, "relay_instance_changed")
+                return
+            self.send_response(202)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if not self._authorized():
             self._json(401, "relay_auth_required")
             return
-        if self.path not in ("/v1/responses", "/v1/responses/compact"):
+        with self.server._admission_lock:
+            admitted = not self.server.draining
+            if admitted:
+                self.server.active_requests += 1
+        if not admitted:
+            self._json(503, "api_relay_draining")
+            return
+        try:
+            self._model_request()
+        finally:
+            with self.server._admission_lock:
+                self.server.active_requests -= 1
+
+    def _model_request(self):
+        upstream_path = self.path.removeprefix("/steward") if self.consumer == "steward" else self.path
+        if upstream_path not in ("/v1/responses", "/v1/responses/compact"):
             self._json(404, "unsupported_route")
             return
         if not self._admitted():
@@ -150,7 +277,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             current = next((r for r in keys._load()["keys"] if r["id"] == row["id"]), None)
             if current is None:
                 continue
-            request = urllib.request.Request("https://api.openai.com" + self.path, data=body, headers={
+            request = urllib.request.Request("https://api.openai.com" + upstream_path, data=body, headers={
                 "Authorization": "Bearer " + current["api_key"], "Content-Type": "application/json",
                 "Accept": self.headers.get("Accept", "text/event-stream"),
             }, method="POST")
@@ -185,9 +312,17 @@ class RelayHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 # Once headers/output are admitted, disconnects and SSE errors
                 # end this request. No key rotation, synthetic completion or job replay.
+                observer = _StreamOutcome() if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "text/event-stream" else None
                 try:
                     read = getattr(response, "read1", response.read)
                     while chunk := read(8192):
+                        outcome = observer.feed(chunk) if observer is not None else None
+                        if outcome is not None:
+                            try:
+                                keys.record(row["id"], status=outcome["status"], code=outcome["code"],
+                                            model=model, headers=headers)
+                            except (OSError, ValueError, HostError, subprocess.SubprocessError):
+                                pass
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 except (OSError, TimeoutError):
@@ -203,14 +338,10 @@ def main():
     try:
         with owner._lock(name="api-relay.lock"):
             server = RelayServer(owner, route(owner))
-            server.timeout = 5
-            started = time.monotonic()
             try:
-                while True:
-                    server.handle_request()
-                    policy = owner._load()["policy"]
-                    if time.monotonic() - started > 10 and (not policy.get("enabled") or not policy.get("api_fallback")):
-                        break
+                server.serve_forever(poll_interval=5)
+            except KeyboardInterrupt:
+                pass  # A qualified legacy migration requests normal SIGINT.
             finally:
                 # Drain already admitted requests; disabling never replays them.
                 server.server_close()

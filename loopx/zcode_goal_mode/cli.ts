@@ -47,7 +47,8 @@ async function runJSON(command: string[], args: string[], request: NativeRequest
     const child = execFile(command[0], [...command.slice(1), ...args], {
       cwd: request.project, windowsHide: true, timeout: ADMISSION_TIMEOUT_MS,
       maxBuffer: 1024 * 1024, encoding: "utf8",
-      env: {...process.env, LOOPX_USAGE_PING: "0"},
+      // These internal consumers need Core JSON, not model-facing navigation.
+      env: {...process.env, LOOPX_USAGE_PING: "0", LOOPX_CONTEXT_DELIVERY: "off"},
     }, (error, stdout) => {
       if (error) return reject(new ZCodeGoalError("LoopX authority or quota check failed"));
       try {

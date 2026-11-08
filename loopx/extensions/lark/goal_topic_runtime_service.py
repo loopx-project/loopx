@@ -95,6 +95,8 @@ class LarkGoalTopicRuntimeService:
         reports_due = 0.0
         feedback: Future[int] | None = None
         feedback_due = 0.0
+        discovery: Future[list[Path]] | None = None
+        discovery_due = 0.0
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -103,10 +105,18 @@ class LarkGoalTopicRuntimeService:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def step() -> None:
-                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due
+                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                if discovery is not None and discovery.done():
+                    try:
+                        for path in discovery.result():
+                            attempted.setdefault(path, 0)
+                    except Exception:
+                        logging.getLogger(__name__).warning("Private Chat historical discovery is pending")
+                    discovery = None
+                    discovery_due = time.monotonic() + 5
                 if feedback is not None and feedback.done():
                     try:
                         feedback.result()
@@ -152,11 +162,20 @@ class LarkGoalTopicRuntimeService:
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
                 try:
-                    paths = transport.pending_delivery_paths()
+                    body_paths = getattr(transport, "pending_body_paths", None)
+                    paths = body_paths() if callable(body_paths) else transport.pending_delivery_paths()
                     # Discovery can temporarily hide a durable request during
                     # backoff. Retain its fairness count until the source is
                     # actually removed, so earlier hints cannot starve later work.
                     attempted = {path: count for path, count in attempted.items() if path.exists()}
+                    for path in paths:
+                        attempted.setdefault(path, 0)
+                    # A scan is not an attempt. Keep unsubmitted discoveries in
+                    # this same fairness map when the pool is full; discovery's
+                    # read-only backoff must not hide them after a slot opens.
+                    # Reconciliation re-reads the source and Core authority.
+                    paths = list(dict.fromkeys([
+                        *(path for path, count in attempted.items() if count == 0), *paths]))
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
@@ -168,27 +187,41 @@ class LarkGoalTopicRuntimeService:
                         and time.monotonic() >= reports_due and report_provider.pending())
                     if report_provider is not None and reports is None and time.monotonic() >= reports_due:
                         reports_due = time.monotonic() + 30
-                    for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
+                    recovery_path = getattr(transport, "is_recovery_path", lambda path: False)
+                    # Fresh bodies take the next released slot ahead of old
+                    # recovery probes, including discoveries retained while
+                    # full. Attempts retain fairness within each class. This
+                    # local hint never admits/replays a request or skips its
+                    # original grant and provider-attempt checks.
+                    for path in sorted(paths, key=lambda path: (recovery_path(path), attempted.get(path, 0))):
                         if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
-                                + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
+                                + int(ingress is not None or ingress_ready) + int(discovery is not None) >= 4 or self._closed.is_set()):
                             break
                         if path in pending:
                             continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         attempted[path] = attempted.get(path, 0) + 1
-                    if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
                         reports = pool.submit(report_provider.reconcile)
-                    if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
-                        ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
+                    if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) + int(discovery is not None) < 4 and not self._closed.is_set():
+                        ingress = pool.submit(getattr(transport, "observe_ingress", observer.observe), cancelled=self._closed.is_set)
                     app_feedback = getattr(transport, "reconcile_app_feedback", None)
                     # Optional feedback uses one slot in this same bounded
                     # pool and leaves capacity for canonical body deliveries.
                     if (callable(app_feedback) and feedback is None and time.monotonic() >= feedback_due
                             and len(pending) + int(reports is not None) + int(attention is not None)
-                            + int(ingress is not None) < 3 and not self._closed.is_set()):
+                            + int(ingress is not None) + int(discovery is not None) < 3 and not self._closed.is_set()):
                         feedback = pool.submit(app_feedback)
+                    # One discovery pass uses this same bounded pool. Its slow
+                    # native/history observations cannot hold the scanner that
+                    # discovers fresh captures and already generated answers.
+                    if (callable(body_paths) and discovery is None and time.monotonic() >= discovery_due
+                            and len(pending) + int(feedback is not None) + int(reports is not None)
+                            + int(attention is not None) + int(ingress is not None) < 4 and not self._closed.is_set()):
+                        discovery = pool.submit(transport.pending_delivery_paths)
+                        discovery.add_done_callback(lambda _: self._delivery_wakeup.set())
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
 

@@ -5,6 +5,7 @@ import json
 import copy
 import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -13,6 +14,94 @@ from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _initialize_fixture_authority,
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    private = runtime / "context-delivery"
+    private.mkdir(mode=0o700, exist_ok=True)
+    private.chmod(0o755)
+    command = ["refresh-state", *binding, "--classification", "verified_receipt_recovery",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    rc, failed = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc != 0 and failed["ok"] is False
+    assert failed["settlement_progress"]["state"] == "settled"
+    assert len(failed["settlement_result"]["receipts"]) == 3
+    assert _spend_run_count(runtime) == 1
+    private.chmod(0o700)
+    rc, replay = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc == 0, replay
+    assert replay["settlement_identity"] == failed["settlement_identity"]
+    assert len(replay["settlement_result"]["receipts"]) == 3
+    assert _spend_run_count(runtime) == 1
+
+
+def _read_selected_result(command):
+    bodies = []
+    while command:
+        result = subprocess.run(shlex.split(command), capture_output=True, text=True, check=False)
+        page = json.loads(result.stdout)
+        assert result.returncode == 0 and len(result.stdout.encode()) <= 64000, page
+        bodies.append(page["content"])
+        command = page.get("next_command")
+    return {row["pointer"]: row["value"] for row in json.loads("".join(bodies))["selections"]}
+
+
+def test_receipt_keeps_unknown_controls_and_never_hides_partial_failure(tmp_path):
+    from loopx.cli_commands.refresh_settlement import present_settled_refresh
+
+    payload = {"ok": True, "settlement_progress": {"state": "settled"},
+        "state": {"large_supporting_snapshot": "x" * 3000},
+        "future_control": {"required_resolution": "preserve exactly"},
+        "projection_outbox": {"status": "pending", "next_action": "retry"}}
+    receipt = present_settled_refresh(payload, runtime_root=tmp_path)
+    assert receipt["future_control"] == payload["future_control"]
+    assert receipt["projection_outbox"] == payload["projection_outbox"]
+    for update in ({"ok": False}, {"dry_run": True}, {"settlement_owed": {"command": "original"}},
+                   {"settlement_progress": {"state": "spend_required"}}):
+        original = {**payload, **update}
+        assert present_settled_refresh(original, runtime_root=tmp_path) is original
+    large = {**payload, "future_control": {"required_resolution": "x" * 100000}}
+    bounded = present_settled_refresh(large, runtime_root=tmp_path)
+    assert "Read the complete selected result controls before acting" in bounded["instruction"]
+    assert "Supporting snapshots" in bounded["instruction"]
+    selected = _read_selected_result(bounded["command"])
+    assert selected["/future_control"] == large["future_control"]
+
+
+def test_wide_failed_spend_keeps_nested_reader_and_parent_controls(tmp_path):
+    from loopx.cli_commands.quota_capture import budgeted_settlement_result
+    from loopx.cli_commands.refresh_settlement import present_settled_refresh
+
+    child = {"ok": False, "appended": False, "future_recovery_control": {"detail": "step " * 15000}}
+    child_view = budgeted_settlement_result(child, runtime_root=tmp_path, output_bytes=64000,
+        reader_argv=[sys.executable, "-m", "loopx.entrypoint"])
+    parent = {"ok": False, "error": "Original refusal", "quota_spend": child_view,
+        "settlement_identity": {"effect_id": "original-effect"},
+        "settlement_owed": {"command": "original owed command"},
+        "another_control": "detail " * 10000}
+    bounded = present_settled_refresh(parent, runtime_root=tmp_path)
+    assert bounded["ok"] is False and "Read the complete selected result controls" in bounded["instruction"]
+    selected = _read_selected_result(bounded["command"])
+    assert selected["/settlement_identity"] == parent["settlement_identity"]
+    assert selected["/settlement_owed"] == parent["settlement_owed"]
+    assert selected["/quota_spend"] == child_view
+    child_controls = _read_selected_result(selected["/quota_spend"]["command"])
+    assert child_controls["/future_recovery_control"] == child["future_recovery_control"]
+
+    (tmp_path / "context-delivery").chmod(0o755)
+    fallback = present_settled_refresh(parent, runtime_root=tmp_path)
+    assert fallback.pop("result_delivery_error")["error_code"] == "quota_decision_transport_failed"
+    assert fallback == parent
 
 
 def _repository_delivery(tmp_path, provider):
@@ -66,8 +155,6 @@ def test_combined_settlement_uses_producing_worktree_and_originating_cli(
 def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery(
     tmp_path, monkeypatch, provider,
 ):
-    from loopx.cli_commands.refresh_settlement import settle_refreshed_turn
-
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry, delivery = _repository_delivery(tmp_path, provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -76,21 +163,28 @@ def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recover
     assert rc == 0, guard
     refresh = ["refresh-state", *binding, "--classification", "verified_worktree",
                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
-               "--delivery-workspace-path", str(delivery)]
-    rc, original = _run_cli(registry, runtime, *refresh, cwd=project)
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
+    producing = [*refresh, "--delivery-workspace-path", str(delivery)]
+    rc, original = _run_cli(registry, runtime, *producing, cwd=project)
     assert rc == 0 and _spend_run_count(runtime) == 0, original
     for workspace in (project, tmp_path / "missing"):
-        failed = copy.deepcopy(original)
-        settle_refreshed_turn(failed, registry_path=registry, runtime_root=runtime,
-            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
-            replan_obligation_id=None, turn_instance_id=TURN_ID, goal_ref=None,
-            delivery_workspace_path=workspace)
-        assert failed["ok"] is False, failed
+        rc, failed = _run_cli(registry, runtime, *refresh, "--delivery-workspace-path", str(workspace),
+            "--settle-turn", "--settlement-receipt", cwd=project)
+        assert rc != 0 and failed["ok"] is False, failed
         assert failed["settlement_progress"]["state"] == "spend_required"
+        assert failed["settlement_identity"] == original["settlement_identity"]
         assert failed["settlement_owed"]["command"] == original["settlement_owed"]["command"]
         assert _spend_run_count(runtime) == 0
-    rc, recovered = _run_cli(registry, runtime, *refresh, "--settle-turn", cwd=project)
+        if workspace == project:
+            child = failed["quota_spend"]
+            assert child["ok"] is False and child["appended"] is False
+            workspace_guard = child["workspace_guard"]
+            assert workspace_guard["action"] == "return_to_delivery_worktree"
+            assert workspace_guard["current_workspace"] == "canonical_checkout"
+            assert workspace_guard["blocks_delivery"] is True
+            assert "workspace that produced" in workspace_guard["required_action"]
+            assert child["before"]["selected_todo"]["todo_id"] == TODO_ID and child["after"] is None
+    rc, recovered = _run_cli(registry, runtime, *producing, "--settle-turn", cwd=project)
     assert rc == 0, recovered
     assert recovered["settlement_progress"]["state"] == "settled"
     assert recovered["settlement_identity"] == original["settlement_identity"]
@@ -112,27 +206,32 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     validation, writeback = plan["ordered_steps"][:2]
     assert validation["command_condition"] == "todo_deliverable_complete"
-    assert "semantic_closeout" in validation["precondition"]
-    vision_args = []
+    assert " --delivery-boundary semantic_closeout " in writeback["semantic_closeout_command_template"]
     if finish_todo:
         rc, complete = _run_generated_cli(validation["command_template"].replace(
             "<validated evidence>", "Independent validation of the original deliverable."), registry_path=registry)
         assert rc == 0, complete
-        vision = tmp_path / "vision.json"
-        vision.write_text(json.dumps({
-            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
-            "vision_patch": {"acceptance_summary": "Original scoped validation completed; wider Goal remains open."},
-            "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
-                           "observed_reality": "The original deliverable passed independent validation.",
-                           "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
-        }))
-        vision_args = ["--agent-vision-json", str(vision)]
-    command = writeback["command_template"]
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": (
+            "Original scoped validation completed; wider Goal remains open." if finish_todo else
+            "Verified progress advances the original task; its remaining acceptance stays open.")},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
+                       "observed_reality": (
+                           "The original deliverable passed independent validation." if finish_todo else
+                           "A bounded verified outcome advances work without completing the deliverable."),
+                       "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
+    }))
+    command = writeback["semantic_closeout_command_template"]
     for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
-                       "<outcome>": "outcome_progress", "<boundary>": "semantic_closeout" if finish_todo else "in_flight_continuation"}.items():
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
         command = command.replace(key, value)
+    words = shlex.split(command)
+    assert words[words.index("--delivery-boundary") + 1] == "semantic_closeout"
     command += " " + shlex.join(["--settle-turn", "--no-global-sync", "--suppress-external-sinks",
-        "--delivery-workspace-path", str(project), *vision_args])
+        "--delivery-workspace-path", str(project)])
     # A hostile ambient executable must not select another checkout/accounting owner.
     trap = tmp_path / "bin"
     trap.mkdir()
@@ -144,8 +243,19 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
         assert rc == 0, json.dumps(result, ensure_ascii=False)
         assert result["settlement_progress"]["state"] == "settled"
         assert result["settlement_identity"] == plan["identity"]
+        receipts = result["settlement_result"]["receipts"]
+        assert [row["step_kind"] for row in receipts] == ["validation", "durable_writeback", "quota_spend"], replay
+        assert all(row["status"] == "committed" and row["effect_id"] == plan["identity"]["effect_id"]
+                   for row in receipts)
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
+    ordinary_args = shlex.split(command)
+    ordinary_args.remove("--settle-turn")
+    rc, ordinary = _run_generated_cli(shlex.join(ordinary_args), registry_path=registry)
+    assert rc == 0 and ordinary["settlement_progress"]["state"] == "settled", ordinary
+    assert [row["step_kind"] for row in ordinary["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback"]
+    assert _spend_run_count(runtime) == 1
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0 and todo["todo"]["status"] == ("done" if finish_todo else "open")
     events = runtime / "goals" / GOAL_ID / "rollout-events.jsonl"
@@ -226,6 +336,84 @@ def test_fresh_turn_honors_the_written_route_and_keeps_unfinished_requirements(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.explore.result_log import explore_result_log_path
+    from loopx.configure_goal import configure_goal
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configure_goal(registry_path=registry, goal_id=GOAL_ID, execute=True, explore_mode="evidence")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, entry = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+        "--context-delivery", "on", "--decision-output-dir", str(tmp_path / "capture"), cwd=project)
+    assert rc == 0 and entry["schema_version"] == "context_capture_navigation_v1", entry
+    rc, detail = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
+        entry["recovery"]["reference_file"], "--select", "/interaction_contract/cli_channel/settlement_plan",
+        "--page-bytes", "24000", "--max-page-output-bytes", "64000", cwd=project)
+    assert rc == 0 and detail["eof"], detail
+    plan = json.loads(detail["content"])["selections"][0]["value"]
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+
+    refs = ["result:probe", "source:" + "e" * 64]
+    revision = "dataset:" + "d" * 64
+    observation = {"schema_version": "explore_execution_observation_v0",
+        "candidate_sha256": "c" * 64, "input_revision": revision,
+        "planned_method_id": "initial", "executed_method_id": "revised",
+        "change_reason": "A boundary check selected the revised method.",
+        "elapsed_seconds": 0.125, "limit_seconds": 10, "search_iterations": 2,
+        "stop_reason": "iteration_limit", "evidence_refs": sorted(refs),
+        "result_ref": refs[0], "result_candidate_sha256": "c" * 64}
+    vision = tmp_path / "vision.json"
+    packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The bounded execution has a reproducible result."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
+            "prior_assumption": "The first method could cover the boundary.",
+            "observed_reality": "The revised method handled the boundary case.",
+            "retained": ["Validate the remaining cases."],
+            "evidence_refs": [*refs, ".loopx/evidence/probe.json"]},
+        "explore_result": {"schema_version": "explore_result_from_path_delta_v0",
+            "question": "Which method handles the boundary?", "applicability": "Synthetic boundary case only",
+            "input_revision": revision, "status": "confirmed", "evidence_refs": refs}}
+    command = writeback["semantic_closeout_command_template"]
+    for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
+        command = command.replace(key, value)
+    if "--settle-turn" not in shlex.split(command):
+        command += " --settle-turn --settlement-receipt"
+    command += " --no-global-sync --suppress-external-sinks"
+
+    packet["explore_result"]["execution_observation"] = {**observation, "input_revision": "foreign-input"}
+    vision.write_text(json.dumps(packet))
+    rc, rejected = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 1 and rejected["appended"] is False, rejected
+    assert "execution observation must retain this finding's input revision" in rejected["error"], rejected
+    log = explore_result_log_path(runtime, GOAL_ID)
+    assert _spend_run_count(runtime) == 0 and not log.exists()
+
+    compact = {key: value for key, value in observation.items() if key != "input_revision"}
+    compact.update(schema_version="explore_execution_from_finding_v0", evidence_refs="finding")
+    packet["explore_result"]["execution_observation"] = compact
+    vision.write_text(json.dumps(packet))
+    rc, settled = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled.get("error", settled)
+    assert settled["settlement_identity"] == plan["identity"]
+    assert settled["quota_spend"]["ok"] and "settlement_owed" not in settled
+
+    example = writeback["optional_attachments"][0]["optional_execution_observation_example"]
+    assert example["execution_observation"]["schema_version"] == compact["schema_version"]
+    assert compact["schema_version"] not in json.dumps(entry)
+    assert settled["explore_result"]["execution_observation"] == observation
+    rc, context = _run_cli(registry, runtime, "explore", "turn-context", "--goal-id", GOAL_ID,
+                          "--agent-id", AGENT_ID, cwd=project)
+    assert rc == 0 and context["graph"]["writeback_results"][0]["execution_observation"] == observation
+    before = log.read_bytes()
+    rc, replay = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"] and replay["settlement_identity"] == plan["identity"], replay
+    assert _spend_run_count(runtime) == 1 and log.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_owed_command_identity_and_lost_response_recover_without_another_debit(tmp_path, monkeypatch, provider):
     from loopx.cli_commands import refresh_settlement
 
@@ -257,6 +445,7 @@ def test_owed_command_identity_and_lost_response_recover_without_another_debit(t
     result = copy.deepcopy(original)
     settle(result)
     assert result["ok"] and result["settlement_progress"]["state"] == "settled", result
+    assert "Synthetic response loss" in result["quota_spend"]["transport_warning"]
     assert len(calls) == 1 and _spend_run_count(runtime) == 1
     monkeypatch.setattr(refresh_settlement.subprocess, "run", real_run)
     replay = copy.deepcopy(original)

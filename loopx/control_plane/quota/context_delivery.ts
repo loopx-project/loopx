@@ -1,6 +1,3 @@
-import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity,
-  type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 /** Presentation of immutable quota, Turn and work-context captures. No admission or state writes.
  * Confirmed final input and explicit native-hook continuity assumptions remain
  * distinct; successful capture handoff alone is never retained-input proof. */
@@ -9,6 +6,9 @@ import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_d
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {reusableTurnContext} from "../capability_hooks.ts";
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity,
+  type ProjectionSourceValues} from "./diagnostic_projection.ts";
+import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 
 const VERSION = "context_delivery_v1";
 const MAX_ANCESTRY = 32;
@@ -170,7 +170,7 @@ function splitContext(context: JsonObject, binding: JsonObject): Split {
 
 /** The projection surface is a transport binding, never a new admission mode.
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
-const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
+const SURFACES = ["work_context", "quota_packet", "turn_envelope", "complete_turn"] as const;
 type Surface = typeof SURFACES[number];
 type Delta = {value: unknown} | {from: Path; edit?: Delta} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
   | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};
@@ -237,7 +237,11 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
             detail.forEach((attachment, j) => {
               const item = jsonObject(attachment), prefix = [...path, key, i, field, j];
               if (!item) { paths.push(prefix); return; }
-              for (const property of Object.keys(item)) if (property !== "guidance") paths.push([...prefix, property]);
+              for (const property of Object.keys(item)) {
+                if (property === "guidance" || (property === "optional_execution_observation_example"
+                    && item.capability_id === "explore" && item.required === false)) continue;
+                paths.push([...prefix, property]);
+              }
             });
           } else paths.push([...path, key, i, field]);
         }
@@ -585,6 +589,12 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   return publish(request, encodeContextDelivery(request, legacyQuotaFields, values), values);
 }
 
+/** Progressive file deltas expose current discovery even without a retained model baseline. */
+export function fileNavigationPaths(context: JsonObject): Path[] {
+  const details = jsonObject(context.context_details);
+  return details && Object.hasOwn(details, "unread_context_index") ? [["context_details", "unread_context_index"]] : [];
+}
+
 /** Shared encoding within one presentation transaction; callers publish once
  * against their original source so numeric facts never round-trip through JS. */
 export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[],
@@ -607,6 +617,7 @@ export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: re
   const fileBacked = !retained && continuity?.basis === "captured_file"
     && continuity.capture_bytes_verified === true && equal(continuity.target, binding);
   if (!binding || !prior || (!confirmed && !assumed && !fileBacked) || !compatible(binding, target)
+      || (fileBacked && binding.capture_id === target.capture_id)
       || binding.context_digest !== digest(prior)) return fullResult("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return fullResult("full_refresh_due");
@@ -671,17 +682,26 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
     const fileBacked = delivery.continuity_basis === "captured_file";
     if (delivery.schema_version !== VERSION || delivery.mode !== "delta" || !equal(delivery.target, target)
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
+        || (fileBacked && base.capture_id === target.capture_id)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
     const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
     if (!fileBacked && (!before.valid || !after.valid)) return fallback();
-    const expected = changeTree(context, currentContext, fileBacked ? [] : after.paths, fileBacked,
+    const currentChanges = (paths: Path[]) => changeTree(context, currentContext, paths, fileBacked,
       {identity, before: ["baseline", "context"], after: ["current", "context"],
         ...(request.source_edits === true ? {values} : {})});
-    // Also rejects omitted unchanged controls, redundant/conflicting edits,
-    // malformed array indices/lengths and unsupported operations before applying.
-    if (contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values)
-        !== contextProjectionIdentity(request, {changes: expected}, request.source_number_tokens, values)) return fallback();
+    const wireIdentity = contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values);
+    const matches = (changes: ReturnType<typeof changeTree>) =>
+      contextProjectionIdentity(request, {changes}, request.source_number_tokens, values) === wireIdentity;
+    const navigation = fileBacked ? fileNavigationPaths(currentContext) : [];
+    let expected = currentChanges(fileBacked ? navigation : after.paths);
+    if (!matches(expected)) {
+      // The ordinary codec may encode the same file without progressive
+      // navigation. Verify that exact encoding too; never apply caller edits.
+      if (!navigation.length) return fallback();
+      expected = currentChanges([]);
+      if (!matches(expected)) return fallback();
+    }
     const result = applyTree(context, expected);
     if (!equal(result, currentContext)) return fallback();
     return publish(request, {...copy(delivery), context: copy(currentContext)}, values);

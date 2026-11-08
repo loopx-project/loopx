@@ -1,0 +1,1429 @@
+{
+  "description": "Complete captured Explore display state from a recent real Grid Turing Robot run. Original wording, recording times, identities, measurements and references are unchanged.",
+  "source_sha256": "292f493ee5d88e0f99546776ee2a46958e19517ceae192c10288276f270f404d",
+  "source_bytes": 80992,
+  "goal_id": "benchmark-goal",
+  "display_name": "Grid · context on · 2026-11-03",
+  "provenance": {
+    "case_id": "grid_turing_robot",
+    "source_run_id": "grid-sol-xhigh-explore-stride-context-on-20261103-18h-r7",
+    "selection": "Both terminal R7 context arms, selected by recency and complete saved Explore log availability, including negative and unknown observations; no event or score-based sampling.",
+    "capture_kind": "terminal_collected_display_state",
+    "exported_at": "2026-11-03T17:24:14.633032+00:00",
+    "claim_scope": "diagnostic_only",
+    "score_countable": false,
+    "runner_status": "runner_invalid",
+    "limitations": [
+      "The complete saved Explore log is not the complete solver trajectory or a coverage claim for every attempt.",
+      "Recorded confirmed labels are source-authored. Negative and unknown results remain in their original prose.",
+      "No explicit parent or relationship edges were recorded; shared wording or chronological adjacency does not establish causality.",
+      "The two arms have the same logical Goal ID in different runtimes. Load them as independent sources.",
+      "These runs include operational interventions and are not a qualified causal comparison. Local and native measurements retain separate scopes."
+    ],
+    "redactions": [],
+    "trajectory_archive": {
+      "url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/grid_turing_robot.zip",
+      "sha256": "ea147c9ae7173e3f1ce9ca6e0bbda5e0103e2be035b8e6d0658dd35a2d282c8d",
+      "manifest_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/manifest.json",
+      "redactions_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/redactions.json"
+    },
+    "boundary": "Display-state events only. No execution/authority store, credentials, raw session transcript, hidden evaluator, workspace or model weights are included."
+  },
+  "source_counts": {
+    "event_count": 33,
+    "event_kinds": {
+      "node": 8,
+      "finding": 25
+    },
+    "statuses": {
+      "resolved": 8,
+      "confirmed": 25
+    },
+    "first_recorded_at": "2026-11-03T06:02:35+00:00",
+    "last_recorded_at": "2026-11-03T15:06:44+00:00",
+    "edge_count": 0,
+    "parent_records": 0
+  },
+  "events": [
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "981043665539ac69",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T06:02:35+00:00",
+      "result_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "run_id": "explore-result:24b520c4ca70ee762188e278db7a56e31218c44587d7fa95f859a275c372634a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only.",
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "20abfa64b53d4fc9",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/validated_candidate.json",
+        "research/reports/summary.json",
+        "research/reports/resource_check_9.json",
+        "research/candidates/validated_candidate.py",
+        "research/reports/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:88a44107699d8d74b0ccc0b65a6a8231cb04f85776139c5583fef125c30f1630",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/validated_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1445
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T06:02:35+00:00",
+      "result_id": "finding_24b520c4ca70ee762188e278db7a56e31218c44587d7fa95f859a275c372634a",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: 27/27 complete; total score 1445; maximum measured case runtime 8.42 seconds. On matched seeds 0..9, total score falls from baseline 1437089 to 487. Interpretation: The tester confirms complete ordered visitation for this corpus. Backward construction fixes each repaint to the next visit color, and exact rule reuse preserves the trajectory. Self-paint allocation improves the earlier compiler total from 663 to 487 on seeds 0..9. This supports retaining the approach locally; native generalization is unknown. Next: use the existing P1 for native feedback and compare automaton merging or use of spare steps.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1b89310dacd2c25c",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/palette_candidate.json",
+        "research/reports/palette_summary.json",
+        "research/candidates/palette_candidate.py"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:73df12d647255ab3ca4ae30e51e15ba85f26ac3798254e0b0bdacf2018ffdb1c",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/palette_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1441
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T06:23:41Z",
+      "result_id": "finding_da1fc9e51231",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Exact palette source 73df12d64725 completes all 27 local cases; seeds 8, 42 and 99 improve, with no per-case regression. Input and evaluator hashes match the prior local comparison. Native performance of this revision remains unmeasured.",
+      "title": "Palette allocation lowers the matched 27-case total from 1445 to 1441 with complete coverage"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a3877a8d94156119",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T06:25:08+00:00",
+      "result_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "run_id": "explore-result:88a7052ee44c013724373243f690729946d4eae513a94cec0b4d891f66000e5f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved.",
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2f1eb278977cc88f",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/e5f28fa80668/result.json",
+        "research/native/e5f28fa80668/manifest.json",
+        "research/native/e5f28fa80668/solution.py",
+        "research/selection.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:88a44107699d8d74b0ccc0b65a6a8231cb04f85776139c5583fef125c30f1630",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/e5f28fa80668/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2447
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T06:25:08+00:00",
+      "result_id": "finding_88a7052ee44c013724373243f690729946d4eae513a94cec0b4d891f66000e5f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Submission e5f28fa80668 (agent-1), source 88a44107699d, passed 50/50 native cases with total score 2447; no reported errors or timeouts. Interpretation: This confirms the first complete native baseline for the preserved source. Public per-case scores are unavailable. Later palette allocation changes are a separate local candidate and are not certified by this result. Keep the native-supported snapshot and evaluate a stronger candidate only after accepted-submission cooldown; continue useful independent optimization meanwhile.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8a9d756549ebb49a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/pool_candidate.json",
+        "research/reports/pool_summary.json",
+        "research/candidates/pool_candidate.py",
+        "research/reports/pool_resource_9.json",
+        "research/turns/wake-1793687227579770176-171fa2199391/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:6f7193a4ccf48d1c229e8c409d3749040029789d982af5582373eebbf3d98151",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/pool_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1284
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T06:57:56+00:00",
+      "result_id": "finding_1da0fa50555fcfa9592e43ca1491d002f01d0fab3f5c5714edeb7382394ecdaf",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: All27 official local checks complete every destination; total score1284 versus1441, no per-case regressions. Max runtime20.09s; seed9 uses20584KiB RSS. Interpretation: The pool compiler preserves the complete shortest-path trajectory while choosing a free state row using the preceding step as lookahead. Fresh input pairs never overwrite rules; exact reuse preserves outputs. Unused terminal states cannot affect steps before the last target. This supports adopting the stronger local source. Joint congruence and mixed-direction synthesis showed no gain in their tested scopes. Native performance of this source is unmeasured; keep the prior native-supported snapshot and test only after cooldown.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b65a827c8f871ffe",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/4b07ae24c8b6/result.json",
+        "research/native/4b07ae24c8b6/manifest.json",
+        "research/native/4b07ae24c8b6/solution.py"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:09bafdbd4eef456552ea295ada05dd3314b1f9cbd139258fef7c5cd110c6e29f",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/4b07ae24c8b6/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2196
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T07:11:17Z",
+      "result_id": "finding_c54dd0af7fb0",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Accepted submission4b07ae24c8b6, roundagent-2, evaluates exact source09bafdbd4eef. The same fixed50 native protocol reports2196 with50passed, no errors or timeouts; improvement251 over source88a441. Public per-case numeric scores remain unavailable. Further flexible-pool work is independent local evidence and is not certified by this result. Preserve both immutable snapshots and continue independent optimization; next native admission cannot precede2026-11-03T08:09:19.349185Z.",
+      "title": "State-pool candidate improves native score from2447 to2196, with50/50 complete"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8156975a33adfa3e",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/spill_candidate.json",
+        "research/reports/spill_summary.json",
+        "research/candidates/spill_candidate.py",
+        "research/reports/pool_order_comparison.json",
+        "research/turns/wake-1793689222063002377-d8e40ca978e6/execution_observation.json",
+        "research/reports/extended_pool_candidate.json",
+        "research/reports/spill_resource_9.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:c09268de7d9064cb7fb452d1fc14390a684387a12afb39b0f536d16ab92ab994",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/spill_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1247
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T07:24:50+00:00",
+      "result_id": "finding_0c6a5d49f7f51e9be173a430f15eda815dc54f1a27b7ca4c4a88e84ded60fa1f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: All27 official local checks finish every target; matched total1272 improves to1247 without case regressions, max25.13s. Root seed9 repeats93 versus91, all targets complete, sampled26824KiB RSS. The separate native2196 result belongs to the prior source. Interpretation: Spilling permits mixed direction state rows while retaining unique input pairs and the backward repaint invariant. All original native-supported functions remain unchanged; the extra pass uses remaining time. An earlier shared-dispatch variant scored1249 but regressed seed9, so the isolated version was selected after full matched validation. Early-only pool seeding also regressed a case. Preserve the native2196 snapshot and test two-step predecessor reuse next; current local gains do not certify native performance. Deadline timing can affect the retained objective; the resource repeat demonstrates this limitation. The matched aggregate is evidence for this run, not a guarantee of identical later scores.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "62da3163a4538b24",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/twostep_candidate.json",
+        "research/reports/twostep_summary.json",
+        "research/candidates/twostep_candidate.py",
+        "research/reports/twostep_probe_summary.json",
+        "research/reports/twostep_structure.json",
+        "research/turns/wake-1793690784526726205-f5e20fe281ee/execution_observation.json",
+        "research/reports/twostep_resource_9.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:636ce7010db85e3b3cd0ff901d5d47b826992af894b71c523a984dd0e3e02fc9",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/twostep_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1209
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T07:42:18+00:00",
+      "result_id": "finding_ee0ec8532edee9f01851fc1b7298c20c465c250bfde7dfcc888bbb8d22f83e34",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: All27 official checks complete every destination; matched total1247 improves to1209 with no case regressions, max25.16s. Root seed9 repeats87 and uses26872KiB RSS. New source636ce7 is unmeasured natively; prior native2196 belongs to source09baf. Interpretation: Two-step lookahead prefers rows that can reuse both preceding transitions, accounting for a preceding return to the current cell. Preferred-group pruning omits only rows dominated by the first rank component. Unique input pairs and reverse repaint semantics preserve every planned move. Search ordering also changed, so the38-point gain is for the full portfolio rather than an isolated causal effect. Q1..3 spilling gave no reduction in10 saved programs and was not integrated. Preserve native2196 and local snapshots, then test depth3 reuse chains against their lookup cost within the same deadline.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "7b5aab3bafe83f8c",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/depth3_tail_candidate.json",
+        "research/reports/depth3_tail_summary.json",
+        "research/candidates/depth3_tail_candidate.py",
+        "research/reports/depth3_probe_summary.json",
+        "research/reports/depth3_cost.json",
+        "research/turns/wake-1793691842472373293-c1cc1314e755/execution_observation.json",
+        "research/reports/depth3_resource_12.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0da994b023624712758b31ac5a60c76ba3c80a75067bb48335214117eed8df45",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/depth3_tail_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1207
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T08:00:01+00:00",
+      "result_id": "finding_7d23d0970a40e4cc168e43b24f477654289c51213159522c664a7b26f6588429",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: All27 official checks complete every target; matched total1209 improves to1207 without case regression, max25.11s. Actual root seed12 repeats44,26900KiB RSS. Source0da994 is unmeasured natively; native2196 certifies source09baf. Interpretation: Depth3 reuse tracks temporary repaint colors for repeated positions and includes the proposed rule, with at most8 loose alternatives per step. A same-baseline saved10 comparison improves413 to411 while the two-step control stays413. Fixed15-attempt batches on3 seeds show17..27percent extra compiler time, so only a remaining-time final pass was added. The complete27 check confirms the modest integrated gain. Preserve earlier snapshots; alternate shortest-route weights can now test changed compiler conditions, while native evaluation still requires cooldown eligibility.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "f53a948a9de674bc",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/d66799bdb01a/result.json",
+        "research/native/d66799bdb01a/manifest.json",
+        "research/native/d66799bdb01a/solution.py",
+        "research/reports/route_load_summary.json",
+        "research/reports/detour_reuse_probe.json",
+        "research/reports/pre_native_stress_116.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0da994b023624712758b31ac5a60c76ba3c80a75067bb48335214117eed8df45",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/d66799bdb01a/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2074
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T08:19:13+00:00",
+      "result_id": "finding_c0e8f7217aaf697b41728e4349d0dfe9ac6ed0a0d5c76e34f8a0da1ff9f3b52e",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Submissiond66799bdb01a, source0da994, passes50/50 native tests with total2074, improving2196 by122; no reported errors or timeouts. Interpretation: The native result confirms improvement for the exact retained standalone source, which also completes the local27 corpus and a fresh large stress case. Alternate shortest-route weights and bounded fewer-turn detours gave no gain on10 saved cases each, so the solver stayed unchanged. Preserve prior snapshots. Further work should test bounded direction-pool allocation changes with measured cost and complete coverage; the native cooldown is now based on this third accepted submission.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9beca95bc753546a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/pool_transfer_candidate.json",
+        "research/reports/pool_transfer_summary.json",
+        "research/candidates/pool_transfer_candidate.py",
+        "research/reports/pool_transfer_probe.json",
+        "research/reports/pool_transfer_resource_6.json",
+        "research/turns/wake-1793694229908192807-37e9250efd43/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:26bdcb1efefb9f02e67fc643f3b6f42d73b574360b9c6b14675cca95eada0c40",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/pool_transfer_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1203
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T08:40:09+00:00",
+      "result_id": "finding_ab10912e0fb5251415db28f4843e5ef8adcf7f3565ad8c3bff401b91893151c8",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: Source26bdcb completes all27 local cases, total1203 versus1207, no case regressions, max25.15s. Actual root seed6 repeats32 in10.96s with21716KiB RSS. Native2074 still belongs to source0da994. Interpretation: A fixed-Q transfer moves one preferred state between directions while keeping at least one per used direction. On10 saved0da994 programs,5 extra seconds including route construction improves412 to410. The standalone integration preserves all17 baseline functions and search order, adding at most5 seconds only inside the original25-second deadline. Four local cases improve; both prior tested sources and the native2074 snapshot remain recoverable. This confirms a modest local gain, not native improvement or optimality. Static outputs contain no duplicate exact output triples, but loose successor/direction groups have choices; a future bounded probe can rank final-visit reuse alternatives using predecessor lookahead.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "5cb94f56462e21c2",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/loose_match_candidate.json",
+        "research/reports/loose_match_summary.json",
+        "research/candidates/loose_match_candidate.py",
+        "research/reports/loose_match_probe_summary.json",
+        "research/reports/loose_match_cost.json",
+        "research/reports/loose_match_resource_0.json",
+        "research/turns/wake-1793695347337797714-5a4be89c1edb/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:8ef535a802d792549eb3c86b61d597b7d386dd20ff46c79b1a41bc479dcd78d5",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/loose_match_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1201
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T09:02:33+00:00",
+      "result_id": "finding_87ab8f10fec4d8ba0baafc0671324f6d478ce7300c6044e1d14bd103fd87ce61",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: Source8ef535 completes all27 local cases, total1201 versus1203, no case regressions, max25.12s. Actual root seed0 repeats44 in22.03s,23276KiB RSS. Native2074 remains bound to0da994. Interpretation: Existing loose final-visit matches are ranked by predecessor reuse depth with temporary color overrides, then original state/color ordering. Known-repaint matching and free-pair ranking are unchanged. Paired saved10 tests give new408/control409 from410; only seed0 is a new-policy-specific gain, while seed9 improves in both. Fixed15-attempt batches on3 seeds with counters disabled cost19..83percent more, so the integration retains all19 baseline functions/main order and adds only an at-most5s tail inside25s. The full27 portfolio improves two cases; deadline effects limit causal attribution. Preserve both local and native snapshots. Static planned routes contain two-step returns; a future paired probe can test alternative free input colors instead of always preferring repaint color.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d949a16e9736f101",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/9d67d71d7de1/result.json",
+        "research/native/9d67d71d7de1/manifest.json",
+        "research/native/9d67d71d7de1/solution.py",
+        "research/reports/return_color_probe_summary.json",
+        "research/reports/color_choice_probe_summary.json",
+        "research/reports/return_color_retained_stress_116.json",
+        "research/turns/wake-1793696680491733282-9c57e348fd63/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:8ef535a802d792549eb3c86b61d597b7d386dd20ff46c79b1a41bc479dcd78d5",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/9d67d71d7de1/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2066
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T09:27:04+00:00",
+      "result_id": "finding_3280c1873331ea7121d546ba7223fa52acfd2092be1bbcdf8d570c5ba6cbc98b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Submission9d67d71d7de1, exact source8ef535, passes50/50 native cases at2066, improving2074 by8; no errors/timeouts. Retained root also completes fresh stress116 at88 in25.11s,23652KiB RSS. Interpretation: The native improvement validates the combined preferred-pool transfer and loose-match tails for the exact uploaded solver; it does not isolate each method. Local27 stays1201. Two changed color-policy questions were tested with paired unchanged controls and5extra seconds/method on10 saved programs each. Forced alternate color gives409/control408; considering both colors gives408/control408. All40 checks complete, but neither policy adds value over its control, so root stays8ef535. Preserve scoped negatives and immutable earlier sources. The next discriminating allocation probe compares radius2 integer state-pool transfers with a matched one-transfer control. Another native submission requires server admission after10:13:17.816523Z.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "a213ba69a2ac7402",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/pool_radius_candidate.json",
+        "research/reports/pool_radius_candidate_summary.json",
+        "research/reports/pool_radius_probe_summary.json",
+        "research/reports/pool_radius_baseline_repeat_16.json",
+        "research/reports/pool_radius_resource_1.json",
+        "research/turns/wake-1793698188529610126-fea53d9d0844/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:e541114d20fb0fb5be0240bb7162fe4c8a673f68b964c74ff57428ff02c60f2f",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/pool_radius_candidate.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1200
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T09:54:02+00:00",
+      "result_id": "finding_95226bd05fe4fa4be15c0c559cf15074ae0d04c5c1d72ce99779cbb59f8c71c1",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: Exact sourcee54111 completes27 cases at1200 versus1201, max25.13s. Gains1,9999; seed16 regresses56 to57. Unchanged baseline16 repeat also57. Actual root1 repeats32 in17.22s,22684KiB RSS. Interpretation: The established observation is scoped complete coverage and lower measured aggregate, not distributional dominance or native improvement. Radius2 beats matched radius1 control408 to409 on10 saved programs with5extra seconds each; only2,3 exhaust radius2 coverage. The standalone solver preserves all21 earlier functions/main prefix and adds the tested helper only within remaining25s. One per-case regression remains in the original full27 record. A targeted unchanged baseline repeat reproduces57 on16, demonstrating timing sensitivity without proving its cause or erasing the regression. Adopt the lower aggregate source and preserve native2066/source8ef535 separately. Static mixed-state rows motivate the next bounded preferred-group ordering comparison; benefit is unmeasured. No new native submission before10:13:17.816523Z and server admission.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "5f7fca03c32f45d7",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T10:10:29+00:00",
+      "result_id": "question_e1ada92c1a146bb505bc80cd1cfde07839a4ffd433f1024b3bb540c87b07bd87",
+      "run_id": "explore-result:34a69c579a1d09e10848ce567cf3d35898ef07ec9b7c3ee6fa5e567761d4ba62",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Generated seeds0..9; exact e54111 saved incumbents; radius2 count search, policy4, allocations0/1/2;5extra seconds/method including routes, rotating order; tools/bin/tester.",
+      "title": "Can preferred-state group ordering or spill-pressure ranking improve saved source e54111 programs within five extra seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "1e803159a0f7ee0c",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/pool_order_probe.json",
+        "research/reports/pool_order_diagnostic.json",
+        "research/reports/pool_pressure_probe.json",
+        "research/reports/pool_pressure_probe_summary.json",
+        "research/reports/pool_order_retained_stress_116.json",
+        "research/turns/wake-1793699721491935149-bcea70a06800/execution_observation.json",
+        "research/turns/wake-1793699721491935149-bcea70a06800/saved_program_protocol.json",
+        "research/candidates/pool_pressure_pressure_early.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:9f03869bafb8c6b375a4212a74adb0e8e0d93944bd5bfe033692a95b089726bc",
+          "comparison_scope": "grid-turing-robot:saved-e54111-10:extra-5s:radius2:v1",
+          "evaluation_ref": "sha256:d8fa3467d4c3378742208a74b690a771e14fb75dcd8365220d876a173759122e",
+          "evidence_ref": "research/reports/pool_pressure_probe.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:adf9622dcf32b0c3b1e5b59380ef9251135534698b0984b8d05ab3f2e29c0136",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 408
+        }
+      ],
+      "node_id": "question_e1ada92c1a146bb505bc80cd1cfde07839a4ffd433f1024b3bb540c87b07bd87",
+      "recorded_at": "2026-11-03T10:10:29+00:00",
+      "result_id": "finding_34a69c579a1d09e10848ce567cf3d35898ef07ec9b7c3ee6fa5e567761d4ba62",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:adf9622dcf32b0c3b1e5b59380ef9251135534698b0984b8d05ab3f2e29c0136 Applicability: Generated seeds0..9; exact e54111 saved incumbents; radius2 count search, policy4, allocations0/1/2;5extra seconds/method including routes, rotating order; tools/bin/tester. Observation: Canonical/reverse/axis-swap each408; unchanged/late/early spill pressure each408,60 retained outputs complete and no strict fits.40 fixed canonical clone calls agree exactly. Diagnostic q ties are rare on3 sampled cases;12 fitted outputs pass. Interpretation: The bounded answer is no measured gain from either tested family, so no variant is integrated. Order attempts20741/20635/20983; pressure control/late/early18697/18204/18201. Only seeds2,3 exhaust the tested radius2 search. Diagnostic18 fixed calls use BFS only atQfixed and capacityC or2C: atC, cross-group q ties occur2or3 times on seed0 failed prefixes and0 on5,9 despite spill steps. This motivates pressure ahead of row occupancy or reuse, but both placements also tie control. These results do not rule out all orderings, counts, demand models or larger budgets. The measurement is early-pressure helper plus exact parameters on saved incumbents with5extra seconds, not a standalone/native score. Retain local1200/sourcee54111 and native2066/source8ef535 separately. Fresh actual root116 completes88 in25.10s,23592KiB RSS. Prior depth3 gains motivate next depth4-versus-depth3 comparison; fixed-attempt cost and full27 are required before integration. No new native before10:13:17.816523Z plus server admission.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Can preferred-state group ordering or spill-pressure ranking improve saved source e54111 programs within five extra seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "75570cb2a4f8949a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/horizon_portfolio_12.json",
+        "research/reports/horizon_portfolio_12_summary.json",
+        "research/reports/horizon_probe_summary.json",
+        "research/reports/horizon_cost.json",
+        "research/reports/horizon_portfolio_resource_116.json",
+        "research/turns/wake-1793700738530828175-cf0b3270ded2/integration_review.json",
+        "research/turns/wake-1793700738530828175-cf0b3270ded2/local_execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:8dc4cd836e68e7aec432bd3644dd2ca9a2961f41a637e369102a16337b095a09",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/horizon_portfolio_12.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1196
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T10:43:58Z",
+      "result_id": "finding_77382bf34b6c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Exact source8dc4cd completes all27 local cases at1196 versus1200, no case regressions in this matched run, max25.158s. Gains5,9,11,999. Saved10 depth4406 versus depth3control407 from408; seed5 is depth4-specific,9shared. Fixed15-attempt batches on0,5,9 cost4.6..14.2percent more fordepth4, a small sample. Both demonstrated gains already consume25s in prior source, so reserve12s primary, twostep until17, depth4 up to5s/until22, pool23, spill24, other passes25. The8s primary sample ties12s at248 on4cases, so retain12s. All22 other baseline functions are AST-identical; solve gains only optional budget argument, copied helper preserves overrides/proposed rule/branchcap8 plus recursion timeout check every256calls. Actual root116 completes88 in25.107s,28124KiB RSS. This is the combined runtime/depth4 portfolio, not isolated horizon attribution or native improvement. Native5accepted3d18078fab52 remains running; native2066 still belongs to8ef535.",
+      "title": "Reserved-time depth4 portfolio completes27 local cases at1196, improving1200."
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "30b5e3b778b8c98a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/3d18078fab52/result.json",
+        "research/native/3d18078fab52/manifest.json",
+        "research/native/3d18078fab52/solution.py",
+        "research/reports/horizon_portfolio_12_summary.json",
+        "research/reports/horizon_probe_summary.json",
+        "research/reports/horizon_cost.json",
+        "research/reports/horizon_stage_summary.json",
+        "research/turns/wake-1793700738530828175-cf0b3270ded2/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:8dc4cd836e68e7aec432bd3644dd2ca9a2961f41a637e369102a16337b095a09",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/3d18078fab52/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2055
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T10:52:22+00:00",
+      "result_id": "finding_56116e83eb0e339563f323e4ce03079c59f4544b7a32efc388015ab39897a9f3",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Submission3d18078fab52/agent5, exact8dc4cd, passes50/50 at2055 versus2066,0errors/timeouts. Full27=1196 vs1200, max25.158s, no case regressions; actual root116 completes88,25.11s,28124KiB RSS. Interpretation: Native improvement11 validates the entire submitted source, including the previously unsubmitted radius2 tail and earlier depth4/runtime scheduling; it does not isolate a component. Saved10 depth4406/control407 from408 gives a depth4-specific gain5 and sharedgain9. Fixed15-attempt cost on3 cases adds4.6..14.2percent, so the new method gets at most5s within25s. The12s/8s primary samples tie248 on4 cases; choose12s. Local27 improves4, recorded separately as finding_77382bf34b6c with stable local scope. Stage traces5/9 show horizon gains62to61/87to86, while primary caps are nonbinding; this corrects an earlier working-brief inference that primary consumed the full25s. Late refinements starve other positive tails in these instrumented samples, motivating a capped-budget comparison. Traces alter timing and are not an isolated ablation. Public per-case numeric scores are unavailable; native153.075s is aggregate. Native5timestamp1793702306.366869 sets next eligibility no earlier11:38:26.366869Z, subject to server admission. Five accepted completed/no pending; keep P1 open.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d5d812896aa8aa55",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T11:08:25+00:00",
+      "result_id": "question_a43b5beda8342f41eee3f7c7cac42e62623064caaad65a9c01cf0a2aecbc1855",
+      "run_id": "explore-result:538350b38cb0a069ce211632e21442256c86e17f4f173224b7aeeaa008b88921",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Seeds0..9, saved8dc4cd incumbents; same seven compilers/routes/parameters,5extra seconds including shared routes; rotating method order and official tester.",
+      "title": "Can equal or weighted late-stage time budgets improve saved source8dc4cd programs within five extra seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2dc8aec658bc4995",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/late_budget_probe.json",
+        "research/reports/late_budget_summary.json",
+        "research/late_budget.py",
+        "research/late_budget_probe.py",
+        "research/turns/wake-1793703393262674400-dd1e63213897/execution_observation.json",
+        "research/turns/wake-1793703393262674400-dd1e63213897/weighted_manifest.json",
+        "research/turns/wake-1793703393262674400-dd1e63213897/evaluation_protocol.json",
+        "research/reports/late_budget_final_root_9.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:2fd9faec9dcb6de30f9c1963ac286bea61ab4069afc56038ac4e3a0ce633e6da",
+          "comparison_scope": "grid-turing-robot:saved-8dc4cd-10:extra5s:v1",
+          "evaluation_ref": "sha256:c49f8c965860d524f8842d83b156bce4bd57868c3ed768ed45f56b70e189f8fe",
+          "evidence_ref": "research/reports/late_budget_probe.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:9bd6e7d40e3148c86ee2b1412e0642462101cb17a54080f6d9c6c4c51fd4400e",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 406
+        }
+      ],
+      "node_id": "question_a43b5beda8342f41eee3f7c7cac42e62623064caaad65a9c01cf0a2aecbc1855",
+      "recorded_at": "2026-11-03T11:08:25+00:00",
+      "result_id": "finding_538350b38cb0a069ce211632e21442256c86e17f4f173224b7aeeaa008b88921",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:9bd6e7d40e3148c86ee2b1412e0642462101cb17a54080f6d9c6c4c51fd4400e Applicability: Seeds0..9, saved8dc4cd incumbents; same seven compilers/routes/parameters,5extra seconds including shared routes; rotating method order and official tester. Observation: Current/equal/weighted totals406/406/406 from406;30 official outputs complete, no strict gains, max5.000952s including routes. Capped schedules reach transfer/loose/radius on cases5/9; root unchanged. Interpretation: This controlled negative answers only the10 saved-program, extra5s scope. On5/9 current order reaches zero transfer/radius attempts; equal/weighted reach64/70 and29/31 transfer attempts plus83/178 and35/79 radius attempts without fits. Redistributing effort increased coverage without reducing any tested objective, so do not integrate these schedules. All methods use unchanged compilers and incumbent copies; missing attempt counts for other stages remain unknown. The probe is not the actual native schedule and does not exclude benefits on other seeds, intermediate programs or different budgets. Preserve native2055/local1196 source8dc4cd and earlier scoped negative evidence. Initial list/count driver error was corrected before rerunning the complete comparison; rejected helper/stderr retained. Fresh unchanged root9 completes86 in25.109s with28032KiB RSS. Next independent probe compares depth4/5/6 reuse with branch cap8 and matched budgets; only useful gains warrant full27 and root validation. No new native evaluation during cooldown.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Can equal or weighted late-stage time budgets improve saved source8dc4cd programs within five extra seconds?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6ed196f8d3d2e8c5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/fused_after_pool2.json",
+        "research/reports/fused_after_pool2_summary.json",
+        "research/reports/fused_reuse_summary.json",
+        "research/reports/deeper_horizon_summary.json",
+        "research/reports/fused_reuse_cost.json",
+        "research/reports/fused_winning_case.json",
+        "research/reports/fused_after_pool2_resource_116.json",
+        "research/turns/wake-1793704199105111701-87aa3169bd04/local_execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0bcb7f79db77504c022c6889b6789d39a9a785eb4117a924594955927cef1c97",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/fused_after_pool2.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1195
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T11:47:29Z",
+      "result_id": "finding_a0793236d4ed",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Exact source0bcb7f completes27 local cases at1195 versus1196, no case regressions, max25.123s; gain9:86to85. Actual root116 improves88to87 in25.106s/28516KiB RSS. New-rule depths4/5/6 tie406 on10 saved8dc4cd programs; fusednewrule4 plusmatchdepth0/2/3 scores406/405/406,30complete outputs eachfamily.20canonicalfixedcalls identical. Match2fixed15-attempt overhead13.2..33.4percent on3small batches; posthocC47/Q38 onlyalloc1/match2fits85 among9triples,allofficialoutputscomplete. Directearly replacement regresses248to249(sample4); split3s/2s full27=1197 losesold11/999gains. Retaining full canonical5s andpool23, thenfusion atmost2s/until25 restores those gains and adds9gain; one-second phase missed it. All26parentfunctions AST-identical,3functions added,permatchcounters disabled. This verifies combined ranking/placement underlocalconditions, not native improvement or universalmethod superiority. Native6accepted53e974a860fb pending;2055 still belongs to8dc4cd. Keep scoped negative sources and bestnative snapshot.",
+      "title": "Preserved canonical prefix plus fused-match search completes27 at1195 versus1196."
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8143724ac6acdcb0",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/53e974a860fb/result.json",
+        "research/native/53e974a860fb/manifest.json",
+        "research/native/53e974a860fb/solution.py",
+        "research/reports/fused_after_pool2_summary.json",
+        "research/reports/fused_after_pool2_resource_116.json",
+        "research/reports/fused_reuse_summary.json",
+        "research/reports/jump_search_summary.json",
+        "research/turns/wake-1793704199105111701-87aa3169bd04/execution_observation.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0bcb7f79db77504c022c6889b6789d39a9a785eb4117a924594955927cef1c97",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/53e974a860fb/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2050
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T11:55:58+00:00",
+      "result_id": "finding_efee8a3f5857a5434febbcaa6a2b94a244697d498133dc3df8fa6e9272579e52",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Native6 53e974a860fb exact0bcb7f passes50/50 at2050 versus2055,0errors/timeouts. Local27=1195 versus1196,no case regressions; actualroot116 completes87,25.106s,28516KiB RSS. Jumpmargins tie259 on4. Interpretation: Nativegain5 validates fullsubmitted0bcb7f and its fusedranking/placement, not isolated choices. Local27 gain1(9:86to85) recorded separately finding_a0793236d4ed; stress11688to87. Saved newrule5/6 tie406; combined4/match2 scores405/control406,match3flat. Directreplacement249/248 andsplit1197/1196 regressed; preservecanonical5s/pool23 prefix thenfusionuntil25,26parentfunctions unchanged. PosthocC47/Q38 onlyalloc1/match2fits85;1scontrol misses searchorder. Instrumentedtrace9 showscanonical87to86 thenfusion86to85; not literalCLI timing or isolated ablation. Duringnativepending,margins1/2/3 each259 on4currentprograms,12complete,max5.001s;noadoption,otherinputsunknown. Publicpercasescoresnull;153.456s native runtimeaggregate. Sixacceptedcompleted/nonepending; submitted_at1793706275.7548187 setsnextfloor12:44:35.754819Z,subjectserver. Nextallocation1-first within1s mayreclaimtailtime; verifybeforeadoption. KeepGoal/P1open.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b212f96f3e98e535",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T12:38:00+00:00",
+      "result_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "run_id": "explore-result:60ed9a3ea61a2ec84404c200d4df86fb07ac518a60c7e2bf858f778cc5c914cb",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only.",
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "0e7f47f4b881e323",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/reverse_route_tail.json",
+        "research/reports/reverse_route_tail_summary.json",
+        "research/reports/reverse_route_summary.json",
+        "research/reports/fused_priority1_1s_summary.json",
+        "research/reports/reverse_route_repeat42.json",
+        "research/reports/reverse_route_resource7.json",
+        "research/reports/reverse_route_resource116.json",
+        "research/turns/wake-1793707309934361684-b5977dd4c50e/execution_observation.json"
+      ],
+      "execution_observation": {
+        "candidate_sha256": "1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+        "change_reason": null,
+        "elapsed_seconds": 25.152105178000056,
+        "evidence_refs": [
+          "research/reports/reverse_route_resource116.json",
+          "research/reports/reverse_route_resource7.json",
+          "research/reports/reverse_route_tail.json",
+          "research/reports/reverse_route_tail_summary.json",
+          "research/turns/wake-1793707309934361684-b5977dd4c50e/execution_observation.json"
+        ],
+        "executed_method_id": "reverse-route-tail-25s",
+        "exit_code": 0,
+        "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+        "limit_seconds": 30,
+        "planned_method_id": "reverse-route-tail-25s",
+        "result_candidate_sha256": "1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+        "result_ref": "research/reports/reverse_route_tail.json",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": "All27 complete; elapsed=max case walltime,limit=per case30s. Main25s cap or search exhaustion; iteration count unmeasured."
+      },
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/reverse_route_tail.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1195
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T12:38:00+00:00",
+      "result_id": "finding_60ed9a3ea61a2ec84404c200d4df86fb07ac518a60c7e2bf858f778cc5c914cb",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd Applicability: Local generated seeds 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,42,99,123,999,2026,9999,10000; Python 3, 30-second and 512-MB case limits, supported tools/bin/tester only. Observation: Exact1d4 completes27 at1195 tie,max25.152s. Gain7:36to35;loss42:79to80. Oldroot42repeat79 andexactnew42repeat79; originalregression retained. Actualroot7 repeats35/25.102s/24956KiB;116 retains87/25.125s/29280KiB. Native1d4 unknown. Interpretation: The27-case tie and within-candidate42 variation are established, not a corrected1194 aggregate, isolated cause or native gain. Active1d4 keeps all29functions andoldmain prefix, adding reversed shortest construction only when0.7s remains to25s. Matched extra5s forward/reverse on10saved0bcb programs scores405/404, all20outputscomplete,only7gain;30newroutes legal/same shortest length andall differ fromforward. Allocation1-first extra1s reached known9fitat0.629s, totals406/405/406 vscontrol/first2 onolder8dc10,30complete; its whole1s variant ties1195 butloses11687to88,so rejected. Do not conflate datasets/budgets. Preserve nativebest2050 andfirstbestlocal1195 source0bcb separately; use1d4 as validated nextnative candidate. Six prioracceptednativecompleted; no newsubmission before12:44:35.754819Z plusserver. Next independent test combines deepernewrule5/6 withmatch2; previous deepernegative usedmatch0. Scopedquestionanswered; Goal/P1continue.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does reverse trajectory compilation produce complete compact programs on the declared 27-seed corpus?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "cacb4166a1a37f2b",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T12:57:18+00:00",
+      "result_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "run_id": "explore-result:e1836e8496e129739343b33fc1b55009fc2a141c0f1c9423430bf7d06c455359",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved.",
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "b720eaaaef144b97",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/7f156c1e602a/result.json",
+        "research/native/7f156c1e602a/manifest.json",
+        "research/native/7f156c1e602a/solution.py",
+        "research/reports/fused_deeper_summary.json",
+        "research/reports/fused_weight_mix_summary.json",
+        "research/reports/native7_final_root42.json",
+        "research/turns/wake-1793709660328732653-f8c4cc464818/execution_observation.json",
+        "research/turns/wake-1793709660328732653-f8c4cc464818/next_route_priority_plan.json"
+      ],
+      "execution_observation": {
+        "candidate_sha256": "1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+        "change_reason": null,
+        "elapsed_seconds": null,
+        "evidence_refs": [
+          "research/native/7f156c1e602a/manifest.json",
+          "research/native/7f156c1e602a/result.json",
+          "research/turns/wake-1793709660328732653-f8c4cc464818/execution_observation.json"
+        ],
+        "executed_method_id": "reverse-route-tail-native50",
+        "exit_code": null,
+        "input_revision": "grid_turing_robot:native-fixed-50",
+        "limit_seconds": null,
+        "planned_method_id": "reverse-route-tail-native50",
+        "result_candidate_sha256": "1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+        "result_ref": "research/native/7f156c1e602a/result.json",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": "Native50 completed; percase30s/512MiB. Reported154.227s runtime is aggregate, not elapsed/percase; iterations unmeasured."
+      },
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:1d4c83e2b5c42c18e5a7d35c65a9173f8e2fcbc086352b64e77c131c574450e3",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/7f156c1e602a/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2048
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T12:57:18+00:00",
+      "result_id": "finding_e1836e8496e129739343b33fc1b55009fc2a141c0f1c9423430bf7d06c455359",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Native7 7f156c1e602a exact1d4 scores2048 vs2050,50/50,0errors/timeouts. Full27 remains1195tie with7gain/42loss retained. Actualroot42 repeats79,25.106s,28196KiB. Both depth4/5/6match2 andweightmix control/geo/linear tie404 on10. Interpretation: The complete1d4 submission improves the nativefixed50 aggregate by2; this doesnotisolate whichpath or timing effect causedit. Archive8b23...8209bytes andsource1d4 snapshots agree before/afterupload. Publicpercase scores/messages/weightsnull,metrics{};154.227s reportedruntimeaggregate. Priorfull27 1195tie includes7:36to35 and42:79to80; fresh42=79 demonstratesvariation, doesnoteraseoriginalregression orproducecorrected1194. Deepernewrule4/5/6 WITHmatch2 onstronger1d4saved10 all404,30outputscomplete,max5.0004s; mixedendpoint/geometric/linearweights all404,30complete,max5.0007s,clonecontrol result/stats exact on2/3. Theseareseparate5s savedprogram negatives, notuniversal bans or nativeablations; noadoption. Keepnative2048/source1d4 andold0bcb2050, allreports. Sevenacceptedcompleted/nonepending; server submitted_at1793710010.2521164 setsnextfloor13:46:50.252116Z, notresultarrival. NextphysicalBFS priorityprobe followsnewpath evidence, distinctfromoldnumericstateorderingnegative. Scopedquestionanswered; Goal/P1continue.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e6e34f87560a76f5",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/joint_route_tail.json",
+        "research/reports/joint_route_tail_summary.json",
+        "research/reports/joint_route_resource42.json",
+        "research/reports/joint_route_resource116.json",
+        "research/turns/wake-1793710939781155513-79360cad50f9/local_protocol_readback.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:e439ddfb96390ba8f33b0c83ff96ae173817741e129cb89bfbdc61946efe35f6",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/joint_route_tail.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1184
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T13:53:38Z",
+      "result_id": "finding_d70b55930ec54d66829d15656a0609074746082ec7bacf8a30aef293f59beb1b",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Exacte439 standalone28.5s search retains30 original1d4 functions/mainprefix and adds reuse-first shortest-predecessor joint packing. Whole27 complete1184 versus original1d4 1195: gains4,11,15,16,17,18,42, no regressions; max28.639412s. Saved10 five-second proxy402vs404 uses different budget; seed0 gain doesnotrepeat standalone. Actualroot42=77/28.609s/29956KiB and116=86/28.610s/30324KiB complete; full27 peakRSS unmeasured. Native8 d7371ed25f19 accepted exacte439/archiveb2d7...9762bytes, stillrunning at publication; nativebest2048/source1d4 remains distinct. No isolatedcause or generalization claim. Same input/evaluator bytes and30s/512MB conditions verified; seven case gains are retained as whole-run evidence.",
+      "title": "Reuse-first joint shortest-path/rule tail completes27 at1184 versus1195."
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "bee4873232600ed0",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T14:02:51+00:00",
+      "result_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "run_id": "explore-result:d39cca9fe845b3418c9e35076e5cf27d71633e4c6f92f294cea98fc640fa1155",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved.",
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "256f38c74657bd19",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/d7371ed25f19/result.json",
+        "research/native/d7371ed25f19/manifest.json",
+        "research/native/d7371ed25f19/solution.py",
+        "research/reports/joint_route_tail_summary.json",
+        "research/reports/route_design_research.json",
+        "research/reports/joint_pruning_probe.json",
+        "research/turns/wake-1793710939781155513-79360cad50f9/execution_observation.json",
+        "research/reports/joint_pruning_diagnostic.json"
+      ],
+      "execution_observation": {
+        "candidate_sha256": "e439ddfb96390ba8f33b0c83ff96ae173817741e129cb89bfbdc61946efe35f6",
+        "change_reason": null,
+        "elapsed_seconds": null,
+        "evidence_refs": [
+          "research/native/d7371ed25f19/manifest.json",
+          "research/native/d7371ed25f19/result.json",
+          "research/turns/wake-1793710939781155513-79360cad50f9/execution_observation.json"
+        ],
+        "executed_method_id": "reuse-first-joint-route-native50",
+        "exit_code": null,
+        "input_revision": "grid_turing_robot:native-fixed-50",
+        "limit_seconds": null,
+        "planned_method_id": "reuse-first-joint-route-native50",
+        "result_candidate_sha256": "e439ddfb96390ba8f33b0c83ff96ae173817741e129cb89bfbdc61946efe35f6",
+        "result_ref": "research/native/d7371ed25f19/result.json",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": "Native8 completed50/50; percase30s/512MB. Reported176.041s is aggregate; elapsed, iterations and peakRSS unmeasured."
+      },
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:e439ddfb96390ba8f33b0c83ff96ae173817741e129cb89bfbdc61946efe35f6",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/d7371ed25f19/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2029
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T14:02:51+00:00",
+      "result_id": "finding_d39cca9fe845b3418c9e35076e5cf27d71633e4c6f92f294cea98fc640fa1155",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Native8 exact e439:2029 vs2048,50/50; full27:1184 vs1195,no losses. Root42/116 complete at28.61s/<=30324KiB. Joint5s:402vs404; pruning matches six finished outputs/routes and improves3.5s proxy403to402. Separate59cf smoke0=43. Interpretation: Native8 is bound to immutablee439, archiveb2d7...9762bytes;2029 improves2048by19 with noerrors/timeouts. Public percase scores/messages/weights are null;176.041s is reported runtimeaggregate, not elapsed or percase. Full27 gains4,11,15,16,17,18,42, no losses; original1d4 total1195 remains comparator despite favorable42repeats. Physical BFS bank tie had0novelty, so it doesnotreject novel paths. Fixed hybrids created40new legal shortest trajectories but tied404; mixed-credit joint1/2 also tied404. Reuse-first joint2 achieved402 under5s and supported the28.5s standalone tail. Subsequent pruning only removes new-rule candidates lexically dominated by any existing match: six nonbinding exact program/route comparisons plus timeout/capacity checks pass;3.5s old/pruned403/402,20complete outputs. Separate59cf standalone0=43/28.606s; no whole27,1183or native score inferred. Keep evaluatede439/2029 and1d4/2048 fallback. Native accepted_at1793713886.487855 sets floor14:51:26.487855Z plusserver;8completed/nonepending. Scoped native question answered; Goal/P1 remain active. Next full27/resource validation of59cf.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "6ee601501d68ed9a",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/reports/guarded_pruned_full27.json",
+        "research/reports/guarded_pruned_summary.json",
+        "research/reports/guarded_pruned_root17.json",
+        "research/reports/guarded_pruned_root116.json",
+        "research/reports/seed17_repeats.json",
+        "research/reports/seed17_profile_summary.json",
+        "research/reports/deadline_guard_negative.json",
+        "research/turns/wake-1793714917306718118-7fdcb97ee944/local_protocol_readback.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0a890023601de75df0f92e2feb651998673c19f155b1cab02ffe639d68f8bf57",
+          "comparison_scope": "grid-turing-robot:local-27:30s-512mb:v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/reports/guarded_pruned_full27.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:dbb983128d11a49c57ff7b3f1149839b97415c3f55f20b4c0406599e8b08bbcd",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 1182
+        }
+      ],
+      "node_id": "question_c76b736308bd1567685f89e5997fd96c605f921ca9dce7d7119b8e6d493b0e84",
+      "recorded_at": "2026-11-03T14:51:03Z",
+      "result_id": "finding_d72ca52a5103409803c3353620d4d1a7c2d2c55818cc0306766dd1e67f345668",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Exact0a89 ordinary full27 completes1182 vsE4391184, gains0:44to43 and999:74to73,no losses,max28.633s. Distinct59cf attempt had31s timeout17 after0..16; no full59cf aggregate. Three serial17 repeats and owned CPU/phase capture complete63; original cause unresolved. A29s signal fallback after valid initialsolve preserves the last complete incumbent on optional late overruns;34 searchfunctions unchanged. Synthetic delayed-phase0/17 guarded2/2 completefixtures while unguarded2/2 exceed.6s; this is fallback semantics,not naturalrootcause proof. Actualroot17=63/28.630s/28544KiB,116=86/28.620s/32628KiB. Profile timing is not acceptance; full27 peakRSS unmeasured. Nativebest remains2029/E439;0a89 nativeunmeasured at publication. Input/evaluator bytes verified unchanged, same30s/512MB case budget; whole-method score,not isolatedcause.",
+      "title": "Dominance-pruned compiler with late-search fallback completes27 at1182 versus1184."
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "4d2e8ca3ae7f33a6",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T15:06:44+00:00",
+      "result_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "run_id": "explore-result:f0b0d89d62c5ad0e1c8175fb52a0ddbb7cc939bfd298443e7ef631bcc79ef380",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved.",
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "dc5af692855b7a51",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/native/63cd98946c33/result.json",
+        "research/native/63cd98946c33/manifest.json",
+        "research/native/63cd98946c33/solution.py",
+        "research/reports/guarded_pruned_summary.json",
+        "research/reports/seed17_profile_summary.json",
+        "research/reports/deadline_guard_negative.json",
+        "research/reports/joint_qmajor_guarded27_summary.json",
+        "research/turns/wake-1793714917306718118-7fdcb97ee944/execution_observation.json"
+      ],
+      "execution_observation": {
+        "candidate_sha256": "0a890023601de75df0f92e2feb651998673c19f155b1cab02ffe639d68f8bf57",
+        "change_reason": null,
+        "elapsed_seconds": null,
+        "evidence_refs": [
+          "research/native/63cd98946c33/manifest.json",
+          "research/native/63cd98946c33/result.json",
+          "research/turns/wake-1793714917306718118-7fdcb97ee944/execution_observation.json"
+        ],
+        "executed_method_id": "pruned-guarded-native50",
+        "exit_code": null,
+        "input_revision": "grid_turing_robot:native-fixed-50",
+        "limit_seconds": null,
+        "planned_method_id": "pruned-guarded-native50",
+        "result_candidate_sha256": "0a890023601de75df0f92e2feb651998673c19f155b1cab02ffe639d68f8bf57",
+        "result_ref": "research/native/63cd98946c33/result.json",
+        "schema_version": "explore_execution_observation_v0",
+        "search_iterations": null,
+        "stop_reason": "Native9 completed50/50;30s/512MB percase.172.456s report is aggregate, not elapsed/percase; iterations and nativepeakRSS unmeasured."
+      },
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:0a890023601de75df0f92e2feb651998673c19f155b1cab02ffe639d68f8bf57",
+          "comparison_scope": "grid-turing-robot:native-fixed-50:30s-512mb:v1",
+          "evaluation_ref": "sha256:bcb472528152b802715c535ff4d1efbf4ad71429dc0bc156e383e0982696b1ab",
+          "evidence_ref": "research/native/63cd98946c33/result.json",
+          "higher_is_better": false,
+          "input_revision": "grid_turing_robot:native-fixed-50",
+          "metric": "total_case_score",
+          "unit": "score",
+          "value": 2026
+        }
+      ],
+      "node_id": "question_1eb23eb6b3c92e03f94c5ac7b092c1dec17740320768fc5cef4c04d4dd522aab",
+      "recorded_at": "2026-11-03T15:06:44+00:00",
+      "result_id": "finding_f0b0d89d62c5ad0e1c8175fb52a0ddbb7cc939bfd298443e7ef631bcc79ef380",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: grid_turing_robot:native-fixed-50 Applicability: The task-declared native fixed 50-case suite, 30 seconds and 512 MB per case; exact source revision and accepted submission receipt are preserved. Observation: Native9 exact0a89:2026 vs2029,50/50. Whole27:1182 vs1184,no losses; root17/116 <=28.630s/32628KiB. Original59cf timeout retained. Qextra27 ties1181;Q16fit0.69s vs3.07/miss; separate90ab smoke16=55 only. Interpretation: Exact0a89/archive8573...10036bytes completes50 at2026,3 below2029. Native172.456s is reported aggregate runtime; percase scores/messages/weightsnull. New full27 source0a89 scores1182 vs1184,gains0/999,no losses; it is not a repaired59cf aggregate. Initial59cf exceeded31s on17;3 ordinary repeats and owned CPU/phase capture passed63 without reproducing it. Cause stays unresolved; profile time is not a benchmark. A29s alarm after valid initialsolve preserves a complete incumbent during late overruns; forced delayed-phase0/17 guard passes,controltimesout. Full27 max28.633s; actualroot17/116 <=28.630s,<=32628KiB. Independent saved0a89 extra3.5s Q/original both1181; only16fits55. Two Qfirstfits0.687/0.695s vsoriginal3.072s/miss are notp95. Separate90ab runnable16=55/28.628s only; no full27,1181or native outcome inferred. Root stays0a89/2026,E439/2029 retained.9completed/nonepending;accepted_at1793717686.5200238 sets floor15:54:46.520024Z plusserver. Nativequestion answered;Goal/P1 continue with full90ab/negative checks.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Does the compact reverse-compiled robot program complete the native 50-case suite, and what baseline score does it achieve?"
+    }
+  ]
+}

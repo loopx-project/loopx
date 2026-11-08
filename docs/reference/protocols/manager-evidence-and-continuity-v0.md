@@ -27,8 +27,14 @@ Long-running work is assigned to an exact worker with a durable return route.
 The initial receipt does not end the exchange: the worker evaluates or executes
 within its current authority and returns an audience-ready decision/result to
 the original conversation automatically. Acknowledgement or adoption does not
-remove the request from the receiver's hook; a committed conclusion does. The
-Chat runtime then owns transport recovery, separately from work completion.
+remove the request from the receiver's hook. An explicit remainder on the
+latest conclusion retains the original request; a queued return retains its
+delivery obligation. The scoped manager handoff reader reuses the native Inbox
+agenda and exposes `inbox_state` and `remaining_work` alongside transport
+receipts. An older delivered conclusion cannot resolve a newer remainder or
+pending reply. Unavailable receipts remain unknown. These are receipt facts,
+not independent acceptance that the original question was answered. The Chat
+runtime owns transport recovery, separately from work completion.
 
 An ordinary private project request interrupted by a host restart after tool
 work is not safe to replay. The original worker can reserve one separately
@@ -94,6 +100,13 @@ the current authorized registry through `goal-portfolio`, freezes that snapshot
 in a `manager.context` event, and supplies it to the executor. Chat prose is
 never the inventory. Normal manager questions no longer silently use a limited
 frontend projection; explicitly choosing status-only still uses that projection.
+
+An ordinary Codex turn in a bound steward conversation starts with the current
+authorized Goal directory. Its unread status rows carry omitted coverage. When
+an answer needs Goal status, the executor uses `loopx_manager_read` with
+`view=portfolio` to collect the requested scope. Each read rechecks the grant.
+Native execution, observations and prompt-only endpoints keep their existing
+evidence preparation.
 
 The manager channel's model and reasoning effort follow its executor. On the
 interactive CLI endpoint the defaults are `gpt-6.1-sol` with `xhigh` reasoning; on

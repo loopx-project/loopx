@@ -17,8 +17,10 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 def _recording_host(tmp_path):
@@ -164,16 +166,30 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def unavailable(**_kwargs):
         raise OSError("acceptance source unavailable")
 
+    planner_sources = []
+    runtime_result = context_readback.effect_runtime_result
+
+    def observe_planner_source(method, params, **options):
+        if method == "work_item.context.plan":
+            planner_sources.append(params["packet"])
+        return runtime_result(method, params, **options)
+
     with monkeypatch.context() as fault:
         fault.setattr(context_readback, "inspect_goal_acceptance", unavailable)
+        fault.setattr(context_readback, "effect_runtime_result", observe_planner_source)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", ])
+                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--context-delivery", "off"])
         failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
+    assert planner_sources
+    for source in planner_sources:
+        assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
+        assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
+        assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
     recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", )
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
@@ -233,6 +249,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
         "--turn-envelope", "--decision-output-dir", str(capture))
+    first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
     basis = next(row["content"] for row in first["work_context"]["sources"]
@@ -282,6 +299,15 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     # changed work, remove a wait or silently rebind the owner's checks.
     code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
     assert code == (0 if change == "checks_removed" else 1), current
+    if code == 0:
+        current = read_cli_policy_payload(json.dumps(current), returncode=0)
+    else:
+        assert current["error_code"] == "quota_action_selection_rejected"
+        assert current["heartbeat_receipt"]["status"] == "not_committed"
+        # The refusal is authoritative. Its saved detail is an oracle for the
+        # original observation, never permission to run the rejected work.
+        detail = current["captured_decision"]
+        current = read_context_capture_file(detail["path"], detail["sha256"], private=True)[2]
     channel = current["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is (change == "checks_removed")
     if change != "checks_removed":

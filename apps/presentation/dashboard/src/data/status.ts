@@ -88,6 +88,7 @@ export const todoItemSchema = z.object({
   watch_only: z.union([z.boolean(), z.string()]).optional().nullable(),
   task_domain: z.string().optional().nullable(),
   action_kind: z.string().optional().nullable(),
+  capability_binding_ref: z.string().optional().nullable(),
   // Canonical author provenance, distinct from the Agent authorized to reply.
   created_by: z.string().optional().nullable(),
   claimed_by: z.string().optional().nullable(),
@@ -114,6 +115,17 @@ export const todoItemSchema = z.object({
   { path: ["todo_id"], message: "Todo without a source index requires todo_id" },
 );
 
+export const todoCapabilityActionsSchema = z.object({
+  schema_version: z.literal("todo_capability_actions_v0"),
+  total_count: z.number().int().nonnegative(),
+  groups: z.array(z.object({
+    action_kind: z.string().min(1),
+    count: z.number().int().nonnegative(),
+    latest_at: z.string().optional().nullable(),
+    items: z.array(todoItemSchema).max(3),
+  })).default([]),
+});
+
 export const todoGroupSchema = z.object({
   source_section: z.string().optional().nullable(),
   total_count: z.number().optional().default(0),
@@ -123,6 +135,7 @@ export const todoGroupSchema = z.object({
   items: z.array(todoItemSchema).optional().default([]),
   deferred_items: z.array(todoItemSchema).optional(),
   recent_completed_advancement_items: z.array(todoItemSchema).optional(),
+  capability_actions: todoCapabilityActionsSchema.optional(),
 });
 
 export const todoIndexItemSchema = todoItemSchema.safeExtend({
@@ -267,6 +280,7 @@ export const projectAssetTodoSummarySchema = z.object({
   next_index: z.number().optional().nullable(),
   items: z.array(todoItemSchema).optional().default([]),
   recent_completed_advancement_items: z.array(todoItemSchema).optional().default([]),
+  capability_actions: todoCapabilityActionsSchema.optional(),
 });
 
 export const dependencyBlockerSchema = z.object({
@@ -539,7 +553,7 @@ export const runRecordSchema = z.object({
 });
 
 export const runGoalSchema = z.object({
-  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true)}).optional(),
+  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true), original_goal_id: z.string().optional()}).optional(),
   parent_goal_id: z.string().nullable().optional().catch(null),
   goal_objective: z.string().nullable().optional().catch(null),
   zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
@@ -612,6 +626,17 @@ export const runGoalSchema = z.object({
   raw_index_records: z.number().optional().default(0),
   unique_runs: z.number().optional().default(0),
   latest_runs: z.array(runRecordSchema).optional().default([]),
+  semantic_history: z.object({
+    agents: z.array(z.object({
+      latest_agent_vision_run: z.object({
+        generated_at: z.string(),
+        agent_vision: z.object({
+          vision_patch: z.object({vision_summary: z.string().nullish()}).nullish(),
+          path_delta: z.object({observed_reality: z.string().nullish()}).nullish().catch(null),
+        }),
+      }).nullish().catch(null),
+    })),
+  }).nullish().catch(null),
 });
 
 export const runHistorySchema = z.object({

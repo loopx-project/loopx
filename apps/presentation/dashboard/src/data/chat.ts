@@ -1,3 +1,4 @@
+import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
@@ -656,6 +657,7 @@ export async function readTodoRequest(goalId: string, todoId: string, signal: Ab
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    evidence: z.string().nullable().optional(), note: z.string().nullable().optional(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
     source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(url, {signal}));
@@ -895,6 +897,8 @@ export type ManagerRuntimeSessionReadback = {
 };
 
 export type ChatVisibleMessage = {
+  queue_input_revision?: number;
+  queue_input_cancelled?: true;
   goal_draft?: ReturnType<typeof normalizeGoalDraft>;
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
@@ -965,6 +969,81 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
+export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
+  z.object({action: z.literal("edit"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative(), message: z.string().min(1).max(24000)}).strict(),
+  z.object({action: z.literal("cancel"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative()}).strict(),
+]);
+export type ChatQueueInputRequest = z.infer<typeof chatQueueInputRequestSchema>;
+const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnegative(), message: z.string(),
+  attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
+    mime_type: z.string(), data_url: z.string()})),
+});
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema>;
+export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
+  // Keep original-source audience projection and complete paging. The visible
+  // input and its revision come from one canonical user row, never raw model context.
+  const history = await fetchChatSessionHistory(sessionId, signal, turnId);
+  const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
+  if (!original) throw new Error("Original queued input is unavailable");
+  return chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []});
+}
+const chatQueueSchema = z.object({
+  ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
+  active_turn_id: z.string().min(1).nullable(),
+  turns: z.array(z.object({
+    turn_id: z.string().min(1), created_at: z.string(), origin: z.string().nullable(),
+    preview: z.string(), character_count: z.number().int().nonnegative(),
+    attachment_count: z.number().int().nonnegative(),
+    input_revision: z.number().int().nonnegative().default(0),
+    mutation: z.object({action: z.enum(["edit", "cancel"]), operation_id: z.string().min(1),
+      expected_revision: z.number().int().nonnegative(), input_revision: z.number().int().positive(),
+      message: z.string().optional()}).nullable().optional().default(null),
+    steering: z.object({
+      schema_version: z.literal("loopx_chat_queue_steering_v1"),
+      client_ingress_id: z.string().min(1), operation_id: z.string().min(1),
+      target_turn_id: z.string().min(1), status: z.enum(["pending", "delivered", "failed"]),
+      error_code: z.string().optional(),
+    }).nullable(),
+  })),
+});
+export type ChatQueuedTurn = z.infer<typeof chatQueueSchema>["turns"][number];
+
+/** Bounded metadata from the existing persistent queue, never a local queue. */
+export async function fetchChatQueue(sessionId: string, signal?: AbortSignal) {
+  const result = chatQueueSchema.safeParse(await requestJson<unknown>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue`, {signal}));
+  if (!result.success || result.data.session_id !== sessionId
+    || new Set(result.data.turns.map(row => row.turn_id)).size !== result.data.turns.length) {
+    throw new Error("The original Session queue could not be verified.");
+  }
+  return result.data;
+}
+
+export async function steerQueuedChatTurn(sessionId: string, queuedId: string, targetId: string, ingressId: string) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/steer`,
+    {method: "POST", body: JSON.stringify({target_turn_id: targetId, client_ingress_id: ingressId}),
+      signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId
+    || value.turn_id !== targetId || value.client_ingress_id !== ingressId || value.status !== "delivered") {
+    throw new Error("Queue steering acknowledgement does not match the original request");
+  }
+}
+
+export async function mutateQueuedChatTurn(sessionId: string, queuedId: string, request: ChatQueueInputRequest) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/input`,
+    {method: "POST", body: JSON.stringify(request), signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId ||
+      value.operation_id !== request.operation_id || value.action !== request.action ||
+      value.input_revision !== request.expected_revision + 1 || value.status !== "applied") {
+    throw new Error("Queue input acknowledgement does not match the original request");
+  }
+}
+
 const chatMessagePageSchema = z.object({
   schema_version: z.literal("loopx_chat_message_page_v1"),
   offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
@@ -972,15 +1051,45 @@ const chatMessagePageSchema = z.object({
   turn_id: z.string().min(1).optional(),
 });
 
+// A long original transcript can outlive the interactive request budget even
+// when each verified page succeeds. Apply the same bounded read deadline to
+// its pages and fresh source checks; caller cancellation still takes priority.
+const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+
+type ChatHistoryReadProgress = {
+  first: ChatSessionSnapshot;
+  messages: ChatVisibleMessage[];
+  cursors: Set<string>;
+  cursor: string;
+  total: number;
+  digest: string;
+};
+
+function sameHistorySource(actual: ChatSessionSummary, expected: ChatSessionSummary) {
+  return actual.session_id === expected.session_id &&
+    (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
+      .every(key => (actual[key] ?? null) === (expected[key] ?? null)) &&
+    (actual.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime");
+}
+
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
 export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
+  return readChatSessionHistory(session, signal, turnId);
+}
+
+async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
   let expectedSession = typeof session === "string" ? undefined : session;
-  let first: ChatSessionSnapshot | undefined, cursor: string | null = null;
-  let total: number | undefined, digest: string | undefined;
-  const messages: ChatVisibleMessage[] = [], cursors = new Set<string>(), ids = new Set<string>();
+  // Recovery is derived browser memory, scoped again by current discovery. It
+  // grants no source authority and never exposes an incomplete transcript.
+  if (progress && expectedSession && !sameHistorySource(progress.first.session, expectedSession)) progress = undefined;
+  let first = progress?.first, cursor: string | null = progress?.cursor ?? null;
+  let total = progress?.total, digest = progress?.digest;
+  const messages = [...(progress?.messages ?? [])], cursors = new Set(progress?.cursors),
+    ids = new Set(messages.map(message => message.message_id));
   do {
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
@@ -988,13 +1097,10 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
-      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)});
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
     signal?.throwIfAborted();
     const expected = expectedSession;
-    const sameSource = snapshot.session?.session_id === sessionId && (!expected || (
-      (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
-        .every(key => (snapshot.session[key] ?? null) === (expected[key] ?? null)) &&
-      (snapshot.session.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime")));
+    const sameSource = snapshot.session?.session_id === sessionId && (!expected || sameHistorySource(snapshot.session, expected));
     if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
       throw new Error("The original Session scope changed during history read.");
     }
@@ -1023,7 +1129,10 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
     }
     first ??= snapshot;
     total = page.total; digest = page.snapshot_sha256; cursor = page.next_cursor;
-    if (cursor !== null) cursors.add(cursor);
+    if (cursor !== null) {
+      cursors.add(cursor);
+      checkpoint?.({first, messages: [...messages], cursors: new Set(cursors), cursor, total, digest});
+    }
   } while (cursor !== null);
   // Keep the first read's execution/revision hint. An append between pages is
   // intentionally outside this prefix and will trigger the normal next refresh.
@@ -1123,6 +1232,7 @@ export type ChatHistory = {
   sessions: ChatSessionSummary[];
   snapshots: ChatSessionSnapshot[];
   unavailableSessionIds: string[];
+  pendingReads?: Map<string, ChatHistoryReadProgress>;
 };
 
 export async function fetchChatHistory(options: {
@@ -1137,9 +1247,11 @@ export async function fetchChatHistory(options: {
 }, previous?: ChatHistory): Promise<ChatHistory> {
   // Source authorization must be re-read even when recovering an older snapshot.
   const exact = Boolean(options.bound || options.managed);
-  const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(5000))]}
-    : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
+  const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
+    : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const pendingReads = new Map(previous?.pendingReads);
+  for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
@@ -1151,7 +1263,20 @@ export async function fetchChatHistory(options: {
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
-    const snapshot = await fetchChatSessionHistory(session);
+    const savedProgress = pendingReads.get(session.session_id);
+    if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
+    let snapshot: ChatSessionSnapshot;
+    try {
+      snapshot = await readChatSessionHistory(session, undefined, undefined, pendingReads.get(session.session_id),
+        progress => pendingReads.set(session.session_id, progress));
+    } catch (error) {
+      // Reuse the hook's existing retry schedule only for a lost transport.
+      // Revoked sources, invalid pages and stale cursors must start a fresh read.
+      if (!(error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
+        && (error.payload.http_status === undefined || Number(error.payload.http_status) >= 500))) pendingReads.delete(session.session_id);
+      throw error;
+    }
+    pendingReads.delete(session.session_id);
     if (snapshot.session.session_id !== session.session_id || snapshot.session.agent_id !== session.agent_id) {
       throw new Error("The original Session identity changed during history read.");
     }
@@ -1163,8 +1288,8 @@ export async function fetchChatHistory(options: {
   // A long page sequence must not publish against a connection/Goal removed
   // while it was in flight. Reuse the original source owner, never a fallback.
   if (missing.length && results.some(result => result.status === "fulfilled")) {
-    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(5000));
-    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(5000));
+    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
   }
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
@@ -1175,6 +1300,7 @@ export async function fetchChatHistory(options: {
     sessions: listed.sessions,
     snapshots,
     unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
+    pendingReads,
   };
 }
 
@@ -1553,7 +1679,7 @@ export async function sendChatTurnStreaming(
     options.attachments,
     options.signal,
   );
-  options.onPhase?.("turn.accepted", accepted.turn_id);
+  options.onPhase?.(accepted.status === "queued" ? "turn.queued" : "turn.accepted", accepted.turn_id);
   return receiveChatTurnStreaming(
     sessionId,
     accepted.turn_id,
@@ -1574,6 +1700,7 @@ async function receiveChatTurnStreaming(
   } = {},
 ) {
   let finalResponse: unknown = null;
+  let steeredIntoTurnId: string | undefined;
   const outcome: {
     failure: Record<string, unknown> | null;
     interrupted: Record<string, unknown> | null;
@@ -1591,6 +1718,9 @@ async function receiveChatTurnStreaming(
           if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
+          if (typeof event.payload.steered_into_turn_id === "string" && event.payload.steered_into_turn_id) {
+            steeredIntoTurnId = event.payload.steered_into_turn_id;
+          }
           finalResponse = event.payload.response;
         }
         if (event.kind === "turn.failed") {
@@ -1632,6 +1762,7 @@ async function receiveChatTurnStreaming(
     response: agentResponseSchema.parse(finalResponse),
     sessionId,
     turnId,
+    steeredIntoTurnId,
   };
 }
 
@@ -1642,7 +1773,7 @@ async function receiveChatTurnStreaming(
 export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
   let completed: AgentResponse | null = null;
   await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
-    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+    if (event.kind === "turn.completed" && !event.payload.steered_into_turn_id) completed = agentResponseSchema.parse(event.payload.response);
   }, signal);
   return completed;
 }
@@ -2813,9 +2944,8 @@ export async function resolveBoundConversation(target: BoundConversationTarget, 
     throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
   }
   const session = listed.sessions[0], source = parsed.data;
-  if (source.executor_endpoint_id !== session.agent_id) {
-    throw new Error("The original conversation's executor no longer matches its connection.");
-  }
+  // Core qualifies this exact Session, including its original quota fallback.
+  // The connection's configured preference need not be its active executor.
   return {session, source};
 }
 
@@ -2922,6 +3052,7 @@ const exploreResultPageSchema = z.object({
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
+    work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
@@ -2929,9 +3060,39 @@ const exploreResultPageSchema = z.object({
   })),
 });
 export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
-export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string) {
+export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string, originalGoalId = goalId) {
   const query = new URLSearchParams({goal_id: goalId, view: "findings", ...(cursor ? {cursor} : {})});
   const page = exploreResultPageSchema.parse(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`)));
-  if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
+  if (page.goal_id !== originalGoalId) throw new Error("Explore result Goal mismatch");
+  for (const item of page.items) if (item.work_yardstick) normalizeWorkYardstickCapture({
+    capture: item.work_yardstick, goal_id: originalGoalId, agent_id: item.agent_id, evidence_refs: item.evidence_refs,
+  });
   return page;
+}
+
+const researchHistoryTimingSchema = z.object({
+  ok: z.literal(true),
+  goal_id: z.string(),
+  source_namespace: z.string().nullable(),
+  first_recorded_at: z.iso.datetime().nullable(),
+  last_recorded_at: z.iso.datetime().nullable(),
+  untimed_record_count: z.number().int().nonnegative(),
+  strategy_recorded_at: z.iso.datetime().nullable(),
+}).refine(value => value.first_recorded_at === null
+  ? value.last_recorded_at === null
+  : value.last_recorded_at !== null && Date.parse(value.first_recorded_at) <= Date.parse(value.last_recorded_at));
+export type ResearchHistoryTiming = z.infer<typeof researchHistoryTimingSchema>;
+
+export async function fetchResearchHistoryTiming(
+  goalId: string, originalGoalId: string, namespace: string | null, directoryUrl: string | undefined, signal: AbortSignal,
+): Promise<ResearchHistoryTiming> {
+  const statusUrl = namespace ? `/status.json?source_namespace=${namespace}` : directoryUrl;
+  const query = new URLSearchParams({goal_id: goalId, view: "history-timing"});
+  const timing = researchHistoryTimingSchema.parse(await requestJson<unknown>(
+    sourceReadApiUrl(statusUrl, `/api/chat/explore-results?${query}`), {signal},
+  ));
+  if (timing.goal_id !== originalGoalId || timing.source_namespace !== namespace) {
+    throw new Error("Research timing source mismatch");
+  }
+  return timing;
 }

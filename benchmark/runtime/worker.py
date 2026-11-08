@@ -16,7 +16,8 @@ from pathlib import Path
 
 from benchmark.runtime.codex import Execution, prepare_codex_home, process_environment
 
-PHASE_WORK_RESERVE_SECONDS = 160
+from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
+from benchmark.runtime.scheduler import phase_work_reserve
 
 
 def read_json(text: str) -> dict:
@@ -125,7 +126,9 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     )
     from .research_probe import runtime_execution_guidance
 
-    return body + runtime_execution_guidance(env)
+    from .interruption_recovery import recovery_handoff
+    _, handoff = recovery_handoff(env)
+    return body + runtime_execution_guidance(env) + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
 
 
 @contextmanager
@@ -206,11 +209,18 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
         guard = ProviderRequestAdmission(env, session_wake, receipt, wake,
             timeout=timeout, original_quota=original_quota)
         scope = guard.serve(command)
+    observation = guard
+    if env.get("LOOPX_HOST_ATTEMPT_ID") and session_wake is not None:
+        from loopx.capabilities.benchmark_toolkit.native_codex_process import NativeCodexProcessObservation
+        from .interruption_recovery import ProcessObservers
+
+        native_observation = NativeCodexProcessObservation(lambda value: receipt.update(native_process=value))
+        observation = ProcessObservers(native_observation, guard)
     with scope as routed:
         with child_process(routed, env=env, stdout=stdout, stderr=stderr,
                 goal_admission=session_wake.admission if session_wake is not None else None,
                 check_current_launch=heartbeat_launch_check(env, session_wake, original_quota=original_quota),
-                **({"process_observation": guard} if guard is not None else {})) as process:
+                **({"process_observation": observation} if observation is not None else {})) as process:
             yield process
     if guard is not None and guard.refusal_code is not None:
         from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
@@ -495,6 +505,8 @@ def run_once(env: dict[str, str]) -> dict:
         task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
+        native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
+                            if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -541,12 +553,19 @@ def run_once(env: dict[str, str]) -> dict:
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"native_child_limit": execution.native_child_limit}
+           if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
         "timed_out": False,
     }
+    if env.get("LOOPX_HOST_ATTEMPT_ID"):
+        # The scheduler supplies the transport identity, never model prose.
+        receipt.update(host_attempt_id=env["LOOPX_HOST_ATTEMPT_ID"],
+            goal_id=env.get("LOOPX_GOAL_ID"), agent_id=env.get("LOOPX_AGENT_ID"),
+            phase_deadline_epoch=env.get("LOOPX_PHASE_DEADLINE_EPOCH"))
     session_wake = None
     phase_work_deadline = None
     checkpoint_context = ExitStack()
@@ -554,22 +573,25 @@ def run_once(env: dict[str, str]) -> dict:
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
     )
     try:
+        from .interruption_recovery import recovery_handoff
+        handoff, _ = recovery_handoff(env)
+        if handoff is not None:
+            receipt["recovery_handoff_sha256"] = handoff["sha256"]
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-            # Reserve startup and settlement on every wake, then allow the
-            # remaining time for work instead of reusing the initial timeout.
-            if remaining <= PHASE_WORK_RESERVE_SECONDS:
+            # Heartbeat work uses the whole remaining phase. Cleanup is bounded
+            # by its existing host transport, not subtracted from each wake.
+            # Native Goal and managed-turn transports retain their own reserve.
+            reserve = phase_work_reserve(execution.mode)
+            if remaining <= reserve:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
             if execution.mode == "heartbeat":
-                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - PHASE_WORK_RESERVE_SECONDS
+                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"])
             execution = replace(
-                execution, timeout_seconds=(remaining - PHASE_WORK_RESERVE_SECONDS if execution.timeout_seconds is None
-                                             else min(execution.timeout_seconds, remaining - PHASE_WORK_RESERVE_SECONDS))
+                execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
+                                             else min(execution.timeout_seconds, remaining - reserve))
             )
-        if env.get("LOOPX_WARM_START"):
-            from benchmark.runtime.sforge_warm_start import finish_preparation
-            receipt["warm_preparation"] = finish_preparation(env)
         prepare_codex_home(
             home,
             execution=execution,
@@ -642,7 +664,10 @@ def run_once(env: dict[str, str]) -> dict:
         if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
             from benchmark.runtime.checkpoint import capture_before_replan
 
-            body = capture_before_replan(env, receipt, body)
+            # The prepared Codex exec session carries the complete read guide
+            # in developer instructions, including after compaction.
+            body = capture_before_replan(env, receipt, body,
+                guide_in_host=not execution.native_goal and receipt.get("context_transport", {}).get("available") is True)
         if phase_work_deadline is not None and time.time() >= phase_work_deadline:
             receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
             return receipt

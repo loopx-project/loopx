@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {evaluateQuotaSchedulingWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -97,14 +99,10 @@ test("scheduling write-scope overlap folds case and keeps subtree containment", 
     ["src/a.ts", "src/a.ts/b", true],
   ];
   for (const [left, right, overlap] of rows) {
-    const scheduling = await dispatchEffectRuntimeMethod(
-      handlers,
-      "quota.task_orchestration.write_scope_overlap",
-      { left: [left], right: [right] },
-    ) as Record<string, unknown>;
+    const scheduling = evaluateQuotaSchedulingWriteScopesOverlap({left: [left], right: [right]});
     assert.equal(scheduling.overlap, overlap, `scheduling ${left} vs ${right}`);
   }
-  // The scheduling entry point stays wider than the canonical lease rule.
+  // The in-process scheduling owner stays wider than the canonical lease rule.
   const canonical = await dispatchEffectRuntimeMethod(
     handlers,
     "task_lease.write_scopes.overlap",
@@ -256,3 +254,21 @@ for (const retired of [
       {code: "unsupported_method"});
   });
 }
+
+
+test("explicit Host retry is registered and requires a valid typed failure and intent", async () => {
+  const failure = {schema_version: "loopx_turn_host_failure_v0", kind: "quota_exhausted",
+    attempt: 1, retryable: false};
+  assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "host_failure.retry",
+    {failure, retry_failed: true}), {allowed: true, check: null});
+  const held = await dispatchEffectRuntimeMethod(handlers, "host_failure.retry",
+    {failure, retry_failed: false}) as Record<string, unknown>;
+  assert.equal(held.allowed, false);
+  for (const params of [{failure}, {failure, retry_failed: "true"},
+    {failure, retry_failed: true, extra: true}, {retry_failed: true},
+    {failure: {...failure, kind: "not_registered"}, retry_failed: true},
+    {failure: {...failure, attempt: true}, retry_failed: true},
+    {failure: {...failure, retryable: true}, retry_failed: true}]) {
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, "host_failure.retry", params));
+  }
+});

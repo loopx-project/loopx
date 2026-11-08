@@ -165,7 +165,8 @@ export type WorkspaceGoalSubagentConfiguration = {
 };
 
 export type WorkspaceGoal = {
-  sourceAccess?: {namespace: string; label: string; readOnly: true};
+  sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
+  sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
   parentGoalId?: string | null;
   /** Bounded, safe text from this Goal's declared source document. */
@@ -211,6 +212,9 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  /** Exact full-source capability-action count and bounded display rows. */
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
@@ -340,6 +344,8 @@ export type WorkspaceSchedule = {
 export type WorkspaceActionPreview = {
   /** Exact Todo target from the stored action, used only for display joins. */
   todoId?: string;
+  /** Stored Todo operation for result wording; never grants execution authority. */
+  todoOperation?: string;
   reviewPlan?: ActionReviewPlan;
   actionKind:
     | "goal.create"
@@ -393,6 +399,9 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  queueInputCancelled?: true;
+  /** A native queue receipt, not an assistant answer or active execution. */
+  queued?: boolean;
   replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;
@@ -573,6 +582,7 @@ export type PersonalWorkspaceCallbacks = {
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
+  onObserveConversationQueue?: (contextId: string, sessionId: string) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
@@ -630,7 +640,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
-  onSelectWorkAgent?: (agentId: string | null) => void;
+  onSelectWorkAgent?: (agentId: string | null, sessionId?: string) => void;
   onSelectWorkSession?: (sessionId: string, replace?: boolean) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;

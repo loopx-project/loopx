@@ -89,6 +89,13 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         raise ValueError("planning referenced non-runnable or unclaimed work")
     if status == "blocked" and not set(ids).issubset(after["blocking_todo_ids"]):
         raise ValueError("blocked planning result requires unresolved blocking Todos")
+    requirements = after.get("goal_acceptance", {}).get("planning_requirements", {})
+    if status == "ready" and (
+        requirements.get("agent_id") != after["agent_id"]
+        or requirements.get("declaration_current") is not True
+        or not set(ids).issubset(requirements.get("linked_todo_ids", []))
+    ):
+        raise ValueError("ready planning requires canonical overall requirements linked to its Todos")
     return {
         "input_digest": before["input_digest"],
         "status": status,
@@ -96,5 +103,6 @@ def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
         "goal_id": after["goal_id"],
         "agent_id": after["agent_id"],
         "state_readback_verified": True,
+        **({"goal_requirements_readback": requirements} if status == "ready" else {}),
         "execution_owner": "caller",
     }

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..control_plane.quota.settlement import QuotaSettlementReadback
 
 
 def stage_reward_memory_outcome_candidate(
@@ -65,30 +68,12 @@ def attach_reward_memory_ingest_after_spend(
     execute: bool,
     runtime_root: Path,
     registry_path: Path,
-    goal_id: str,
-    agent_id: str,
-    todo_id: str | None,
-    turn_instance_id: str,
-    replan_obligation_id: str | None,
-    goal_ref: Mapping[str, Any] | None = None,
+    readback: QuotaSettlementReadback,
 ) -> None:
     if not execute or payload.get("ok") is not True:
         return
     from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
-    from ..control_plane.quota.settlement import read_heartbeat_settlement
 
-    readback = read_heartbeat_settlement(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=todo_id,
-        turn_instance_id=turn_instance_id,
-        replan_obligation_id=replan_obligation_id,
-        registry_path=registry_path,
-        goal_ref=goal_ref,
-    )
-    if readback is None:
-        return
     identity = readback.identity.value
     writeback_event = readback.writeback_event
     details_value = (

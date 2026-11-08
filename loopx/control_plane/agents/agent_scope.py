@@ -7,10 +7,11 @@ from typing import Any, TypeGuard
 from .agent_scope_frontier import (
     AGENT_LANE_FRONTIER_HINT_SCHEMA_VERSION,
     AgentLaneFrontierHintDecision,
-    AgentScopeFrontierAction,
-    agent_scope_frontier_action as _agent_scope_frontier_action,
+    AgentScopeFrontierAction as AgentScopeFrontierAction,
+    agent_scope_frontier_action as _frontier_action,
     build_agent_scope_frontier_payload,
 )
+
 from ..todos.decision_scope import select_scoped_gate_fallback
 from ..work_items.work_lane import (
     work_lane_contract_is_due_monitor_attempt,
@@ -41,6 +42,8 @@ from ..todos.user_gate import (
     open_todo_count as _open_todo_count,
     open_user_gate_todo_items as _open_user_gate_todo_items,
 )
+
+_agent_scope_frontier_action = _frontier_action
 
 _ACTION_SCOPE_STOPWORDS = {
     "a",
@@ -689,7 +692,7 @@ def _agent_lane_frontier_hint(
 def _agent_scope_deferred_resume_candidates(
     agent_todo_summary: dict[str, Any],
     *,
-    agent_id: str,
+    agent_id: str | None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for key in (
@@ -1093,10 +1096,8 @@ def _deferred_resume_frontier(
 def _blocked_successor_wait_frontier(
     context: _AgentScopeNoCandidateContext,
 ) -> dict[str, Any] | None:
-    candidates = project_todo_resume_planning(
-        context.summary,
-        agent_id=context.agent_id,
-    )["blocked_successor_items"]
+    planning = project_todo_resume_planning(context.summary, agent_id=context.agent_id)
+    candidates = planning["blocked_successor_items"]
     if not candidates:
         return None
     first = candidates[0]
@@ -1121,7 +1122,11 @@ def _blocked_successor_wait_frontier(
             **context.candidate_counts,
             "blocked_successor_wait_count": len(candidates),
         },
-        extra_fields={"blocked_successor_wait_candidates": candidates[:3]},
+        extra_fields={
+            "blocked_successor_wait_candidates": candidates[:3],
+            **({"automatic_resume_todo": planning["automatic_resume_todo"]}
+               if "automatic_resume_todo" in planning else {}),
+        },
     )
 
 

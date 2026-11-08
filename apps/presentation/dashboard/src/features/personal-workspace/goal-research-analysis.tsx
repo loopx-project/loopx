@@ -2,10 +2,13 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {ArrowLeft, ArrowUpRight, ChevronDown, CircleHelp, History, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
+import type {TrajectoryUsageComparison} from "../../../../../../loopx/control_plane/capabilities/trajectory_usage_comparison.js";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
+import {ResearchCaseStudy} from "./research-case-study";
+import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
 // Transport views of the existing toolkit producer, not an assessment, score,
@@ -15,6 +18,8 @@ type Job = {status: string; attempt?: number; analysis_wall_seconds?: number | n
   config?: {model: string; effort: string; service_tier: string}; served_service_tier?: string | null;
   usage?: {input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number} | null};
 type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; method_version: string;
+  case_study?: TrajectoryCaseStudy;
+  case_study_summary?: {title: string; language: TrajectoryOutputLanguage};
   display_request?: {schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string; eligible: number};
   result_attempt?: number;
   result_job?: Job;
@@ -22,7 +27,8 @@ type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; 
   objective?: string; episodes?: TrajectoryEpisode[]; job?: Job | null;
   continuation_unavailable?: {base_pack_id: string};
   continuation?: TrajectoryContinuation & {base_pack_id: string; base_title: string; base_available: boolean; base_episode_count: number}};
-type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]; unreadable_pack_ids?: string[]}; pack: Pack | null};
+type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]; unreadable_pack_ids?: string[]}; pack: Pack | null;
+  originalPack?: Pack | null; originalReadError?: string};
 type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
@@ -31,9 +37,55 @@ const locationFor = (goal: string) => {
   return {open: query.get("research_analysis") === goal, packId: owner === goal ? query.get("research_pack") : null};
 };
 
+export async function readAnalysisSnapshot(goalId: string, packId: string | null, zh: boolean,
+  readSourceUrl?: string, signal?: AbortSignal, isCurrent: () => boolean = () => true): Promise<Snapshot> {
+  const endpoint = "/api/chat/research-analysis", outputLanguage = zh ? "zh" : "en";
+  const query = new URLSearchParams({goal_id: goalId, output_language: outputLanguage, ...(packId ? {pack_id: packId} : {})});
+  const value = await requestJson<Snapshot>(sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});
+  if (!value?.ok || !Array.isArray(value.catalog?.packs) || (value.pack && (value.pack.pack_id !== (packId ?? value.catalog.default_pack_id)
+      || value.pack.config.output_language !== outputLanguage || (value.pack.result && (value.pack.result.output_language !== outputLanguage
+        || value.pack.result.analysis_key !== value.pack.analysis_key || value.pack.result.method_version !== value.pack.method_version
+        || JSON.stringify(value.pack.result.scope) !== JSON.stringify(value.pack.scope)))))) {
+    throw new Error(zh ? "分析来源读回不一致。" : "Analysis source readback does not match.");
+  }
+  // Older registered packs have a successful, language-unspecified identity.
+  // Read that exact pack through the existing owner; never relabel its
+  // original output as a result generated in the interface language. The
+  // owning Goal can differ from the solver Goal in the pack's analysis scope.
+  let originalPack: Pack | null = null, originalReadError = "";
+  if (value.pack && !value.pack.result && isCurrent() && !signal?.aborted) {
+    const originalQuery = new URLSearchParams({goal_id: goalId, pack_id: value.pack.pack_id});
+    try {
+      const original = await requestJson<Snapshot>(sourceReadApiUrl(readSourceUrl, `${endpoint}?${originalQuery}`), {signal});
+      const p = original.pack;
+      if (!original.ok || !p || p.pack_id !== value.pack.pack_id
+          || p.method_version !== value.pack.method_version
+          || JSON.stringify(p.scope) !== JSON.stringify(value.pack.scope)) {
+        throw new Error(zh ? "原文分析来源读回不一致。" : "Original analysis source readback does not match.");
+      }
+      if (p.config.output_language === undefined && p.result) {
+        if (p.result.output_language !== undefined || p.result.analysis_key !== p.analysis_key
+            || p.result.method_version !== p.method_version || JSON.stringify(p.result.scope) !== JSON.stringify(p.scope)) {
+          throw new Error(zh ? "原文分析结果身份不一致。" : "Original analysis result identity does not match.");
+        }
+        originalPack = p;
+      }
+    } catch (e) {originalReadError = errorText(e);}
+  }
+  return {...value, originalPack, originalReadError};
+}
+
 export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean, readSourceUrl?: string) {
   const endpoint = "/api/chat/research-analysis";
   const outputLanguage = zh ? "zh" : "en";
+  const readUsageComparison = useCallback(async (packId: string, referenceId: string, signal: AbortSignal) => {
+    const query = new URLSearchParams({goal_id: goalId, pack_id: packId, compare_pack_id: referenceId, output_language: outputLanguage});
+    const value = await requestJson<{ok: boolean; comparison: TrajectoryUsageComparison}>(
+      sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});
+    if (!value?.ok || value.comparison?.method !== "trajectory_usage_comparison_v1"
+      || !["observed", "unavailable"].includes(value.comparison.status)) throw new Error("Comparison readback unavailable");
+    return value.comparison;
+  }, [goalId, readSourceUrl, outputLanguage]);
   const [citation, setCitation] = useState<Citation | null>(null);
   const [citationError, setCitationError] = useState("");
   const [citationBusy, setCitationBusy] = useState(false);
@@ -46,7 +98,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     {scope: sourceScope, packId: location.packId, snapshot: null, error: "", loading: true});
   // Scope changes hide old data synchronously, before effects start the next read.
   const snapshot = readState.scope !== sourceScope ? null : readState.packId === location.packId
-    ? readState.snapshot : readState.snapshot ? {...readState.snapshot, pack: null} : null;
+    ? readState.snapshot : readState.snapshot ? {...readState.snapshot, pack: null, originalPack: null, originalReadError: ""} : null;
   const readError = readState.scope === sourceScope && readState.packId === location.packId ? readState.error : "";
   const loading = readState.scope !== sourceScope || readState.packId !== location.packId || readState.loading;
   const [error, setError] = useState("");
@@ -65,17 +117,19 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const isCurrent = () => current === generation.current && sequence === readSequence.current
       && scope.current.sourceScope === sourceScope && scope.current.packId === packId && !signal?.aborted;
     setReadState(previous => ({scope: sourceScope, packId, snapshot: previous.scope === sourceScope
-      ? previous.packId === packId ? previous.snapshot : previous.snapshot ? {...previous.snapshot, pack: null} : null : null,
+      ? previous.packId === packId ? previous.snapshot : previous.snapshot ? {...previous.snapshot, pack: null, originalPack: null, originalReadError: ""} : null : null,
       error: previous.scope === sourceScope && previous.packId === packId ? previous.error : "", loading: true}));
-    const query = new URLSearchParams({goal_id: goalId, output_language: outputLanguage, ...(packId ? {pack_id: packId} : {})});
     try {
-      const value = await requestJson<Snapshot>(sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});
-      if (!value?.ok || !Array.isArray(value.catalog?.packs) || (value.pack && (value.pack.pack_id !== (packId ?? value.catalog.default_pack_id)
-          || value.pack.config.output_language !== outputLanguage || (value.pack.result && value.pack.result.output_language !== outputLanguage)))) {
-        throw new Error(zh ? "分析来源读回不一致。" : "Analysis source readback does not match.");
-      }
+      const value = await readAnalysisSnapshot(goalId, packId, zh, readSourceUrl, signal, isCurrent);
       if (isCurrent()) {
-        setReadState({scope: sourceScope, packId, snapshot: value, error: "", loading: false});
+        setReadState(previous => {
+          const saved = previous.snapshot?.originalPack;
+          return {scope: sourceScope, packId, snapshot: {...value,
+            originalPack: value.originalReadError && previous.scope === sourceScope && previous.packId === packId
+              && saved && saved.pack_id === value.pack?.pack_id
+              ? {...saved, applicability: "historical", availability: "unavailable", reason_code: "source_unavailable"}
+              : value.originalPack}, error: "", loading: false};
+        });
         const observation = JSON.stringify([value.pack?.analysis_key, value.pack?.job?.attempt, value.pack?.job?.status]);
         if (observation !== lastJobObservation.current && (value.pack?.job?.status === "succeeded" || value.pack?.job?.status === "cancelled")) setError("");
         lastJobObservation.current = observation;
@@ -94,7 +148,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
       citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);
       setPending(false); setCancelPending(false); setError("");
       setReadState(previous => ({scope: sourceScope, packId: next.packId, snapshot: previous.scope === sourceScope && previous.snapshot
-        ? previous.snapshot.pack?.pack_id === next.packId ? previous.snapshot : {...previous.snapshot, pack: null} : null, error: "", loading: true}));
+        ? previous.snapshot.pack?.pack_id === next.packId ? previous.snapshot : {...previous.snapshot, pack: null, originalPack: null, originalReadError: ""} : null, error: "", loading: true}));
     }
     scope.current = {goalId, packId: next.packId, outputLanguage, sourceScope};
     setLocation(next);
@@ -116,6 +170,8 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   }, [active, read, location.packId]);
   const currentSnapshot = snapshot;
   const pack = currentSnapshot?.pack ?? null;
+  const readingPack = currentSnapshot?.originalPack ?? pack;
+  const savedOriginal = Boolean(currentSnapshot?.originalPack);
   useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
   useEffect(() => {
     if ((!citation && !citationBusy && !citationError) || !active) return;
@@ -154,7 +210,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "start"});});
   };
   const execute = async (retry = false) => {
-    if (readSourceUrl && snapshot?.execution_enabled !== true) return;
+    if (snapshot?.execution_enabled === false || (readSourceUrl && snapshot?.execution_enabled !== true)) return;
     if (readError || !pack || pack.availability !== "available" || submitting.current) return;
     show(); submitting.current = true; setPending(true); setError("");
     const current = generation.current;
@@ -165,7 +221,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     finally {if (current === generation.current) {submitting.current = false; setPending(false);}}
   };
   const cancel = async () => {
-    if (readSourceUrl && snapshot?.execution_enabled !== true) return;
+    if (snapshot?.execution_enabled === false || (readSourceUrl && snapshot?.execution_enabled !== true)) return;
     if (!pack || cancelPending) return;
     const current = generation.current;
     setCancelPending(true);
@@ -176,11 +232,12 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     finally {if (current === generation.current) setCancelPending(false);}
   };
   const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLButtonElement) => {
-    const p = pack;
+    const p = readingPack;
     if (!p) return;
     if (origin) sourceTrigger.current = origin;
     const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
-    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, output_language: outputLanguage, ...selection});
+    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
+      ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
     try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`)); if (current === citeGeneration.current) setCitation(value);}
     catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
@@ -188,7 +245,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -209,9 +266,9 @@ export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
   const sourceUnavailable = !a.loading && !a.readError && a.snapshot && (!a.pack || a.pack.availability !== "available");
   // The action keeps its separate-usage consequence visible. Further method
   // explanation is optional; cached results and unavailable states are reads.
-  const readOnly = unavailable || a.readError || a.pack?.result || a.pending || a.recordedRunning;
+  const readOnly = unavailable || a.readError || a.snapshot?.originalReadError || a.pack?.result || a.pending || a.recordedRunning;
   return <div className="research-analysis-entry"><div className="research-analysis-entry-actions"><button ref={a.trigger} type="button" disabled={a.loading && !a.pack} onClick={() => readOnly ? a.show() : void a.execute(a.pack?.job?.status === "failed" || a.pack?.job?.status === "cancelled")} aria-expanded={a.location.open}>
-    <Sparkles size={14} aria-hidden/>{a.readOnly || a.pack?.result ? (a.zh ? "查看分析" : "View analysis") : analysisActionLabel(a.pack, a.zh)}
+    <Sparkles size={14} aria-hidden/>{a.readOnly || a.pack?.result || a.snapshot?.originalReadError ? (a.zh ? "查看分析" : "View analysis") : analysisActionLabel(a.pack, a.zh)}
   </button><ContextHelp label={sourceUnavailable ? (a.zh ? "分析来源未就绪" : "Analysis source unavailable") : (a.zh ? "分析说明" : "About deep analysis")} icon={sourceUnavailable ? CircleHelp : undefined}>
     {sourceUnavailable ? <p>{reasonCopy(a.pack?.reason_code ?? a.snapshot?.catalog.reason_code, a.zh)}</p> : null}
     {a.pack ? <p>{a.zh ? "分析请求设置（固定）：" : "Fixed analysis request: "}{a.pack.config.model} / {a.pack.config.effort} / {a.pack.config.service_tier}</p> : null}
@@ -222,7 +279,7 @@ export function ResearchAnalysisButton({analysis: a}: {analysis: Controller}) {
     <p>{a.pack?.result ? (a.zh ? "所选范围已有分析，查看不调用 Agent。" : "An analysis exists for the selected scope. Viewing never invokes an Agent.") : a.pack?.continuation?.can_reuse ? (a.zh ? "本次复用已有判读，不调用模型；原用量保留在上一版。" : "This action reuses existing judgments without a model call; original usage stays with the previous version.") : (a.zh ? "点击深度分析使用本机 Codex 账户，单独产生分析用量；普通浏览不调用 Agent。" : "Deep analysis uses the local Codex account with separate analysis usage; ordinary browsing never invokes an Agent.")}</p>
     <p>{a.zh ? "只分析已授权的固定轨迹，不改变研究历史。范围、方法与来源版本可在结果中查看。" : "Analyzes an authorized fixed trajectory without changing research history. Scope, method and source revisions remain available with the result."}</p>
     {a.pack?.continuation ? <p>{a.zh ? "接续保留上一版。新增、更正或删除可能影响旧判断，本版重新评估全部片段；仅证据内容与配置等价时复用已有判读。浏览与来源更新不启动分析。" : "Continuation preserves the previous version. Additions, corrections and removals can affect earlier judgments, so all episodes are reassessed. Existing judgments are reused only for equivalent evidence and configuration. Browsing and source updates never start analysis."}</p> : null}
-  </ContextHelp></div>{a.pack && !a.pack.result && !unavailable ? <small>{a.pack.continuation?.can_reuse ? (a.zh ? "无需新模型调用" : "No new model call") : <>{a.pack.config.model} · {a.zh ? "单独用量" : "Separate usage"}</>}</small> : null}</div>;
+  </ContextHelp></div>{a.savedOriginal ? <small>{a.zh ? "已保存原文" : "Saved original"}</small> : a.pack && !a.pack.result && !unavailable ? <small>{a.pack.continuation?.can_reuse ? (a.zh ? "无需新模型调用" : "No new model call") : <>{a.pack.config.model} · {a.zh ? "单独用量" : "Separate usage"}</>}</small> : null}</div>;
 }
 
 const analysisActionLabel = (p: Pack | null, zh: boolean) => p?.continuation?.can_reuse
@@ -261,12 +318,14 @@ function AnalysisContinuation({pack: p, analysis: a}: {pack: Pack; analysis: Con
 }
 
 function AnalysisReadState({analysis: a}: {analysis: Controller}) {
-  if (a.readError) return <div className="analysis-read-error" role="alert">
+  const error = a.readError || a.snapshot?.originalReadError;
+  if (error) return <div className="analysis-read-error" role="alert">
+    {a.snapshot?.originalReadError && !a.readError ? <span>{a.zh ? "已保存原文暂不可读，当前语言的分析状态仍保留。" : "The saved original could not be read. The current language’s analysis state is preserved."}</span> :
     <span>{a.pack ? (a.zh ? "刷新失败，保留上次结果。" : "Refresh failed. Showing the last result.")
-      : (a.zh ? "暂时无法读取分析。" : "Analysis could not be read.")}</span>
+      : (a.zh ? "暂时无法读取分析。" : "Analysis could not be read.")}</span>}
     <button type="button" disabled={a.loading} aria-label={a.zh ? "重试读取" : "Retry reading"} onClick={() => void a.read().catch(() => undefined)}>
       <RefreshCw size={14} aria-hidden/>{a.loading ? (a.zh ? "正在重试…" : "Retrying…") : (a.zh ? "重试" : "Retry")}</button>
-    <ContextHelp label={a.zh ? "读取详情" : "Read details"}><p>{a.readError}</p></ContextHelp>
+    <ContextHelp label={a.zh ? "读取详情" : "Read details"}><p>{error}</p></ContextHelp>
   </div>;
   if (!a.pack && a.loading && (!a.snapshot || a.snapshot.catalog.packs.length > 0)) return <div className="analysis-read-loading" role="status" aria-label={a.zh ? "正在读取分析" : "Reading analysis"}>
     {Array.from({length: 6}, (_, i) => <span key={i} aria-hidden/>)}</div>;
@@ -281,7 +340,7 @@ export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
 export function ResearchProgressSummary({analysis: a, includeReport = true}: {analysis: Controller; includeReport?: boolean}) {
   const packs = a.snapshot?.catalog.packs ?? [];
   if (!a.pack && !packs.length) return null;
-  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation} onUsageTurn={a.readUsageTurn}/>;
+  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation} onUsageTurn={a.readUsageTurn} onUsageComparison={a.readUsageComparison} usageComparisonScope={a.sourceScope}/>;
 }
 
 export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
@@ -289,6 +348,26 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
   // Keep the originating control mounted for keyboard return after closing.
   return result?.synthesis ? <div hidden={a.location.open}><ResearchSynthesis key={result.analysis_key} synthesis={result.synthesis} zh={a.zh}
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
+}
+
+export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Controller; onHistory: () => void}) {
+  const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
+  const p = a.pack;
+  const firstStudy = packs[0]?.pack_id;
+  useEffect(() => {
+    if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
+  }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
+  return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
+    <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
+      <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
+        {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
+        {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
+      </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+    <AnalysisReadState analysis={a}/>
+    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
+      scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+    <ResearchCitationPanel analysis={a}/>
+  </section>;
 }
 
 function CitedToolText({text, zh}: {text: string; zh: boolean}) {
@@ -482,15 +561,19 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
   if (!a.location.open) return null;
   const zh = a.zh, p = a.pack, result = p?.result;
   const resultJob = p?.result_job ?? p?.job;
-  const failed = p?.job?.status === "failed" || p?.job?.status === "cancelled";
-  const sourceAvailable = p?.availability === "available";
+  const currentJob = a.requestPack?.job;
+  const failed = currentJob?.status === "failed" || currentJob?.status === "cancelled";
+  const sourceAvailable = a.requestPack?.availability === "available";
   const available = sourceAvailable && !a.readOnly && !a.readError;
   const benefit = result?.metrics.find(m => m.metric === "benefit_test");
   const headline = !result ? null : benefit?.no ? (zh ? "仍有研究片段尚未检验原目标收益" : "Some episodes have not tested original-objective utility")
+    : benefit?.yes && benefit.unknown ? (zh ? `${benefit.yes} / ${benefit.eligible} 个片段记录了原目标收益检验；${benefit.unknown} 个证据不足`
+      : `${benefit.yes} / ${benefit.eligible} episodes recorded original-objective utility tests; ${benefit.unknown} ${benefit.unknown === 1 ? "remains" : "remain"} unknown`)
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
-  const scope = p ? <>{p.episode_count} {zh ? "个研究片段" : "research episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
+  const episodeLabel = result ? (zh ? "个研究片段" : "research episodes") : (zh ? "个输入片段" : "input episodes");
+  const scope = p ? <>{p.episode_count} {episodeLabel} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
   const scopeHelp = p ? <ContextHelp label={zh ? "分析范围" : "Analysis scope"} icon={result?.synthesis ? Sparkles : undefined}>
     {result?.synthesis ? <p><strong>{zh ? "Agent 分析 · 未校准" : "Agent analysis · uncalibrated"}</strong></p> : null}
     <p>{p.selection.exhaustive ? (zh ? "覆盖此固定分析范围；不等于覆盖全部研究。" : "Covers this fixed analysis scope, not necessarily the whole research history.") : (zh ? "定向抽样，仅分析选定研究片段；范围外或未捕获的工作未纳入，不代表全程。" : "Purposive sample of selected episodes; work outside this scope or not captured is excluded. It does not represent the whole run.")}</p>
@@ -508,22 +591,25 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
     {p ? <>
       {!result?.synthesis ? <div className="analysis-scope">{scope}{scopeHelp}</div> : null}
       <AnalysisContinuation pack={p} analysis={a}/>
+      {a.savedOriginal ? <p className="analysis-warning" role="status">{zh ? "显示已保存的原文分析，未按当前界面语言生成。原判断、引用和用量保持不变。" : "Showing the saved original, not an analysis generated in the current interface language. Its judgments, citations and usage are unchanged."}</p> : null}
       {p.result && !sourceAvailable ? <p className="analysis-warning">{reasonCopy(p.reason_code, zh)}</p> : null}
       {p.result_attempt && p.result_attempt !== p.job?.attempt ? <ContextHelp label={zh ? "本次分析未完成" : "Current analysis incomplete"} icon={TriangleAlert}><p className="analysis-warning" role="status">{zh ? "当前重试尚未完成，显示上次已保存分析。" : "The current retry is incomplete; showing the previously saved analysis."}</p></ContextHelp> : null}
-      {result?.display?.coverage.missing && !a.pending && !a.recordedRunning ? <div className="analysis-actions">
+      {!a.savedOriginal && result?.display?.coverage.missing && !a.pending && !a.recordedRunning ? <div className="analysis-actions">
         <button type="button" disabled={!available} onClick={() => void a.execute(true)}>{zh ? "重新分析并补全译文" : "Reanalyze to complete translation"}</button>
         <small>{zh ? "重新分析完整固定范围，产生新的分析用量；保留上一轮结果。" : "Reanalyzes the full fixed scope with new analysis usage; the previous result is preserved."}</small>
       </div> : null}
-      {!result || a.pending || a.recordedRunning ? <div className="analysis-actions">
-        {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.readOnly || a.cancelPending || p.job?.cancel_requested}>{p.job?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
-          : result ? <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新结果" : "Refresh result"}</button>
-            : a.readOnly ? <><p className={sourceAvailable ? undefined : "analysis-warning"}>{sourceAvailable ? (zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.") : reasonCopy(p.reason_code, zh)}</p><button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "刷新结果" : "Refresh result"}</button></>
+      {!result || a.savedOriginal || a.pending || a.recordedRunning ? <div className="analysis-actions">
+        {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.readOnly || a.cancelPending || currentJob?.cancel_requested}>{currentJob?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
+          : a.savedOriginal && !a.readOnly ? <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{zh ? "用中文分析所选范围" : "Analyze selected scope in English"}</button>
+            : result ? <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新结果" : "Refresh result"}</button>
+            : a.readOnly ? (a.loading || a.readError || a.snapshot?.originalReadError ? null
+              : <><p className={sourceAvailable ? undefined : "analysis-warning"}>{sourceAvailable ? (zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.") : reasonCopy(p.reason_code, zh)}</p><button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "刷新结果" : "Refresh result"}</button></>)
             : <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{failed ? (zh ? "重试分析" : "Retry analysis") : p.continuation ? analysisActionLabel(p, zh) : (zh ? "分析所选范围" : "Analyze selected scope")}</button>}
-        {!result && !a.readOnly && !a.pending && !a.recordedRunning ? <small>{p.continuation?.can_reuse ? (zh ? "复用已有判读，无需新模型调用。" : "Reuses existing judgments without a new model call.") : zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
+        {(!result || a.savedOriginal) && !a.readOnly && !a.pending && !a.recordedRunning ? <small>{a.requestPack?.continuation?.can_reuse ? (zh ? "复用已有判读，无需新模型调用。" : "Reuses existing judgments without a new model call.") : zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
       </div> : null}
-      {failed && !a.pending ? <p className="analysis-warning" role="status">{p.job?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : a.readOnly ? (zh ? "上次分析未完成；失败记录已保留。" : "The last analysis did not complete; its failure record is preserved.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
+      {failed && !a.pending ? <p className="analysis-warning" role="status">{currentJob?.status === "cancelled" ? (zh ? "分析已取消，研究历史保持可读。" : "Analysis cancelled. Research history remains readable.") : a.readOnly ? (zh ? "上次分析未完成；失败记录已保留。" : "The last analysis did not complete; its failure record is preserved.") : (zh ? "上次分析未完成；可重试，原失败记录会保留。" : "The last analysis did not complete. Retry preserves its failure record.")}</p> : null}
       {failed && !a.pending ? <p className="analysis-attempt-usage" aria-label={zh ? "本次分析用量" : "Current analysis usage"}>
-        {zh ? "本次尝试" : "This attempt"} · {p.job?.analysis_wall_seconds == null ? (zh ? "耗时未知" : "Time unknown") : `${p.job.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {p.job?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {p.job?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens
+        {zh ? "本次尝试" : "This attempt"} · {currentJob?.analysis_wall_seconds == null ? (zh ? "耗时未知" : "Time unknown") : `${currentJob.analysis_wall_seconds.toFixed(1)}s`} · {zh ? "输入" : "input"} {currentJob?.usage?.input_tokens?.toLocaleString() ?? "—"} / {zh ? "输出" : "output"} {currentJob?.usage?.output_tokens?.toLocaleString() ?? "—"} tokens
       </p> : null}
       {result ? <>
         {result.synthesis ? <AnalysisReport key={`${p.pack_id}:${result.analysis_key}:${zh}`} pack={p} result={result} zh={zh} onCitation={a.readCitation}/>

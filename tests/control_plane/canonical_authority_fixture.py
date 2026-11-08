@@ -2,6 +2,8 @@
 
 This fixture runs the real FileAuthorityStore in a Node process. It deliberately
 does not claim that a shadow qualification can promote canonical authority.
+Resolve TypeScript modules from the imported package so source and installed
+wheel tests exercise the same Python and TypeScript build.
 """
 from __future__ import annotations
 
@@ -11,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 import subprocess
 import tempfile
+
+import loopx
 
 
 def assert_todo_read_unchanged(current, previous):
@@ -56,10 +60,10 @@ def without_resume_observation_time(value):
 
 
 def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection: dict, *, state_path: Path, provider: str = "file") -> dict:
-    repository = Path(__file__).resolve().parents[2]
-    module = repository / "loopx/control_plane/coordination/file_authority_store.ts"
-    fence_module = repository / "loopx/control_plane/coordination/legacy_writer_fence.ts"
-    codec_module = repository / "loopx/control_plane/coordination/authority_store_codec.ts"
+    package = Path(loopx.__file__).resolve().parent
+    module = package / "control_plane/coordination/file_authority_store.ts"
+    fence_module = package / "control_plane/coordination/legacy_writer_fence.ts"
+    codec_module = package / "control_plane/coordination/authority_store_codec.ts"
     script = (
         f"import {{FileAuthorityStore}} from {json.dumps(module.as_uri())};"
         f"import {{selectLocalSqliteAuthority,openLocalAuthorityStore}} from {json.dumps((module.parent / 'local_authority_provider.ts').as_uri())};"
@@ -88,14 +92,15 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
 
 def read_fixture_todos(state_path: Path) -> list[dict]:
     """Read authored input before initializing a disposable canonical fixture."""
-    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import structured_todo_item
 
-    summary = parse_active_state_todos(
-        state_path.read_text(encoding="utf-8"), state_path=state_path, item_limit=None,
-    )
+    # Attention summaries intentionally shorten text. Seeding their preview as
+    # canonical authority would erase the tail before the consumer is tested.
+    items, _, _ = parse_todo_source(state_path.read_text(encoding="utf-8"), state_path=state_path)
     return [
-        *(summary.get("user_todos", {}).get("items") or []),
-        *(summary.get("agent_todos", {}).get("items") or []),
+        structured_todo_item(item, role=role, source_section=item["source_section"], text_limit=None)
+        for role in ("user", "agent") for item in items[role]
     ]
 
 
@@ -107,7 +112,7 @@ def advance_canonical_fixture_authority(
     Consumer fixtures may author a later synthetic state, but must not replace
     storage bytes, reset lineage, re-import Markdown or re-engage its fence.
     """
-    module = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
+    module = Path(loopx.__file__).resolve().parent / "control_plane/coordination/local_authority_provider.ts"
     script = (
         f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
         "let input='';for await(const chunk of process.stdin)input+=chunk;"

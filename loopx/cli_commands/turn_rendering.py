@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from ..control_plane.turn_driver import (
@@ -11,6 +12,39 @@ from ..control_plane.turn_driver import (
 from ..presentation.renderers.turn_envelope_markdown import (
     turn_envelope_budget_warning_lines,
 )
+
+
+def project_turn_plan_inspection(plan: dict[str, Any], runtime_root: Path) -> None:
+    """Copy display fields from the original Python values, then pin the rest."""
+    paths = plan.pop("_inspection_paths", None)
+    if not paths or not plan.get("ok"):
+        return
+    source = plan["work_contract"]
+    preview: dict[str, Any] = {}
+    for path in paths:
+        value = source
+        for field in path:
+            if not isinstance(value, dict) or field not in value:
+                break
+            value = value[field]
+        else:
+            target = preview
+            for field in path[:-1]:
+                target = target.setdefault(field, {})
+            target[path[-1]] = value
+
+    from .context_machine import capture_context_recovery
+
+    detail = capture_context_recovery(source, runtime_root=runtime_root, index_and_select=False)
+    if detail.get("available") is False:
+        return  # The original complete plan is the fallback.
+    plan["work_contract"] = preview
+    plan["detail_ref"] = {**detail, "instruction": (
+        "This inspection shows the current decision and authoring guidance. "
+        "Before a decision or action that depends on other Goal requirements or evidence, "
+        "append --list or --select '<pointer>' to the command to read the necessary fields from this exact work contract. "
+        "The plan and its saved source grant no execution authority."
+    )}
 
 
 def _turn_start_observation_lines(payload: Mapping[str, object]) -> list[str]:

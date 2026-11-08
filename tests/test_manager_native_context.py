@@ -159,7 +159,8 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
     assert stored["namespaces"]["context_delivery"] == {
         "schema_version": "context_delivery_machine_defaults_v0",
         "mode": codex_mode,
-        "antigravity_mode": expected_antigravity,
+        "delta_delivery": "auto",
+        **({"antigravity_mode": antigravity_mode} if antigravity_mode is not None else {}),
     }
 
     args = argparse.Namespace(
@@ -168,12 +169,10 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
         format="json", codex_context_dir=None, codex_context_root=None,
         decision_handoff_socket=None, decision_output_dir=None, decision_output_root=None,
     )
+    apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
+    assert args.context_delivery == ("auto" if codex_mode == "on" else "off")
     if codex_mode == "on" and os.name != "posix":
-        with pytest.raises(ValueError, match="unavailable on this platform"):
-            apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
-    else:
-        apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
-        assert args.context_delivery == codex_mode
+        assert args.delta_delivery == "off"
 
     capture_root = tmp_path / "captures"
     capture_root.mkdir()
@@ -187,3 +186,27 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
         assert result is not context
         assert result["goals"][0]["recent_delivery_history"]["status"] == "not_read"
         assert _read(result["context_read"]["recovery_command"]) == original
+
+def test_short_history_stays_inline_and_mixed_history_keeps_cheap_rows(tmp_path):
+    from loopx.capabilities.native_chat.manager_input import manager_turn_input
+
+    adapter = _adapter()
+    small = _context()
+    small["goals"][0]["recent_delivery_history"]["deliveries"] = [{"summary": "Export accepted"}]
+    assert native_manager_context(small, adapter, runtime_root=tmp_path, capture_root=tmp_path) is small
+    assert not list(tmp_path.iterdir())
+    prior = tmp_path / "previous-capture"
+    prior.mkdir()
+    medium = deepcopy(small)
+    medium["goals"][0]["recent_delivery_history"]["deliveries"] = [{"summary": "history" * 170}]
+    assert native_manager_context(medium, adapter, runtime_root=tmp_path, capture_root=tmp_path) is medium
+    assert list(tmp_path.iterdir()) == [prior], "discard only this losing candidate"
+    mixed = _context()
+    mixed["goals"].extend(small["goals"])
+    result = native_manager_context(mixed, adapter, runtime_root=tmp_path, capture_root=tmp_path)
+    assert result["goals"][1] == small["goals"][0]
+    assert result["goals"][0]["recent_delivery_history"]["status"] == "not_read"
+    assert _read(result["context_read"]["recovery_command"]) == mixed
+    def wire(context):
+        return manager_turn_input(adapter, "Status?", json.dumps(context, ensure_ascii=False)).encode()
+    assert len(wire(result)) < len(wire(mixed))

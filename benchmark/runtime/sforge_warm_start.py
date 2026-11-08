@@ -1,7 +1,7 @@
 """Explicit SForge receiver composition; existing owners retain all authority.
 
 This is an operator transport, not a checkpoint format or a second admission
-rule. The artifact, native session, Todo handoff and judge each verify their own
+rule. The artifact, canonical state, native session and judge each verify their own
 participant before the ordinary worker can start.
 """
 from __future__ import annotations
@@ -19,19 +19,10 @@ import time
 import tomllib
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
-from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
+from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC, _REGISTRY, _LOOPX_RUNTIME
 
 
 _CHECKPOINT_VERIFY_TIMEOUT_SECONDS = 60
-_PREPARATION_TASK = (
-    "Read the full retained checkpoint research and pending decision, verify the current code, "
-    "incumbent and remaining native opportunities. Do not modify candidates or submit during "
-    "this preparation. Settle actual findings under current authority, then complete the first "
-    "current replan before choosing a complete research experiment."
-)
-# Compatibility for the already accepted longer preparation request. Never
-# submit that guidance to a new receiver or rewrite an existing create receipt.
-_LEGACY_PREPARATION_TEXT_SHA256 = "c1480d8fcec20909567f39bac1b0af2a0a3d3703c56556f4356e5b3e43e0ba45"
 
 
 @dataclass(frozen=True)
@@ -47,6 +38,12 @@ class WarmStart:
     research_component_ids: tuple[str, ...] = ()
     fresh_replan: bool = False
     destination_config: Path | None = None
+    research_sidecar: bool = False
+    native_child_limit: int | None = None
+
+    def _selected_research(self, metadata: dict):
+        from .research_artifacts import selected_research_components
+        return selected_research_components(metadata, self.research_component_ids, managed=self.research_sidecar)
 
     def verify(self, workspace: str) -> dict:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
@@ -54,6 +51,8 @@ class WarmStart:
             return self._verify(workspace)
 
     def _verify(self, workspace: str) -> dict:
+        if type(self.research_sidecar) is not bool:
+            raise ValueError("research_sidecar requires an explicit boolean")
         if type(self.fresh_replan) is not bool:
             raise ValueError("fresh_replan requires an explicit boolean context treatment")
         if (type(self.normal_cadence) is not int or not 1 <= self.normal_cadence <= 6
@@ -61,7 +60,7 @@ class WarmStart:
                 or self.deadline_epoch <= time.time()
                 or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", v)
                        for v in (self.goal_id, self.agent_id, self.source_todo_id))):
-            raise ValueError("Warm start needs fresh explicit identities and its original open deadline")
+            raise ValueError("Warm start needs explicit source identities and its original open deadline")
         paths = (self.root, self.config)
         if self.destination_config is not None:
             paths += (self.destination_config,)
@@ -77,13 +76,25 @@ class WarmStart:
             timeout=min(_CHECKPOINT_VERIFY_TIMEOUT_SECONDS, remaining), large_local_snapshot=True)
         metadata = json.loads((self.root / "checkpoint.json").read_bytes())["point_metadata"]
         native, source = metadata["native_session"], metadata["loopx_state"]
+        same = source["goal_id"] == self.goal_id and source["agent_id"] == self.agent_id
         if (native["guest_workspace"] != workspace or native["guest_home"] != _CODEX_HOME
-                or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id):
+                or not same):
             raise ValueError("Warm start paths, configuration or destination lineage differ")
+        _loopx_components(self.root, metadata, Path(workspace))
         from loopx.hosts.codex_checkpoint import checkpoint_destination_config
-        checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        from .codex import Execution
+
+        configuration, _ = checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        agents = tomllib.loads(configuration.decode("utf-8")).get("agents", {})
+        if not isinstance(agents, dict):
+            raise ValueError("Sealed checkpoint agents configuration must be a TOML table")
+        retained_limit = Execution(mode="plain",
+            native_child_limit=agents.get("max_concurrent_threads_per_session")).native_child_limit
+        requested_limit = Execution(mode="plain", native_child_limit=self.native_child_limit).native_child_limit
+        if retained_limit != requested_limit:
+            raise ValueError("Requested native child limit differs from the sealed checkpoint")
         _workspace_component(self.root, metadata, Path(workspace))
-        _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        _research_components(self.root, metadata, Path(workspace), self._selected_research(metadata))
         context = metadata["research_context"]
         context_path = self.root / "components" / context["component_id"] / context["member_path"]
         if not context_path.resolve(strict=True).is_relative_to(self.root / "components"):
@@ -109,7 +120,7 @@ class WarmStart:
                      effective_config: bytes | None = None,
                      provider_base_url: str | None = None) -> list[str]:
         metadata = self._verify(workspace)
-        research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        research = _research_components(self.root, metadata, Path(workspace), self._selected_research(metadata))
         requested = self.destination_config or self.config
         transport_config = None
         if effective_config is not None:
@@ -157,8 +168,8 @@ class WarmStart:
             await environment.upload_file(self.destination_config, target)
             payload["destination_config"] = target
             protected_files.append(target)
-        if self.research_component_ids:
-            payload["research_component_ids"] = list(self.research_component_ids)
+        if research:
+            payload["research_component_ids"] = [key for key, _, _ in research]
         if self.fresh_replan:
             payload["fresh_replan"] = True
         with tempfile.TemporaryDirectory() as folder:
@@ -174,9 +185,10 @@ class WarmStart:
         if result.return_code:
             raise RuntimeError("Could not stage the verified checkpoint participants")
         # The root-only materializer preserves sealed modes. Its receiver must
-        # transfer these selected data copies to the worker before preparation;
+        # transfer these selected data copies to the worker before continuation;
         # making private directories world-readable would change the artifact.
-        return [str(target) for _, _, target in research]
+        state = _loopx_components(self.root, metadata, Path(workspace))
+        return [str(target) for _, _, target in [*research, *state]]
 
 
 # Provider-owned data locations; selecting a component never grants permission
@@ -248,6 +260,60 @@ def _check_research_destinations(entries):
             raise ValueError("Research destination requires an existing physical parent")
 
 
+def _loopx_components(unit: Path, metadata: dict, workspace: Path) -> list[tuple[str, Path, Path]]:
+    """Resolve the backup owner's inventory for a fixed-path isolated replacement.
+
+    This copies complete provider files, not a Todo projection or a rewritten
+    journal. The ordinary registry, canonical snapshot and session owners still
+    validate the restored values before a worker can obtain current admission.
+    """
+    state = metadata["loopx_state"]
+    inventory = state["source_inventory"]
+    result = []
+    for key, target in (("runtime_root", Path(_LOOPX_RUNTIME)),
+                        ("configuration_source_registry", Path(_REGISTRY))):
+        entries = [entry for entry in inventory if entry["key"] == key]
+        if len(entries) != 1 or entries[0]["source_path"] != str(target):
+            raise ValueError("Full LoopX restore requires its original isolated runtime and registry paths")
+        entry = entries[0]
+        component = entry["component_id"]
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", component):
+            raise ValueError("LoopX state component ID is invalid")
+        source = unit / "components" / component
+        if key == "configuration_source_registry":
+            if state["registry_component_id"] != component:
+                raise ValueError("LoopX registry inventory differs from its sealed registry participant")
+            source = source / state["registry_member_path"]
+        if source.resolve(strict=True) != source or not source.is_relative_to(unit / "components"):
+            raise ValueError("LoopX state member is not a physical sealed participant")
+        if (key == "runtime_root" and not source.is_dir()) or (key != "runtime_root" and not source.is_file()):
+            raise ValueError("LoopX state participant kind differs")
+        result.append((component, source, target))
+    if any(entry["key"] not in {"runtime_root", "configuration_source_registry"}
+           and not Path(entry["source_path"]).is_relative_to(workspace) for entry in inventory):
+        raise ValueError("LoopX state inventory contains an unsupported external route")
+    raw = result[1][1].read_bytes()
+    if hashlib.sha256(raw).hexdigest() != state["registry_sha256"]:
+        raise ValueError("LoopX source registry digest differs")
+    registry = json.loads(raw)
+    goals = registry.get("goals", [])
+    if (registry.get("common_runtime_root") != _LOOPX_RUNTIME or len(goals) != 1
+            or goals[0].get("id") != state["goal_id"] or goals[0].get("repo") != str(workspace)
+            or state["agent_id"] not in goals[0].get("coordination", {}).get("registered_agents", [])):
+        raise ValueError("Full LoopX restore requires the captured single-Goal registry and Agent")
+    return result
+
+
+def _check_loopx_destinations(entries):
+    for _, source, target in entries:
+        if target.resolve() != target or not target.parent.is_dir() or target.is_symlink():
+            raise ValueError("LoopX restore destination is redirected or unavailable")
+        # The ordinary installer creates the empty runtime directory. Never
+        # replace a configured receiver, including an earlier partial restore.
+        if target.exists() and (not source.is_dir() or not target.is_dir() or any(target.iterdir())):
+            raise ValueError("LoopX receiver already has state; preserve the original attempt")
+
+
 def _phase_read_timeout(declaration: dict, limit: float) -> float:
     deadline = declaration["deadline_epoch"]
     if type(deadline) is not int or not 0 < deadline < 2 ** 53:
@@ -259,7 +325,7 @@ def _phase_read_timeout(declaration: dict, limit: float) -> float:
 
 
 def restore_workspace(declaration: dict, workspace: Path):
-    """Materialize one isolated receiver workspace; never import its registry."""
+    """Copy task/research files only; this transport does not configure a Goal."""
     unit = Path(declaration["root"])
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]},
@@ -304,6 +370,40 @@ def restore_workspace(declaration: dict, workspace: Path):
     _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)
 
 
+def restore_worker(declaration: dict, workspace: Path):
+    """Replace one stopped isolated worker with its complete retained state."""
+    unit = Path(declaration["root"])
+    effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "verify", "root": str(unit), "expected_sha256": declaration["sha256"]},
+        timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS), large_local_snapshot=True)
+    manifest = json.loads((unit / "checkpoint.json").read_bytes())
+    state = _loopx_components(unit, manifest["point_metadata"], workspace)
+    _check_loopx_destinations(state)
+    restore_workspace(declaration, workspace)
+    for _, captured, target in state:
+        if captured.is_dir():
+            if target.exists():
+                target.rmdir()  # Only the verified empty installer directory.
+            shutil.copytree(captured, target)
+        else:
+            with target.open("xb") as output, captured.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output)
+            shutil.copystat(captured, target)
+    if state:
+        copied = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
+            "components": [{"id": key, "source_path": str(target)} for key, _, target in state]},
+            timeout=_phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS), large_local_snapshot=True)
+        for key, captured, _ in state:
+            member = captured.relative_to(unit / "components" / key).as_posix()
+            expected = manifest["artifact_witness"][key]
+            if member != ".":
+                expected = [{**entry, "path": entry["path"][len(member):].lstrip("/")}
+                    for entry in expected if entry["path"] == member or entry["path"].startswith(member + "/")]
+            if copied["source_witness"][key] != expected:
+                raise ValueError("Restored LoopX files differ from the sealed state; preserve this failed receiver")
+    _phase_read_timeout(declaration, _CHECKPOINT_VERIFY_TIMEOUT_SECONDS)
+
+
 def _prepare_native_skills(home: Path, installed: Path) -> None:
     """Leave skill installation to the ordinary worker after native fork.
 
@@ -329,7 +429,7 @@ def _prepare_native_skills(home: Path, installed: Path) -> None:
 def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
     """Recheck the full native participant within its original remaining phase.
 
-    Mature histories need the same bounded read allowance at initial preparation
+    Mature histories need the same bounded read allowance at initial continuation
     and fresh-context revalidation. This retains source/cursor checks; it neither
     trusts a cached history digest nor grants another execution window.
     """
@@ -338,6 +438,7 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
     timeout = _phase_read_timeout(declaration, 90)
     result = admit_native_checkpoint_session(env, Path(declaration["root"]), declaration["sha256"],
         Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout,
+        restore_loopx_state=True,
         **({"destination_config": Path(declaration["destination_config"])}
            if declaration.get("destination_config") is not None else {}),
         **({"provider_base_url": declaration["provider_base_url"]}
@@ -346,148 +447,18 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
     return result
 
 
-def _preparation_todo(cli, goal: str, agent: str) -> str:
-    """Replay the exact accepted create payload; history grants no readiness."""
-    operation = "checkpoint-preparation"
-    found = cli("todo", "receipt", "--goal-id", goal, "--operation-id", operation)
-    text = _PREPARATION_TASK
-    if found.get("status") == "found":
-        receipts = found.get("receipts")
-        original = receipts[0] if isinstance(receipts, list) and len(receipts) == 1 else {}
-        todo = original.get("todo") or {}
-        # Canonical presentation may decorate text with a priority prefix;
-        # title retains the create intent. The create owner checks its digest.
-        text = todo.get("title", todo.get("text"))
-        if (original.get("schema_version") != "loopx_coordination_todo_create_receipt_v0"
-                or original.get("goal_id") != goal or original.get("operation_id") != operation
-                or not isinstance(text, str)
-                or (text != _PREPARATION_TASK and hashlib.sha256(text.encode()).hexdigest()
-                    != _LEGACY_PREPARATION_TEXT_SHA256)):
-            raise ValueError("Warm preparation operation names another request; inspect its original receipt")
-    elif found.get("status") != "missing":
-        raise ValueError("Warm preparation create receipt is unavailable; preserve its operation identity")
-    # The canonical owner still compares the complete request digest, including
-    # owner/capabilities/class. Do not derive a second Todo or accept a receipt
-    # as permission to execute a completed/transferred preparation.
-    return cli("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,
-        "--operation-id", operation, "--required-capability", "shell",
-        "--task-class", "advancement_task", "--text", text)["todo_id"]
-
-
 def prepare_context(env: dict[str, str], declaration: dict) -> dict:
-    """Join actual session + research owners on one freshly bootstrapped Goal."""
-    from loopx.hosts.research_checkpoint import adopt_todo_context
-    from benchmark.runtime.worker import loopx_command
-    import subprocess
-
-    unit, digest = Path(declaration["root"]), declaration["sha256"]
+    """Verify native continuation of the complete retained Goal; seed no work."""
     if any(env[key] != declaration[field] for key, field in
            (("LOOPX_GOAL_ID", "goal_id"), ("LOOPX_AGENT_ID", "agent_id"))):
-        raise ValueError("Warm context requires its declared destination lineage")
-    if declaration["deadline_epoch"] <= time.time():
-        raise ValueError("Original warm start allowance expired during installation")
+        raise ValueError("Warm context requires its declared source lineage")
+    _phase_read_timeout(declaration, 90)
     native = admit_warm_session(env, declaration)
     _prepare_native_skills(Path(env["CODEX_HOME"]), Path(env["LOOPX_SHARED_SKILLS"]))
-    def cli(*args):
-        result = subprocess.run([*loopx_command(env), *args], env=env,
-            cwd=env["LOOPX_PROJECT"], text=True, capture_output=True,
-            timeout=_phase_read_timeout(declaration, 60), check=True)
-        value = json.loads(result.stdout)
-        if value.get("ok") is not True:
-            raise ValueError("Checkpoint destination operation failed: " + args[0])
-        return value
-    goal, agent = declaration["goal_id"], declaration["agent_id"]
-    # Preparation is actual current work, not imported completion. The normal
-    # model/guard must inspect the retained evidence and settle this Todo.
-    todo = _preparation_todo(cli, goal, agent)
-    key = "checkpoint-preparation"
-    lease = cli("task-lease", "acquire", "--goal-id", goal, "--todo-id", todo,
-                "--owner", agent, "--idempotency-key", key)["lease"]
-    revision = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)["authority_read"]["provider_revision"]
-    context = adopt_todo_context(env, unit, digest,
-        source_todo_id=declaration["source_todo_id"], todo_id=todo,
-        operation_id="checkpoint-context", expected_revision=revision,
-        lease_key=key, lease_version=lease["version"], deadline=declaration["deadline_epoch"])
-    # The first work guard owns the next execution lease. Context adoption is
-    # finished before this lease is released; no historical lease is imported.
-    cli("task-lease", "release", "--goal-id", goal, "--todo-id", todo,
-        "--owner", agent, "--idempotency-key", key, "--expected-version", str(lease["version"]))
-    readback = _read_preparation(cli, goal, agent, todo, declaration)
-    # Rejected readiness must not mutate cadence. Once this succeeds the worker
-    # still acquires fresh ordinary admission; no best-effort rollback may erase
-    # an owed current review after an ambiguous configuration response.
-    cli("configure-goal", "--goal-id", goal, "--execution-replan-after-turns", "1", "--execute")
-    return {"session": native, "context": context, "preparation_todo_id": todo,
-            "preparation_readback": readback,
-            "preparation_actionable": True, "model_calls": 0,
+    return {"loopx_state_restored": True, "session": native,
+            "goal_id": declaration["goal_id"], "agent_id": declaration["agent_id"],
+            "model_calls": 0, "execution_authority_granted": False,
             "research_continuation_qualified": False}
-
-
-
-def _read_preparation(cli, goal, agent, todo, declaration):
-    """Read current owner facts; a saved plan alone cannot admit continuation."""
-    _phase_read_timeout(declaration, 60)
-    before = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)
-    preparation = before["todo"]
-    if preparation.get("status") != "open" or preparation.get("claimed_by") != agent:
-        raise ValueError("Warm preparation Todo is not open under the destination agent")
-    guard = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
-        "--available-capability", "shell", "--available-capability", "filesystem_write")
-    channel = (guard.get("interaction_contract") or {}).get("agent_channel") or {}
-    selected = guard.get("selected_todo") or {}
-    pending_review = guard.get("autonomous_replan_obligation") or {}
-    if (guard.get("should_run") is not True or channel.get("delivery_allowed") is not True or
-            not (selected.get("todo_id") == todo or pending_review.get("required") is True)):
-        raise ValueError("Warm continuation has no actionable current preparation or review")
-    # The guard can legitimately require a review after this Todo completes.
-    # That review cannot make an older open/owned preparation snapshot current.
-    # Bracket it with the existing canonical read revision; do not invent a
-    # ready receipt, retry budget, or permission from imported history.
-    after = cli("todo", "list", "--goal-id", goal, "--todo-id", todo)
-    revision = (before.get("authority_read") or {}).get("provider_revision")
-    current = after["todo"]
-    if (not isinstance(revision, str) or not revision
-            or (after.get("authority_read") or {}).get("provider_revision") != revision
-            or current.get("status") != "open" or current.get("claimed_by") != agent):
-        raise ValueError("Warm preparation state changed during current readiness readback; inspect this receiver")
-    _phase_read_timeout(declaration, 60)
-    return {"authority_read": after["authority_read"], "preparation_todo_id": todo,
-            "selected_todo_id": selected.get("todo_id"),
-            "current_replan_obligation_id": pending_review.get("obligation_id"),
-            "current_replan_required": pending_review.get("required") is True}
-
-
-def finish_preparation(env: dict[str, str]) -> dict:
-    """Restore the declared cadence only after the existing joint replan gate."""
-    from benchmark.runtime.checkpoint_continuation import restored_capture_gate
-    from benchmark.runtime.worker import loopx_command
-    import subprocess
-    declaration = json.loads(Path(env["LOOPX_WARM_START"]).read_bytes())
-    if any(env[key] != declaration[field] for key, field in
-           (("LOOPX_GOAL_ID", "goal_id"), ("LOOPX_AGENT_ID", "agent_id"))):
-        raise ValueError("Warm preparation destination lineage differs")
-    basis = {"checkpoint_sha256": declaration["sha256"],
-             "goal_id": declaration["goal_id"], "agent_id": declaration["agent_id"],
-             "normal_cadence": declaration["normal_cadence"]}
-    receipt = Path(env["LOOPX_WARM_START"]).with_name("warm-preparation-complete.json")
-    if receipt.exists():
-        value = json.loads(receipt.read_bytes())
-        if any(value.get(key) != expected for key, expected in basis.items()):
-            raise ValueError("Warm preparation receipt refers to another checkpoint")
-        return value
-    gate = restored_capture_gate(env)
-    if not gate.get("capture_allowed") or gate.get("checkpoint_sha256") != declaration["sha256"]:
-        return {"preparation_complete": False}
-    command = [*loopx_command(env), "configure-goal", "--goal-id", env["LOOPX_GOAL_ID"],
-               "--execution-replan-after-turns", str(declaration["normal_cadence"]), "--execute"]
-    raw = subprocess.check_output(command, env=env, cwd=env["LOOPX_PROJECT"], timeout=60, text=True)
-    value = json.loads(raw)
-    if value.get("ok") is not True:
-        raise ValueError("Could not restore the declared normal cadence after checkpoint preparation")
-    result = {**basis, "preparation_complete": True, "review_turn_id": gate["review_turn_id"]}
-    with receipt.open("x") as stream:
-        json.dump(result, stream)
-    return result
 
 
 def main():
@@ -499,7 +470,7 @@ def main():
     declaration = json.loads(args.declaration.read_bytes())
     env = dict(os.environ)
     if args.action == "workspace":
-        restore_workspace(declaration, Path(env["LOOPX_PROJECT"]))
+        restore_worker(declaration, Path(env["LOOPX_PROJECT"]))
     else:
         print(json.dumps(prepare_context(env, declaration)))
 

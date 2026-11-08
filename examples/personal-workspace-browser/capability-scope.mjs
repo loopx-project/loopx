@@ -3,6 +3,52 @@ import assert from "node:assert/strict";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+// Independent ordering oracle: input order is deliberately unrelated to tier or
+// name order. Exercise both actual settings consumers, not the sort helper.
+async function verifyFilteredCatalogOrder(page) {
+  const snapshots = await page.evaluate(async () => ({
+    machine: await (await fetch('/api/chat/machine-configuration')).json(),
+    goal: await (await fetch('/api/chat/goal-configuration?goal_id=product-release')).json(),
+  }));
+  const template = snapshots.goal.capability_catalog.capabilities.find(item => item.capability_id === 'periodic_report');
+  const capability = (id, title, availability, writable = true) => ({...template,
+    capability_id: id, display_name: title, description: '', available_scopes: ['machine', 'goal'], machine_namespace: id,
+    availability, configuration_editor: {...template.configuration_editor, fields: [],
+      editable: writable, supported_scopes: ['machine', 'goal'], writable_scopes: writable ? ['machine', 'goal'] : []},
+  });
+  const capabilities = [
+    capability('order_retired', 'Order Retired', 'retired', false),
+    capability('order_zulu', 'Order Zulu', 'supported_opt_in'),
+    capability('order_experiment', 'Order Experiment', 'experimental_opt_in'),
+    capability('order_readonly', 'Order Read only', 'supported_opt_in', false),
+    capability('unrelated', 'Unrelated', 'supported_explicit_override'),
+    capability('order_alpha', 'Order Alpha', 'supported_opt_in'),
+    capability('order_priority', 'Order Priority', 'supported_explicit_override'),
+  ];
+  for (const [scope, snapshot] of Object.entries(snapshots)) {
+    await page.route(`**/api/chat/${scope}-configuration*`, async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({json: {...snapshot, capability_catalog: {...snapshot.capability_catalog, capabilities}}});
+    });
+  }
+  await page.reload({waitUntil: 'networkidle'});
+  const expected = ['Order Priority', 'Unrelated', 'Order Alpha', 'Order Zulu', 'Order Read only', 'Order Experiment', 'Order Retired'];
+  for (const scope of ['Goal', 'Machine']) {
+    if (scope === 'Machine') await page.getByRole('radio', {name: 'This device', exact: true}).check();
+    const catalog = page.getByRole('navigation', {name: `${scope} capability catalog`, exact: true});
+    const labels = () => catalog.locator('button strong').allTextContents();
+    const search = page.getByRole('searchbox', {name: 'Search capabilities', exact: true});
+    await catalog.getByRole('button', {name: /^Order Priority/}).waitFor();
+    assert.deepEqual(await labels(), expected, `${scope}: priority overrides precede actionable, read-only, experimental and retired entries; peers sort by name`);
+    await search.fill('order');
+    assert.deepEqual(await labels(), expected.filter(label => label !== 'Unrelated'), `${scope}: filtering preserves tier and name order`);
+    await search.fill('order zulu');
+    assert.deepEqual(await labels(), ['Order Zulu'], `${scope}: every term must match`);
+    await search.press('Escape');
+    assert.deepEqual(await labels(), expected, `${scope}: clearing restores complete presentation order`);
+  }
+}
+
 export const capabilityScopeScenario = {
   id: "capability-scope",
   async run({ browser, collectCoverage, url }) {
@@ -22,6 +68,40 @@ export const capabilityScopeScenario = {
       const goalScope = page.getByRole("radio", { name: "Goal 设置", exact: true });
       if (!await defaults.isChecked()) throw new Error("Global settings must start at device defaults");
       await page.getByRole("navigation", { name: "机器能力目录" }).waitFor();
+      const search = page.getByRole('searchbox', {name: '搜索能力', exact: true});
+      const machineCatalog = page.getByRole('navigation', {name: '机器能力目录'});
+      const initialEditor = await page.locator('.personal-capability-detail h2').innerText();
+      const allMachineEntries = await machineCatalog.getByRole('button').count();
+      const toggleBox = await page.locator('.personal-capability-fields input[role="switch"]').first().boundingBox();
+      assert(toggleBox && toggleBox.width <= 44 && toggleBox.height <= 28, 'Current capability toggles are compact, not oversized native checkboxes');
+      console.log(`current capability switch: ${toggleBox.width}×${toggleBox.height} CSS pixels`);
+
+      await search.fill('  PERIODIC_REPORT  ');
+      assert.equal(await machineCatalog.getByRole('button').count(), 1);
+      assert.equal(await page.locator('.personal-capability-detail h2').innerText(), initialEditor, 'Filtering does not select or replace the editor');
+      await search.fill('not-a-capability-[.*]');
+      assert.equal(await machineCatalog.getByRole('button').count(), 0, 'Search is literal, not a regular expression');
+      await page.getByText('没有匹配的能力，请尝试其他关键词。', {exact: true}).waitFor();
+      await search.press('Escape');
+      assert.equal(await search.inputValue(), '');
+      assert(await search.evaluate(element => element === document.activeElement));
+      for (const width of [1280, 960, 390]) {
+        await page.setViewportSize({width, height: width === 390 ? 844 : 820});
+        await search.fill('周期');
+        assert(await machineCatalog.getByRole('button').count() >= 1);
+        await machineCatalog.getByRole('button', {name: '周期报告', exact: true}).click();
+        assert.equal(await page.locator('.personal-capability-detail h2').innerText(), '周期报告');
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        const box = await search.boundingBox();
+        assert(box && box.width > 80 && box.height >= 40);
+        await page.screenshot({path: resolve(outputDir, `capability-search-${width}.png`), animations: 'disabled'});
+        await page.getByRole('button', {name: '清除能力搜索', exact: true}).click();
+        assert.equal(await search.inputValue(), '');
+        assert.equal(await machineCatalog.getByRole('button').count(), allMachineEntries);
+        assert(await search.evaluate(element => element === document.activeElement));
+      }
+      await page.setViewportSize({width: 1512, height: 982});
+
       await tabs.getByRole("button", { name: "管家", exact: true }).click();
       await page.locator(".personal-capability-supported-scopes").filter({ hasText: "设备全局配置 · 不支持 Goal 覆盖" }).waitFor();
       await tabs.getByRole("button", { name: "能力中心", exact: true }).click();
@@ -65,6 +145,13 @@ export const capabilityScopeScenario = {
       await catalog.getByRole("button", { name: /周期报告/ }).click();
       assert.notEqual(await page.getByLabel(/^报告 Profile/u).inputValue(), "discarded-periodic-draft");
       await page.getByLabel(/^报告 Profile/u).fill("unsaved-scope-test");
+      await search.fill('multi_subagent');
+      assert.equal(await catalog.getByRole('button').count(), 1);
+      assert.equal(await page.getByLabel(/^报告 Profile/u).inputValue(), 'unsaved-scope-test', 'Filtering preserves the unsaved draft');
+      await search.fill('reward_memory');
+      assert.equal(await catalog.getByRole('button', {name: '记忆与资料', exact: true}).count(), 1, 'A member ID finds its grouped memory entry');
+      await search.fill('');
+
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
       if (api.goalConfigurationRequests.at(-1)?.goal_id !== "product-release") throw new Error("Preview targeted a different Goal");
@@ -189,6 +276,17 @@ export const capabilityScopeScenario = {
       await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       if (!await goalScope.isChecked() || await target.inputValue() !== "product-release") throw new Error("Goal settings entry lost its target");
+      await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
+      await page.reload({waitUntil: 'networkidle'});
+      const englishSearch = page.getByRole('searchbox', {name: 'Search capabilities', exact: true});
+      await englishSearch.fill('periodic reports');
+      const englishCatalog = page.getByRole('navigation', {name: 'Goal capability catalog'});
+      await englishCatalog.getByRole('button', {name: /^Periodic reports/}).waitFor();
+      await englishSearch.press('Tab');
+      await page.getByRole('button', {name: 'Clear capability search', exact: true}).press('Enter');
+      assert.equal(await englishSearch.inputValue(), '');
+      assert(await englishSearch.evaluate(element => element === document.activeElement));
+      await verifyFilteredCatalogOrder(page);
       if (context.errors.some(error => !/503/.test(error))) throw new Error(context.errors.join(" | "));
       return { coverageEntries: await context.close(), note: "One capability destination; explicit device/Goal scope; fresh target reads; no cross-scope drafts or writes; Goal entry preserved; desktop/mobile verified." };
     } catch (error) {
