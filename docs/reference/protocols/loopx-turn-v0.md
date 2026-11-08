@@ -104,6 +104,17 @@ and the complete inline contract.
 `turn run-once` retains and validates the original complete contract before
 dispatch; an inspection does not authorize that operation.
 
+In the C1 proposal, `quota should-run --turn-envelope` is a compatibility
+spelling for the same `loopx_turn_envelope_v1` producer as ordinary quota.
+It does not select the old bounded v0 packet. Explicit `--context-delivery off`
+retains every source fact and clause inline; Markdown carries that complete
+JSON under the existing `LoopX Turn Envelope` heading. The
+[versioned presentation budgets](../contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
+record its additional cost. Historical v0 capture/journal readers remain
+version-specific; new callers do not fall back to v0. Benchmark wake options
+and their recorded boolean identities remain unchanged: an explicit spelling
+is not a second decision producer or proof of Progressive/Delta adoption.
+
 Complete-source requests use Host request v1: `work_contract` is the complete
 admitted input; `turn_key`, session/result transport and original `detail_ref`
 readers retain their roles. The external stdin and native model prompt omit the

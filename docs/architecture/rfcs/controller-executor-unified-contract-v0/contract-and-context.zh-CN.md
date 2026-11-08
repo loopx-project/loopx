@@ -429,6 +429,12 @@ capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 到达两个真实 CLI 入口。这是未合入的源码提议；installed 采用、剩余受支持 reader，
 以及相对原 quota 的验收成果与完整成本仍使 C1 保持开放。
 
+[显式内联消费方检查点](../../reference/contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
+按已注册的 v1 载体验证普通 quota、保留的 flag／详情拼法及完整事务检视。off／Markdown
+完整来源、native／structured Host 输入不缩减；历史 v0 reader 保留原版本边界。
+同源 File／SQLite 与长路径证据支持展示预算重新定标，原失败、全部行数／增长／权限
+限制继续保留。这是接受新增内联成本，不是效率收益、installed 采用或 C1 关闭。
+
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
 验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，

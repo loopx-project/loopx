@@ -557,9 +557,15 @@ def _assert_turn_plan_writeback_routes(
 ) -> None:
     # Budget compaction must not discard or redirect the writeback target.
     plan = _measured_payload(measurement)
-    assert plan["boundary"]["inspection_only"] is True
     assert not any(plan["effects"].values())
-    action = plan["work_contract"]["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
+    if plan["schema_version"] == "loopx_turn_plan_v0":
+        # A frozen caller also measures historical main under its original
+        # contract; v0 did not declare the v1 inspection marker or carrier.
+        action = plan["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    else:
+        assert plan["schema_version"] == "loopx_turn_plan_v1"
+        assert plan["boundary"]["inspection_only"] is True
+        action = plan["work_contract"]["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
     argv = shlex.split(action)
     assert argv.count("--registry") == argv.count("--runtime-root") == 1
     # Windows drive-rooted aliases are canonicalized by the runtime owner.
@@ -1758,12 +1764,14 @@ def _assert_collection_growth_and_bootstrap_duplication(
             assert 0 < len(context["evidence"]) <= 24
         elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
-            small_packet = _measured_payload(small[spec.surface_id]["json"])[
-                "work_contract"
-            ].get("replan_action_packet")
-            crowded_packet = _measured_payload(crowded[spec.surface_id]["json"])[
-                "work_contract"
-            ]["replan_action_packet"]
+            def replan_packet(measurement):
+                plan = _measured_payload(measurement)
+                if plan["schema_version"] == "loopx_turn_plan_v0":
+                    return plan["turn_envelope"].get("replan_action_packet")
+                assert plan["schema_version"] == "loopx_turn_plan_v1"
+                return plan["work_contract"].get("replan_action_packet")
+            small_packet = replan_packet(small[spec.surface_id]["json"])
+            crowded_packet = replan_packet(crowded[spec.surface_id]["json"])
             small_writeback = (
                 small_packet.get("writeback_contract")
                 if isinstance(small_packet, dict)
@@ -1829,6 +1837,94 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
                 text=text,
                 measurement=measurement,
             )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_explicit_modes_keep_full_contract_on_long_routes(
+    tmp_path: Path, provider: str,
+) -> None:
+    # Combine the supported route length and enabled subagent policy rather
+    # than calibrating either cost in isolation. This starts no model or child.
+    parent = Path(tempfile.gettempdir() if os.name == "nt" else "/tmp").resolve()
+    prefix = "loopx-explicit-"
+    while len(str(parent / prefix)) + 8 > 128:
+        assert parent != parent.parent
+        parent = parent.parent
+    prefix += "p" * (128 - len(str(parent / prefix)) - 8)
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
+        root = Path(directory).resolve()
+        assert len(str(root)) == 128
+        project, runtime, registry_path, state_file = _write_fixture(root, SCENARIOS[0])
+        registry = json.loads(registry_path.read_text())
+        registry["goals"][0]["spawn_policy"] = {
+            "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
+            "model_config": {"model": "example-small", "reasoning_effort": "max"},
+        }
+        registry_path.write_text(json.dumps(registry))
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+        from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+        for output_format in ("json", "markdown"):
+            commands = _mode_variant_commands(project=project, runtime=runtime,
+                registry_path=registry_path, state_file=state_file, output_format=output_format)
+            for variant_id in ("quota_should_run_turn_envelope", "loopx_turn_plan_transaction_detail"):
+                spec = CLI_OUTPUT_MODE_VARIANT_BY_ID[variant_id]
+                if output_format not in spec.output_formats:
+                    continue
+                capture = runtime / f"{variant_id}-{output_format}"
+                command = commands[variant_id]
+                if variant_id == "quota_should_run_turn_envelope":
+                    command = [*command, "--decision-output-dir", str(capture),
+                               "--turn-instance-id", "complete-explicit"]
+                code, text = _invoke_cli(command)
+                assert code == 0, text
+                payload = (json.loads(text) if output_format == "json" else
+                    json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]))
+                source = payload
+                if variant_id == "loopx_turn_plan_transaction_detail":
+                    source = payload["work_contract"]
+                    assert build_loopx_turn_host_request(payload)["work_contract"] == source
+                else:
+                    # off is literal, even for the compatibility spelling and
+                    # Markdown. Every captured fact and clause is delivered.
+                    assert payload == json.loads((capture / "decision.json").read_text())
+                assert_complete_turn_decision(source)
+                assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
+                    measurement=measure_cli_output(text, output_format=output_format))
+                oversized = text + " " * max(0, spec.max_chars[output_format] + 1 - len(text))
+                with pytest.raises(AssertionError, match="variant ceiling"):
+                    assert_cli_output_mode_variant(spec, output_format=output_format, text=oversized,
+                        measurement=measure_cli_output(oversized, output_format=output_format))
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+@pytest.mark.parametrize("measurement_only", [False, True])
+def test_explicit_version_qualification_rejects_old_or_incomplete_carriers(
+    output_format: str, measurement_only: bool,
+) -> None:
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_turn_envelope"]
+    valid = {key: {} for key in spec.semantic_json_keys}
+    valid["schema_version"] = spec.output_contract_version
+    def check(payload):
+        text = json.dumps(payload)
+        if output_format == "markdown":
+            text = spec.markdown_anchor + "\n\n```json\n" + text + "\n```"
+        measurement = measure_cli_output(text, output_format=output_format)
+        if measurement_only:
+            import runpy
+            runner = runpy.run_path(str(Path(__file__).resolve().parents[2] /
+                "examples/control_plane/cli-output-probe-runner.py"))
+            runner["_assert_output_contract"](output_format=output_format, text=text,
+                measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+                markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+        else:
+            assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
+                measurement=measurement)
+    check(valid)
+    with pytest.raises(AssertionError, match="version mismatch"):
+        check({**valid, "schema_version": "loopx_turn_envelope_v0"})
+    with pytest.raises(AssertionError, match="lost semantic key"):
+        check({key: value for key, value in valid.items() if key != "interaction_contract"})
 
 
 def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:

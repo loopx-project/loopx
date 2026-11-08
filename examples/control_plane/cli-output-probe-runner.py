@@ -166,8 +166,17 @@ def _assert_output_contract(
     measurement: dict,
     semantic_json_keys: tuple[str, ...],
     markdown_anchor: str | None,
+    output_contract_version: str | None = None,
 ) -> None:
     """Validate shape while allowing a red base to remain measurable."""
+    from loopx.control_plane.testing import cli_output_budget
+
+    check = getattr(cli_output_budget, "assert_cli_output_semantics", None)
+    if check is not None:
+        check("probe", output_format=output_format, text=text, measurement=measurement,
+            semantic_json_keys=semantic_json_keys, markdown_anchor=markdown_anchor,
+            output_contract_version=output_contract_version)
+        return
 
     if output_format == "markdown":
         if markdown_anchor and markdown_anchor not in text:
@@ -241,6 +250,8 @@ def _default_rows(
                             measurement=measurement,
                             semantic_json_keys=surface.semantic_json_keys,
                             markdown_anchor=surface.markdown_anchor,
+                            output_contract_version=(getattr(surface, "output_contract_version", None)
+                                if output_format == "json" else None),
                         )
                     rows.append(
                         _receipt_row(
@@ -313,6 +324,7 @@ def _variant_rows(
                     measurement=measurement,
                     semantic_json_keys=variant.semantic_json_keys,
                     markdown_anchor=variant.markdown_anchor,
+                    output_contract_version=getattr(variant, "output_contract_version", None),
                 )
             rows.append(
                 _receipt_row(
@@ -327,6 +339,7 @@ def _variant_rows(
                     markdown_anchor=variant.markdown_anchor,
                     measurement=measurement,
                     text=text,
+                    output_contract_version=getattr(variant, "output_contract_version", None),
                 )
             )
     return _link_turn_warning_basis(rows)
@@ -381,6 +394,7 @@ def _blocking_gate_rows(
             measurement=measurement,
             semantic_json_keys=variant.semantic_json_keys,
             markdown_anchor=variant.markdown_anchor,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     return [
         _receipt_row(
@@ -398,6 +412,7 @@ def _blocking_gate_rows(
             markdown_anchor=variant.markdown_anchor,
             measurement=measurement,
             text=output,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     ]
 
@@ -434,6 +449,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
             output_format="json", text=output, measurement=measurement,
             semantic_json_keys=variant.semantic_json_keys,
             markdown_anchor=variant.markdown_anchor,
+            output_contract_version=getattr(variant, "output_contract_version", None),
         )
     return [_receipt_row(
         semantics=semantics,
@@ -443,6 +459,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
         output_format="json", qualification_policy="explicit_opt_in_cold_path",
         semantic_json_keys=variant.semantic_json_keys, markdown_anchor=variant.markdown_anchor,
         measurement=measurement, text=output,
+        output_contract_version=getattr(variant, "output_contract_version", None),
     )]
 
 
