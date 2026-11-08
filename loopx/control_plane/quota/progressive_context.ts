@@ -530,6 +530,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
           || typeof object(graph?.work_yardstick_capture)?.guidance !== "string") continue;
       const graphPath = [...work, "sources", index, "content", "graph"];
       include(...graphPath, "work_yardstick_capture", "guidance");
+      const measurements = graph?.work_measurements;
+      if (Array.isArray(measurements)) {
+        const current = measurements.findIndex(card => object(card)?.todo_id === selectedTodo.todo_id);
+        if (current >= 0) include(...graphPath, "work_measurements", current);
+      }
       const cues = graph?.work_yardsticks;
       if (Array.isArray(cues)) {
         const current = cues.findIndex(cue => object(cue)?.todo_id === selectedTodo.todo_id);

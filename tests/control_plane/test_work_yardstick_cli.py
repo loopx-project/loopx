@@ -101,6 +101,14 @@ def starting_page(project, runtime, path, turn, saved, monkeypatch):
     return page
 
 
+def wide_write_scope():
+    return [
+        f"modules/component-{i:03d}/experiments/artifact-encodings/public-validation/"
+        "accepted-input-compatibility/fixture-baseline/ordered-results/recorded-comparison/**"
+        for i in range(100)
+    ]
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled, monkeypatch):
     project, runtime, path = setup(tmp_path, enabled, active=True)
@@ -126,11 +134,7 @@ def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(tmp_path, provider, monkeypatch):
-    scope = [
-        f"modules/component-{i:03d}/experiments/artifact-encodings/public-validation/"
-        "accepted-input-compatibility/fixture-baseline/ordered-results/recorded-comparison/**"
-        for i in range(100)
-    ]
+    scope = wide_write_scope()
     project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=scope)
     source = tmp_path / "finding.json"
     source.write_text(json.dumps(attachment()))
@@ -175,6 +179,91 @@ def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(t
     assert values["/effective_action"] == "normal_run"
     assert values["/goal_boundary"] == json.loads(original)["goal_boundary"]
     assert values["/goal_boundary"]["write_scope"] == scope
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn[-1]) == _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("enabled", [None, False])
+def test_disabled_yardstick_preserves_exact_first_read_option(tmp_path, provider, enabled, monkeypatch):
+    project, runtime, path = setup(tmp_path, False, active=True, provider=provider)
+    if enabled is None:
+        config = json.loads(path.read_text())
+        del config["goals"][0]["execution_profile"]["yardstick_enabled"]
+        path.write_text(json.dumps(config))
+    turn = binding("off-exact-first-read")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    saved = capture / "decision.json"
+    original = saved.read_bytes()
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_CODEX_CONTEXT_DIR": str(native)}
+    prompt = preflight_context_instruction(env, saved, hashlib.sha256(original).hexdigest(), turn[-1])
+    # This existing optional route is an agent decision, not an instruction to
+    # drain an unrelated default opening when the policy is off.
+    assert "For known fields, replace --initial-read with repeated --select pointers" in prompt
+    argv = shlex.split(prompt.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    argv.remove("--initial-read")
+    wanted = ["/effective_action", "/normal_delivery_allowed", "/heartbeat_receipt",
+              "/selected_todo", "/goal_id"]
+    for pointer in wanted:
+        argv.extend(["--select", pointer])
+    with monkeypatch.context() as patch:
+        patch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        patch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        page = run(project, runtime, path, *argv[argv.index("quota"):])
+    assert page["eof"]
+    values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+    assert values == {pointer: json.loads(original)[pointer[1:]] for pointer in wanted}
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn[-1]) == 1 and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_first_work_reads_linked_measurements_without_a_yardstick_decision(tmp_path, provider, monkeypatch):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=wide_write_scope())
+    source = tmp_path / "finding.json"
+    finding = attachment()
+    profiles = decision()
+    del finding["work_yardstick_decision"]
+    finding["evidence_refs"] = ["result:a", "result:b"]
+    finding["measurements"] = [
+        {**profiles[profile], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": f"result:{candidate}", "value": value}
+        for profile, points in [("authoritative", [("a", 10), ("b", 20)]),
+                                ("proxy", [("a", 9), ("b", 8)])]
+        for candidate, value in points
+    ]
+    source.write_text(json.dumps(finding))
+    receipt = refresh(project, runtime, path, "plain-measurements", source,
+                      "--delivery-boundary", "in_flight_continuation")
+    assert receipt["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id="plain-measurements"))
+    events_before = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+    turn = binding("first-linked-comparison")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    saved = capture / "decision.json"
+    original = saved.read_bytes()
+    page = starting_page(project, runtime, path, turn, saved, monkeypatch)
+    assert page["offset"] == 0 and not page["eof"]
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 12000
+    marker = "/content/graph/work_measurements/0\""
+    start = page["content"].index(',"value":', page["content"].index(marker)) + len(',"value":')
+    comparison, _ = json.JSONDecoder().raw_decode(page["content"], start)
+    assert comparison["todo_id"] == TODO_ID
+    metrics = {row["metric"]: row for row in comparison["measurement_feedback"]}
+    assert metrics["quality"]["best"]["candidate_ref"] == "candidate:b"
+    assert metrics["screen"]["best"]["candidate_ref"] == "candidate:a"
+    assert metrics["quality"]["latest"]["measurement"]["value"] == 20
+    assert comparison["omitted_measurement_feedback"] == 0
+    assert "search_comparison" not in comparison and "authoritative" not in comparison
+    assert "work_yardsticks" not in context(runtime, path, detail=False)["graph"]
+    assert load_explore_result_events(explore_result_log_path(runtime, GOAL_ID)) == events_before
     assert saved.read_bytes() == original
     assert _heartbeat_receipt_count(runtime, turn[-1]) == _spend_run_count(runtime) == 1
 
