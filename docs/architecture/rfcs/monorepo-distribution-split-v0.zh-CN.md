@@ -1859,6 +1859,64 @@ release 的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context／model／
 split-install、full-cost／adoption 及完整 freshness、identity／revision／WAL／
 lease／receipt／recovery 栅栏。本轮不合入 main、不升级 host。
 
+### 2026-11-08 — CLI CPU 归因与新鲜源码扫描的路径构造
+
+一个独立 wheel 归因 pair 对照 main `21013c0c1` 与提案 `24ca29f4e`，保留完整
+101-Todo 生命周期及原 source／package、scope、预热 PID、产物、原完成时间、
+四份 receipt、一次 debit、refusal／replay／restart 和 native 退出 oracle。每 arm
+记录 22 个 Python console 进程、三个独立 Node helper／probe、两个 managed
+daemon 的真实退出。Helper 是两个 version probe 和一个 setup helper，均在
+所属调用方读回前退出。PATH 解析的 Node 保留精确 executable／argv；Python
+console CPU profile 使用 `process_time`，不以该插桩 pair 验收速度。
+
+| 诊断 CPU，秒，main → proposal | 观测 |
+| --- | --- |
+| Profile dump 前采样的 Python CLI self | 20.447 →20.099 |
+| Python profile exclusive total | 18.230 →17.922 |
+| Import machinery cumulative | 14.505 →14.403 |
+| Compilation exclusive | 7.488 →7.464 |
+| 完整 managed-daemon subtree | 1.780 →1.890 |
+| 三个独立 Node helper／probe subtree | 0.286 →0.281 |
+
+Import cumulative 含嵌套 compilation，不能与 compile exclusive 或 self sample
+相加。模块加载可能发生在操作内部，尚未独立识别解释器启动。固定的
+bytecode-disabled 条件使加载／编译突出，helper 贡献有限；解释器／wrapper／
+profiler 开销及发布尾部仍使这些值不能作为无插桩成本分解。它们不解释或推翻
+此前冻结 pair 的 CPU 增量，不证明提速，也不验收正常 bytecode 的 installed adoption。
+
+同一 profile 定位原 filesystem adapter 的 source-scan 路径处理。Runtime
+`a57fd3ef7` 每目录只构造一次 POSIX 相对目录前缀，免去每候选文件额外的相对
+`Path` 构造。源码选择、行排序、文件元数据、`Path.stat` 及其平台错误策略保留；
+完整 source hash 与 freshness／identity、revision／WAL／lease／receipt／recovery
+栅栏不变。这是有限的同域 refactor，不新增 capability、provider、持久字段、
+词汇或 authority cache；原生 TypeScript owner 继续持有原规则。
+
+不可变 parent 与新 scanner 在同一真实源码树返回完全相同的 404 个 metadata
+tuple。64 个聚焦 Python 用例及 kernel mypy／Ruff 通过。Before／head 的真实
+`runtime.ping` 在 disposable package 中均在所属 JSON 文件变化后切换 fingerprint
+与 PID；故意漏掉该 JSON source 的 mutation 在同一独立 runtime oracle 上失败，
+所有自有 probe runtime 已停止。八条 before／head × source／wheel × File／SQLite
+完整 CLI 生命周期保留原产物、完成时间、scope、四份 receipt、一次 debit、
+refusal／replay 及两个 native 退出。这验收正确性与已执行真实路径，不验收性能。
+
+新建单体 wheel 与 1840 个 packaged tracked source 相同；原 24 个 production
+文件中仅 `effect_runtime.py` 改动，仍保留相同五个 source-only omission。独立
+import probe 首次从 checkout 工作目录加载了源码，其失败准备保留；修正后的
+核验使用非 checkout 工作目录、清空 `PYTHONPATH`，并在比较字节前断言模块属于
+隔离安装。Lifecycle harness 始终保留自己的独立 package-root 检查。首次在错误
+目录执行 Chat build 命令也保留为准备失败，随后 dashboard owner 的 build 验证
+bundle。
+
+更大加载改动仍是下一步的独立决策：先在既有 quota／context 与 refresh dispatch
+owner 对照真实 normal／disabled bytecode，再移动必需依赖。路径 allocation
+变化仅是局部中间结果，不新增 whole-path／边际成本收益声明。当前 PostgreSQL
+host／wheel、model／attention、连续峰值、物理设备写入、installed adoption 和
+完整长程资格仍开放；未变的 PostgreSQL store／service owner 保留此前真实资格，
+本轮不宣称新 PG 运行。保留全部冻结失败、既有 peer hard-cut validation hold、
+至少一个 minor release 的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 及
+context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
+评审继续开放，本轮不合入 main、不升级 installed host。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
