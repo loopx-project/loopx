@@ -2567,6 +2567,50 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Synthetic Host UTF-8 recovery qualification
+
+The Windows CPython 3.11 CI arm of #8360 fails six existing original-task
+revalidation cases. Its synthetic Python Host inherits a locale decoder for a
+pipe, while the existing generic Host transport sends UTF-8 JSON. A disposable
+File-provider counterprobe changes only that Host decoder: CP1252 produces
+`host_failure` without `task_failure`; UTF-8 reaches the independent artifact
+validator and produces `validation_failed` at `task_postcondition`, with
+`revalidate_cached_result`. The source macOS arm independently passes all 12
+existing revalidation cases. These observations locate a fixture mismatch;
+they do not justify widening production failure classification.
+
+Fixture commit `a4ce613585fdb329ba3600f0ede768864214ed84`, over main
+`4e949f405528fd8087f0623526c62f890c1ce982`, explicitly configures its stdin as
+UTF-8 before reading the request. One new File/SQLite regression first sets
+only the generated Host's decoder to CP1252, sends a Unicode brief and requires
+the rejected artifact to reach task validation. After repairing the artifact,
+revalidation must accept it with the original turn key and exactly one Host
+invocation. The same regression fails with the immutable baseline Host on the
+same CPython 3.13.5/Node 22.22.3 environment, and passes with the correction.
+No transport, production owner, persisted state or protocol vocabulary changes.
+
+On macOS arm64 with Node 22.22.3, CPython 3.11.15 source and a newly installed,
+isolated monolithic wheel each pass the new two provider cases plus all 12
+existing original-task recovery cases. Wheel imports are verified outside the
+checkout before loading the source-owned fixtures; all 1,920 present packaged
+tracked runtime entries match the source bytes. The same 17 source-only
+exclusions remain: canary baseline, host plugin/config, fault-test helper and
+documentation/media. This qualifies the existing File/SQLite
+synthetic Host recovery path, including retained MCP disconnection and lock
+timeout recovery cases, not model adoption, split installation or native
+Windows. The failed original Windows arm remains historical evidence until a
+new exact-head Windows run passes. The independent Frontstage manifest request
+still returns HTTP 504 after its bounded retry.
+
+The original task stays open. Preserve I3 for at least one minor release,
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel, whole-path/full marginal-cost/adoption requirements and
+all historical and frozen failures. No cost campaign is repeated or relabeled,
+and this fixture qualification establishes no performance benefit. The report
+loading proposal #8360 retains its independent review and CI gates; the next
+step is exact-head review of this correction and native Windows readback. No
+main merge or installed-host upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
