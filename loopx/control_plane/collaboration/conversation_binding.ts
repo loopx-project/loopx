@@ -1298,7 +1298,7 @@ function planRelatedResultReview(recovery: JsonObject, row: JsonObject, current:
   const observation = preparationOnly && !preparationReserved ? {...recovery, admitted_turn: null} : recovery;
   const plan = planCompletedResultReview(observation, row, current, completed, previous, version, null);
   return preparationOnly && plan.recovery_candidate === true ? {...plan,
-    client_turn_id: `${baseClient}-preparation-1`, review_preparation_attempt: 1,
+    client_turn_id: `external-${row.request_ref}-recovery-${version}-preparation-1`, review_preparation_attempt: 1,
     preparation_failed_turn_id: failed!.turn_id, original_result_turn_id: completed.turn_id} : plan;
 }
 
@@ -1310,8 +1310,10 @@ function planCompletedResultReview(recovery: JsonObject, row: JsonObject, curren
   // owner with a result reader. Keep that owner for the next fresh work proof.
   // Already reserved reviews retain their own adoption and execution checks.
   if (previous === null && recovery.live_work_owner !== false) return no;
-  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`
-    + (previous?.review_preparation_attempt === 1 ? "-preparation-1" : "");
+  // Old readers recognize preparation-1 and reject its read-only policy, so a
+  // rollback holds this receipt instead of treating an unknown key as ordinary input.
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-`
+    + (previous?.review_preparation_attempt === 1 ? "preparation-1" : "review-1");
   if (work !== null && previous?.review_preparation_attempt != null) return no;
   if (current.steward_context != null || completed.client_turn_id !== `external-${row.request_ref}`
       || completed.message !== row.message || completed.origin !== row.origin

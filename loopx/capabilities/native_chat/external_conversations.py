@@ -919,7 +919,7 @@ class ChatExternalConversations:
                 return row
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota|preparation)-[1-3]|review-1(?:-preparation-1)?|work-1|metadata-1))?", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota|preparation)-[1-3]|review-1|work-1|metadata-1))?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])
@@ -927,9 +927,11 @@ class ChatExternalConversations:
         preparation = match[2] is not None and match[2].startswith("preparation-")
         if (row.get("session_id") == session["session_id"] and recovery
                 and recovery["client_turn_id"] == turn["client_turn_id"]):
-            if bool(match[2] and match[2].startswith("review-1")) != (recovery.get("read_only_review") is True):
+            review_preparation = (match[2] == "preparation-1" and recovery.get("legacy_result_review") is True
+                and recovery.get("read_only_review") is True and recovery.get("review_preparation_attempt") == 1)
+            if (match[2] == "review-1" or review_preparation) != (recovery.get("read_only_review") is True):
                 raise ValueError("reserved result review policy changed")
-            if (match[2] == "review-1-preparation-1") != (recovery.get("review_preparation_attempt") == 1):
+            if review_preparation != (recovery.get("review_preparation_attempt") == 1):
                 raise ValueError("reserved result review preparation changed")
             if recovery.get("context_correction") and (recovery.get("history_review") is not True or recovery.get("context_version") != 1):
                 raise ValueError("historical correction requires its qualified context")
@@ -937,11 +939,11 @@ class ChatExternalConversations:
                 raise ValueError("reserved unfinished work correlation changed")
             if (match[2] == "metadata-1") != (recovery.get("metadata_review") is True):
                 raise ValueError("reserved metadata review correlation changed")
-            if preparation != (recovery.get("preparation_attempt") is not None) or (
-                    preparation and str(recovery["preparation_attempt"]) != match[2][-1]):
+            if (preparation and not review_preparation) != (recovery.get("preparation_attempt") is not None) or (
+                    preparation and not review_preparation and str(recovery["preparation_attempt"]) != match[2][-1]):
                 raise ValueError("reserved preparation recovery correlation changed")
             return {"request_ref": row["request_ref"], **recovery}
-        if preparation or match[2] in {"review-1", "review-1-preparation-1", "work-1", "metadata-1"}:
+        if preparation or match[2] in {"review-1", "work-1", "metadata-1"}:
             raise ValueError("reserved result review correlation unavailable")
         return None
 

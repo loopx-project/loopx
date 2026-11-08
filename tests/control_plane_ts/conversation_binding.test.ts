@@ -1220,7 +1220,7 @@ test("a delivered same-question review permits one independent legacy result rea
   assert.equal(prepared.read_only_review, true);
   assert.equal(prepared.review_preparation_attempt, 1);
   assert.equal(prepared.original_result_turn_id, completed.turn_id);
-  assert.equal(prepared.client_turn_id, `${plan.client_turn_id}-preparation-1`);
+  assert.equal(prepared.client_turn_id, String(plan.client_turn_id).replace(/-review-1$/, "-preparation-1"));
   assert.equal(prepared.work_attempt, undefined);
   for (const change of [{upstream_turn_id: "possibly-dispatched"}, {delta_count: 1}, {response},
     {error_code: "runtime_error"}, {client_turn_id: "another-review"}]) {

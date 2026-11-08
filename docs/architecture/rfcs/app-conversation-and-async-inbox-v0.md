@@ -2075,6 +2075,8 @@ retains the failed Turn and reservation in history and uses a distinct, pinned
 preparation receipt/phase. It does not renew the single model invocation: an
 actual dispatch, unknown native work, changed source/evidence, Stop, or a second
 preparation failure remains held. Reservation/queue crashes adopt that receipt.
+Its existing `preparation-1` key carries the explicit read-only preparation tag;
+older readers reject that policy combination before model dispatch on rollback.
 
 A new result review now requires an explicit observation that no original
 writable adapter is attached. An inconclusive effect readback while that owner

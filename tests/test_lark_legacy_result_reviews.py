@@ -170,6 +170,8 @@ def test_original_worker_returns_each_legacy_message_without_replaying_business(
             assert "unfinished_work" not in recovery and "work_attempt" not in recovery
             if failed_preparation is not None:
                 assert recovery["review_preparation_attempt"] == 1
+                assert recovery["client_turn_id"].endswith("-preparation-1")
+                assert "preparation_attempt" not in recovery
                 assert recovery["preparation_failed_turn_id"] == failed_preparation["turn_id"]
                 assert len(returned["context_recovery_history"]) == 1
                 old_failure = store.load_turn(returned["session_id"], failed_preparation["turn_id"])
