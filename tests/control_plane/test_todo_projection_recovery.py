@@ -107,7 +107,11 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     before = _read(runtime)
     record = before["todos"][0]
     assert record["text"] == text and record["title"] == title
-    assert text in state.read_text()
+    displayed = next(line for line in state.read_text().splitlines() if line.startswith("- [ ] " + text[:80]))
+    if provider == "sqlite":
+        assert displayed.endswith("...") and "retain the final obligation" not in displayed
+    else:
+        assert displayed == "- [ ] " + text
 
     # A stale compatibility view must be repaired from the canonical head,
     # not by editing the accepted Todo or repeating its committed mutation.
@@ -115,7 +119,11 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     code, delivered = _run(registry, before["provider_revision"], "--execute")
     assert code == 0 and delivered["status"] == "delivered", delivered
     rendered = state.read_text()
-    assert text in rendered and "Keep this narrative." in rendered
+    assert displayed in rendered and "Keep this narrative." in rendered
+    assert delivered["omitted_active_records"] == ([
+        {"todo_id": record["todo_id"], "role": "agent", "omitted_fields": ["text"],
+         "query": f"loopx todo list --goal-id goal-a --todo-id {record['todo_id']}"},
+    ] if provider == "sqlite" else [])
     assert delivered["parse_render_parity"] is True
     assert _read(runtime) == before
     code, replay = _run(registry, before["provider_revision"], "--execute")

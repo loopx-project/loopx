@@ -40,13 +40,13 @@ def test_blocked_lifecycle_closes_original_attempt_without_a_retry_clock(
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"blocked-lifecycle-{provider}")
-    guard_args = ("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app",
+    guard_args = ("quota", "should-run", "--context-delivery", "off", "--goal-id", GOAL_ID, "--codex-app",
                   )
-    rc, guard = cli(*guard_args, *binding)
-    assert rc == 0 and guard["heartbeat_receipt"]["closeout_required"], guard
     rc, acquired = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                        "--owner", AGENT_ID, "--idempotency-key", "attempt-before-source-loss")
     assert rc == 0, acquired
+    rc, guard = cli(*guard_args, *binding)
+    assert rc == 0 and guard["heartbeat_receipt"]["closeout_required"], guard
     rc, blocked = cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                       "--agent-id", AGENT_ID, "--status", "blocked",
                       "--reason", "Original source is no longer available", "--clear-resume-when",
