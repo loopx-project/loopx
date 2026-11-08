@@ -2065,6 +2065,17 @@ intent. The original worker independently checks current artifacts and returns
 one read-only answer under this source's own idempotent identity. A legacy review
 cannot seed another legacy review; changed evidence and exhausted attempts hold.
 
+Host event-compaction filesystem stamps are excluded from the two retained Turn
+evidence locations before crossing the JSON/JavaScript boundary; nanoseconds
+must not become rounded answer or authority evidence. All semantic fields stay
+pinned. An already failed legacy preparation can recover once only when the
+canonical trace is exactly queue then local `host_gate`, with no native input,
+delta or response, and fresh native inventory excludes hidden dispatch. This
+retains the failed Turn and reservation in history and uses a distinct, pinned
+preparation receipt/phase. It does not renew the single model invocation: an
+actual dispatch, unknown native work, changed source/evidence, Stop, or a second
+preparation failure remains held. Reservation/queue crashes adopt that receipt.
+
 A new result review now requires an explicit observation that no original
 writable adapter is attached. An inconclusive effect readback while that owner
 is still attached remains a hold; it must not replace the owner with a model
