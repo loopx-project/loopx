@@ -16,7 +16,7 @@ the changed reader avoids the repeated prefix. The regression belongs to
 
 These captures use the built Chat bundle and the production HTTP/SQLite/Core
 binding owner in a disposable synthetic runtime. Its 464 original rows include
-a 19,000-character body. The packaged UI recovered automatically through both
+a 20,000-character body. The packaged UI recovered automatically through both
 interruptions, displayed the complete body once, retained the draft, and kept
 Send disabled until the complete history was verified. Independent store
 readback remained identical, with no message/Session creation or model Turns.
@@ -36,3 +36,21 @@ PNG pixels and metadata were inspected. This qualifies the packaged browser
 reader, not the installed native App, live IM transport, server latency or
 business completion. Current source authorization and every page's frozen
 prefix/identity checks remain mandatory; checkpoints do not grant authority.
+
+The server also selects the current page's immutable result keys before reading
+answer bodies and delivery sidecars. This matters when an unmatched legacy row
+requires the existing exhaustive route fallback: off-page results no longer
+need to be deserialized. The fallback still examines every candidate route;
+Session/source checks, current status validation and unreadable-state handling
+remain unchanged. No delivery state or authorization is cached between reads.
+
+A controlled production HTTP/SQLite/Core fixture contains 404 messages, 96
+request routes and 768 complete 20,000-character results. In alternating
+base/head/head/base runs (seven uninstrumented samples each), the first page's
+result-file reads fell from 1,536 to 80. Per-run median HTTP latency was
+0.17–0.26 seconds on the base and 0.04–0.05 seconds after the change. Both arms
+returned the identical complete history and left the original source unchanged.
+These local synthetic measurements are neither a production p95 nor evidence
+that other service contention is fixed. The durable HTTP and fallback
+regressions live in `tests/test_manager_context_roundtrip.py`; they also retain
+late verification changes, malformed state and the original full long body.
