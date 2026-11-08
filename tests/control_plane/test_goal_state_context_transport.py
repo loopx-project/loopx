@@ -18,6 +18,49 @@ from loopx.control_plane.work_items import context_readback
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 
 
+def test_scalar_root_projection_keeps_the_complete_view_and_original_number():
+    from loopx.control_plane.quota.turn_envelope import _apply_context_projection_changes
+
+    source = {"counter": 9007199254740997}
+    view = {"ok": True, "goal_id": "example", "stage": "explore", "explore_basis": None}
+    actual = _apply_context_projection_changes(source, {"changes": [
+        {"path": [], "value": view},
+        {"path": ["counter"], "from": ["counter"]},
+    ]}, base={})
+    assert actual == {**view, "counter": 9007199254740997}
+    assert "counter" not in view
+    assert source == {"counter": 9007199254740997}
+
+
+def test_root_source_copy_keeps_numeric_identity_without_aliasing():
+    import math
+
+    from loopx.control_plane.quota.turn_envelope import _apply_context_projection_changes
+
+    source = {"facts": {"unsafe": 9007199254740997, "negative_zero": -0.0}}
+    actual = _apply_context_projection_changes(source, {
+        "changes": [{"path": [], "from": []}],
+    }, base={})
+    assert actual == source and actual is not source
+    assert actual["facts"] is not source["facts"]
+    assert math.copysign(1, actual["facts"]["negative_zero"]) == -1
+    actual["facts"]["unsafe"] = 0
+    assert source["facts"]["unsafe"] == 9007199254740997
+
+
+@pytest.mark.parametrize("change", [
+    {"path": [], "remove": True},
+    {"path": [], "value": None},
+    {"path": [], "value": []},
+    {"path": [], "value": False},
+])
+def test_projection_root_must_remain_an_object(change):
+    from loopx.control_plane.quota.turn_envelope import _apply_context_projection_changes
+
+    with pytest.raises(RuntimeError, match="Invalid TypeScript context projection changes"):
+        _apply_context_projection_changes({}, {"changes": [change]}, base={})
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
