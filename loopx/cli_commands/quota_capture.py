@@ -29,7 +29,8 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
-    _capture_page,
+    _saved_context_read_page,
+    _context_page_output_enabled,
     _capture_read_reference,
     _native_context_read_bytes,
     _native_context_reference,
@@ -263,74 +264,6 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
     return readable if page_attached or len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
-
-
-def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
-                          page_bytes: int, output_bytes: int, reader_argv: list[str]) -> dict[str, Any] | None:
-    """Try the typed opening and keep the remainder pinned to the same capture."""
-    if "opening" not in plan or "first_read_command" not in navigation:
-        return None
-    try:
-        path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
-        digest = plan["capture"]["sha256"]
-        opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
-        if len(content) > page_bytes or len(content) >= output_bytes:
-            return None
-        remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
-
-        def command(reference: Path) -> str:
-            return context_capture_read_command(path, digest, page_bytes=page_bytes,
-                max_page_output_bytes=output_bytes, reference_file=reference, reader_argv=reader_argv)
-
-        navigation = {**navigation, "first_read_command": command(opening), "remaining_read_command": command(remaining),
-            "instruction": ("This opening covers the decision and read obligations. Before work, read its content, "
-                "then follow remaining_read_command and its cursor through the rest of the initial selection. "
-                + navigation["instruction"])}
-        page = _capture_page(path, content, digest, offset=0, size=len(content), output_limit=None,
-            instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
-        # An opening is useful only as a complete, independently readable
-        # page. Keep the ordinary cursor when even the opening cannot fit.
-        page["read_instruction"] = (
-            "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
-            "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
-            "EOF does not establish retention, authority or freshness.")
-        page["navigation"] = navigation
-        return page if len(_native_output_bytes(page)) <= output_bytes else None
-    except (OSError, ValueError):
-        return None  # The same-capture ordinary reader is already available.
-
-
-def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
-                             initial_reference: str | None, initial_read_plan: dict[str, Any] | None,
-                             output_limit: int | None, reader_argv: list[str]) -> dict[str, Any]:
-    """Use the ordinary verified reader; the first page and navigation share its output budget."""
-    recovery = navigation["recovery"]
-    pinned = initial_reference if args.initial_read else None
-    reference = pinned or recovery.get("reference_file")
-    read_args = argparse.Namespace(**{**vars(args), "quota_command": "context-read",
-        "reference_file": reference, "capture_file": None if reference else recovery["path"],
-        "capture_sha256": None if reference else recovery["sha256"],
-        "max_page_output_bytes": output_limit,
-        "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
-    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
-    if page["ok"]:
-        if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
-                and "previously_delivered_fields" not in page
-                and (opening := _bounded_initial_page(navigation, initial_read_plan,
-                    page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
-                    output_bytes=output_limit, reader_argv=reader_argv)) is not None):
-            return opening
-        # Keep the already-budgeted page and cursor ahead of recovery metadata.
-        page["navigation"] = page.pop("navigation")
-    elif "recovery_command" not in page:
-        page["recovery_command"] = recovery["command"]
-    return page
-
-
-def _context_page_output_enabled(args: argparse.Namespace, activation: dict[str, Any]) -> bool:
-    return activation["enabled"] or (
-        args.quota_command == "context-project" and getattr(args, "initial_read", False)
-        and activation["progressive_enabled"])
 
 
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:

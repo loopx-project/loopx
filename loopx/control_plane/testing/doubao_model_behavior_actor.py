@@ -459,7 +459,11 @@ with these top-level fields and no others:
 }
 Copy the requested phase exactly. Output JSON only, without markdown or
 reasoning. The semantic_contract must contain exactly the phase-specific fields
-described below. Use null where instructed and never invent identifiers."""
+described below. Use null where instructed and never invent identifiers.
+reason_codes is required and must contain 1 to 12 distinct, non-empty strings.
+Each reason code must match ^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,159}$; use short
+English tokens derived from the observed packet. Never return an empty list,
+prose, or non-ASCII reason codes, including when the observation is healthy."""
     if phase == "entry":
         return (
             common

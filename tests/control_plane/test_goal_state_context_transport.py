@@ -39,12 +39,10 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
         state_path=state, provider=provider)
     source_args = dict(registry_path=registry, runtime_root=runtime, goal_id=goal, todo_id=todo_id)
     original_effect = context_readback.effect_runtime_result
-    requests, plans = [], []
+    requests, packets = [], []
     omit_delivery_profile = [False]
 
     def observe(operation, request, **kwargs):
-        if operation == "work_item.context.plan":
-            plans.append(deepcopy(request["packet"]))
         if operation == "work_item.context.project":
             requests.append(deepcopy(request))
         result = original_effect(operation, request, **kwargs)
@@ -62,6 +60,7 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
                 "--runtime-profile", "generic_cli", "--context-delivery", "off"])
         packet = json.loads(output.getvalue())
         assert code == 0 and packet["should_run"] is True, packet.get("reason")
+        packets.append(deepcopy(packet))
         return packet["interaction_contract"]["agent_channel"]
 
     small_channel = guard()
@@ -116,7 +115,9 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     state.write_bytes(large)
     large_channel = guard()
     large_request = requests[-1]
-    captured_plan = plans[-1]
+    # Exercise the public decision, including its work-read obligations. The
+    # internal planner input deliberately carries only selection metadata.
+    captured_plan = packets[-1]
     assert state.read_bytes() == large
     # Source growth changes neither the complete Agent contract nor transport
     # size. The full Goal read remains pending; availability is not consumption.
