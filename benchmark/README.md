@@ -1533,6 +1533,11 @@ including any later failure; it cannot clear the failure or extend its deadline.
 A later explicit repair must bind that new failure separately. Existing operator
 and account authority remain required; a digest is provenance, not permission.
 
+For in-place continuation, bind the checkpoint supervisor's `phase_deadline_path`
+to the same new immutable clock supplied to the resumed scheduler. Both held
+and terminal captures use that clock. Preserve the stopped phase's clock at
+its original path. Fresh workers retain the standard path.
+
 The explicit failed-phase path additionally uses the installed optional native
 Codex provider's existing availability policy (`loopx-codex-provider-routing`).
 It reads `account/read(refreshToken=false)` and `account/rateLimits/read` in a

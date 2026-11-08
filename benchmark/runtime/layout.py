@@ -3,6 +3,7 @@
 _ROOT = "/opt/loopx-benchmark"
 _SRC = f"{_ROOT}/source"
 _CONTROL = f"{_ROOT}/control"
+_PHASE_DEADLINE = f"{_CONTROL}/phase-deadline"
 _CODEX_HOME = f"{_ROOT}/codex-home"
 _REGISTRY = f"{_CONTROL}/registry.json"
 _LOOPX_RUNTIME = f"{_ROOT}/state/runtime"

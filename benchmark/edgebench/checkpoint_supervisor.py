@@ -12,15 +12,18 @@ import time
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+from benchmark.runtime.layout import _PHASE_DEADLINE
 
 from .checkpoint_controller import _controller
-from .checkpoint_worker import _archive, capture_worker, qualify_export_storage
+from .checkpoint_worker import _archive, _guest_path, _validate_request, capture_worker, qualify_export_storage
 
 
 class CheckpointSupervisor:
     def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None,
                  *, retention_enabled: bool = True, terminal_components: list[dict[str, str]] | None = None,
-                 terminal_receipt: Path | None = None):
+                 terminal_receipt: Path | None = None, phase_deadline_path: str = _PHASE_DEADLINE):
+        _guest_path(phase_deadline_path)
+        self.phase_deadline_path = phase_deadline_path
         _controller(controller_file)  # Fail before native registration.
         qualify_export_storage(destination)
         if not retention_enabled and retention_policy is not None:
@@ -31,7 +34,10 @@ class CheckpointSupervisor:
             from .terminal_capture import FailurePreservation
             if terminal_receipt is None or terminal_receipt.exists():
                 raise ValueError("Terminal preservation requires a fresh private receipt")
-            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt)
+            _validate_request({"container_id": "0" * 64, "components": terminal_components,
+                               "phase_deadline_path": phase_deadline_path})
+            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt,
+                                                    phase_deadline_path=phase_deadline_path)
         self.token = None
         self.stop = threading.Event()
         self.thread = None
@@ -171,7 +177,7 @@ class CheckpointSupervisor:
                         request = stage / "request.json"
                         request.write_text(json.dumps({"container_id": container.id,
                             "components": value["components"],
-                            "phase_deadline_path": "/opt/loopx-benchmark/control/phase-deadline",
+                            "phase_deadline_path": self.phase_deadline_path,
                             "handoff": {"source_path": remote, "sha256": digest}}))
                         remaining = value["deadline_epoch"] - time.time()
                         if remaining <= 0:

@@ -11,7 +11,7 @@ import uuid
 from pathlib import PurePosixPath
 
 from loopx.file_lock import write_json_atomic
-from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _REGISTRY
+from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _PHASE_DEADLINE, _REGISTRY
 
 
 def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str]]:
@@ -43,16 +43,17 @@ def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str
     # than silently dropping an explicit external research participant.
     from benchmark.edgebench.checkpoint_worker import _validate_request
     _validate_request({"container_id": "0" * 64, "components": components,
-                       "phase_deadline_path": f"{_CONTROL}/phase-deadline"})
+                       "phase_deadline_path": _PHASE_DEADLINE})
     return components
 
 
 class FailurePreservation:
     """One terminal attempt; a stopped source remains until explicit disposal."""
-    def __init__(self, supervisor, components, receipt_path):
+    def __init__(self, supervisor, components, receipt_path, *, phase_deadline_path=_PHASE_DEADLINE):
         self.supervisor = supervisor
         self.components = components
         self.receipt_path = receipt_path
+        self.phase_deadline_path = phase_deadline_path
         self.receipt = None
         self.retain_source = False
 
@@ -106,7 +107,7 @@ class FailurePreservation:
             self._persist_receipt()
             request = self.supervisor.destination / "terminal-request.json"
             write_json_atomic(request, {"container_id": self.supervisor.container.id,
-                "components": self.components, "phase_deadline_path": f"{_CONTROL}/phase-deadline"},
+                "components": self.components, "phase_deadline_path": self.phase_deadline_path},
                 mode=0o600, fsync_directory=True)
             point = capture_worker(supervisor.controller_file, token=supervisor.token,
                 capture_id=self.receipt["capture_id"],
