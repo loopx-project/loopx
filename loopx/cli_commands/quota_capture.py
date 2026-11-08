@@ -28,6 +28,7 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
+    _bounded_initial_read,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
     _saved_context_read_page,
@@ -108,17 +109,19 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    initial_read_size = 0
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
-        nonlocal initial_read_pointers, initial_read_reference
+        nonlocal initial_read_pointers, initial_read_reference, initial_read_size
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, _ = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
+            initial_read_size = len(content)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
@@ -195,6 +198,10 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
+    elif (not page_attached and initial_read_plan and initial_read_plan.get("prefer_linked_opening") is True
+            and initial_read_size > first_page_bytes):
+        result = _bounded_initial_read(result, initial_read_plan, page_bytes=first_page_bytes,
+            output_bytes=first_output_bytes, reader_argv=reader_argv, attach_page=False) or result
     return result
 
 

@@ -473,7 +473,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context, exactBody),
     ...(request.include_initial_read_plan === true && groups
-      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, undefined, true);
+      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups, exactBody?.path)} : {})}, sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -488,12 +488,31 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>): JsonObject {
+    groups: ReturnType<typeof initialContextReadGroups>, openingDetail?: Path): JsonObject {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
-  return {initial: true, plan: select(pointers), ...(groups.opening.length && groups.remaining.length
-    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {})};
+  let {opening, remaining} = groups;
+  let linkedOpening = false;
+  if (openingDetail) {
+    const parent = openingDetail.slice(0, -1), detail = openingDetail.at(-1)!;
+    const body = jsonObject(at(context, parent)), address = pointer(parent);
+    // Small lists stay in the ordinary opening. The IO adapter also checks
+    // the serialized size against the actual tool window before linking.
+    if (opening.includes(address) && body && Object.hasOwn(body, detail)
+        && Buffer.byteLength(JSON.stringify(body[detail])) >= 8192) {
+      const preparation = "/interaction_contract/cli_channel/execution_preparation";
+      opening = opening.flatMap(field => field === address
+        ? Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key])) : [field]);
+      if (remaining.includes(preparation)) opening.push(preparation);
+      remaining = [pointer(openingDetail), ...remaining.filter(field => field !== preparation)];
+      linkedOpening = true;
+    }
+  }
+  // Keep the ordinary selection (and historical raw cursors) byte-compatible.
+  return {initial: true, plan: select(pointers), ...(opening.length && remaining.length
+    ? {opening: select(opening), remaining: select(remaining)} : {}),
+    ...(linkedOpening ? {prefer_linked_opening: true} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {

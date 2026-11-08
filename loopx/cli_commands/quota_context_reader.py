@@ -445,6 +445,8 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
             result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                 page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes, initial_read=True,
                 reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
+        if "remaining_read_command" in view:
+            result["remaining_read_command"] = view["remaining_read_command"]
     result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
         "Reader references keep complete digests locally; the CLI checks them on every page. "
         "A reference or digest grants no authority or freshness.")
@@ -582,8 +584,9 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
         offset = page["next_offset"]
 
 
-def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
-                          page_bytes: int, output_bytes: int, reader_argv: list[str]) -> dict[str, Any] | None:
+def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
+                          page_bytes: int, output_bytes: int, reader_argv: list[str] | None,
+                          attach_page: bool = True) -> dict[str, Any] | None:
     """Try the typed opening and keep the remainder pinned to the same capture."""
     if "opening" not in plan or "first_read_command" not in navigation:
         return None
@@ -599,14 +602,20 @@ def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
             return context_capture_read_command(path, digest, page_bytes=page_bytes,
                 max_page_output_bytes=output_bytes, reference_file=reference, reader_argv=reader_argv)
 
+        guidance = ("This opening covers the decision and read obligations. Before work, read its content, "
+            "then follow remaining_read_command and its cursor through the rest of the initial selection. "
+            "Both views pin the same capture.")
         navigation = {**navigation, "first_read_command": command(opening), "remaining_read_command": command(remaining),
-            "instruction": ("This opening covers the decision and read obligations. Before work, read its content, "
-                "then follow remaining_read_command and its cursor through the rest of the initial selection. "
-                + navigation["instruction"])}
+            "instruction": (guidance + " " + navigation["instruction"] if attach_page
+                else navigation["instruction"] + " " + guidance)}
         page = _capture_page(path, content, digest, offset=0, size=len(content), output_limit=None,
             instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
         # An opening is useful only as a complete, independently readable
         # page. Keep the ordinary cursor when even the opening cannot fit.
+        if not attach_page:
+            navigation["first_read_reference"] = str(opening)
+            return (navigation if len(_native_output_bytes(page)) <= output_bytes
+                and len(_native_output_bytes(navigation)) <= min(output_bytes, 7900) else None)
         page["read_instruction"] = (
             "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
             "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
@@ -633,7 +642,7 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
     if page["ok"]:
         if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
                 and "previously_delivered_fields" not in page
-                and (opening := _bounded_initial_page(navigation, initial_read_plan,
+                and (opening := _bounded_initial_read(navigation, initial_read_plan,
                     page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
                     output_bytes=output_limit, reader_argv=reader_argv)) is not None):
             return opening

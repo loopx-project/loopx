@@ -456,6 +456,84 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+        _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configuration = json.loads(registry.read_text())
+    scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/published/**" for index in range(290)]
+    configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
+    registry.write_text(json.dumps(configuration))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal, captures = tmp_path / "journal", tmp_path / "captures"
+    journal.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    setup(journal, monkeypatch)
+
+    def cli(*args):
+        code, result = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and result["ok"], result
+        return result
+
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    cli("todo", "claim", *binding, "--claimed-by", AGENT_ID)
+    view = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+        *binding, "--turn-instance-id", "wide-ready", "--decision-output-root", str(captures),
+        "--codex-context-dir", str(journal))
+
+    def read(command):
+        pages, body = [], bytearray()
+        while command:
+            words = shlex.split(command)
+            page = cli(*words[words.index("quota"):])
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            pages.append(page)
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and len(body) == pages[-1]["total_bytes"]
+        return pages, selected_context_values(body.decode())
+
+    assert "Before work" in view["instruction"] and "remaining_read_command" in view
+    _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
+    path = Path(source_ref["path"])
+    raw = path.read_bytes()
+    source = json.loads(raw)
+    pages, opening = read(view["first_read_command"])
+    assert len(pages) == 1 and pages[0]["eof"]
+    _, opening_ref = read_context_read_reference(pages[0]["reference_file"])
+    assert opening_ref["sha256"] == source_ref["sha256"]
+    assert opening["/effective_action"] == "normal_run"
+    assert opening["/heartbeat_receipt/turn_instance_id"] == "wide-ready"
+    assert opening["/selected_todo/todo_id"] == TODO_ID
+    assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
+    assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
+    assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
+    assert "/goal_boundary/write_scope" not in opening
+
+    pages, remaining = read(view["remaining_read_command"])
+    assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    _, remainder_ref = read_context_read_reference(pages[0]["reference_file"])
+    assert remainder_ref["sha256"] == source_ref["sha256"]
+    _, ordinary = read(view["recovery"]["command"] + " --initial-read")
+    # The pinned split and historical one-view selector cover the same leaves.
+    def leaves(values):
+        return {pointer: value for pointer, value in values.items()
+            if not isinstance(value, (dict, list)) or not value}
+    assert not opening.keys() & remaining.keys()
+    assert leaves(opening | remaining) == leaves(ordinary)
+    assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
+    assert _heartbeat_receipt_count(runtime, "wide-ready") == 1
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_advertised_native_reader_keeps_the_complete_current_contract_across_pages(tmp_path, monkeypatch, provider):
     from test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
@@ -1249,14 +1327,22 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
         assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
         return pages, selected_context_values("".join(page["content"] for page in pages)), size
 
+    def read_initial(view):
+        pages, facts, size = read(view["first_read_command"])
+        if continuation := view.get("remaining_read_command"):
+            more_pages, more_facts, more_size = read(continuation)
+            assert not facts.keys() & more_facts.keys()
+            return pages + more_pages, facts | more_facts, size + more_size
+        return pages, facts, size
+
     cli("todo", "claim", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--claimed-by", AGENT_ID)
-    cold, cold_facts, _ = read(capture("scope-cold")["first_read_command"])
+    cold, cold_facts, _ = read_initial(capture("scope-cold"))
     assert cold_facts[scope_path] == scopes and len(cold) > 1
     assert scope_path not in cold[0].get("previously_delivered_fields", [])
     deliver(journal, event, cold[:1])
     settle("scope-cold")
 
-    first_complete, complete_facts, _ = read(capture("scope-unobserved")["first_read_command"])
+    first_complete, complete_facts, _ = read_initial(capture("scope-unobserved"))
     assert scope_path not in first_complete[0].get("previously_delivered_fields", [])
     assert complete_facts[scope_path] == scopes
     deliver(journal, event, first_complete)
@@ -1270,11 +1356,11 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
     original = Path(source_ref["path"])
     raw = original.read_bytes()
     boundary = json.loads(raw)["goal_boundary"]
-    warm, warm_facts, warm_bytes = read(current["first_read_command"])
+    warm, warm_facts, warm_bytes = read_initial(current)
     _, restored_scope, scope_bytes = read(current["recovery"]["command"] + " --select " + scope_path)
     assert restored_scope[scope_path] == scopes
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
-    restored, restored_facts, restored_bytes = read(current["first_read_command"])
+    restored, restored_facts, restored_bytes = read_initial(current)
     assert scope_path not in restored[0].get("previously_delivered_fields", [])
     assert restored_facts[scope_path] == scopes and original.read_bytes() == raw
     deliver(journal, event, restored)
@@ -1282,14 +1368,14 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
 
     alternate_registry = registry.with_name("alternate-registry.json")
     alternate_registry.write_bytes(registry.read_bytes())
-    rebound, rebound_facts, _ = read(capture("scope-rebound", alternate_registry)["first_read_command"])
+    rebound, rebound_facts, _ = read_initial(capture("scope-rebound", alternate_registry))
     assert scope_path not in rebound[0].get("previously_delivered_fields", [])
     assert rebound_facts[scope_path] == scopes
     settle("scope-rebound", alternate_registry)
 
     coordination["write_scope"] = scopes[:-1] + ["docs/areas/fresh-scope/**"]
     registry.write_text(json.dumps(configuration))
-    changed, changed_facts, _ = read(capture("scope-revised")["first_read_command"])
+    changed, changed_facts, _ = read_initial(capture("scope-revised"))
     assert scope_path not in changed[0].get("previously_delivered_fields", [])
     assert changed_facts[scope_path] == coordination["write_scope"]
     settle("scope-revised")
