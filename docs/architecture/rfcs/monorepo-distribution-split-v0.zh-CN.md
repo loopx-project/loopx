@@ -1917,6 +1917,82 @@ host／wheel、model／attention、连续峰值、物理设备写入、installed
 context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
 评审继续开放，本轮不合入 main、不升级 installed host。
 
+### 2026-11-08 — 正常 bytecode 生命周期及观测限制
+
+仅执行一对 before/head wheel，复用完整 101-Todo SQLite 生命周期：源码为
+`24ca29f4eb2afe0bbf27df00002abd005febf256` /
+`1a4d9d8f92491db5913cfa59061bcd58c677868d`，打包 runtime 字节为
+`9e147ddf2085b080eba0cd2d7888ec896b270333` /
+`a57fd3ef771013c80add55821321e98e577836e6`，目标 main 仍为
+`21013c0c113445b71a30f6ce06ab61455b56f1f2`。本 checkpoint 仅改双语 RFC，
+生产提案保留并等待独立评审。
+
+两端均新建 wheel 安装，使用相同 CPython 3.13.5、依赖版本及既有 fixture helper
+的全新逐字节相同副本。安装与 fixture 初始 pyc 均为零。运行前的来源核验使用
+`-B`、非 checkout 工作目录及清空的 `PYTHONPATH`，先确认导入模块属于隔离安装，
+再核对全部 1840 个 packaged tracked source 哈希；保留相同五个 source-only
+omission。测量进程使用默认 bytecode，清除 write-disable、cache-prefix 与
+importtime 变量，读回 `sys.dont_write_bytecode=False`、`sys.pycache_prefix=None`。
+导入 fixture 前即隔离 data／临时目录。解释器 stdlib 与 OS 文件缓存共享，不属于
+本次隔离声明。
+
+| 缓存阶段，两端路径集合完全相同 | 全部 installed pyc | LoopX pyc |
+| --- | ---: | ---: |
+| 安装完成 | 0 | 0 |
+| Driver 导入 fixture 前 | 1 | 0 |
+| Fixture/setup 完成 | 317 | 223 |
+| Bootstrap 完成 | 358 | 264 |
+| Prequota 完成 | 433 | 339 |
+| Guard 与 required reads 完成 | 665 | 571 |
+| Settled replay 与 teardown 完成 | 699 | 605 |
+
+Driver 首个 pyc 来自 virtualenv support。两端全新 fixture 副本在 setup 各生成
+五个 pyc；最终 605 个 LoopX pyc header 全部匹配解释器 magic 及源码 timestamp／
+size。这是缓存有效性与阶段观测，不是单次 guard 的模块数量，也未测出默认模式
+的 compile／import CPU。
+
+两端原生命周期均成功退出：sum45 artifact 及 digest、原 completion time、
+required scopes、四个 committed receipt、一个 debit、prequota 不变的 warm
+PID 集合、受控重启、evidence replacement refusal，以及 completion／writeback／
+spend／terminal／settled-Turn replay 均通过。每端保留全部 22 个 console 的
+command／phase／wrapper 退出记录、三个 exact-argv Node helper 退出及两个 managed
+daemon 退出。Waited descendants 只计算一次，仅把 orphan daemon subtree 与已观察
+的 waiter CPU 加入 outer waited subtree。
+
+**实际 console PID 观测子检查失败。** 首个 observer 把 macOS
+`proc_listchildpids` 返回的 PID 数量误作字节数，记录为 0/22。独立 disposable
+child probe 复现并修正 API 解释后，才执行尚未开始的 head。Head 记录 21/22，
+bootstrap 仍落在有界采样窗口之外。Wrapper PID／argv／exit 记录完整，但实际
+PID 覆盖不完整；两次运行后的子检查失败都保留，不重跑任一生命周期。使用 host
+不兼容 Python 3.9 的初步 parse 也失败，执行用 3.13 的语法验证通过。修复与证据
+缺口保留在原 Task 的恢复记录中。
+
+| 单对原始观测，before → head | 数值 |
+| --- | ---: |
+| Whole harness wall | 24.044 → 25.180 s |
+| 包含 orphan additions 的 observed process CPU | 10.698 → 10.724 s |
+| OS time 文件中的四舍五入 console waited-subtree CPU | 6.020 → 5.980 s |
+| 完整 managed-daemon subtree CPU | 1.900 → 1.920 s |
+| 三个 Node helper subtree | 0.273 → 0.291 s |
+| Setup / 最终 teardown wall | 5.503 / 0.062 → 3.338 / 0.054 s |
+
+Observer 修正使两端的有界采样等待不同，head bootstrap 另有较大 wall 延迟。
+Fixture、verifier、observer 与 readback 工作仍计入 whole harness。这些观测不能
+验收提速、回退或 paired CPU 差异，不能解释既有冻结成本实验，也不能与
+bytecode-disabled profile 相减后声称 compile saving。Console waited CPU 包含
+本地处理及 descendants，不能统称 Python startup。冻结样本不重跑、不扩充、不
+重标签；publication／exit tail、物理写入、连续系统峰值、build／setup environment
+成本、model／attention 与 installed adoption 仍 unknown。
+
+这回答了有限的默认缓存正确性问题，但保留成本／归因缺口。继续保留既有 typed
+transaction 与 source-scan 提案。下一段应检查既有 quota／context／refresh
+caller 的必需依赖闭包，再选一个完整可回退的加载改动并验证 normal-default 语义
+一致性。有效缓存本身不证明应移动必需 import 或移除 fresh read；不为补 PID
+观测重复本 pair。原 Task、独立 exact-head review／readiness、peer hard-cut hold
+及全部 I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
+继续开放；本轮不合入 main、不升级 host。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
