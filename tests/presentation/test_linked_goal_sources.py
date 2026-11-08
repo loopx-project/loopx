@@ -56,7 +56,7 @@ def native_source(w, name='original', task_text='Check the original question aga
         append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
             node_id=name, node_kind='question', title=name, summary='Original native record', recorded_at=clock))
     append_explore_result_event(log, build_explore_edge_event(goal_id='solver-goal',
-        from_node='attempt', to_node='question', edge_type='depends_on'))
+        from_node='attempt', to_node='question', edge_type='depends_on', recorded_at=clock))
     raw = {'id': name, 'label': 'Original experiment',
         'connection': {'kind': 'local'}, 'environment': {'kind': 'host'},
         'scope': {'goal_id': 'solver-goal'}, 'registry': str(registry), 'runtime_root': str(runtime),
@@ -228,6 +228,44 @@ def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
     assert request('/status.json?goal_id=solver-goal')['run_history']['goals'][0]['registry_member']
     assert request(timing_url)['first_recorded_at'] == '2026-01-02T00:15:00Z'
     assert not w['count'].exists()
+
+
+def test_research_reads_pin_code_revision_without_retaining_source_authority(workspace, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    raw, request, before = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    query = urlencode({'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace})
+    fingerprint = effect_runtime._runtime_fingerprint
+    qualifications = []
+
+    def qualify():
+        revision = fingerprint()
+        qualifications.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect_runtime, '_runtime_fingerprint', qualify)
+
+    def read(suffix):
+        qualifications.clear()
+        value = request('/api/chat/explore-results?' + query + suffix)
+        assert len(qualifications) == 1
+        return value
+
+    assert read('&view=history')['total'] == 3
+    log = explore_result_log_path(Path(raw['runtime_root']), 'solver-goal')
+    append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
+        node_id='new-evidence', title='New source observation', recorded_at='2026-01-04T00:15:00Z'))
+    assert any(row.get('title') == 'New source observation' for row in read('&view=history')['items'])
+    assert read('&view=history-timing')['last_recorded_at'] == '2026-01-04T00:15:00Z'
+    source_registry = Path(raw['registry'])
+    source_registry.unlink()
+    with pytest.raises(HTTPError) as unavailable:
+        read('&view=history-timing')
+    assert unavailable.value.code == 503
+    source_registry.write_bytes(before[source_registry])
+    assert read('&view=history-timing')['last_recorded_at'] == '2026-01-04T00:15:00Z'
+    assert not workspace['count'].exists()
 
 
 def test_original_task_detail_cannot_follow_a_replaced_source(workspace):
