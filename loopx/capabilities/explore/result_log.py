@@ -999,8 +999,9 @@ def _mermaid_label(text: str) -> str:
     return cleaned[:60].strip() or "untitled"
 
 
-def _mermaid_id(node_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]", "_", str(node_id))
+def explore_mermaid_node_id(node_id: str) -> str:
+    """Encode identity losslessly, outside Mermaid keywords and layout IDs."""
+    return "n_" + str(node_id).encode("utf-8").hex()
 
 
 def build_explore_mermaid(
@@ -1015,7 +1016,7 @@ def build_explore_mermaid(
     shown = list(nodes)[:node_limit]
     shown_ids = {str(node.get("node_id")) for node in shown}
     for node in shown:
-        node_id = _mermaid_id(str(node.get("node_id")))
+        node_id = explore_mermaid_node_id(str(node.get("node_id")))
         status = str(node.get("status") or NODE_STATUS_OPEN)
         marker = {"blocked": " (BLOCKED)", "resolved": " (done)", "dead_end": " (dead end)"}.get(
             status, ""
@@ -1028,7 +1029,7 @@ def build_explore_mermaid(
         if from_node not in shown_ids or to_node not in shown_ids:
             continue
         label = _mermaid_label(str(edge.get("edge_type") or ""))
-        lines.append(f"    {_mermaid_id(from_node)} -->|{label}| {_mermaid_id(to_node)}")
+        lines.append(f"    {explore_mermaid_node_id(from_node)} -->|{label}| {explore_mermaid_node_id(to_node)}")
     if len(nodes) > node_limit:
         lines.append(f"    %% {len(nodes) - node_limit} more nodes omitted")
     lines.extend(

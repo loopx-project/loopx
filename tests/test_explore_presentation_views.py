@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from tests.test_explore_mermaid_identity import mermaid_node_id
+
 from loopx.presentation.explore_views import (
     PRESENTATION_MODE_CANONICAL_ONLY,
     PRESENTATION_MODE_DUAL_VIEW,
@@ -360,11 +362,13 @@ def test_complex_graph_recommends_traceable_dual_view() -> None:
     assert "Canonical evidence timeline" not in bundle["executive"]["mermaid"]
     assert bundle["executive"]["filter"]["layout"]["orientation"] == "top_to_bottom"
     canonical_mermaid = bundle["canonical"]["mermaid"]
-    for node in projection["nodes"]:
-        assert f'{str(node["node_id"]).replace("-", "_")}["' in canonical_mermaid
+    rendered_ids = {
+        node["node_id"]: mermaid_node_id(canonical_mermaid, node["title"])
+        for node in projection["nodes"]
+    }
     for edge in projection["edges"]:
-        source = str(edge["from_node"]).replace("-", "_")
-        target = str(edge["to_node"]).replace("-", "_")
+        source = rendered_ids[edge["from_node"]]
+        target = rendered_ids[edge["to_node"]]
         assert f"{source} -->|supports| {target}" in canonical_mermaid
     canonical_ids = {node["node_id"] for node in bundle["canonical"]["nodes"]}
     assert len(bundle["executive"]["nodes"]) < len(canonical_ids)
@@ -456,7 +460,9 @@ def test_stage_board_preserves_two_lanes_and_real_cross_lane_relation() -> None:
     assert stage["cross_lane_edge_count"] == 1
     assert 'subgraph canonical_stage_1_lane_1["Delivery"]' in stage["mermaid"]
     assert 'subgraph canonical_stage_1_lane_2["LoopX capability"]' in stage["mermaid"]
-    assert "fix_pr -->|supports| durable_capability" in stage["mermaid"]
+    source = mermaid_node_id(stage["mermaid"], "Public fixture fix-pr")
+    target = mermaid_node_id(stage["mermaid"], "Public fixture durable-capability")
+    assert f"{source} -->|supports| {target}" in stage["mermaid"]
     assert "edge-fix-subtopic" not in stage["mermaid"]
     assert stage["svg_layout"] == {
         "strategy": "semantic_lane_columns",
@@ -537,8 +543,11 @@ def test_executive_view_suppresses_dense_hub_scaffolding_edges() -> None:
     assert bundle["executive"]["graph_counts"]["suppressed_edge_count"] == 6
     edge_projection = bundle["executive"]["filter"]["edge_projection"]
     assert edge_projection["suppression_counts"]["dense_hub_scaffolding"] == 6
-    assert "hub -->|supports|" not in bundle["executive"]["mermaid"]
-    assert "active_0 -->|leads_to| active_1" in bundle["executive"]["mermaid"]
+    mermaid = bundle["executive"]["mermaid"]
+    assert "-->|supports|" not in mermaid
+    source = mermaid_node_id(mermaid, "Public fixture active-0")
+    target = mermaid_node_id(mermaid, "Public fixture active-1")
+    assert f"{source} -->|leads_to| {target}" in mermaid
 
 
 def test_findings_change_digest_and_stale_view_is_rejected() -> None:
