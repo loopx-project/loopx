@@ -80,12 +80,73 @@ try {
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
   const routedRead = globalThis.fetch;
   if (!fallback) {
+    // Repeated transport loss at later pages must advance one original prefix
+    // through the existing retry caller, without ever publishing partial text.
+    child.stdin.write("history\n");
+    const expectedRows = (await next()).history_rows;
+    const complete = await fetchChatSessionHistory(original.session);
+    assert.equal(complete.messages.length, expectedRows);
+    const recoveredOffsets: number[] = [];
+    const failedOffsets = new Set<number>();
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (new URL(String(input), origin).pathname !== `/api/chat/sessions/${sessionId}`) return response;
+      const value = await response.clone().json();
+      const offset = value.message_page.offset;
+      recoveredOffsets.push(offset);
+      if (offset > 0 && !failedOffsets.has(offset)) {
+        failedOffsets.add(offset);
+        throw new Error("Synthetic interrupted transport after a verified prefix");
+      }
+      return response;
+    };
+    const interrupted = await fetchChatHistory(options);
+    assert.deepEqual(interrupted.unavailableSessionIds, [sessionId]);
+    assert.deepEqual(interrupted.messages, []);
+    assert.deepEqual(interrupted.snapshots, []);
+    const interruptedAgain = await fetchChatHistory(options, interrupted);
+    assert.deepEqual(interruptedAgain.messages, []);
+    const recovered = await fetchChatHistory(options, interruptedAgain);
+    assert.deepEqual(recovered.unavailableSessionIds, []);
+    assert.deepEqual(recovered.snapshots[0].messages, complete.messages);
+    assert.deepEqual(recoveredOffsets, [0, 200, 200, 400, 400], "Only failed pages are read again");
+    assert.equal(interrupted.pendingReads?.get(sessionId)?.messages.length, 200,
+      "Later retries cannot mutate the previously published read state");
+    assert.equal(recovered.pendingReads?.size, 0);
+    assert.ok(calls.every(row => row.method === "GET"), "Recovery never starts work");
+    globalThis.fetch = routedRead;
+    // Current source revocation blocks recovery before another history page.
+    child.stdin.write("deny\n"); assert.equal((await next()).source_verified, false);
+    calls.length = 0;
+    await assert.rejects(() => fetchChatHistory(options, interrupted));
+    assert.ok(calls.every(row => new URL(row.path, origin).pathname === "/api/chat/sessions"));
+    child.stdin.write("recover\n"); assert.equal((await next()).source_verified, true);
+    // Permanent denial, a changed source or malformed prefix cannot be retained
+    // as transport progress. The following read must validate page zero again.
+    for (const fault of ["denied", "source", "digest"]) {
+      globalThis.fetch = async (input, init) => {
+        const response = await routedRead(input, init);
+        if (!new URL(String(input), origin).searchParams.has("message_cursor")) return response;
+        if (fault === "denied") return new Response("{}", {status: 403});
+        const value = await response.json();
+        if (fault === "source") value.session.goal_id = "unrelated-goal";
+        else value.message_page.snapshot_sha256 = "0".repeat(64);
+        return new Response(JSON.stringify(value));
+      };
+      const rejected = await fetchChatHistory(options, interrupted);
+      assert.deepEqual(rejected.messages, []);
+      assert.equal(rejected.pendingReads?.size, 0);
+      globalThis.fetch = routedRead;
+      calls.length = 0;
+      assert.deepEqual((await fetchChatHistory(options, rejected)).snapshots[0].messages, complete.messages);
+      assert.equal(new URL(calls.find(row => row.path.includes(`${sessionId}?`))!.path, origin).searchParams.has("message_cursor"), false);
+    }
     // Real HTTP responses beyond the old interactive deadline must still hydrate
     // the complete original history. Source verification keeps its own deadline.
     child.stdin.write("slow-history\n");
     assert.equal((await next()).slow_history, true);
     const slow = await fetchChatHistory(options);
-    assert.deepEqual(slow.messages, history.messages);
+    assert.deepEqual(slow.messages, recovered.messages);
     assert.deepEqual(slow.unavailableSessionIds, []);
     // Delay only the post-history fresh source check, not initial discovery.
     const beforeSlowSource = calls.length;
@@ -98,7 +159,7 @@ try {
       return response;
     };
     const sourceSlow = await fetchChatHistory(options);
-    assert.deepEqual(sourceSlow.messages, history.messages);
+    assert.deepEqual(sourceSlow.messages, recovered.messages);
     assert.deepEqual(sourceSlow.unavailableSessionIds, []);
     assert.ok(calls.slice(beforeSlowSource).every(row => row.method === "GET"));
     globalThis.fetch = routedRead;

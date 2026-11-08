@@ -1,15 +1,17 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan} from "./progressive_context.ts";
-import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
-  contextSourceIdentity, projectQuotaDiagnostics, type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
-import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
+import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
+import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
+import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRetainFields,
+  contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
+  type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 
 import {
@@ -21,9 +23,10 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
-import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
+import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
+  sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { INTERACTION_CONTRACT_SCHEMA_VERSION, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -230,6 +233,15 @@ function canonicalHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalValue(value)), "utf8").digest("hex")}`;
 }
 
+/** Complete references reuse the checked content binding. Historical captures
+ * retain their old JSON hash; never rewrite a stored action or Turn key. */
+function decisionSourceHash(payload: JsonObject): string {
+  if (payload.schema_version !== COMPLETE_TURN_DECISION_VERSION) return canonicalHash(payload);
+  const digest = object(payload.contract_binding).content_hash;
+  if (typeof digest !== "string") throw new EffectRuntimeRequestError("complete Turn decision content binding is missing");
+  return digest;
+}
+
 type ReplanValueIdentity = (value: unknown, path: (string | number)[]) => string;
 type ReplanReadPrecision = {
   identity: ReplanValueIdentity;
@@ -419,6 +431,72 @@ function referenceGoalAcceptance(payload: JsonObject,
   return result;
 }
 
+/** One registry for ordinary captured reads and staged replan. Only registered
+ * acceptance carriers participate; unrelated objects named `outcomes` are not
+ * sources. Equal content shares a reference, while differing revisions of the
+ * same outcome retain their complete bodies, including unknown fields.
+ */
+function indexCapturedAcceptanceOutcomes(payload: JsonObject, indexOutcome: (value: unknown) => string): void {
+  const carriers = acceptanceCarriers(payload);
+  // Sharing prefers the first source, but a diagnostic index must cover every
+  // loaded registered carrier, including different same-id revisions.
+  const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
+  if (Array.isArray(sources)) for (const [index, value] of sources.entries()) {
+    const source = object(value), content = object(source.content);
+    if (source.source === "goal_acceptance" && (content.status == null || content.status === "loaded")) {
+      carriers.push({parent: content, field: "goal_acceptance_contract", path: "",
+        parentPath: ["interaction_contract", "agent_channel", "work_context", "sources", index, "content"]});
+    }
+  }
+  for (const {parent, field} of carriers) {
+    const acceptance = Object.hasOwn(parent, `${field}_ref`)
+      ? inlineAcceptance(payload, parent[`${field}_ref`]) : object(parent[field]);
+    if (!Object.keys(acceptance).length) continue;
+    const requirements = object(acceptance.outcome_requirements);
+    if (!Object.hasOwn(acceptance, "outcome_requirements")) continue;
+    if (!Array.isArray(requirements.outcomes)) throw new EffectRuntimeRequestError("captured outcome source is unsupported");
+    for (const value of requirements.outcomes) indexOutcome(value);
+  }
+}
+
+/** Expose existing facts, not another acceptance verdict. Missing values stay
+ * absent; an Agent's `met` review is not a current independent check.
+ */
+function capturedOutcomeIndex(outcomes: ReadonlyMap<string, JsonObject>, precision?: ReplanReadPrecision): JsonObject[] {
+  return [...outcomes].map(([ref, outcome]) => {
+    const states = new Map<string, JsonObject>();
+    if (Array.isArray(outcome.requirements)) for (const value of outcome.requirements) {
+      const requirement = requireJsonObject(value, "captured outcome requirement");
+      const review = jsonObject(requirement.agent_review);
+      const state = {
+        ...Object.fromEntries(["status", "planning_satisfied"].filter(key => Object.hasOwn(requirement, key))
+          .map(key => [key, requirement[key]])),
+        ...(Object.hasOwn(requirement, "agent_review") ? {agent_review: review === null
+          ? requirement.agent_review : Object.fromEntries(
+          ["conclusion", "basis_current", "independently_verified"].filter(key => Object.hasOwn(review, key))
+            .map(key => [key, review[key]]))} : {}),
+      };
+      const key = JSON.stringify(canonicalValue(state));
+      const group = states.get(key);
+      if (group) (group.requirement_ids as unknown[]).push(requirement.id);
+      else states.set(key, {requirement_ids: [requirement.id], ...state});
+    }
+    const row = {outcome_ref: ref, id: outcome.id, objective: outcome.objective, revision: outcome.revision,
+      ...Object.fromEntries(["owner_agent_id", "work", ...(Object.hasOwn(outcome, "work") ? [] : ["todo_ids"])].filter(key => Object.hasOwn(outcome, key))
+        .map(key => [key, outcome[key]])),
+      requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null,
+      requirement_states: Array.isArray(outcome.requirements) ? [...states.values()] : null};
+    return precision?.retain(row, outcome, ["id", "objective", "revision", "owner_agent_id"]) ?? row;
+  });
+}
+
+/** Reuse the existing settlement authoring owner, never a summary or a chain. */
+
+
+/** Same-capture references have one typed settlement owner. Historical readers
+ * expand before moving work context, so a full-packet path never dangles in a
+ * staged envelope. Explore's independent read and domain guidance stay intact. */
+
 function referenceExploreGuidance(payload: JsonObject): JsonObject {
   const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
   const context = object(agent.work_context);
@@ -514,6 +592,9 @@ function referenceVisionContinuation(payload: JsonObject,
     identity(audit, path) === source ? structuredClone(reference) : audit);
 }
 
+/** The verified current Task is the only owner of a shared lane title. Keep
+ * the original declaration inline and require exact identity, never a label or
+ * prefix comparison. The legacy display and complete writer use this owner. */
 function currentTaskTitleOwner(payload: JsonObject): {index: number; todo: JsonObject} | null {
   const lane = object(payload.agent_lane_next_action), selected = object(payload.selected_todo);
   const context = object(object(object(payload.interaction_contract).agent_channel).work_context);
@@ -528,6 +609,20 @@ function currentTaskTitleOwner(payload: JsonObject): {index: number; todo: JsonO
       content.read_complete === false || typeof todo.text !== "string" ||
       todo.archive_state === "archive" || todo.status === "done" || todo.todo_id !== lane.todo_id) return null;
   return {index, todo};
+}
+
+function requireCurrentTaskTitleReference(payload: JsonObject): void {
+  const lane = object(payload.agent_lane_next_action);
+  if (!Object.hasOwn(lane, "title_ref")) return;
+  const reference = lane.title_ref;
+  const match = typeof reference === "string"
+    ? /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.todo\.(text|title)$/.exec(reference) : null;
+  const owner = currentTaskTitleOwner(payload);
+  if (Object.hasOwn(lane, "title") || !match || !owner || owner.index !== Number(match[1]) ||
+      typeof owner.todo[match[2]] !== "string" || !owner.todo[match[2]] ||
+      Object.hasOwn(owner.todo, `${match[2]}_ref`)) {
+    throw new EffectRuntimeRequestError("Current Task title reference must resolve to the complete verified selected Task");
+  }
 }
 
 function referenceCurrentTaskTitle(payload: JsonObject): JsonObject {
@@ -598,7 +693,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"]): JsonObject | null {
+  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -610,7 +705,7 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${canonicalHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -656,7 +751,13 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
   const horizonOutcomes = resolvedHorizon ? capturedOutcomes(resolvedHorizon) : [];
   const refs = new Map<JsonObject, string>();
   const legacyGroups = new Map<string, JsonObject[]>();
-  for (const outcome of [...coreOutcomes, ...horizonOutcomes]) {
+  const captured = [...coreOutcomes, ...horizonOutcomes];
+  const complete = payload.schema_version === COMPLETE_TURN_DECISION_VERSION;
+  if (reads && complete) indexCapturedAcceptanceOutcomes(payload, value => {
+    captured.push(requireJsonObject(value, "captured acceptance outcome"));
+    return "";
+  });
+  for (const outcome of captured) {
     if (refs.has(outcome)) continue;
     const legacy = canonicalHash(outcome);
     refs.set(outcome, legacy);
@@ -701,12 +802,25 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
   }
   const acceptanceIndex = outcomes.size ? {
     read_action_template: `${reads!.acceptance} --outcome-ref {outcome_ref}`,
-    outcomes: [...outcomes].map(([ref, outcome]) => retain({outcome_ref: ref, id: outcome.id,
+    outcomes: complete ? capturedOutcomeIndex(outcomes, precision) : [...outcomes].map(([ref, outcome]) => retain({outcome_ref: ref, id: outcome.id,
       objective: outcome.objective, revision: outcome.revision,
       requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null},
       outcome, ["id", "objective", "revision"])),
   } : null;
   return {core, horizon, outcomes, acceptanceIndex, ambiguous};
+}
+
+/** Applicability of Explore's existing attachment owner, shared by complete
+ * composition and the historical staged projection. No authority is granted. */
+function unboundExploreReplan(payload: JsonObject, plan: JsonObject): boolean {
+  const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
+  const attachments = object(steps.find(step => step.kind === "durable_writeback")).optional_attachments;
+  const explore = Array.isArray(attachments) ? attachments.map(object).filter(row => row.capability_id === "explore") : [];
+  const identity = object(plan.identity);
+  return payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
+    selectedWorkTodoId(payload) === null && identity.binding_kind === "autonomous_replan" &&
+    identity.replan_obligation_id === object(payload.replan_action_packet).obligation_id &&
+    !identity.todo_id && explore.length === 0;
 }
 
 /** Move only an identical acceptance copy behind the existing captured read.
@@ -723,11 +837,7 @@ function replanWorkContext(payload: JsonObject, context: JsonObject, reads = rep
   const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
   const attachments = object(steps.find(step => step.kind === "durable_writeback")).optional_attachments;
   const explore = Array.isArray(attachments) ? attachments.map(object).filter(row => row.capability_id === "explore") : [];
-  const binding = object(plan.identity);
-  const unboundReplan = payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
-    selectedWorkTodoId(payload) === null && binding.binding_kind === "autonomous_replan" &&
-    binding.replan_obligation_id === object(payload.replan_action_packet).obligation_id &&
-    !binding.todo_id && explore.length === 0;
+  const unboundReplan = unboundExploreReplan(payload, plan);
   return {...context, sources: context.sources.map((value, index) => {
     const source = object(value), content = object(source.content);
     if (source.source === "turn_start_capability_hook" && source.hook_id === "explore.turn_context" &&
@@ -747,17 +857,42 @@ function replanWorkContext(payload: JsonObject, context: JsonObject, reads = rep
   })};
 }
 
+/** Bind successor authoring to the already-decided Turn. This formatting
+ * owner is shared by complete composition and historical staged reads; it does
+ * not select work, create a successor or change the settlement plan.
+ */
+function bindReplanSuccessorContract(value: JsonObject, plan: JsonObject): JsonObject {
+  const contract = {...value};
+  const identity = object(plan.identity);
+  if (typeof identity.turn_instance_id !== "string") return contract;
+  const goalRef = object(plan.goal_ref);
+  contract.successor_binding_args = `--turn-instance-id ${shellQuote(identity.turn_instance_id)}` +
+    (typeof goalRef.goal_instance_id === "string" ? ` --goal-instance-id ${shellQuote(goalRef.goal_instance_id)}` : "");
+  contract.successor_settlement = "If creating a replan successor, include successor_binding_args with its obligation id, then follow the creation receipt's original Turn settlement plan before ending; do not run the successor.";
+  delete contract.successor_host_action;
+  if (typeof contract.successor_command === "string") {
+    contract.successor_command = `${contract.successor_command} ${contract.successor_binding_args}`;
+  }
+  return contract;
+}
+
 function replanView(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured replan decision");
-  if (request.source_hash !== canonicalHash(payload) || payload.ok !== true) {
+  const sourceHash = decisionSourceHash(payload);
+  if (request.source_hash !== sourceHash || payload.ok !== true) {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
+  // Validate the complete current source before the historical display lens.
+  if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
+    requireCompleteTurnDecision(payload, request.source_number_tokens);
+  } else requireVisionAuditReferences(payload);
   const precision = replanReadPrecision(payload, request.source_number_tokens);
   const view = projectReplanView(request, payload, precision);
   return precision ? contextProjectionChanges(payload, view, precision.values, {}) : view;
 }
 
 function projectReplanView(request: JsonObject, payload: JsonObject, precision?: ReplanReadPrecision): JsonObject {
+  const sourceHash = decisionSourceHash(payload);
   const retain = precision?.retain ?? ((view: JsonObject) => view);
   requireVisionAuditReferences(payload);
   const originalContract = replanAuthoringContract(payload, precision);
@@ -773,7 +908,7 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"]);
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
   const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes, ambiguous} = replanGoalContext(payload, reads, undefined, precision);
@@ -801,25 +936,18 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
-    const writeback = actionProjection(payload, false).writeback;
-    const plan = object(object(writeback).settlement_plan);
-    const identity = object(plan.identity);
-    if (typeof identity.turn_instance_id === "string") {
-      const goalRef = object(plan.goal_ref);
-      contract.successor_binding_args = `--turn-instance-id ${shellQuote(identity.turn_instance_id)}` +
-        (typeof goalRef.goal_instance_id === "string" ? ` --goal-instance-id ${shellQuote(goalRef.goal_instance_id)}` : "");
-      contract.successor_settlement = "If creating a replan successor, include successor_binding_args with its obligation id, then follow the creation receipt's original Turn settlement plan before ending; do not run the successor.";
-      delete contract.successor_host_action;
-      if (typeof contract.successor_command === "string") {
-        contract.successor_command = `${contract.successor_command} ${contract.successor_binding_args}`;
-        // Creation returns the original settlement plan directly. A guard
-        // reentry here would repeat admission/context and can select new work.
-        object(writeback).next_cli_actions = [contract.successor_command];
-      }
+    const writeback = object(actionProjection(payload, false, precision, sourceHash).writeback);
+    const plan = object(writeback.settlement_plan);
+    const boundContract = payload.schema_version === COMPLETE_TURN_DECISION_VERSION
+      ? contract : bindReplanSuccessorContract(contract, plan);
+    if (typeof boundContract.successor_command === "string" && typeof object(plan.identity).turn_instance_id === "string") {
+      // Creation returns the original settlement plan directly. A guard
+      // reentry would repeat admission/context and can select new work.
+      writeback.next_cli_actions = [boundContract.successor_command];
     }
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
-    return retain({...common, ...sourceRead, writeback_contract: retain(contract, originalContract),
+    return retain({...common, ...sourceRead, writeback_contract: retain(boundContract, originalContract),
       required_outcome: packet.required_outcome, allowed_terminal: packet.allowed_terminal,
       ...(packet.stride_control ? {stride_control: stride} : {}),
       writeback,
@@ -1179,7 +1307,12 @@ function contractCapsule(payload: JsonObject): JsonObject {
   return capsule;
 }
 
-function actionProjection(payload: JsonObject, deferSettlement = true, precision?: ReplanReadPrecision): JsonObject {
+function actionProjection(payload: JsonObject, deferSettlement = true, precision?: ReplanReadPrecision, verifiedSourceHash?: string): JsonObject {
+  // Reader identity belongs to the original captured source. Expanding shared
+  // diagnostic lanes for the historical executor must not hash that local view.
+  const reads = payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT
+    ? null : replanReadCommands(payload, payload.replan_read_path, payload.replan_read_argv ?? ["loopx"], verifiedSourceHash);
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) payload = resolveQuotaSummaryLanes(payload);
   const agentIdentity = object(payload.agent_identity);
   const semanticAgentId = scalarString(
     payload.agent_id || agentIdentity.agent_id,
@@ -1197,12 +1330,12 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
     ? projectPendingCapabilityIntent(payload.pending_capability_intent) : null;
   // A governed capability action has already won the live decision. Stale
   // replan/host-reentry projections must not replace its exact command.
-  const replanPacket = capabilityIntent || turnBindingRequired ? null : replanActionPacket(payload);
+  const replanPacket = capabilityIntent || turnBindingRequired ? null : replanActionPacket(payload, reads);
   const replanSettlementOnly = object(payload.replan_action_packet).settlement_only === true;
   const recommendedAction = replanPacket
     ? replanSettlementOnly
       ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
-      : replanReadCommands(payload) ? "read replan_action_packet.review, decide from state, then follow review.next"
+      : reads ? "read replan_action_packet.review, decide from state, then follow review.next"
       : "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
   // The signed host action is executable authority, not a display summary.
@@ -1211,7 +1344,7 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   const action: JsonObject = {
     recommended_action: recommendedAction,
     primary_action: replanPacket && !replanSettlementOnly
-      ? replanReadCommands(payload)?.review ?? "produce one required semantic outcome"
+      ? reads?.review ?? "produce one required semantic outcome"
       : primaryAction || null,
     must_attempt: Boolean(agentChannel.must_attempt),
     delivery_allowed: Boolean(agentChannel.delivery_allowed),
@@ -1222,7 +1355,6 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   if (turn.observation.action_portfolio !== null) {
     action.action_portfolio = { ...turn.observation.action_portfolio };
   }
-  const reads = capabilityIntent ? null : replanReadCommands(payload);
   if (turn.observation.planning_horizon !== null) action.planning_horizon = {...turn.observation.planning_horizon};
   if (reads && deferSettlement) {
     const goal = replanGoalContext(payload, reads, "$.action.core_goal", precision);
@@ -1321,7 +1453,7 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
     && (typeof object(action.selected_todo).text === "string"
       || object(action.selected_todo).text_ref === "action.recommended_action");
   if (Object.keys(workContext).length > 0 && !selectedTodoContextIsAlreadyInAction) {
-    projection.work_context = replanWorkContext(payload, workContext);
+    projection.work_context = replanWorkContext(payload, workContext, reads);
   }
   const orchestration = object(payload.task_orchestration_contract);
   if (Object.keys(orchestration).length > 0) projection.task_orchestration_contract = orchestration;
@@ -1539,6 +1671,317 @@ function coldPath(
   };
 }
 
+/** Complete decision composition precedes capture. Domain owners have already
+ * decided admission, work and settlement; this boundary does not decide again.
+ * The v0 envelope remains an internal executor adapter during reader migration.
+ */
+export const COMPLETE_TURN_DECISION_VERSION = "loopx_turn_envelope_v1";
+// Sparse producer metadata is a different identity from the earlier
+// experimental all-float binding; its saved contracts need their pinned reader.
+const COMPLETE_TURN_HASH_CODEC = "context_source_numbers_v2";
+
+function requireCompleteDecisionSource(source: JsonObject): void {
+  assertSupportedQuotaPacket(source);
+  // Validate executable semantics with their owner, retaining the original
+  // object (including optional facts) rather than its normalized decode.
+  const interaction = decodeInteractionContract(source.interaction_contract);
+  assertInteractionRequiredReads(interaction.agent_channel.required_reads);
+  replanAuthoringContract(source);
+  requireVisionAuditReferences(source);
+  requireCurrentTaskTitleReference(source);
+  resolveQuotaSummaryLanes(source);
+  resolveExploreGuidance(source, object(object(object(source.interaction_contract).agent_channel).work_context));
+  // This root field selects execution, unlike optional evidence carried intact
+  // in the source. Reuse both registered owners; do not inherit the historical
+  // adapter's unknown-action fallback at the new version boundary.
+  requireStringLiteral(source.effective_action,
+    [...EFFECTIVE_ACTIONS, ...AGENT_SCOPE_FRONTIER_ACTIONS], "Turn effective_action");
+  for (const {parent, field} of acceptanceCarriers(source)) {
+    if (!Object.hasOwn(parent, field) && Object.hasOwn(parent, `${field}_ref`)) {
+      inlineAcceptance(source, parent[`${field}_ref`]);
+    }
+  }
+}
+
+function completeSourceHash(value: JsonObject, identity = contextSourceIdentity(value, [])): string {
+  return `sha256:${createHash("sha256").update(identity(value, []), "utf8").digest("hex")}`;
+}
+
+export function requireCompleteTurnDecision(value: unknown, numberTokens?: unknown): JsonObject {
+  const decision = requireJsonObject(value, "complete Turn decision");
+  if (decision.schema_version !== COMPLETE_TURN_DECISION_VERSION) {
+    throw new EffectRuntimeRequestError("unsupported complete Turn decision version");
+  }
+  const binding = requireJsonObject(decision.contract_binding, "Turn contract binding");
+  if (binding.hash_codec !== COMPLETE_TURN_HASH_CODEC) {
+    throw new EffectRuntimeRequestError("unsupported complete Turn decision hash codec");
+  }
+  const identity = contextSourceIdentity(decision, numberTokens ?? []);
+  if (typeof binding.scheduler_execution_args !== "string") {
+    throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
+  }
+  const unsignedBinding = {...binding};
+  delete unsignedBinding.content_hash;
+  const content = {...decision, contract_binding: unsignedBinding};
+  if (binding.content_hash !== completeSourceHash(content, identity)) {
+    throw new EffectRuntimeRequestError("complete Turn decision content integrity mismatch");
+  }
+  const source = {...decision};
+  delete source.schema_version;
+  delete source.contract_binding;
+  if (binding.source_decision_hash !== completeSourceHash(source, identity)) {
+    throw new EffectRuntimeRequestError("complete Turn decision source integrity mismatch");
+  }
+  requireCompleteDecisionSource(source);
+  return decision;
+}
+
+/** One checked source for model input and transport session identity. The
+ * historical effect adapter may remain in the request during migration, but it
+ * cannot redirect the complete contract to another Goal, Agent or work item. */
+export function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
+  const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+  // The versioned model wire has one complete source. The outer executor has
+  // already checked its private effect adapter; a standalone reader validates
+  // the source and original capture header without recreating that adapter.
+  if (Object.hasOwn(request, "complete_host_request")) {
+    const header = requireJsonObject(request.complete_host_request, "complete Host request");
+    if (header.schema_version !== "loopx_turn_host_request_v1" ||
+        Object.keys(object(request.envelope)).length !== 0 ||
+        typeof header.turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(header.turn_key)) {
+      throw new EffectRuntimeRequestError("unsupported or invalid complete Host request");
+    }
+    if (Object.hasOwn(header, "source_decision_hash") && header.source_decision_hash !== decisionSourceHash(decision)) {
+      throw new EffectRuntimeRequestError("complete Host request differs from captured source");
+    }
+    const detail = Object.hasOwn(header, "detail_ref") ? requireJsonObject(header.detail_ref, "complete Host detail reference") : {};
+    const hasCapture = Object.hasOwn(detail, "captured_decision");
+    const captured = hasCapture ? requireJsonObject(detail.captured_decision, "complete Host captured decision") : {};
+    // A direct quota capture predates the Host journal and has no Turn key.
+    // Preserve its source observation rather than inventing a journal binding.
+    // A provided journal key keeps the existing exact-key rule.
+    const captureTurnMatches = Object.hasOwn(captured, "turn_key")
+      ? captured.turn_key === header.turn_key
+      : captured.turn_instance_id === (object(decision.heartbeat_receipt).turn_instance_id ?? null);
+    if (hasCapture && (typeof captured.path !== "string" || !captured.path.trim() || captured.path.includes("\0") ||
+        !captureTurnMatches ||
+        captured.goal_id !== decision.goal_id || captured.agent_id !== object(decision.agent_identity).agent_id ||
+        captured.source_hash_ref !== "$.source_decision_hash" || !Object.hasOwn(header, "source_decision_hash"))) {
+      throw new EffectRuntimeRequestError("complete Host request capture binding differs");
+    }
+    return {decision, projection: turnActionProjection(decision)};
+  }
+  const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
+  assertTurnEnvelopeConsumerVersion(envelope);
+  const signature = object(envelope.action_signature);
+  if (signature.source_decision_hash !== decisionSourceHash(decision)
+      || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))
+      || signature.source_hash !== signature.envelope_hash || signature.matches !== true) {
+    throw new EffectRuntimeRequestError("complete Turn model input differs from captured executor source");
+  }
+  if (decision.goal_id !== envelope.goal_id
+      || object(decision.agent_identity).agent_id !== envelope.agent_id
+      || selectedWorkTodoId(decision) !== selectedWorkTodoId({
+        selected_todo: object(envelope.action).selected_todo,
+        task_orchestration_contract: envelope.task_orchestration_contract,
+      })) {
+    throw new EffectRuntimeRequestError("complete Turn session lineage differs from executor source");
+  }
+  // An adapter's self-consistent hash does not prove that it carries the
+  // admitted decision. Reuse the producer's projection, including writeback
+  // and execution conditions, rather than maintaining a second field list.
+  const projection = turnActionProjection(decision);
+  if (signature.source_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(projection))) {
+    throw new EffectRuntimeRequestError("complete Turn executor projection differs from admitted source");
+  }
+  return {decision, projection};
+}
+
+/** A current private plan stores its one admitted source and transport header.
+ * The old plan codec is read only for recorded journals or explicit old input. */
+export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
+  work: JsonObject; decision: JsonObject | null; scopedIdentity: JsonObject | null | undefined;
+} {
+  if (plan.schema_version === "loopx_turn_plan_v1") {
+    if (!Object.hasOwn(plan, "work_contract") || Object.hasOwn(plan, "turn_envelope")
+        || !Object.hasOwn(plan, "source_decision_hash")) {
+      throw new EffectRuntimeRequestError("complete Turn plan requires one source without an executor adapter");
+    }
+    const checked = completeHostSource({payload: plan.work_contract, source_number_tokens: numberTokens,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1",
+        turn_key: object(plan.transaction).turn_key, source_decision_hash: plan.source_decision_hash,
+        ...(Object.hasOwn(plan, "detail_ref") ? {detail_ref: plan.detail_ref} : {})}});
+    const work = {goal_id: checked.decision.goal_id ?? null, ...checked.projection};
+    return {work, decision: checked.decision, scopedIdentity: scopedTurnSettlementIdentity(work,
+      object(plan.transaction).turn_instance_id)};
+  }
+  if (Object.hasOwn(plan, "schema_version") && plan.schema_version !== "loopx_turn_plan_v0") {
+    throw new EffectRuntimeRequestError("unsupported Turn plan version");
+  }
+  const envelope = object(plan.turn_envelope);
+  if (Object.hasOwn(plan, "work_contract")) {
+    const checked = completeHostSource({payload: plan.work_contract, envelope,
+      source_number_tokens: numberTokens});
+    return {work: {...envelope, ...checked.projection}, decision: checked.decision, scopedIdentity: undefined};
+  }
+  return {work: envelope, decision: null, scopedIdentity: undefined};
+}
+
+function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
+  complete: boolean, historical?: JsonObject): JsonObject {
+  const selected = selectedWorkTodo({selected_todo: object(work.action).selected_todo,
+    task_orchestration_contract: work.task_orchestration_contract},
+    historical && Object.hasOwn(historical, "primary_todo_id")
+      ? scalarString(historical.primary_todo_id, "historical primary Todo") : undefined);
+  const signature = turnEnvelopeActionSignatureDocument(work);
+  signature.action = {...object(signature.action), selected_todo: selected};
+  return {
+    ...(decision ? {goal_id: decision.goal_id ?? null,
+      agent_id: object(decision.agent_identity).agent_id ?? null,
+      todo_id: selectedWorkTodoId(decision) ?? ""} : {}),
+    route: complete ? admittedTurnRoute(work, () => scopedTurnSettlementIdentity(work))
+      : turnEnvelopeRoute(work, historical),
+    action_signature: signature,
+    ...(complete ? {scoped_settlement_identity: scopedTurnSettlementIdentity(work)} : {}),
+  };
+}
+
+export function completePlanningFacts(request: JsonObject): JsonObject {
+  // An explicitly supplied old carrier retains its consistency proof. New
+  // producers start from the complete source and never construct that view.
+  const checked = Object.hasOwn(request, "envelope") ? completeHostSource(request) : null;
+  const decision = checked?.decision ?? requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+  const work = {goal_id: decision.goal_id ?? null, ...(checked?.projection ?? turnActionProjection(decision))};
+  const lineage = admittedDriverLineage(work, decision, true);
+  let scopedIdentity: JsonObject | null = null, identityError: string | null = null;
+  if (lineage.route === "replan_required" || lineage.route === "ready_for_host" && !lineage.todo_id) {
+    try { scopedIdentity = scopedTurnSettlementIdentity(work, request.turn_instance_id); }
+    catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      identityError = error.message;
+    }
+  }
+  return {...lineage, work, source_decision_hash: decisionSourceHash(decision),
+    action_source_hash: canonicalHash(turnEnvelopeActionSignatureDocument(work)),
+    scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError,
+    ...(request.inspect_plan === true &&
+      (lineage.route === "ready_for_host" || lineage.route === "replan_required")
+      ? {inspection_paths: turnPlanInspectionPaths(decision, lineage.route)} : {})};
+}
+
+function completeHostDecision(request: JsonObject): JsonObject {
+  return completeHostSource(request).decision;
+}
+
+/** Reuse the existing presentation plan only after its complete source passes
+ * the versioned decision owner. The unsigned root is used for path selection;
+ * edits and recovery still address the unchanged, signed original capture. */
+function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+  const context = requireJsonObject(request.context, "current projection");
+  if (request.surface !== "complete_turn")
+    return nativeReplanPresentation(request) ?? contextPresentationPlan(request);
+  const numbers = sourceNumberTokens(request, request.source_number_tokens)
+    .filter(({path}) => path[0] === "context").map(({path, token}) => [path.slice(1), token]);
+  requireCompleteTurnDecision(context, numbers);
+  const source = {...context};
+  delete source.schema_version;
+  delete source.contract_binding;
+  return nativeReplanPresentation(request) ??
+    progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScope(source));
+}
+
+function completeWorkIdentity(decision: JsonObject): JsonObject {
+  return {goal_id: decision.goal_id ?? null,
+    agent_id: object(decision.agent_identity).agent_id ?? null,
+    todo_id: selectedWorkTodoId(decision) ?? ""};
+}
+
+function completeSessionLineage(decision: JsonObject): JsonObject {
+  const identity = completeWorkIdentity(decision);
+  return {goal_id: scalarString(identity.goal_id, "Turn Goal identity").trim(),
+    agent_id: scalarString(identity.agent_id, "Turn Agent identity").trim(),
+    todo_id: scalarString(identity.todo_id, "Turn Todo identity").trim()};
+}
+
+function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string | null {
+  const context = object(object(object(decision.interaction_contract).agent_channel).work_context);
+  const declared = {...object(decision.selected_todo),
+    ...(Object.hasOwn(context, "selected_todo_text_verified")
+      ? {text_source_verified: context.selected_todo_text_verified} : {})};
+  return capturedTodoTextSha256(declared, context, decision.recommended_action, todoId);
+}
+
+export function composeCompleteTurnDecision(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "complete Turn decision request");
+  const payload = requireJsonObject(request.payload, "complete Turn decision source");
+  if (typeof request.scheduler_execution_args !== "string") {
+    throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
+  }
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
+    const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
+    if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
+      throw new EffectRuntimeRequestError("complete Turn decision cannot change its host binding");
+    }
+    return prior;
+  }
+  if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
+    throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
+  }
+  requireCompleteDecisionSource(payload);
+  const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens ?? []);
+  // A complete input must carry the original-Turn successor instructions that
+  // used to exist only in the staged writer. Compose them before hashing and
+  // capture; a later material read must not add a competing execution contract.
+  const packet = object(payload.replan_action_packet);
+  const interaction = object(payload.interaction_contract);
+  const cli = object(interaction.cli_channel);
+  const plan = object(cli.settlement_plan);
+  let source = payload;
+  if (packet.obligation_id && packet.settlement_only !== true &&
+      payload.effective_action !== EffectiveAction.GOVERNED_CAPABILITY_INTENT &&
+      packet.obligation_id === object(object(payload.autonomous_replan_obligation).replan_context).obligation_id &&
+      typeof object(plan.identity).turn_instance_id === "string") {
+    const contract = bindReplanSuccessorContract(object(packet.writeback_contract), plan);
+    source = {...payload, replan_action_packet: {...packet, writeback_contract: contract},
+      ...(typeof contract.successor_command === "string" ? {
+        interaction_contract: {...interaction, cli_channel: {...cli,
+          next_cli_actions: [contract.successor_command]}},
+      } : {})};
+  }
+  // Retain the existing Explore owner's pure-replan applicability correction
+  // before capture too. A complete contract must not advertise an attachment
+  // that requires a Todo when this admission has only an obligation. Reuse the
+  // exact known-guidance check; custom instructions and evidence stay intact.
+  // Do not run the historical compactor: complete authoring remains in this capture.
+  if (unboundExploreReplan(source, plan)) {
+    const currentInteraction = object(source.interaction_contract);
+    const agent = object(currentInteraction.agent_channel);
+    const context = object(agent.work_context);
+    if (Array.isArray(context.sources)) {
+      source = {...source, interaction_contract: {...currentInteraction, agent_channel: {...agent,
+        work_context: {...context, sources: context.sources.map(value => {
+          const item = object(value);
+          return item.source === "turn_start_capability_hook" && item.hook_id === "explore.turn_context" &&
+            item.capability_id === "explore"
+            ? {...item, content: omitUnboundExploreResultWriteback(object(item.content))} : value;
+        })}}}};
+    }
+  }
+  source = referenceGoalAcceptance(source, sourceIdentity);
+  source = referenceReplanAuthoring(source, sourceIdentity);
+  source = referenceExploreGuidance(source);
+  source = referenceCurrentTaskTitle(source);
+  source = referenceVisionContinuation(source, sourceIdentity);
+  source = referenceQuotaSummaryLanes(source, sourceIdentity);
+  requireCompleteDecisionSource(source);
+  const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
+    contract_binding: {scheduler_execution_args: request.scheduler_execution_args,
+      hash_codec: COMPLETE_TURN_HASH_CODEC,
+      source_decision_hash: completeSourceHash(source, sourceIdentity)}};
+  result.contract_binding = {...object(result.contract_binding), content_hash: completeSourceHash(result, sourceIdentity)};
+  return result;
+}
+
 export function buildTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const payload = requireJsonObject(request.payload, "turn envelope payload");
@@ -1546,6 +1989,12 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError(
       "turn envelope scheduler_execution_args must be a string",
     );
+  }
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
+    requireCompleteTurnDecision(payload, request.source_number_tokens);
+    if (object(payload.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
+      throw new EffectRuntimeRequestError("Turn adapter host binding differs from captured contract");
+    }
   }
   const schedulerExecutionArgs = request.scheduler_execution_args;
   const capturedDecisionPath = request.captured_decision_path;
@@ -1580,7 +2029,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     source_hash: canonicalHash(sourceSignature),
     envelope_hash: canonicalHash(envelopeSignature),
     matches: JSON.stringify(sourceSignature) === JSON.stringify(envelopeSignature),
-    source_decision_hash: canonicalHash(payload),
+    source_decision_hash: decisionSourceHash(payload),
   };
   measureTurnEnvelope(envelope, payload);
   return envelope;
@@ -1591,8 +2040,22 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
 function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured decision");
   assertSupportedQuotaPacket(payload);
-  const envelope = requireJsonObject(request.envelope, "captured decision envelope");
-  assertSupportedQuotaPacket(envelope);
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
+    try {
+      requireCompleteTurnDecision(payload, request.source_number_tokens);
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      throw new EffectRuntimeRequestError(
+        `Turn decision capture does not match the original observation: ${error.message}`, error.code);
+    }
+  }
+  const sourceHash = decisionSourceHash(payload);
+  const completeHeader = Object.hasOwn(request, "complete_host_request")
+    ? requireJsonObject(request.complete_host_request, "complete capture header") : null;
+  const checked = completeHeader ? completeHostSource(request) : null;
+  const envelope = checked ? {goal_id: checked.decision.goal_id ?? null, ...checked.projection}
+    : requireJsonObject(request.envelope, "captured decision envelope");
+  if (!checked) assertSupportedQuotaPacket(envelope);
   const path = scalarString(request.captured_decision_path, "capture path");
   const turnId = scalarString(request.turn_instance_id, "capture Turn identity");
   const turnKey = scalarString(request.turn_key, "capture Turn key");
@@ -1601,10 +2064,11 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
       !ENVELOPED_SHA256_PATTERN.test(turnKey) || payload.ok !== true ||
       payload.goal_id !== envelope.goal_id ||
       object(payload.agent_identity).agent_id !== envelope.agent_id ||
-      signature.source_decision_hash !== canonicalHash(payload)) {
+      (completeHeader ? completeHeader.source_decision_hash !== sourceHash || completeHeader.turn_key !== turnKey
+        : signature.source_decision_hash !== sourceHash)) {
     throw new EffectRuntimeRequestError("Turn decision capture does not match the original observation");
   }
-  const detail = object(envelope.detail_ref);
+  const detail = object(completeHeader ? completeHeader.detail_ref : envelope.detail_ref);
   const original = object(detail.captured_decision);
   if (Object.keys(original).length && (original.path !== path ||
       original.turn_instance_id !== turnId || original.turn_key !== turnKey ||
@@ -1613,21 +2077,31 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   }
   const capture = object(coldPath(payload, String(envelope.agent_id), "", path).captured_decision);
   const readerArgv = detail.replan_read_argv ?? request.reader_argv;
-  const reads = readerArgv ? replanReadCommands(payload, path, readerArgv) : null;
+  const reads = readerArgv ? replanReadCommands(payload, path, readerArgv, sourceHash) : null;
   const goal = reads ? replanGoalContext(payload, reads, undefined,
     replanReadPrecision(payload, request.source_number_tokens)) : null;
-  const bound = {...envelope, detail_ref: {...detail,
+  const boundDetail = {...detail,
     full_decision: `cat -- ${shellQuote(path)}`,
     ...(reads ? {replan_action_packet: replanActionPacket(payload, reads), replan_read_argv: readerArgv,
       core_goal: goal!.core, planning_horizon: payload.planning_horizon == null ? null : goal!.horizon,
     } : {}),
     captured_decision: {...capture, turn_instance_id: turnId, turn_key: turnKey,
+      ...(completeHeader ? {source_hash_ref: "$.source_decision_hash"} : {}),
       instruction: "Read this original observation for omitted context. Validate its Goal/Agent and source hash; " +
         "Turn identity comes from this journal-bound reference, not a fabricated quota receipt. " +
         "It grants no fresh authority: later actions require current admission and mutation checks. " +
         "Missing or invalid evidence requires recovery, never blind guard replay.",
     },
-  }};
+  };
+  if (completeHeader) {
+    const materialReaders = object(boundDetail.replan_action_packet);
+    return {...completeHeader, detail_ref: {
+      full_decision: boundDetail.full_decision, captured_decision: boundDetail.captured_decision,
+      ...(materialReaders.review ? {replan_action_packet: Object.fromEntries(
+        Object.entries(materialReaders).filter(([field]) => ["review", "writeback"].includes(field)))} : {}),
+    }};
+  }
+  const bound = {...envelope, detail_ref: boundDetail};
   measureTurnEnvelope(bound, payload);
   return bound;
 }
@@ -1682,19 +2156,27 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   const sourceHash = scalarString(historicalText ? historicalText.source_hash : signature.source_hash || "", "route source hash");
   const envelopeHash = scalarString(historicalText ? historicalText.envelope_hash : signature.envelope_hash || "", "route envelope hash");
   if (signature.matches !== true || !sourceHash || sourceHash !== envelopeHash) return "contract_error";
+  return admittedTurnRoute(envelope, () => turnEnvelopeReplanSettlementIdentity(envelope), historicalText);
+}
+
+/** Share action rules after the caller's versioned source check. A complete
+ * source and a historical envelope retain their own proof and scalar codec. */
+function admittedTurnRoute(
+  work: JsonObject, replanIdentity: () => JsonObject | null, historicalText?: JsonObject,
+): LoopXTurnRouteValue {
   // Size diagnostics grant no authority and do not veto a valid contract.
-  const action = object(envelope.action);
-  if (envelope.should_run === true) {
+  const action = object(work.action);
+  if (work.should_run === true) {
     // An unbound native Goal Turn can require its binding command before
     // work. That obligation cannot route a host launch, including a replan.
-    if (action.must_attempt !== true || object(envelope.writeback).turn_binding_required === true) {
+    if (action.must_attempt !== true || object(work.writeback).turn_binding_required === true) {
       return "blocked";
     }
-    const name = scalarString(historicalText ? historicalText.effective_action : envelope.effective_action || "", "route effective action");
+    const name = scalarString(historicalText ? historicalText.effective_action : work.effective_action || "", "route effective action");
     const route = Object.hasOwn(TURN_ACTION_ROUTES, name)
       ? TURN_ACTION_ROUTES[name as keyof typeof TURN_ACTION_ROUTES] : "ready_for_host";
     if (route === "replan_required") {
-      try { turnEnvelopeReplanSettlementIdentity(envelope); }
+      try { replanIdentity(); }
       catch (error) {
         if (!(error instanceof EffectRuntimeRequestError)) throw error;
         return "contract_error";
@@ -1708,29 +2190,67 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
       const hasCommand = Array.isArray(command) ? command.length > 0
         : command !== null && typeof command === "object" ? Object.keys(command).length > 0 : Boolean(command);
       if (intent.schema_version !== "pending_capability_intent_projection_v0"
-          || (intent.goal_id ?? null) !== (envelope.goal_id ?? null)
-          || (intent.agent_id ?? null) !== (envelope.agent_id ?? null) || !hasCommand) return "contract_error";
+          || (intent.goal_id ?? null) !== (work.goal_id ?? null)
+          || (intent.agent_id ?? null) !== (work.agent_id ?? null) || !hasCommand) return "contract_error";
       return "capability_action_required";
     }
     return route === "repair_required" ? "repair_required" : "ready_for_host";
   }
-  if (object(envelope.user).action_required === true) return "user_action_required";
+  if (object(work.user).action_required === true) return "user_action_required";
   return action.quiet_noop_allowed === true ? "wait" : "blocked";
 }
 
-/** Navigation over captured facts, never a summary or a source-read receipt. */
-// Quota field vocabulary stays with its decision owner; the RFC 6901 reader
-// receives addresses and remains independent of Goal/permission policy.
+// Local navigation vocabulary remains with the complete decision owner.
 const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
   "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
 
+/** The read-only plan needs the current decision and executable authoring
+ * guidance. Evidence and diagnostics remain in its exact source capture. */
+function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" | "replan_required"): string[][] {
+  const paths = INITIAL_CONTEXT_DECISION_FIELDS.filter(field => field !== "schema_version").map(field => [field]);
+  for (const field of ["agent_identity", "decision", "recommended_action", "execution_preparation", "requires_user_action",
+    "action_portfolio", "delivery_workspace_isolation", "replan_action_packet"])
+    paths.push([field]);
+  const userTodos = object(decision.user_todo_summary);
+  if (userTodos.open_count === 0 && userTodos.all_open_count === 0) {
+    paths.push(["user_todo_summary", "open_count"], ["user_todo_summary", "all_open_count"]);
+  } else {
+    paths.push(["user_todo_summary"]);
+  }
+  for (const field of Object.keys(object(decision.autonomous_replan_obligation)))
+    if (field !== "replan_context") paths.push(["autonomous_replan_obligation", field]);
+  for (const field of Object.keys(object(decision.vision_continuation_audit)))
+    if (field !== "vision_gap_judge") paths.push(["vision_continuation_audit", field]);
+  const interaction = object(decision.interaction_contract);
+  for (const field of ["schema_version", "mode", "user_channel"])
+    paths.push(["interaction_contract", field]);
+  for (const field of Object.keys(object(interaction.agent_channel)))
+    if (field !== "work_context" && field !== "vision_continuation_audit")
+      paths.push(["interaction_contract", "agent_channel", field]);
+  paths.push(["interaction_contract", "agent_channel", "work_context", "instruction"]);
+  for (const field of Object.keys(object(interaction.cli_channel)))
+    if (field !== "vision_continuation_audit") paths.push(["interaction_contract", "cli_channel", field]);
+  if (route === "ready_for_host") {
+    for (const field of ["status_health_ok", "state", "status", "waiting_on", "quota", "scheduler_hint",
+      "action_required", "action_selection_qualification", "execution_profile", "task_scope",
+      "handoff_readiness", "planning_horizon"])
+      paths.push([field]);
+    for (const field of ["next_step", "next_action_basis"])
+      paths.push(["agent_lane_next_action", field]);
+    for (const field of ["selected_todo_ref", "selected_todo_authority", "user_todos", "unavailable_context", "failures"])
+      paths.push(["interaction_contract", "agent_channel", "work_context", field]);
+  }
+  return paths;
+}
+
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+  return capturedContextSelection(request, initial ? initialContextReadPointers(
+    requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
 }
 
 function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = canonicalHash,
@@ -1824,6 +2344,11 @@ function contextPresentationPlan(request: JsonObject): JsonObject {
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "planning_facts") return completePlanningFacts(request);
+  if (operation === "plan_work") {
+    const {decision, projection} = completeHostSource(request);
+    return {goal_id: decision.goal_id ?? null, ...projection};
+  }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
@@ -1834,6 +2359,41 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const view = replanCliView(payload, identity, undefined, precision);
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
+  if (operation === "compose_complete") {
+    const result = composeCompleteTurnDecision(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
+  }
+  if (operation === "complete_consumer") {
+    requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    return {ok: true};
+  }
+  if (operation === "complete_host_lineage") {
+    // Session-index reads need only the original checked source. A supplied
+    // adapter or wire header still selects full Host validation, even if bad.
+    // This read returns identity facts and grants no execution authority.
+    const decision = Object.hasOwn(request, "envelope") || Object.hasOwn(request, "complete_host_request")
+      ? completeHostDecision(request) : requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    return completeSessionLineage(decision);
+  }
+  if (operation === "host_context" || operation === "host_dispatch_context") {
+    if (Object.hasOwn(request, "include_session_lineage") &&
+        typeof request.include_session_lineage !== "boolean") {
+      throw new EffectRuntimeRequestError("Host session-lineage projection option must be a boolean");
+    }
+    const {decision, projection} = completeHostSource(request);
+    if (operation === "host_dispatch_context" && Object.keys(object(projection.replan_action_packet)).length === 0) {
+      assertGoalContextDelivered(object(object(decision.interaction_contract).agent_channel));
+    }
+    // The caller already holds this exact checked source. Return only the
+    // resolved facts it needs, not another full copy over the transport.
+    return {primary_action: object(projection.action).primary_action ?? null,
+      replan_admitted: Object.keys(object(projection.replan_action_packet)).length > 0,
+      checkpointed_write_approval: Object.hasOwn(object(projection.boundary), "checkpointed_boundary_authority"),
+      execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
+      ...(operation === "host_dispatch_context" ? {work_identity: completeWorkIdentity(decision),
+        ...(request.include_session_lineage === true ? {session_lineage: completeSessionLineage(decision)} : {})} : {})};
+  }
   if (operation === "selected_work_todo") {
     const source = requireJsonObject(request.payload, "Turn work selection source");
     const historical = scalarString(request.historical_primary_text, "historical primary Todo");
@@ -1842,14 +2402,42 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
     request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};
   if (operation === "driver_lineage") {
-    const envelope = requireJsonObject(request.envelope, "Turn driver envelope");
-    return {route: turnEnvelopeRoute(envelope, request.historical_route_text === undefined
-      ? undefined : requireJsonObject(request.historical_route_text, "historical route text")),
-      action_signature: turnEnvelopeActionSignatureDocument(envelope)};
+    const completeWire = Object.hasOwn(request, "complete_host_request");
+    const checked = Object.hasOwn(request, "payload") || completeWire ? completeHostSource(request) : null;
+    const decision = checked?.decision ?? null;
+    // Recovery consumes the already checked action facts. It does not rebuild
+    // a v0 adapter, cold reader commands or size diagnostics from that source.
+    // Historical carriers keep their signed envelope and version-pinned proof.
+    const work = completeWire && checked ? {goal_id: checked.decision.goal_id ?? null, ...checked.projection}
+      : requireJsonObject(request.envelope, "Turn driver envelope");
+    const historical = !decision && request.historical_route_text !== undefined
+      ? requireJsonObject(request.historical_route_text, "historical route text") : undefined;
+    // Both planning and recovery use these action/selection/hash facts. Python
+    // retains only its persisted number codec; historical readers keep proof.
+    return admittedDriverLineage(work, decision, completeWire, historical);
   }
-  if (operation === "build_controller_input") {
-    const envelope = buildTurnEnvelope(request);
-    return {envelope, route: turnEnvelopeRoute(envelope)};
+  if (operation === "execution_context") {
+    // The CLI consumes one checked source for execution, not the historical
+    // adapter's layout. Reuse the projection already checked against that
+    // source for effect conditions; this is not another model-facing contract.
+    const {decision, projection} = completeHostSource(request);
+    const work = {selected_todo: object(projection.action).selected_todo,
+      task_orchestration_contract: projection.task_orchestration_contract};
+    return {selected_todo: selectedWorkTodo(work),
+      sha256: completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? ""),
+      effective_action: decision.effective_action ?? null,
+      writeback: object(projection.writeback),
+      replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
+      replan_action_packet: projection.replan_action_packet ?? null};
+  }
+  if (operation === "captured_todo_text") {
+    const envelope = requireJsonObject(request.envelope, "Turn completion envelope");
+    if (Object.hasOwn(request, "payload")) {
+      return {sha256: completeTaskTextSha256(completeHostDecision(request), request.todo_id)};
+    }
+    const action = object(envelope.action);
+    return {sha256: capturedTodoTextSha256(object(action.selected_todo), envelope.work_context,
+      action.recommended_action, request.todo_id)};
   }
   if (operation === "consumer_version") {
     assertTurnEnvelopeConsumerVersion(requireJsonObject(request.envelope, "turn_envelope"));
@@ -1888,11 +2476,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
   }
   if (operation === "progressive_context_delivery")
-    return prepareProgressiveContext(request, nativeReplanPresentation(request) ?? contextPresentationPlan(request));
+    return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
     : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      nativeReplanPresentation(request) ?? contextPresentationPlan(request));
+      checkedContextPresentationPlan(request));
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
@@ -1913,9 +2501,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
 /** A scoped planning identity comes from the signed quota plan, never a Host
  * session or a missing Todo. Journal validation reuses this exact binding rule.
  */
-export function turnEnvelopeScopedSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
-  assertSupportedQuotaPacket(envelope);
-  const writeback = object(envelope.writeback);
+function scopedTurnSettlementIdentity(work: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  assertSupportedQuotaPacket(work);
+  const writeback = object(work.writeback);
   const plan = Object.keys(object(writeback.settlement_plan)).length ? object(writeback.settlement_plan)
     : {identity: writeback.settlement_identity};
   const raw = object(plan.identity);
@@ -1923,21 +2511,31 @@ export function turnEnvelopeScopedSettlementIdentity(envelope: JsonObject, turnI
   const parsed = settlementIdentityFromPlan({settlement_plan: plan});
   if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
   const identity = parsed.value;
+  if ((identity.binding_kind === "request" ? work.effective_action !== EffectiveAction.NORMAL_RUN
+        : work.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED)
+      || selectedWorkTodoId({selected_todo: object(work.action).selected_todo,
+        task_orchestration_contract: work.task_orchestration_contract}) !== null
+      || !["autonomous_replan", "request"].includes(identity.binding_kind)
+      || identity.goal_id !== work.goal_id || identity.agent_id !== work.agent_id
+      || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
+      || identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== object(work.replan_action_packet).obligation_id) {
+    throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
+  }
+  return settlementIdentityPayload(identity);
+}
+
+/** Historical envelopes keep their version/signature proof around the same
+ * scoped-identity rules used after complete-source validation. */
+export function turnEnvelopeScopedSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  const identity = scopedTurnSettlementIdentity(envelope, turnInstanceId);
+  if (identity === null) return null;
   const signature = object(envelope.action_signature);
   if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION
-      || (identity.binding_kind === "request" ? envelope.effective_action !== EffectiveAction.NORMAL_RUN
-        : envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED)
-      || selectedWorkTodoId({selected_todo: object(envelope.action).selected_todo,
-        task_orchestration_contract: envelope.task_orchestration_contract}) !== null
-      || !["autonomous_replan", "request"].includes(identity.binding_kind)
-      || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
-      || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
-      || identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
       || signature.matches !== true || signature.source_hash !== signature.envelope_hash
       || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))) {
     throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
   }
-  return settlementIdentityPayload(identity);
+  return identity;
 }
 
 /** Persisted planning callers retain their narrow compatibility entrypoint. */

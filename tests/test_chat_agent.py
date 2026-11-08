@@ -3,6 +3,7 @@ from __future__ import annotations
 from loopx.capabilities.native_chat.codex_adapter import failed_request_readback, interrupted_result_readback
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -19,6 +20,125 @@ import loopx.chat_agent as chat_agent
 import loopx.chat_providers as chat_providers
 import loopx.chat_runtime as chat_runtime
 import pytest
+
+
+@pytest.mark.parametrize("surface", ["turn", "session"])
+@pytest.mark.parametrize("failure", ["transient-space", "full-at-close", "permission", "stop", "identity-space", "journal-space"])
+def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monkeypatch, surface, failure):
+    from loopx.chat_store import ChatSessionStore
+    import loopx.chat_store as chat_store
+
+    store = ChatSessionStore(tmp_path / "runtime")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    first, _ = store.create_queued_turn(sid, client_turn_id="original", message="Original request.")
+    following, _ = store.create_queued_turn(sid, client_turn_id="following", message="Separate request.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    target = store._turn_path(sid, first["turn_id"]) if surface == "turn" else store._session_path(sid)
+    replace, initialize = os.replace, chat_runtime._TurnEventBuffer.__init__
+    append = chat_store._append_jsonl_rows
+    pressure, calls, write_failures = [], [], []
+
+    def replace_with_pressure(source, destination):
+        if pressure and Path(destination) == target:
+            record = json.loads(Path(source).read_text())
+            # Fail progress checkpoints, not the subsequent failure/claim release.
+            if ((surface == "session" and record.get("active_turn_id") == first["turn_id"]
+                    and record.get("last_error_code") is None)
+                    or (surface == "turn" and record.get("status") in (
+                        {"starting", "running"} if failure == "identity-space" else {"running"}))):
+                write_failures.append(Path(destination).name)
+                raise OSError(errno.EACCES if failure == "permission" else errno.ENOSPC, "Synthetic storage failure")
+        return replace(source, destination)
+
+    def initialize_immediately(self, **kwargs):
+        initialize(self, **kwargs, metadata_checkpoint_interval_sec=0)
+
+    def append_with_pressure(path, rows):
+        if failure == "journal-space" and pressure and path == store._event_path(sid, first["turn_id"]):
+            raise OSError(errno.ENOSPC, "Synthetic storage failure")
+        return append(path, rows)
+
+    class Adapter:
+        upstream_thread_id = "saved-thread"
+
+        def capabilities(self):
+            return {}
+
+        def healthcheck(self):
+            return True
+
+        def interrupt_turn(self):
+            pass
+
+        def close_session(self):
+            pass
+
+        def start_turn(self, message, event_sink):
+            calls.append(message)
+            if failure == "identity-space" and len(calls) == 1:
+                pressure.append(True)
+            try:
+                event_sink("turn.started", {"upstream_turn_id": "native-" + str(len(calls))})
+            finally:
+                pressure.clear()
+            if len(calls) == 1:
+                pressure.append(True)
+                try:
+                    for step in range(3):
+                        event_sink("agent.phase", {"phase": "working", "label": f"Step {step}"})
+                    if failure == "stop":
+                        store.begin_turn_interrupt(sid, first["turn_id"], expected_statuses={"running"})
+                finally:
+                    if failure != "full-at-close":
+                        pressure.clear()
+            return {"message": "Full original answer." if len(calls) == 1 else "Separate answer."}
+
+    adapter = Adapter()
+    monkeypatch.setattr(os, "replace", replace_with_pressure)
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", append_with_pressure)
+    monkeypatch.setattr(chat_runtime._TurnEventBuffer, "__init__", initialize_immediately)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *args, **kwargs: adapter)
+    try:
+        # Use the real filesystem, atomic rename, managed claim and runtime worker.
+        if failure == "stop":
+            assert store.claim_next_queued_turn(sid)["turn_id"] == first["turn_id"]
+            runtime._run_turn(session_id=sid, turn_id=first["turn_id"],
+                message=first["message"], attachments=[], adapter=adapter)
+        else:
+            runtime._drain_session_queue(session_id=sid, work_dir=tmp_path, objective="Research")
+        result = store.load_turn(sid, first["turn_id"])
+        events = store.events_after(sid, first["turn_id"], None)
+        assert write_failures
+        if failure == "transient-space":
+            assert len(write_failures) == 3
+            assert result["status"] == "completed"
+            assert result["response"]["message"] == "Full original answer."
+            assert result["error"] is None
+            assert len([e for e in events if e["kind"] == "agent.phase"]) == 3
+            assert not any(e["kind"] == "turn.failed" for e in events)
+            independent = ChatSessionStore(tmp_path / "runtime", startup_maintenance=False)
+            assert independent.load_turn(sid, first["turn_id"])["response"] == result["response"]
+            assert [m["text"] for m in independent.messages(sid) if m["role"] == "agent"] == [
+                "Full original answer.", "Separate answer."]
+        elif failure == "stop":
+            assert result["status"] == "interrupting"
+            assert result["response"] is None
+            assert not any(e["kind"] in {"turn.completed", "turn.failed"} for e in events)
+        else:
+            assert result["status"] == "failed"
+            assert result["response"] is None
+            assert result["error_code"] == "runtime_error"
+            assert "Synthetic storage failure" in result["error"]
+        if failure == "stop":
+            assert calls == ["Original request."]
+            assert store.load_turn(sid, following["turn_id"])["status"] == "queued"
+        else:
+            assert calls == ["Original request.", "Separate request."]
+            assert store.load_turn(sid, following["turn_id"])["status"] == "completed"
+    finally:
+        pressure.clear()
+        runtime.close()
 
 
 @pytest.mark.parametrize("failure_kind", ["agent", "timeout", "runtime"])

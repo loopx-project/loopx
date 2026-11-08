@@ -265,6 +265,13 @@ Both check read-only browsing. Source/receipt negatives live in
 `tests/test_manager_context_roundtrip.py`; captures and limits are described in
 [the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
 
+When a later history page loses its transport, the existing read retry retains
+the verified prefix in browser memory and resumes its next cursor. Partial text
+never becomes a readable snapshot or enables sending. Each recovery rechecks
+the current source; source conflicts, invalid cursors/pages and permission
+denials discard the checkpoint. Reload and explicit refresh start a new read.
+See [the repeated-interruption evidence](../assets/personal-workspace/history-recovery/README.md).
+
 ### Workspace reading and request continuity / 工作区阅读与请求连续性
 
 The home brief counts observed native attention items separately from affected

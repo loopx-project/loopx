@@ -217,7 +217,8 @@ def _base_argv(
         str(workspace),
     ]
     if host == "generic-cli":
-        argv.extend(["--host-command-json", host_command])
+        argv.extend(["--host-adapter-request-schema", "loopx_turn_host_request_v1",
+                     "--host-command-json", host_command])
     else:
         argv.extend(
             [

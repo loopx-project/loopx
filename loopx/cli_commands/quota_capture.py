@@ -250,6 +250,8 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        surface = "complete_turn"
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
     required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
         selection_command_args_template=transport, captured_decision_path=captured_decision_path)
@@ -397,6 +399,11 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 return _saved_context_read_page(args, navigation, initial_reference=None,
                     initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
             return navigation
+        except EffectRuntimeRejected as exc:
+            if payload.get("schema_version") == "loopx_turn_envelope_v1":
+                failure = QuotaDecisionTransportError(str(exc))
+                return {"ok": False, "error_code": failure.error_code, "reason": str(failure),
+                    "capture_sha256": args.capture_sha256, "recovery": full_reference}
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass  # The complete original reference remains the fallback below.
     try:
@@ -433,9 +440,10 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
+        complete = payload.get("schema_version") == "loopx_turn_envelope_v1"
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         presentation = payload
-        if args.initial_read and activation["progressive_enabled"]:
+        if args.initial_read and activation["progressive_enabled"] and not complete:
             from .quota_presentation import _project_quota_cli_payload
 
             # Match the ordinary selection guard's view while keeping the
@@ -447,7 +455,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             if "host_poll_receipt" in payload:
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]
         prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+            goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,

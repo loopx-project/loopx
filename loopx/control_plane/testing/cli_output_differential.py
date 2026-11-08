@@ -694,6 +694,21 @@ _TODO_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE: dict[Metric, int] = {
 }
 
 
+def _complete_turn_plan_migration(base: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    """One declared v0 -> v1 plan transition with unchanged measured controls."""
+    row = base.get("row_id")
+    before, after = base.get("turn_plan_controls"), candidate.get("turn_plan_controls")
+    return bool(row == candidate.get("row_id") and base.get("format") == candidate.get("format") == "json"
+        and row in {"surface/loopx_turn_plan/small/json", "surface/loopx_turn_plan/crowded/json",
+                    "surface/loopx_turn_plan/multi_agent/json", "variant/loopx_turn_plan_transaction_detail/small/json"}
+        and isinstance(before, dict) and isinstance(after, dict)
+        and before.get("plan_version") == "loopx_turn_plan_v0" and after.get("plan_version") == "loopx_turn_plan_v1"
+        and isinstance(before.get("controls_sha256"), str) and len(before["controls_sha256"]) == 64
+        and before["controls_sha256"] == after.get("controls_sha256")
+        and base.get("output_contract_version") is None
+        and candidate.get("output_contract_version") == ("loopx_turn_plan_v1" if row.startswith("variant/") else None))
+
+
 def _projection_envelope_migration(
     base: dict[str, Any], candidate: dict[str, Any], *, output_format: str,
 ) -> tuple[dict[Metric, int], list[str], list[str]]:
@@ -702,6 +717,8 @@ def _projection_envelope_migration(
     after = tuple(candidate.get("projection_envelope_schema_versions") or [])
     if before == after:
         return {}, [], []
+    if _complete_turn_plan_migration(base, candidate):
+        return {}, [], ["complete Turn plan exposes the full source projection metadata"]
     surface_id = str(base.get("surface_id") or "")
     row_surface = str(base.get("row_id") or "").partition("/")[2].partition("/")[0]
     if (surface_id == "todo_list" and row_surface in {
@@ -897,7 +914,8 @@ def _turn_projection_migration(
     # this one-time allowance; later growth, removed facts and other paths do not.
     stride_routes = {
         "surface/quota_should_run/crowded/json": ("$", 6_800),
-        "surface/loopx_turn_plan/crowded/json": ("$.turn_envelope", 6_500),
+        "surface/loopx_turn_plan/crowded/json": (
+            "$.work_contract" if "$.work_contract" in new_paths else "$.turn_envelope", 6_500),
     }
     stride_route = stride_routes.get(str(base.get("row_id")))
     if stride_route and candidate.get("row_id") == base.get("row_id"):
@@ -1006,6 +1024,13 @@ def _compare_row_growth(
     review_signals.extend(continuation_signals)
     context_allowance, context_signals = _turn_projection_migration(base, candidate)
     review_signals.extend(context_signals)
+    # The source-complete detail replaces the old summary; default inspection
+    # retains a small pinned-source route. Absolute ceilings stay unchanged.
+    if _complete_turn_plan_migration(base, candidate):
+        bound = 16_000 if base["row_id"].startswith("variant/") else 2_000
+        context_allowance = {metric: max(context_allowance.get(metric, 0), bound)
+                             for metric in ("chars", "utf8_bytes", "compact_payload_chars")}
+        review_signals.append("Turn plan v0 -> v1: unchanged current controls; full-source costs require review")
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -1107,6 +1132,15 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     if candidate.get("format") != output_format:
         failures.append("format changed")
 
+    before_controls, after_controls = base.get("turn_plan_controls"), candidate.get("turn_plan_controls")
+    if (isinstance(before_controls, dict) and isinstance(after_controls, dict)
+            and before_controls.get("plan_version") == "loopx_turn_plan_v0"
+            and after_controls.get("plan_version") == "loopx_turn_plan_v1"
+            and before_controls.get("controls_sha256") != after_controls.get("controls_sha256")):
+        old, new = before_controls["field_sha256"], after_controls["field_sha256"]
+        changed = sorted(key for key in old.keys() | new.keys() if old.get(key) != new.get(key))
+        failures.append("Turn plan current controls changed: " + ", ".join(changed))
+
     base_output_contract = base.get("output_contract_version")
     candidate_output_contract = candidate.get("output_contract_version")
     heartbeat_agent_input_migration = bool(
@@ -1118,6 +1152,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
     if (
         candidate_output_contract != base_output_contract
         and not heartbeat_agent_input_migration
+        and not _complete_turn_plan_migration(base, candidate)
     ):
         failures.append("output_contract_version changed")
 
@@ -1143,7 +1178,7 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             preview = ", ".join(missing[:5])
             suffix = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
             message = f"semantic_json_keys removed: {preview}{suffix}"
-            if heartbeat_agent_input_migration:
+            if heartbeat_agent_input_migration or _complete_turn_plan_migration(base, candidate):
                 review_signals.append(message)
             else:
                 failures.append(message)
@@ -1165,7 +1200,10 @@ def _compare_row(base: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         failures.append("markdown_anchor changed")
     if migration.signature_changed:
         if migration.signature_migration is None:
-            failures.append("action_signature semantic digest changed")
+            if _complete_turn_plan_migration(base, candidate):
+                review_signals.append("historical action signature replaced by the checked complete source")
+            else:
+                failures.append("action_signature semantic digest changed")
         else:
             review_signals.append(
                 f"action_signature coverage migrated: {migration.signature_migration}"
