@@ -131,9 +131,11 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
 /** Both declared pairs and first measurements support the same local choice.
  * This is advisory work context, never another review or evaluation gate. */
 export function workYardstickChoiceGuidance(): string {
-  return "Weigh continuing, a different mechanism or a compatible combination by expected accepted-outcome gain, " +
-    "remaining horizon and full implementation and validation cost, including search and confirmation. Continuing a supported route is valid. " +
-    "Local improvement alone does not establish the best next investment; consider a bounded check when it could change the choice.";
+  return "At a meaningful evidence or probe boundary, weigh continuing, a different mechanism or a compatible combination " +
+    "by expected accepted-outcome gain within accepted constraints, remaining horizon and full implementation and validation cost, " +
+    "including search, confirmation and model/control overhead. Keep unknowns as unknown; continuing a supported route is valid, " +
+    "and local improvement alone does not establish the best next investment. Without a material change, continue the authorized slice; " +
+    "this cue requires no extra review, measurement or decision payload. Consider a bounded check when it could change the choice.";
 }
 
 function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision) {

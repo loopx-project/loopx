@@ -47,8 +47,13 @@ test("initial work measurement feedback preserves linked scopes without choosing
   assert.match(card.guidance, /expected accepted-outcome gain/);
   assert.match(card.guidance, /remaining horizon/);
   assert.match(card.guidance, /full implementation and validation cost/);
-  assert.match(card.guidance, /including search and confirmation/);
-  assert.match(card.guidance, /Continuing a supported route is valid/);
+  assert.match(card.guidance, /including search, confirmation and model\/control overhead/);
+  assert.match(card.guidance, /meaningful evidence or probe boundary/);
+  assert.match(card.guidance, /within accepted constraints/);
+  assert.match(card.guidance, /Keep unknowns as unknown/);
+  assert.match(card.guidance, /continuing a supported route is valid/);
+  assert.match(card.guidance, /Without a material change, continue the authorized slice/);
+  assert.match(card.guidance, /no extra review, measurement or decision payload/);
   assert.match(card.guidance, /No outcome\/proxy profile has been selected/);
   assert.match(card.guidance, /decision attachment remains optional/);
   assert.ok(!Object.hasOwn(graph, "work_yardsticks"));
