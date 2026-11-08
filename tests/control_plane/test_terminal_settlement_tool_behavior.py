@@ -17,6 +17,7 @@ from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedAssistantAction,
     ScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
+    execute_loopx_cli,
 )
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
     TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
@@ -363,14 +364,19 @@ def test_terminal_failure_receipt_does_not_echo_cli_or_model_text(
 
 
 @pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
-@pytest.mark.parametrize(("draft_target", "coverage_observation", "correct_input"), [
-    (".scratch/vision.json", False, False), (".scratch/vision.json", True, False),
-    (".scratch/vision.json", True, True),
-    ("fixture/settlement-proof.json", False, False), ("outside", False, False),
+@pytest.mark.parametrize(("draft_target", "coverage_observation", "correct_input", "page_bytes"), [
+    (".scratch/vision.json", False, False, None), (".scratch/vision.json", True, False, None),
+    (".scratch/vision.json", True, True, None),
+    ("fixture/settlement-proof.json", False, False, None), ("outside", False, False, None),
+    (".scratch/vision.json", True, True, 12000),
+    (".scratch/vision.json", True, True, 64000),
 ])
 def test_terminal_native_draft_preserves_proof_and_authority(
-    tmp_path: Path, draft_target: str, coverage_observation: bool, correct_input: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, draft_target: str,
+    coverage_observation: bool, correct_input: bool, page_bytes: int | None,
 ) -> None:
+    if page_bytes is not None:
+        monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     fixture = _build_fixture(tmp_path / "oracle")
     outside = tmp_path / "owner-private.json"
     outside.write_text("Owner artifact.\n")
@@ -394,6 +400,36 @@ def test_terminal_native_draft_preserves_proof_and_authority(
                 for path in tree.rglob("*") if path.is_file()}
 
     before_rejection = {}
+    initial_parts: list[str] = []
+
+    def context_pages(request):
+        values = [json.loads(message["content"]) for message in request["messages"]
+                  if message.get("role") == "tool" and message["content"].startswith("{")]
+        return [value for value in values
+                if value.get("schema_version") == "context_capture_selection_page_v1"]
+
+    def initial_read(request):
+        navigation = json.loads(request["messages"][-1]["content"])
+        tokens = shlex.split(navigation["first_read_command"])
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            tokens[tokens.index(option) + 1] = str(page_bytes)
+        return ScriptedExecToolAction(command=shlex.join(tokens))
+
+    def next_initial_page(request):
+        page = json.loads(request["messages"][-1]["content"])
+        assert page["eof"] is False
+        initial_parts.append(page["content"])
+        return ScriptedExecToolAction(command=page["next_command"])
+
+    def vision_read(request):
+        pages = context_pages(request)
+        assert pages[-1]["eof"] is True
+        selection = json.loads("".join([*initial_parts, pages[-1]["content"]]))
+        assert selection["selections"]
+        navigation = next(json.loads(message["content"]) for message in request["messages"]
+                          if message.get("role") == "tool")
+        return ScriptedExecToolAction(command=navigation["recovery"]["command"] +
+            " --select /interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring")
 
     def writeback(request, *, omit_scope=False):
         if correct_input and not omit_scope:
@@ -402,6 +438,11 @@ def test_terminal_native_draft_preserves_proof_and_authority(
             assert rejected["error_code"] == "progress_observation_invalid_arguments"
             assert "--progress-coverage-scope-id" in rejected["error"]
             assert authority_files() == before_rejection
+        if page_bytes is not None and omit_scope:
+            authoring = context_pages(request)[-1]
+            assert authoring["eof"] is True
+            syntax = json.loads(authoring["content"])["selections"][0]["value"]
+            assert syntax["minimal_example"]["schema_version"] == "goal_vision_replan_contract_v0"
         command = _writeback_action(request).command + " --agent-vision-json .scratch/vision.json"
         if coverage_observation:
             packet = _latest_quota_packet(request)
@@ -423,7 +464,10 @@ def test_terminal_native_draft_preserves_proof_and_authority(
     receipt = DoubaoTerminalSettlementToolBehaviorActor(
         api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport([
             ScriptedExecToolAction(command=fixture.quota_guard_command),
+            *([initial_read] if page_bytes is not None else []),
+            *([next_initial_page] if page_bytes == 12000 else []),
             ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+            *([vision_read] if page_bytes is not None else []),
             completion,
             ScriptedExecToolAction(command="cat > " + shlex.quote(target) + " <<'JSON'\n" +
                                   json.dumps(vision) + "\nJSON"),
@@ -431,17 +475,50 @@ def test_terminal_native_draft_preserves_proof_and_authority(
             writeback, _spend_action, _completion_action,
         ]),
     ).qualify(qualification_id="native-terminal-draft", fixture_root=tmp_path / "actor")
-    passed = draft_target == ".scratch/vision.json"
+    passed = draft_target == ".scratch/vision.json" and page_bytes != 12000
     assert receipt["qualification_passed"] is passed, receipt
     assert receipt["boundary"]["shell_commands_executed"] is True
     assert receipt["settlement_receipt_steps"] == (
-        ["validation", "durable_writeback", "quota_spend", "terminal_closeout"] if passed else ["validation"]
+        ["validation", "durable_writeback", "quota_spend", "terminal_closeout"] if passed
+        else ["validation", "durable_writeback", "quota_spend"] if page_bytes == 12000
+        else ["validation"]
     )
     assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
     assert outside.read_text() == "Owner artifact.\n"
     if correct_input:
-        assert receipt["tool_call_count"] == 8
+        assert receipt["tool_call_count"] == (10 if page_bytes is not None else 8)
         assert receipt["observed_tool_sequence"].count("progress_observation_invalid_arguments") == 1
+        assert receipt["failure_code"] == ("tool_call_budget_exhausted" if page_bytes == 12000 else None)
+
+
+def test_terminal_first_read_page_size_preserves_complete_original_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    fixture = _build_fixture(tmp_path / "fixture")
+
+    def execute(command):
+        return json.loads(execute_loopx_cli(
+            command, source_root=fixture.source_root, project_root=fixture.project_root,
+        ))
+
+    navigation = execute(fixture.quota_guard_command.replace(
+        '"${LOOPX_TURN:?}"', "terminal-page-selection",
+    ))
+    command = navigation["first_read_command"]
+    parts: list[str] = []
+    while command:
+        page = execute(command)
+        parts.append(page["content"])
+        command = page.get("next_command") if not page["eof"] else None
+        assert len(parts) <= 4
+    assert len(parts) > 1
+    tokens = shlex.split(navigation["first_read_command"])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        tokens[tokens.index(option) + 1] = "64000"
+    bounded = execute(shlex.join(tokens))
+    assert bounded["eof"] is True
+    assert bounded["content"] == "".join(parts)
 
 
 @pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
