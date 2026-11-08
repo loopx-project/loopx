@@ -65,8 +65,43 @@ def source_paths(declaration: dict) -> dict[str, str]:
             'native_history': home + '/thread_history_1.sqlite', 'native_config': home + '/config.toml'}
 
 
+def validate_idle_host_return(state: dict, receipt: dict, *, stdout: bytes, stderr: bytes,
+                              lineage: dict) -> None:
+    """Qualify only an explicitly selected legacy empty-output budget return.
+
+    The unknown failure remains unknown. Live native history must independently
+    prove an idle cursor before this attempt; this predicate cannot grant work.
+    """
+    from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+    from scripts.external_scheduler_worker import _host_attempt
+
+    prior = state.get('host_attempt', {})
+    scope = prior.get('scope')
+    if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
+        raise ValueError('Idle handoff requires its original Host attempt scope')
+    _host_attempt(state, scope)
+    failure = normalize_host_failure_record(prior.get('host_failure'))
+    session = receipt.get('session', {})
+    if (prior.get('status') != 'failed' or prior.get('attempt_id') is not None
+            or failure['kind'] != 'unknown' or failure['attempt'] != prior.get('attempt')
+            or state.get('last_wake_status') != 'wake_failed'
+            or type(state.get('last_wake_rc')) is not int or state['last_wake_rc'] != 1
+            or receipt.get('mode') != 'heartbeat' or receipt.get('stage') != 'execute'
+            or receipt.get('ok') is not False or receipt.get('host_invoked') is not True
+            or receipt.get('budget_exhausted') is not True or receipt.get('timed_out') is not True
+            or 'host_failure' in receipt or 'return_code' in receipt
+            or stdout or stderr or session.get('binding_scope') != 'agent'
+            or any(key in receipt and receipt[key] != lineage[key] for key in ('goal_id', 'agent_id'))
+            or not isinstance(session.get('session_id'), str) or not session['session_id'].strip()
+            or prior.get('session_id') not in (None, session['session_id'])):
+        raise ValueError('Idle handoff requires its original empty-output legacy Host return')
+
+
 def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
-                             output: Path, timeout: float = 120, install: bool = False) -> dict:
+                             output: Path, timeout: float = 120, install: bool = False,
+                             idle_host_handoff: bool = False) -> dict:
+    if type(idle_host_handoff) is not bool:
+        raise ValueError('Idle Host handoff requires an explicit boolean')
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError('Stopped recovery timeout must be finite and positive')
     deadline = time.monotonic() + timeout
@@ -137,7 +172,10 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                     or any(key in receipt and receipt[key] != declaration[key]
                            for key in ('goal_id', 'agent_id'))):
                 raise ValueError('Stopped source lacks its exact returned budget stop')
-        if failed:
+        if idle_host_handoff:
+            validate_idle_host_return(state, receipt, stdout=(wake.parent / 'stdout.jsonl').read_bytes(),
+                                      stderr=(wake.parent / 'stderr.txt').read_bytes(), lineage=declaration)
+        elif failed:
             from loopx.control_plane.turn_driver.host_failure import build_host_failure_record, normalize_host_failure_record
 
             failure = normalize_host_failure_record(prior.get('host_failure'))
@@ -173,7 +211,7 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
         # A returned stop proves the process was reaped before its receipt.
         # Legacy workers could reserve cleanup time before the hard deadline;
         # do not enlarge that native Turn's window to a later container stop.
-        process_stopped = math.floor(wake.stat().st_mtime) if returned_budget_stop else finished
+        process_stopped = math.floor(wake.stat().st_mtime) if returned_budget_stop or idle_host_handoff else finished
         if (not math.isfinite(phase) or not start <= min(phase, process_stopped)
                 or process_stopped > finished
                 or (not failed and not returned_budget_stop and phase > finished)):
@@ -183,6 +221,7 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                   'receipt_sha256': hashlib.sha256(raw).hexdigest(),
                   'process_started_at': start, 'process_stopped_at': process_stopped,
                   'source_phase_deadline_epoch': phase, 'session': receipt.get('session'),
+                  **({'idle_host_handoff': True} if idle_host_handoff else {}),
                   'execution_authority_granted': False}
         box.reload()
         if box.attrs['State'] != before:
@@ -239,11 +278,13 @@ def main():
     parser.add_argument('--declaration', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--install', action='store_true', help='Place the inert proof only in this same stopped worker')
+    parser.add_argument('--idle-host-handoff', action='store_true',
+                        help='Explicitly seal an empty-output legacy Host failure for separate idle-history qualification')
     args = parser.parse_args()
     import docker
     result = prepare_stopped_recovery(docker.from_env(timeout=30),
         container_id=args.source_container, declaration=json.loads(args.declaration.read_bytes()),
-        output=args.output, install=args.install)
+        output=args.output, install=args.install, idle_host_handoff=args.idle_host_handoff)
     print(json.dumps({'container_id': result['container_id'], 'output': str(args.output),
                       'installed_proof_path': result.get('installed_proof_path'), 'execution_authority_granted': False}))
 
