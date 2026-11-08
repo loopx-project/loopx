@@ -6,7 +6,8 @@ import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
 const RESERVED = new Set([
-  "schema_version", "turn_key", "turn_envelope", "session", "goal_ref", "route",
+  "schema_version", "turn_key", "turn_envelope", "work_contract", "source_decision_hash",
+  "session", "goal_ref", "route",
   "result_contract", "capability_context_fields", "capability_instructions",
   "capability_result_fields", "result_kind", "completed_phases", "classification",
   "next_action", "recommended_action", "summary", "agent_vision_json",
