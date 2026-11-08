@@ -727,9 +727,11 @@ An owner-only mode is a storage precaution, not proof of solver exclusion.
 
 When the selected native runner supports `host_registration_callback`, the
 adapter binds enabled checkpoint/feedback observers through that host callback
-before container creation. It does not inject the registration token into the
-solver environment. Frozen older providers retain their original environment
-binding path; runs without either observer add no callback. Blind modes also
+before container creation. The CLI consults the backend's registration options
+for every worker profile, including native controls. The default backend still
+returns no callback when both observers are absent. It does not inject the
+registration token into the solver environment. Frozen older providers retain
+their original environment binding path. Blind modes also
 remove the newer `SFORGE_FEEDBACK_URL` from the solver environment. A restored
 registration may include the native provider's nonempty `feedback_relay_id`;
 all original activation identities must still match, and unknown fields fail
