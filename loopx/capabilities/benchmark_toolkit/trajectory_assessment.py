@@ -126,6 +126,7 @@ def execute(
         }
     os.close(fd)
     process: subprocess.Popen[str] | None = None
+    attempt_started = False
     started = time.monotonic()
     try:
         if (directory / "receipt.json").exists():
@@ -236,6 +237,7 @@ def execute(
             "reused": False,
         }
         _write(directory / "receipt.json", receipt)
+        attempt_started = True
         if reuse_from is not None:
             # Same declared evidence, eligibility, scope and model contract.
             # Requalify against the new exact manifest; never splice labels or
@@ -316,7 +318,9 @@ def execute(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        if (directory / "receipt.json").exists():
+        # Reuse validation and retry preparation still belong to the old
+        # attempt. Their errors must not rewrite its status, cost or clock.
+        if attempt_started:
             receipt = read_job(directory)
             receipt.update(
                 ok=False,
