@@ -57,6 +57,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const inFlight = params.delivery_boundary === "in_flight_continuation";
   const autonomousReplan = (params.autonomous_replan === undefined ? false
     : requireBoolean(params.autonomous_replan, "autonomous_replan")) || identity.binding_kind === "autonomous_replan";
+  const todoSemanticWriteback = identity.binding_kind === "todo" && !autonomousReplan
+    ? semanticWriteback : null;
   const mode = params.handoff_mode == null ? null
     : requireStringLiteral(params.handoff_mode, HANDOFF_MODES, "handoff_mode");
   const managedClaim = identity.binding_kind === "todo" && mode === "hard_lease";
@@ -93,9 +95,10 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open. " +
             "Bind new decision evidence from this admitted work to its artifact/input; follow the remaining plan, " +
             "then yield for freshly guarded continuation. "
-          : (inFlight ? "Choose one: command_template for ordinary in_flight_continuation without new decision evidence; "
-              : "Use command_template for semantic_closeout; ") +
-            (semanticWriteback !== null ? "semantic_closeout_command_template" : "--delivery-boundary semantic_closeout") +
+          : (inFlight ? "Use command_template for ordinary in_flight_continuation without new decision evidence. " : "") +
+            "Use " + (todoSemanticWriteback !== null
+              ? "semantic_closeout_command_template with --agent-vision-json"
+              : "--delivery-boundary semantic_closeout") +
             " for new decision evidence, route change or Todo completion. " +
             "Bind new evidence produced or obtained by this admitted work to its artifact/input in fresh Vision/path_delta " +
             "with --agent-vision-json, including continue/no_change when retaining the route. " +
@@ -111,8 +114,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "An already committed Monitor poll needs neither refresh nor spend." + inputHint,
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
-      ...(identity.binding_kind === "todo" && !autonomousReplan && semanticWriteback !== null
-        ? {semantic_closeout_command_template: semanticWriteback} : {}),
+      ...(todoSemanticWriteback !== null ? {semantic_closeout_command_template: todoSemanticWriteback} : {}),
       // The same open Todo can reach a semantic feedback checkpoint. Deliver
       // its existing authoring contract with the executable command variant.
       // Autonomous replan already carries this owner in its writeback contract.

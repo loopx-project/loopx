@@ -229,6 +229,8 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         assert plan["identity"] == completed["settlement_identity"]
         writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
         assert writeback["vision_authoring"]["schema_version"] == "goal_vision_replan_contract_v0"
+        assert "Use semantic_closeout_command_template with --agent-vision-json" in writeback["precondition"]
+        assert "--agent-vision-json <file>" in writeback["semantic_closeout_command_template"]
         assert completed["next_cli_actions"] == [writeback["command_template"]]
         assert completed["settlement_result"]["receipts"][0]["step_kind"] == "validation"
         markdown = render_todo_markdown(completed)
