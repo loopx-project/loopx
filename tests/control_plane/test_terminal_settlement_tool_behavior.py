@@ -377,6 +377,8 @@ def test_terminal_native_draft_preserves_proof_and_authority(
 ) -> None:
     if page_bytes is not None:
         monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    if page_bytes == 12000:
+        tmp_path /= "long-recovery-root-" + "x" * 120
     fixture = _build_fixture(tmp_path / "oracle")
     outside = tmp_path / "owner-private.json"
     outside.write_text("Owner artifact.\n")
@@ -400,7 +402,7 @@ def test_terminal_native_draft_preserves_proof_and_authority(
                 for path in tree.rglob("*") if path.is_file()}
 
     before_rejection = {}
-    initial_parts: list[str] = []
+    initial_page_count = 0
 
     def context_pages(request):
         values = [json.loads(message["content"]) for message in request["messages"]
@@ -415,16 +417,17 @@ def test_terminal_native_draft_preserves_proof_and_authority(
             tokens[tokens.index(option) + 1] = str(page_bytes)
         return ScriptedExecToolAction(command=shlex.join(tokens))
 
-    def next_initial_page(request):
-        page = json.loads(request["messages"][-1]["content"])
-        assert page["eof"] is False
-        initial_parts.append(page["content"])
-        return ScriptedExecToolAction(command=page["next_command"])
-
     def vision_read(request):
+        nonlocal initial_page_count
         pages = context_pages(request)
         assert pages[-1]["eof"] is True
-        selection = json.loads("".join([*initial_parts, pages[-1]["content"]]))
+        offset = 0
+        for page in pages:
+            assert page["offset"] == offset
+            offset += len(page["content"].encode("utf-8"))
+        assert offset == pages[-1]["total_bytes"]
+        initial_page_count = len(pages)
+        selection = json.loads("".join(page["content"] for page in pages))
         assert selection["selections"]
         navigation = next(json.loads(message["content"]) for message in request["messages"]
                           if message.get("role") == "tool")
@@ -461,11 +464,9 @@ def test_terminal_native_draft_preserves_proof_and_authority(
         tokens[tokens.index("--turn-instance-id") + 1] = "${LOOPX_TURN:?}"
         return ScriptedExecToolAction(command=shlex.join(tokens))
 
-    receipt = DoubaoTerminalSettlementToolBehaviorActor(
-        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport([
+    actions = iter([
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             *([initial_read] if page_bytes is not None else []),
-            *([next_initial_page] if page_bytes == 12000 else []),
             ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
             *([vision_read] if page_bytes is not None else []),
             completion,
@@ -473,21 +474,43 @@ def test_terminal_native_draft_preserves_proof_and_authority(
                                   json.dumps(vision) + "\nJSON"),
             *([partial(writeback, omit_scope=True)] if correct_input else []),
             writeback, _spend_action, _completion_action,
-        ]),
+    ])
+
+    def next_action(request):
+        pages = context_pages(request)
+        if pages and not pages[-1]["eof"]:
+            return ScriptedExecToolAction(command=pages[-1]["next_command"])
+        action = next(actions)
+        return action(request) if callable(action) else action
+
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport(
+            [next_action] * TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
+        ),
     ).qualify(qualification_id="native-terminal-draft", fixture_root=tmp_path / "actor")
     passed = draft_target == ".scratch/vision.json" and page_bytes != 12000
     assert receipt["qualification_passed"] is passed, receipt
     assert receipt["boundary"]["shell_commands_executed"] is True
+    # The original ten-call budget includes every native page. Path length
+    # changes which planned settlement actions fit, never when EOF is reached.
+    budgeted_steps = [("validation", initial_page_count + 4),
+                      ("durable_writeback", initial_page_count + 7),
+                      ("quota_spend", initial_page_count + 8),
+                      ("terminal_closeout", initial_page_count + 9)]
     assert receipt["settlement_receipt_steps"] == (
         ["validation", "durable_writeback", "quota_spend", "terminal_closeout"] if passed
-        else ["validation", "durable_writeback", "quota_spend"] if page_bytes == 12000
+        else [kind for kind, ordinal in budgeted_steps
+              if ordinal <= TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS] if page_bytes == 12000
         else ["validation"]
     )
     assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
     assert outside.read_text() == "Owner artifact.\n"
     if correct_input:
         assert receipt["tool_call_count"] == (10 if page_bytes is not None else 8)
-        assert receipt["observed_tool_sequence"].count("progress_observation_invalid_arguments") == 1
+        assert receipt["observed_tool_sequence"].count("progress_observation_invalid_arguments") == (
+            int(initial_page_count + 6 <= TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS)
+            if page_bytes == 12000 else 1
+        )
         assert receipt["failure_code"] == ("tool_call_budget_exhausted" if page_bytes == 12000 else None)
 
 
