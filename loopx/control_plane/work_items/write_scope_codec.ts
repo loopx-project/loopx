@@ -100,4 +100,3 @@ export function normalizeWriteScopes(value: unknown): string[] {
   }
   return scopes;
 }
-
