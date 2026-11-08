@@ -332,7 +332,17 @@ def test_receipt_reentry_keeps_the_selected_work_outside_the_global_context_wind
     else:
         assert "todo_id" not in view and "work_measurements" not in view["graph"]
         # The public CLI wraps the same view with invocation-routing metadata.
-        assert view == {key: value for key, value in global_view.items() if key != "source_runtime_route"}
+        expected = {key: value for key, value in global_view.items() if key != "source_runtime_route"}
+        reference = view["graph"].get("result_writeback_guidance_ref")
+        if reference is not None:
+            # An existing native profile shares the unchanged guidance through
+            # this same capture. Verify the target before comparing its view.
+            assert reference == "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].optional_attachments[0].guidance"
+            shared = reentered["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]["guidance"]
+            graph = dict(expected["graph"])
+            assert graph.pop("result_writeback_guidance") == shared
+            expected = {**expected, "graph": {**graph, "result_writeback_guidance_ref": reference}}
+        assert view == expected
     opening = starting_page(project, runtime, path, turn, saved, monkeypatch)["content"]
     assert ("/content/graph/work_measurements/0" in opening) is enabled
     assert target in opening
