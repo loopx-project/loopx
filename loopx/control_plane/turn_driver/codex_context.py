@@ -27,6 +27,7 @@ from .native_context_profile import (
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 from .codex_execution_preparation import compact_execution_preparation_request
 
 # Native adapter activation reuses scheduler-owned host declarations. These
@@ -431,9 +432,9 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
 
 
 def native_execution_preparation_request(
-    directory: str | None, event: dict[str, Any],
+    directory: str | None, event: dict[str, Any], *, readback_for: str | None = None,
 ) -> dict[str, Any] | None:
-    """Read one compact Host action from this exact native session journal."""
+    """Reserve one automatic try or surface one readback for the same source."""
 
     if (directory is None or not native_context_event_eligible(event)
             or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}):
@@ -451,19 +452,41 @@ def native_execution_preparation_request(
                 return None
             request = recovery.get("execution_preparation")
             source_sha256 = recovery.get("sha256")
-            if not isinstance(request, dict) or not isinstance(source_sha256, str):
+            if (not isinstance(request, dict) or not isinstance(source_sha256, str)
+                    or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None):
                 return None
-            previous = state.get("host_execution_preparation")
-            if (
-                event.get("hook_event_name") != "SessionStart"
-                and isinstance(previous, dict)
-                and previous.get("source_sha256") == source_sha256
-                and previous.get("state") == "ready"
-            ):
+            if readback_for is not None and readback_for != source_sha256:
                 return None
             action = {**request, "source_sha256": source_sha256}
-            if not _original_native_claim_source(root, session, action.get("claim_source_sha256")):
+            claim_source_sha256 = action.get("claim_source_sha256")
+            if (not isinstance(claim_source_sha256, str) or BARE_SHA256_PATTERN.fullmatch(claim_source_sha256) is None
+                    or not _original_native_claim_source(root, session, claim_source_sha256)):
                 action.pop("claim_source_sha256", None)
+                return action if readback_for is None else None
+            previous = state.get("host_execution_preparation")
+            if isinstance(previous, dict) and previous.get("claim_source_sha256") == claim_source_sha256:
+                if previous.get("state") == "attempted":
+                    if previous.get("readback_sent") is True:
+                        return None
+                    previous["readback_sent"] = True
+                    _save(root, state)
+                    return {**action, "readback_only": True}
+                if previous.get("state") == "ready" and event.get("hook_event_name") != "SessionStart":
+                    return None
+            if readback_for is not None:
+                return None
+            if request.get("turn_instance_id"):
+                # Commit the reservation before the ordinary claim can run.
+                # An interrupted Hook may have committed the claim; only the
+                # exact provider receipt and current lease answer that question.
+                state["host_execution_preparation"] = {
+                    "source_sha256": source_sha256,
+                    "claim_source_sha256": claim_source_sha256,
+                    "state": "attempted",
+                    "todo_id": request.get("todo_id"),
+                    "turn_instance_id": request.get("turn_instance_id"),
+                }
+                _save(root, state)
             return action
     except (OSError, ValueError, TypeError, RecursionError):
         return None
@@ -491,8 +514,10 @@ def record_native_execution_preparation(
             or recovery.get("sha256") != source_sha256
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
+        preparation = recovery.get("execution_preparation")
         state["host_execution_preparation"] = {
             "source_sha256": source_sha256,
+            "claim_source_sha256": preparation.get("claim_source_sha256") if isinstance(preparation, dict) else None,
             "state": "ready",
             "todo_id": receipt.get("todo_id"),
             **(
@@ -664,6 +689,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
+                          captured_recovery: dict[str, Any] | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
@@ -671,6 +697,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     Serialization prevents invalidation from moving the epoch during preparation.
     Full fallback must recover this capture or refuse lookup, never an older one.
     Saved-file comparison is independent of any complete model-read observation.
+    A trusted caller may reuse the identical source it just published; this
+    reference must never come from the external continuity request.
     """
     from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
@@ -712,7 +740,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         state.pop(key, None)
                 state["read_scope"] = read_scope
                 request = _native_context_request(state, scope, capture_id)
-                recovery = capture_context_projection(
+                recovery = dict(captured_recovery) if captured_recovery is not None else capture_context_projection(
                     payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
                 state.pop("section_reads", None)  # partial reads of an older source are not current coverage

@@ -119,7 +119,8 @@ def _quota_payload(*, include_legacy_receipt: bool = False, stride_strategy: str
     )
 
 
-def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_path) -> None:
+@pytest.mark.parametrize("complete", [False, True], ids=["historical", "complete-v1"])
+def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_path, complete) -> None:
     def encoded(value: object) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -154,6 +155,10 @@ def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_pa
         "captured_scalar": -0.0,
         "captured_values": exact,
     }
+    if complete:
+        from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+        source = compose_turn_decision(source)
     raw = encoded(source).encode()
     capture.write_bytes(raw)
     envelope = build_turn_envelope(source)

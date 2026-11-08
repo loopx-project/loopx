@@ -1,6 +1,8 @@
 """Complete consumer costs and the explicit experimental hash transition."""
+import base64
 from copy import deepcopy
 import json
+import zlib
 
 import pytest
 
@@ -40,6 +42,38 @@ def test_checked_complete_progressive_projection_keeps_sparse_numeric_source(tmp
     assert _json(required["observations"]) == _json(source["observations"])
     assert _json(contract) == before
     turn.assert_complete_turn_decision(contract)
+
+
+def test_composed_source_uses_lossless_bounded_transport(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source = _quota_payload()
+    source["observations"] = [1.0, -0.0, 2**60 + 1, 1e-7]
+    source["fixture_material"] = "Full evidence / 完整证据. " * 1400
+    original_rpc = turn.effect_runtime_projection_result
+    observations = []
+
+    def capture(method, params, **kwargs):
+        if params["operation"] == "compose_complete":
+            observations.append((method, params))
+        return original_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(turn, "effect_runtime_projection_result", capture)
+    complete = turn.compose_turn_decision(source)
+    (method, packed), = observations
+    assert "payload" not in packed and len(_json(packed).encode()) < len(_json(source).encode())
+    transport = packed["source_transport"]
+    raw = {key: value for key, value in packed.items() if key != "source_transport"}
+    raw["payload"] = source
+    assert original_rpc(method, packed) == original_rpc(method, raw)
+    assert _json(complete["observations"]) == _json(source["observations"])
+    assert complete["fixture_material"] == source["fixture_material"]
+    turn.assert_complete_turn_decision(complete)
+    with pytest.raises(RuntimeError, match="invalid Turn composition source transport"):
+        original_rpc(method, {**packed, "payload": source})
+    oversized = base64.b64encode(zlib.compress(b" " * (1024 * 1024 + 1))).decode("ascii")
+    for invalid in ("AAAA", oversized):
+        with pytest.raises(RuntimeError, match="valid compressed JSON within 1 MiB"):
+            original_rpc(method, {**packed, "source_transport": {**transport, "data": invalid}})
 
 
 def test_prior_complete_numeric_binding_needs_its_pinned_reader():

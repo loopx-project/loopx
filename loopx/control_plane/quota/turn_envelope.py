@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from copy import deepcopy
-import json
-from dataclasses import dataclass
 from typing import Any, cast
+import json
+import zlib
 
-from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
+from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -16,6 +17,7 @@ from ..scheduler.execution_context import (
 )
 
 TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
+COMPLETE_TURN_DECISION_VERSION = "loopx_turn_envelope_v1"
 TURN_ENVELOPE_BUDGET_BYTES = 8_192
 CONTRACT_CAPSULE_SCHEMA_VERSION = "loopx_contract_capsule_v0"
 ACTION_SIGNATURE_SCHEMA_VERSION = "loopx_action_signature_v0"
@@ -27,27 +29,6 @@ ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4"
 ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5"
 ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0
 PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref"
-
-
-@dataclass(frozen=True, init=False, repr=False, slots=True)
-class TurnControllerInput:
-    """Local producer result; never an agent wire or a retained authority cache.
-
-    The envelope and its typed route originate in one projection. Store the
-    envelope as immutable bytes so a caller cannot mutate it after routing;
-    each consumer receives its own decoded object. Ordinary wire dictionaries
-    cannot supply this qualification through an extra JSON field.
-    """
-
-    envelope_json: str
-    route: str
-
-    def __init__(self) -> None:
-        raise TypeError("Use build_turn_controller_input with the original quota source")
-
-    def envelope(self) -> dict[str, Any]:
-        envelope: dict[str, Any] = json.loads(self.envelope_json)
-        return envelope
 
 
 def _apply_context_projection_changes(
@@ -94,23 +75,29 @@ def _turn_envelope_result(
 
     request = {"operation": operation, **params}
     payload = params.get("payload")
-    complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
+    complete = isinstance(payload, Mapping) and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
     staged_replan = (
-        operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture"}
+        operation in {"build", "quota_signature", "replan_cli_view", "bind_capture"}
         and isinstance(payload, Mapping)
-        and (
-            (operation == "replan_cli_view" and params.get("source_edits") is True)
-            or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv")))
-        )
+        and ((operation == "replan_cli_view" and params.get("source_edits") is True)
+             or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv"))))
     )
-    if complete or operation == "compose_complete" or operation == "replan_view" or staged_replan or operation == "reference_context":
-        tokens = source_number_tokens(payload)
+    token_source = payload if isinstance(payload, Mapping) else params
+    if complete or staged_replan or operation in {"replan_view", "reference_context",
+            "compose_complete", "context_delivery", "context_recovery",
+            "progressive_context_delivery", "context_read_sections"}:
+        tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
-    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
-        tokens = source_number_tokens(params)
-        if tokens:
-            request["source_number_tokens"] = tokens
+    if operation == "compose_complete" and request.get("source_edits") is True and isinstance(payload, Mapping):
+        # Pack only a bounded, useful wire reduction. Edits are still applied
+        # to the original source and larger inputs keep their snapshot route.
+        raw = _encode_rpc_json(payload)
+        if 16 * 1024 <= len(raw) <= 1024 * 1024:
+            data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
+            if len(data) + 128 < len(raw):
+                del request["payload"]
+                request["source_transport"] = {"encoding": "deflate-base64-json-v0", "data": data}
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
@@ -186,8 +173,11 @@ def complete_turn_host_source(
     header = ({"complete_host_request": {key: request[key] for key in (
         "schema_version", "turn_key", "source_decision_hash", "detail_ref",
     ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
-    return _turn_envelope_result(operation, payload=request["work_contract"],
-                                 envelope=_wire_mapping(request.get("turn_envelope")), **header,
+    # Identity-only current callers need no executor adapter. Keep an explicit
+    # adapter, even a damaged one, on the typed owner's full Host validation.
+    adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
+               if "turn_envelope" in request or operation != "complete_host_lineage" else {})
+    return _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
 
 
@@ -269,13 +259,15 @@ def compose_turn_decision(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    composed_settlement: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
-        scheduler_execution_args=args, source_edits=True)
+        scheduler_execution_args=args, source_edits=True,
+        **({"composed_settlement": True} if composed_settlement else {}))
     return _apply_context_projection_changes(source, result)
 
 
@@ -325,7 +317,7 @@ def _build_turn_projection(
     # A captured complete contract already records the original host binding.
     # Only transport that value when no caller override was supplied; TS checks
     # its integrity and rejects an explicit conflicting binding.
-    if scheduler_execution_context is None and payload.get("schema_version") == "loopx_turn_envelope_v1":
+    if scheduler_execution_context is None and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
         binding = payload.get("contract_binding")
         scheduler_execution_args = binding.get("scheduler_execution_args") if isinstance(binding, Mapping) else None
     return _turn_envelope_result(

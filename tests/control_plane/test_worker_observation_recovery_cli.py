@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import shlex
 import subprocess
@@ -66,6 +67,17 @@ def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_
     return payload
 
 
+def _read_capture_fields(reader, *pointers):
+    selected = [arg for pointer in pointers for arg in ("--select", pointer)]
+    result = subprocess.run([*reader, *selected], check=True, capture_output=True, text=True, timeout=90)
+    page = json.loads(result.stdout)
+    assert page["ok"] is True and page["offset"] == 0 and page["eof"] is True
+    assert len(page["content"].encode()) == page["total_bytes"]
+    selections = json.loads(page["content"])["selections"]
+    assert [entry["pointer"] for entry in selections] == list(pointers)
+    return [entry["value"] for entry in selections]
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("wire", ["quota", "envelope", "native"])
 @pytest.mark.parametrize("observation", ["recorded", "unreadable", "off"])
@@ -116,36 +128,39 @@ def test_original_capture_retains_the_emitted_poll_observation(
     if wire == "native":
         # Read precisely the immutable recovery view published to this caller.
         reader = shlex.split(emitted["recovery"]["command"])
-    elif wire == "envelope":
-        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-        # Replan readers bind the full observation, including this receipt.
-        # Their hash changes without changing the selected work or debit.
-        without_poll = {key: value for key, value in source.items() if key != "host_poll_receipt"}
-        prior = build_turn_envelope(without_poll)
-        actual = emitted["action_signature"]
-        for key in ("decision", "should_run", "effective_action"):
-            assert emitted[key] == prior[key]
-        assert emitted["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
-        assert actual["source_decision_hash"] != prior["action_signature"]["source_decision_hash"]
-        assert actual == build_turn_envelope(source)["action_signature"]
-        review = subprocess.run(shlex.split(emitted["replan_action_packet"]["review"]),
-                                check=True, capture_output=True, text=True, timeout=90)
-        assert json.loads(review.stdout)["source_hash"] == actual["source_decision_hash"]
-        reader = shlex.split(emitted["detail_ref"]["full_decision"])
     else:
         reader = [sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "context-read",
                   "--capture-file", str(capture / "decision.json"),
                   "--capture-sha256", hashlib.sha256(original).hexdigest()]
     if wire == "envelope":
-        recovered = json.loads(subprocess.run(reader, check=True, capture_output=True).stdout)
-        assert recovered["host_poll_receipt"] == expected
-    else:
-        page = subprocess.run([*reader, "--select", "/host_poll_receipt"],
-                              check=True, capture_output=True, text=True, timeout=90)
-        recovered = json.loads(page.stdout)
-        assert recovered["ok"] is True and recovered["eof"] is True
-        assert json.loads(recovered["content"])["selections"][0]["value"] == expected
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+        from tests.control_plane.test_complete_turn_decision import _resign_contract
+
+        assert emitted == source
+        assert_complete_turn_decision(source)
+        # Removing the poll changes the original signed content. A separately
+        # signed fixture without the poll keeps the decision and settlement.
+        without_poll = deepcopy(source)
+        del without_poll["host_poll_receipt"]
+        with pytest.raises(RuntimeError, match="content integrity mismatch"):
+            assert_complete_turn_decision(without_poll)
+        comparison, _ = _resign_contract(without_poll)
+        assert_complete_turn_decision(comparison)
+        for key in ("decision", "should_run", "effective_action"):
+            assert source[key] == comparison[key]
+        actual_plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
+        comparison_plan = comparison["interaction_contract"]["cli_channel"]["settlement_plan"]
+        assert actual_plan["identity"] == comparison_plan["identity"]
+        binding = source["contract_binding"]
+        assert binding["source_decision_hash"] != comparison["contract_binding"]["source_decision_hash"]
+        review = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "replan-view",
+            "--decision-file", str(capture / "decision.json"), "--source-hash", binding["content_hash"],
+            "--replan-stage", "review",
+        ], check=True, capture_output=True, text=True, timeout=90)
+        assert json.loads(review.stdout)["source_hash"] == binding["content_hash"]
+    recovered, = _read_capture_fields(reader, "/host_poll_receipt")
+    assert recovered == expected
     if wire != "native":
         assert emitted["host_poll_receipt"] == expected
     assert receipt.read_bytes() == before, "Recovery must not record a second poll"
@@ -193,8 +208,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
 def test_canonical_quota_identity_survives_worker_main_and_alias_restart(tmp_path, monkeypatch, provider):
     runtime, registry, count, host = _worker_fixture(tmp_path, monkeypatch, provider)
     admitted = _poll(runtime, registry, AGENT.upper())
-    assert admitted["agent_identity"]["agent_id"] == AGENT
-    assert admitted["effective_action"] == "autonomous_replan_required"
+    identity, action = _read_capture_fields(shlex.split(admitted["recovery"]["command"]),
+        "/agent_identity", "/effective_action")
+    assert identity["agent_id"] == AGENT
+    assert action == "autonomous_replan_required"
     first = _run_worker(runtime, registry, count, host, AGENT.upper())
     assert first.returncode == 1, first.stdout + first.stderr  # The controlled Host ran and failed.
     files = list((tmp_path / "worker-state").rglob("*.json"))
@@ -226,8 +243,10 @@ def test_actual_liveness_poll_keeps_corrupt_receipt_and_original_unknown(tmp_pat
     for damaged in (b"{broken", b"\xff", b'{"schema_version":"unrecognized"}'):
         receipt.write_bytes(damaged)
         polled = _poll(runtime, registry, AGENT, record=True)
-        assert polled["host_poll_receipt"]["recorded"] is False
-        assert "unreadable" in polled["host_poll_receipt"]["error"]
+        observation_receipt, = _read_capture_fields(
+            shlex.split(polled["recovery"]["command"]), "/host_poll_receipt")
+        assert observation_receipt["recorded"] is False
+        assert "unreadable" in observation_receipt["error"]
         observation = read_host_worker_observations(goal, state, registry_goal_digest="unavailable", runtime_root=runtime)
         assert observation == {"goal_id": GOAL, "read_status": "unreadable", "rows": []}
         assert receipt.read_bytes() == damaged

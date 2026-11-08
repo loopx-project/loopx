@@ -15,6 +15,7 @@ import pytest
 
 import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
+from tests.control_plane.cli_output_fixture import read_pinned_cli_body
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,

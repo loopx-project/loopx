@@ -40,6 +40,13 @@ from .quota_context_reader import (
 )
 
 
+def quota_context_surface(payload: dict[str, Any], args: argparse.Namespace) -> str:
+    """Select the presentation owner from the captured decision, independent of continuity."""
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return "complete_turn"
+    return "turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"
+
+
 def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
     from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
@@ -145,8 +152,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         return _native_context_reference(projected, ref, mode=kind, current=current,
             current_document=current_document, total_bytes=len(body), metadata=metadata,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
-            progressive_enabled=progressive_enabled,
-            initial_read_reference=initial_read_reference,
+            progressive_enabled=progressive_enabled, initial_read_reference=initial_read_reference,
             page_bytes=page_bytes, output_bytes=output_bytes, first_read_budget=first_read_budget,
             page_attached=page_attached, first_read_requested=stateless_first_read, reader_argv=reader_argv)
 
@@ -196,46 +202,21 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     return result
 
 
-def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
-                                 capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
-                                 progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
-    """Prepare one already-decided native view; callers retain receipt failures."""
-    from ..control_plane.turn_driver.codex_context import (
-        NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
-    )
-    try:
-        directory = codex_context_directory(directory=args.codex_context_dir,
-            root=getattr(args, "codex_context_root", None), create=True)
-    except NativeContextSessionUnavailable:
-        directory = None  # Current full input, no fabricated native journal.
-    prepared = prepare_codex_context(payload, directory=directory,
-        capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
-        surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
-        capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled)
-    recovery = prepared.delivery.get("recovery")
-    view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
-        progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
-        metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
-        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
-    return model_context_reference(view, reader_argv=reader_argv)
-
-
 def progressive_context_or_current(payload: dict[str, Any], args: argparse.Namespace, *,
                                    runtime_root: Path, directory: Path | None,
-                                   reader_argv: list[str] | None) -> dict[str, Any]:
+                                   reader_argv: list[str] | None,
+                                   captured_decision_path: str | None = None) -> dict[str, Any]:
     """Optional stateless IO falls back to this complete decided input/receipt."""
     try:
         return progressive_context_capture_view(payload, args, runtime_root=runtime_root,
-            directory=directory, surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
-            reader_argv=reader_argv)
+            directory=directory,
+            reader_argv=reader_argv, captured_decision_path=captured_decision_path)
     except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         return payload
 
 
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
                                      runtime_root: Path, directory: Path | None,
-                                     surface: str = "quota_packet",
                                      reader_argv: list[str] | None = None,
                                      captured_decision_path: str | None = None,
                                      page_attached: bool = False) -> dict[str, Any]:
@@ -250,10 +231,8 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
-    if payload.get("schema_version") == "loopx_turn_envelope_v1":
-        surface = "complete_turn"
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
+    required, reference = capture_progressive_context(payload, directory=directory, surface=quota_context_surface(payload, args),
         selection_command_args_template=transport, captured_decision_path=captured_decision_path)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
@@ -400,7 +379,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                     initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
             return navigation
         except EffectRuntimeRejected as exc:
-            if payload.get("schema_version") == "loopx_turn_envelope_v1":
+            # A valid file digest does not validate the decision inside it. The
+            # source owner rejected this signed Turn; expose recovery only.
+            if quota_context_surface(payload, args) == "complete_turn":
                 failure = QuotaDecisionTransportError(str(exc))
                 return {"ok": False, "error_code": failure.error_code, "reason": str(failure),
                     "capture_sha256": args.capture_sha256, "recovery": full_reference}
@@ -440,7 +421,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
-        complete = payload.get("schema_version") == "loopx_turn_envelope_v1"
+        complete = quota_context_surface(payload, args) == "complete_turn"
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         presentation = payload
         if args.initial_read and activation["progressive_enabled"] and not complete:
@@ -455,7 +436,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             if "host_poll_receipt" in payload:
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]
         prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
+            goal_id=args.goal_id, agent_id=args.agent_id, surface=quota_context_surface(payload, args),
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
@@ -720,13 +701,18 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
-                                     capture_root: Path | None = None) -> None:
+                                     capture_root: Path | None = None,
+                                     capture_directory: Path | None = None) -> None:
     """Retain caller display/capture options in the existing selection command.
 
     Only transport argv is composed here; the typed quota owner still selects the
     action and owns admission. Each selection invocation allocates a new capture.
     """
     root = getattr(args, "decision_output_root", None)
+    # A prepared reference binds one immutable directory. Same-Turn
+    # selection uses its parent to create a fresh sibling capture.
+    if capture_directory is not None and getattr(args, "prepared_capture_reference", False):
+        capture_root = capture_directory.parent
     if root is None and capture_root is None:
         return
     interaction = payload.get("interaction_contract")
@@ -840,6 +826,15 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             or type(list_depth) is not int or not 1 <= list_depth <= 8):
         print_payload({"ok": False, "reason": "--list-depth requires context-read --list and an integer from 1 to 8"}, args.format, str)
         return 1
+    if getattr(args, "selection_sha256", None) is not None and (args.quota_command != "context-read"
+            or (getattr(args, "select", None) is None and not getattr(args, "initial_read", False))):
+        print_payload({"ok": False, "reason": "selection-sha256 requires context-read with --select or --initial-read"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
+    if getattr(args, "outcome_ref", None) is not None and args.quota_command != "replan-view":
+        print_payload({"ok": False, "reason": "outcome-ref is only supported by replan-view"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
     if getattr(args, "list_fields", False) and args.quota_command != "context-read":
         print_payload({"ok": False, "reason": "--list is only supported by context-read"}, args.format, str)
         return 1
@@ -944,6 +939,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.turn_driver.codex_execution_preparation import (
             LegacyNativePreparationCapture,
             codex_execution_preparation_context,
+            codex_execution_preparation_readback_context,
             execute_codex_execution_preparation,
         )
 
@@ -961,14 +957,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
-                preparation_context = ""
+                request = None
+                additional = None
                 try:
-                    request = native_execution_preparation_request(directory, event)
+                    workspace = Path(event.get("cwd") or "")
+                    if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        workspace = Path(event.get("cwd") or "")
-                        if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
-                            if "claim_source_sha256" not in request:
-                                raise LegacyNativePreparationCapture()
+                        if "claim_source_sha256" not in request:
+                            raise LegacyNativePreparationCapture()
+                        if request.get("readback_only") is True:
+                            additional = codex_execution_preparation_readback_context(request)
+                        else:
                             capture = (
                                 Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                                 if request.get("turn_instance_id") else None
@@ -1007,20 +1007,23 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
-                            preparation_context = codex_execution_preparation_context(receipt)
+                            additional = codex_execution_preparation_context(receipt)
                 except LegacyNativePreparationCapture as error:
-                    preparation_context = str(error)
+                    additional = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-                    # Preserve the original explicit action and any context
-                    # recovery output when Host-side preparation cannot prove
-                    # its postcondition.
-                    pass
-                if preparation_context:
+                    # Reconcile only the attempted source. A concurrent guard
+                    # can replace recovery, so it must never be reserved here.
+                    if request is not None and request.get("turn_instance_id"):
+                        readback = native_execution_preparation_request(directory, event,
+                            readback_for=request["source_sha256"])
+                        if readback is not None:
+                            additional = codex_execution_preparation_readback_context(readback)
+                if additional is not None:
                     existing = payload.get("hookSpecificOutput")
                     existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
                     payload["hookSpecificOutput"] = {
                         "hookEventName": event["hook_event_name"],
-                        "additionalContext": " ".join(filter(None, [existing_context, preparation_context])),
+                        "additionalContext": " ".join(filter(None, [existing_context, additional])),
                     }
             else:
                 payload = {}
@@ -1050,6 +1053,8 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
 
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
+    if args.outcome_ref == "":
+        raise ValueError("replan-view outcome-ref requires an exact reference; use context-read --select for original detail")
     path = Path(args.decision_file).expanduser()
     payload = json.loads(read_turn_observation_text(path))
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,

@@ -38,6 +38,33 @@ test("initial navigation keeps unknown supporting-index obligations whole", () =
   }
 });
 
+test("initial outcome ids carry only verified supporting-material addresses", () => {
+  const base = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes";
+  const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0",
+    agent_channel: {work_context: {sources: [{...source, content: {goal_acceptance_contract: {
+      outcome_requirements: {schema_version: "loopx_goal_outcomes_v0", outcomes: [
+        {id: "canonical", supporting_material_pointer: base + "/0"},
+        {id: "alternate", supporting_material_pointer: "/actual/source"},
+        {supporting_material_pointer: base + "/2"},
+      ]}}}}]}}},
+    context_details: {outcome_support_from_id: true, instruction: "Derive the outcome address from the selected id.",
+      unread_context_index: {coverage_confirmed: false, read_before_dependent_work: true, pointers: [base + "/0/sources"],
+        source: {path: "complete.json", sha256: "fixture-digest"}}}};
+  const canonicalAlias = base + "/0/supporting_material_pointer";
+  const before = structuredClone(context);
+  const first = initialContextReadPointers(context, []);
+  assert.ok(first.includes(base + "/0/id") && !first.includes(canonicalAlias));
+  assert.ok(first.includes(base + "/1/supporting_material_pointer"), "preserve an explicit different address");
+  assert.ok(first.includes(base + "/2/supporting_material_pointer"), "a missing id cannot carry the address");
+  assert.ok(first.includes("/context_details/instruction"));
+  assert.deepEqual(context, before, "the captured aliases still exist");
+  for (const changed of [{...context.context_details, outcome_support_from_id: undefined},
+    {...context.context_details, instruction: undefined}, {...context.context_details,
+      unread_context_index: {...context.context_details.unread_context_index, future_obligation: true}}]) {
+    assert.ok(initialContextReadPointers({...context, context_details: changed}, []).includes(canonicalAlias));
+  }
+});
+
 test("only supporting materials move; cumulative obligations and merged source guidance survive", () => {
   const payload = {ok: true, interaction_contract: {agent_channel: {work_context: {complete: true, sources: [source]}}}};
   const before = structuredClone(payload);

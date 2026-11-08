@@ -6,11 +6,61 @@ import {
 } from "../effect_program.ts";
 import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
-import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+
+export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
+
+/** Current complete-contract caller of the shipped refresh/spend adapter.
+ * Historical/manual plans keep v1. This changes presentation and command
+ * ownership, never admission, validation, accounting or recovery authority. */
+export function composedCliSettlementPlan(plan: JsonObject): JsonObject | null {
+  if (plan.schema_version !== "quota_settlement_plan_v1" || !Array.isArray(plan.ordered_steps)
+      || !plan.ordered_steps.every(step => step !== null && typeof step === "object" && !Array.isArray(step))) return null;
+  const steps = plan.ordered_steps as JsonObject[];
+  const writeback = steps.find(step => step.kind === "durable_writeback");
+  const spend = steps.find(step => step.kind === "quota_spend");
+  if (!writeback || !spend || writeback.owner !== "agent" || spend.owner !== "agent"
+      || typeof writeback.command_template !== "string" || typeof spend.command_template !== "string") return null;
+  const composed = (command: string) => command + " --settle-turn --settlement-receipt";
+  return {...plan, schema_version: COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION, ordered_steps: steps.map(step => {
+    if (step === writeback) return {...step, command_template: composed(step.command_template as string),
+      ...(typeof step.semantic_closeout_command_template === "string"
+        ? {semantic_closeout_command_template: composed(step.semantic_closeout_command_template)} : {}),
+      precondition: step.precondition + " The command executes the canonical owed quota step and reads back its exact receipts. " +
+        "After settled success do not run another spend; after a partial failure follow only the returned settlement_owed for this original identity."};
+    if (step === spend) {
+      const {command_template: _manualCommand, ...receiptStep} = step;
+      return {...receiptStep, owner: "runtime", precondition: step.precondition +
+        "; executed by refresh-state --settle-turn. On failure use only its canonical settlement_owed command; never infer a debit from transport success."};
+    }
+    return step;
+  })};
+}
+
+/** Project the same ordinary CLI settlement for both capability binding and capture. */
+export function withComposedCliSettlement(source: JsonObject): JsonObject {
+  if (jsonObject(source.replan_action_packet)?.obligation_id) return source;
+  const interaction = jsonObject(source.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel);
+  const plan = jsonObject(cli?.settlement_plan);
+  if (!interaction || !cli || !plan) return source;
+  const composed = composedCliSettlementPlan(plan);
+  if (composed === null) return source;
+  const steps = plan.ordered_steps as JsonObject[];
+  const originalWriteback = steps.find(step => step.kind === "durable_writeback");
+  const originalSpend = steps.find(step => step.kind === "quota_spend");
+  const composedWriteback = (composed.ordered_steps as JsonObject[]).find(step => step.kind === "durable_writeback");
+  return {...source, interaction_contract: {...interaction, cli_channel: {...cli,
+    settlement_plan: composed,
+    next_cli_actions: Array.isArray(cli.next_cli_actions) ? cli.next_cli_actions
+      .filter(command => command !== originalSpend?.command_template)
+      .map(command => command === originalWriteback?.command_template ? composedWriteback!.command_template : command)
+      : cli.next_cli_actions}}};
+}
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
   const identity = settlementIdentity(

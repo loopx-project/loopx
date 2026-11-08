@@ -43,7 +43,7 @@ def register_quota_command(
         help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
-    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view.")
+    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view. Use context-read --select for saved-file detail.")
     quota_parser.add_argument("--source-hash", help="Original source_decision_hash for replan-view.")
     quota_parser.add_argument("--replan-stage", choices=["review", "writeback", "acceptance", "explore"], default="review",
                               help="Read decision context before opening its writeback format.")
@@ -189,8 +189,8 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Compatibility spelling for the complete v1 decision from `quota should-run`. "
+            "It does not select a second packet format; --context-delivery off keeps the complete source inline."
         ),
     )
     capture_group = quota_parser.add_mutually_exclusive_group()
@@ -251,7 +251,8 @@ def register_quota_command(
         help="For context-read --list: expand 1 to 8 levels in one index (default: 1). "
              "Select the nearest useful parent to avoid unrelated fields; known pointers can be read directly with repeated --select.")
     quota_parser.add_argument("--selection-sha256",
-        help="For selected context-read continuations: exact derived-view digest from the preceding page.")
+        help="For selected context-read continuations: exact derived-view digest from the preceding page, "
+             "including captured outcome reads. Follow next_command rather than computing it.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int,
         help="For context-read or an attached native JSON context-project page: maximum UTF-8 content bytes per page. "

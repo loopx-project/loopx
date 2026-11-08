@@ -66,7 +66,7 @@ def register_turn_commands(
 
     plan = command_sub.add_parser(
         "plan",
-        help="Build one typed read-only host decision without launching or writing.",
+        help="Inspect a typed host decision without launching or changing Goal state.",
     )
     add_subcommand_format(plan)
     # The default host and the default execution mode are one decision: the
@@ -88,7 +88,7 @@ def register_turn_commands(
     plan.add_argument(
         "--include-transaction-detail",
         action="store_true",
-        help="Include session binding and transaction receipt planning detail.",
+        help="Include session binding, transaction receipt planning detail, and the complete inline work contract.",
     )
     plan.add_argument("--limit", type=int, default=5)
 

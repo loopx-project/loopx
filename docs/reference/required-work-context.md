@@ -134,6 +134,13 @@ related source, note and evidence fields without replaying the outcome's inline
 requirements. An unmet or stale review stays visible before its explanation
 is opened. Agent review still does not establish independent acceptance.
 
+In the first read, an unexpanded outcome can use the parent of its selected
+`id` JSON pointer to locate supporting material. The planner omits a separate
+address only when it exactly matches that parent and the pinned instructions
+are included. The required view and explicit selectors retain the address.
+Older captures, different addresses and unavailable guidance keep the original
+first-read address.
+
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge full model retention of the required
@@ -222,6 +229,10 @@ Its `context-read --initial-read` uses the same exact-address selector. New priv
 selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
+Initial navigation can replace fully selected children with their complete
+captured parent to avoid repeating addresses. An unselected child, including
+optional or unknown material, prevents that merge; selected facts and obligations
+stay identical. Explicit selectors and index entries keep their original addresses.
 Historical recipe-only references and explicit-file initial cursors still reject
 a changed selection digest; recover through the same original full-capture
 reference, without another admission or rewriting the saved descriptor. These
@@ -252,8 +263,8 @@ pointer order. Current controls, required sources and settlement obligations
 precede the complete unread-material index. A coalesced parent keeps
 its first selected child's position; explicit selectors retain canonical order.
 This reorders the same selected facts without reducing the total body or
-guaranteeing that all requirements fit one page. Earlier initial-selection
-digests still reject a changed profile; recover from the original full capture.
+guaranteeing that all requirements fit one page. Historical recipe-only references and raw initial cursors still reject a changed
+profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. A warm
 delta's existing `command` still reads its wire delta; its initial read and
@@ -434,6 +445,16 @@ eligible preparation capture.
 仍需准备时，用原 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，
 生成新的 capture，再按当前准入结果准备。已退役的租约需要新的合格 capture。
 
+For each verified live guard, the private native journal reserves the first
+automatic preparation before running the claim. If it is interrupted,
+the hook offers one readback for the original claim receipt and current
+lease, even after the same saved decision is presented again. Use the
+same-Turn readiness check after verifying the matching active lease.
+
+对经验证的同一原始准入，Hook 在认领前记录一次自动准备。中断后提供一次
+原认领回执和当前租约的读回入口，重新展示同一快照也不会重复自动认领。
+核对原租约仍有效后，按同轮准入复查 ready。
+
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
 internal context-projection bridge, preserving the complete progressive read
@@ -489,6 +510,13 @@ retains its complete body and declaration. Todo-less reads and the explicit
 `goal-acceptance inspect` command keep their existing full inventory. This
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
+
+The complete Turn contract stores equal, nonempty registered Todo-summary lanes
+once when a local reference is smaller. A `<lane>_ref` names a literal array in
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
 
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work

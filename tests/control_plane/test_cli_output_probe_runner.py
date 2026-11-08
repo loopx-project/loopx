@@ -306,3 +306,35 @@ def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
         goal["content"]["text"] += "\nChanged acceptance or stop condition\n"
         with pytest.raises(AssertionError):
             receipt_row(**kwargs, measurement=measure)
+
+
+def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    from loopx.rollout_event_log import rollout_event_log_path
+
+    project, runtime, registry, state = probe._write_fixture(tmp_path, probe.SCENARIOS[2])
+    # Partial overlap between lanes permits row references even when there is
+    # no outcome history to defer. Make that projection worth its reader cost.
+    state.write_text(state.read_text().replace("without reading archival detail.",
+        "preserving the original constraint. " * 36))
+    import_fixture_authority(registry, probe.GOAL_ID)
+    command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
+        state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+    code, navigation = probe._invoke_cli([
+        *command, "--todo-id", "todo_fixture_000", "--turn-instance-id", "fixture-signed-rows",
+    ])
+    assert code == 0, navigation
+    events = rollout_event_log_path(runtime, probe.GOAL_ID)
+    before = events.read_bytes()
+    view, _ = cli_output_fixture.read_cli_context_for_oracle(navigation)
+    required = json.loads(view)
+    assert "context_reference_instruction" in required
+    route = shlex.split(required["context_details"]["command_template"])
+    assert route[-2] == "--select"
+    source, _, _ = cli_output_fixture.read_pinned_cli_body(shlex.join(route[:-2]))
+    original = json.loads(source)
+    assert len(view.encode()) < len(source.encode())
+    assert original["contract_binding"] == required["contract_binding"]
+    assert_complete_turn_decision(original)
+    assert events.read_bytes() == before

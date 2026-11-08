@@ -700,7 +700,7 @@ class StewardTurnHost:
             return {"schema_version": "loopx_turn_session_binding_v0",
                 "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
 
-        def prepare_native_task(decision: Mapping[str, Any], envelope: Mapping[str, Any]) -> str | None:
+        def prepare_native_task(decision: Mapping[str, Any]) -> str | None:
             nonlocal managed_lease, managed_lease_request, preparation_status
             from ...control_plane.turn_driver.codex_execution_preparation import compact_execution_preparation_request
 
@@ -715,7 +715,7 @@ class StewardTurnHost:
             current()
             if managed_turn is not None:
                 try:
-                    managed_turn.prepare_validation(request, {"turn_envelope": envelope})
+                    managed_turn.prepare_validation(request, {"work_contract": decision})
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     preparation_status = "stopped"

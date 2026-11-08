@@ -2,6 +2,7 @@
 import copy
 from hashlib import sha256
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -9,11 +10,13 @@ import pytest
 
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, compose_turn_decision,
+    prepare_context_delivery, restore_context_delivery,
 )
 from loopx.control_plane.turn_driver.codex_cli import _prompt
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from tests.control_plane.test_quota_settlement_cli import (
-    _run_cli, _spend_run_count, GOAL_ID, AGENT_ID,
+    _write_fixture, _configure_read_only_todo, _run_cli, _spend_run_count,
+    GOAL_ID, AGENT_ID, TODO_ID,
 )
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -551,10 +554,134 @@ def test_complete_composition_preserves_inactive_replan_authoring(inactive):
     assert {k: v for k, v in contract.items() if k not in {"schema_version", "contract_binding"}} == source
 
 
+def test_complete_markdown_keeps_unknown_facts_types_and_instruction_text():
+    from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
+    from loopx.presentation.renderers.turn_envelope_markdown import render_turn_envelope_markdown
+
+    source = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
+        "effective_action": "normal_run",
+        "interaction_contract": _valid_interaction(),
+        "future_evidence": {"missing": None, "denied": False, "attempts": 0, "text": "0",
+            "integral_float": 1.0, "negative_zero": -0.0, "unsafe_integer": 2**60,
+            "原始约束": "保留全部要求\n```\nStop before publication."}}
+    source["interaction_contract"]["agent_channel"]["required_reads"] = [
+        {"instruction": "Read the original constraints.\n```\nStop before publication."}]
+    contract = compose_turn_decision(source)
+    before = copy.deepcopy(contract)
+    for render in (render_quota_should_run_markdown, render_turn_envelope_markdown):
+        rendered = render(contract)
+        # The complete JSON remains one source even for a human-readable CLI.
+        actual = json.loads(rendered.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        assert actual == before
+        # Python equality alone conflates 1/1.0 and 0/-0.0. The presentation
+        # must preserve their original JSON spellings and all escaped text.
+        assert json.dumps(actual, ensure_ascii=False, sort_keys=True) == json.dumps(
+            before, ensure_ascii=False, sort_keys=True,
+        )
+        assert contract == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("host_args", [("--codex-app",), ("--runtime-profile", "generic_cli")])
+def test_complete_quota_successor_settles_original_turn_without_staged_reader(tmp_path, monkeypatch, provider, host_args):
+    import shlex
+    from tests.control_plane.test_replan_successor_guard_reentry import _fixture, GOAL, AGENT, TURN
+
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    capture = tmp_path / "capture"
+    guard = call("quota", "should-run", *host_args, "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN, "--decision-output-dir", str(capture))
+    original = (capture / "decision.json").read_bytes()
+    assert json.loads(original) == guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    writer = guard["replan_action_packet"]["writeback_contract"]
+    binding = shlex.split(writer["successor_binding_args"])
+    assert binding[binding.index("--turn-instance-id") + 1] == TURN
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-source-artifact",
+        "--operation-id", "complete-source-successor", "--replan-obligation-id", identity["replan_obligation_id"],
+        *binding)
+    assert added["settlement_identity"] == identity
+    assert added["replan_transition"]["turn_boundary"] == "settle_original_turn_before_end"
+    steps = added["settlement_plan"]["ordered_steps"]
+    refresh = next(row["command_template"] for row in steps if row["kind"] == "durable_writeback")
+    spend = next(row["command_template"] for row in steps if row["kind"] == "quota_spend")
+    refused = call(*shlex.split(spend)[1:], expected_code=1)
+    assert refused.get("appended") is not True
+    for placeholder, value in {"<validated_progress>": "successor_created",
+        "<scale>": "single_surface", "<outcome>": "outcome_progress",
+        "<boundary>": "in_flight_continuation"}.items():
+        refresh = refresh.replace(placeholder, value)
+    refreshed = call(*shlex.split(refresh)[1:], "--no-global-sync", "--suppress-external-sinks",
+        "--vision-unchanged-reason", "The accepted source outcome is unchanged; the successor supplies its next validation.")
+    assert refreshed["settlement_progress"]["state"] == "spend_required"
+    spent = call(*shlex.split(spend)[1:])
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert call(*shlex.split(spend)[1:])["appended"] is False
+    assert sum(json.loads(line).get("classification") == "quota_slot_spent" for line in index.read_text().splitlines()) == 1
+    todo = call("todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"])["todo"]
+    assert todo["status"] == "open"  # Creating/settling is not executing the successor.
+    assert (capture / "decision.json").read_bytes() == original
+
+    # After inline execution/settlement, check historical material-reader parity.
+    digest = _source_digest(guard)
+    staged = _turn_envelope_result("replan_view", payload=guard, source_hash=digest, stage="writeback")
+    assert staged["writeback_contract"]["successor_binding_args"] == writer["successor_binding_args"]
+    assert staged["writeback_contract"]["successor_settlement"] == writer["successor_settlement"]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("format_name,envelope_flag", [
+    ("json", True), ("json", False), ("markdown", True), ("markdown", False),
+])
+def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeypatch, provider, format_name, envelope_flag):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, read_fixture_todos
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state)),
+        state_path=state, provider=provider)
+    capture = tmp_path / "capture"
+    command = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", format_name, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "complete-source",
+        "--codex-app", "--available-capability", "shell", "--available-capability", "filesystem_read",
+        "--context-delivery", "off",
+        "--decision-output-dir", str(capture)]
+    if envelope_flag:
+        command.append("--turn-envelope")
+    process = subprocess.run(command, cwd=Path(__file__).resolve().parents[2],
+        capture_output=True, text=True, check=False)
+    assert process.returncode == 0, process.stdout + process.stderr
+    text = process.stdout if format_name == "json" else process.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+    output = json.loads(text)
+    original = (capture / "decision.json").read_bytes()
+    contract = json.loads(original)
+    assert contract["schema_version"] == "loopx_turn_envelope_v1"
+    summary = contract["agent_todo_summary"]
+    assert summary["first_open_items_ref"] == "$.agent_todo_summary.first_executable_items"
+    assert summary["first_executable_items"][0]["todo_id"] == TODO_ID
+    assert summary["first_executable_items"][0]["status"] == "open"
+    assert output["interaction_contract"] == contract["interaction_contract"]
+    assert output["contract_binding"] == contract["contract_binding"]
+    assert output == contract  # Every original fact and instruction survives rendering.
+    assert "action" not in output and "contract_capsule" not in output
+    scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="fixture", context_epoch="one")
+    first = prepare_context_delivery(contract, scope=scope, capture_id="one", surface="complete_turn")
+    current = prepare_context_delivery(contract, scope=scope, capture_id="two", surface="complete_turn")
+    warm = prepare_context_delivery(contract, scope=scope, capture_id="two", surface="complete_turn",
+        baseline=first, retained={"complete": True, "target": first["target"]})
+    assert restore_context_delivery(warm, baseline=first, current=current)["context"] == contract
+    assert restore_context_delivery(warm, baseline=None, current=current)["context"] == contract
+    old = prepare_context_delivery(contract, scope=scope, capture_id="one", surface="quota_packet")
+    changed_surface = prepare_context_delivery(contract, scope=scope, capture_id="two", surface="complete_turn",
+        baseline=old, retained={"complete": True, "target": old["target"]})
+    assert changed_surface["mode"] == "full"
+    assert (capture / "decision.json").read_bytes() == original
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -900,4 +1027,64 @@ def test_real_structured_host_reads_same_complete_replan_source(tmp_path, monkey
         assert material["source_hash"] == request["source_decision_hash"]
     assert "before reading detail_ref.replan_action_packet.writeback" in prompt
     assert "outer Turn executor owns those effects" in prompt
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_external_worker_validates_complete_source_before_wake(tmp_path, monkeypatch, provider):
+    import shlex
+    from tests.test_external_scheduler_worker import _args, _write_executable, worker
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, read_fixture_todos
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state)),
+        state_path=state, provider=provider)
+    rc, contract = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "external-source",
+        "--runtime-profile", "generic_cli", "--include-detail", "scheduler",
+        "--available-capability", "shell", "--available-capability", "filesystem_read", cwd=project)
+    assert rc == 0, contract
+    assert contract["schema_version"] == "loopx_turn_envelope_v1"
+    assert contract["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    original = copy.deepcopy(contract)
+    before_state = state.read_bytes()
+    for mutation in ("valid", "version", "missing_version", "missing_binding", "content",
+                     "terminal", "action", "interaction", "reference"):
+        candidate = copy.deepcopy(contract)
+        if mutation == "version":
+            candidate["schema_version"] = "unsupported-future-version"
+        elif mutation == "missing_version":
+            candidate.pop("schema_version")
+        elif mutation == "missing_binding":
+            candidate.pop("contract_binding")
+        elif mutation == "content":
+            candidate["scheduler_hint"]["reason"] = "Changed after capture"
+        elif mutation == "terminal":
+            candidate["scheduler_hint"]["unchanged_poll"] = {"local_scheduler": "stop"}
+        elif mutation == "action":
+            candidate["effective_action"] = "future_execution"
+            candidate, _ = _resign_contract(candidate)
+        elif mutation == "interaction":
+            candidate["interaction_contract"]["schema_version"] = "future_interaction_version"
+            candidate, _ = _resign_contract(candidate)
+        elif mutation == "reference":
+            candidate.setdefault("agent_lane_next_action", {}).pop("title", None)
+            candidate["agent_lane_next_action"]["title_ref"] = "$.missing_original_requirement"
+            candidate, _ = _resign_contract(candidate)
+        case = tmp_path / mutation
+        cli, marker = case / "quota", case / "wake-called"
+        _write_executable(cli, f"#!{sys.executable}\nprint({json.dumps(candidate)!r})\n")
+        args = _args(fake_cli=cli, state_file=case / "state.json",
+            wake_cmd=shlex.join([sys.executable, "-c",
+                f"from pathlib import Path; Path({str(marker)!r}).touch()"]), wake_timeout_seconds=5)
+        args.goal_id, args.agent_id = GOAL_ID, AGENT_ID
+        result = worker.run_worker(args)
+        assert result == (0 if mutation == "valid" else 2), mutation
+        assert marker.exists() is (mutation == "valid"), mutation
+    assert contract == original
+    assert state.read_bytes() == before_state
     assert _spend_run_count(runtime) == 0
