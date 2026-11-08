@@ -192,11 +192,14 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
       const update = canonicalAuthorityObject(reviewedWorkUpdate, "reviewed work update");
       keys(update, ["todo_id", "append_explore_result_node_refs"]);
       const todoId = id(update.todo_id, "reviewed Todo id"), todo = todos.get(todoId);
-      requireValue(actor !== null && todo && todo.role === "agent" && todo.claimed_by === actor
-        && outcome.todo_ids.includes(todoId), "reviewed work must be the caller's linked Todo");
+      requireValue(actor !== null && todo && todo.role === "agent" && todo.claimed_by === actor,
+        "reviewed work must be the caller's Todo");
       requireValue(Array.isArray(update.append_explore_result_node_refs) && update.append_explore_result_node_refs.length === 1,
         "reviewed work must name exactly one additive result link");
-      reviewedTodos = new Map(todos).set(todoId, {...todo, ...appendTodoExploreReferences(todo, update.append_explore_result_node_refs)});
+      const prospectiveTodo = {...todo, ...appendTodoExploreReferences(todo, update.append_explore_result_node_refs)};
+      // A batch may review another outcome while delivering this Todo's result.
+      // Validate the complete intent first; only linked work enters this basis.
+      if (outcome.todo_ids.includes(todoId)) reviewedTodos = new Map(todos).set(todoId, prospectiveTodo);
     }
     outcome.review = {basis_digest: reviewBasis(outcome, reviewedTodos), items};
   }

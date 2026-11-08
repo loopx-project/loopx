@@ -14,7 +14,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
-def _batch_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
+def _batch_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, separate_review: bool = False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     config = json.loads(registry.read_text())
@@ -30,13 +30,17 @@ def _batch_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: st
     def inspect() -> dict:
         return call("goal-acceptance", "inspect", "--goal-id", GOAL_ID)
 
+    reviewed_todo = (call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
+        "--claimed-by", AGENT_ID, "--text", "Validate a separate retained outcome",
+        "--task-class", "advancement_task", "--action-kind", "validate")["todo_id"]
+        if separate_review else TODO_ID)
     requirements = [{"id": key, "description": description} for key, description in (
         ("content", "Preserve the requested content"),
         ("recovery", "Validate interrupted recovery"),
         ("scope", "Keep conclusions within the tested scope"),
     )]
     declaration = {"outcome_id": "export", "owner_agent_id": AGENT_ID,
-        "objective": "Deliver a recoverable export", "todo_ids": [TODO_ID],
+        "objective": "Deliver a recoverable export", "todo_ids": [reviewed_todo],
         "requirements": requirements,
         "source": {"ref": "message:export", "summary": "The owner requires a recoverable export"}}
     document = tmp_path / "declaration.json"
@@ -63,6 +67,31 @@ def _batch_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: st
         "--no-global-sync", "--suppress-external-sinks", "--goal-outcome-update-json", str(update),
         "--explore-result-json", str(attachment))
     return project, runtime, registry, call, inspect, declaration, reviews, batch
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_batch_review_of_separate_outcome_retains_its_own_work_basis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    _, _, _, call, inspect, declaration, reviews, batch = _batch_fixture(
+        tmp_path, monkeypatch, provider, separate_review=True)
+    before = inspect()
+    preview = call(*batch, "--dry-run")
+    assert preview["goal_outcome_update"]["status"] == "planned" and inspect() == before
+    result = call(*batch)
+    assert result["explore_result_delivery"]["ok"]
+    outcome = inspect()["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["revision"] == 2 and outcome["todo_ids"] == declaration["todo_ids"]
+    assert outcome["todo_ids"] != [TODO_ID], "batching does not attach unrelated work to the reviewed outcome"
+    for row, review in zip(outcome["requirements"], reviews, strict=True):
+        assert row["agent_review"] == {**review, "basis_current": True, "independently_verified": False}
+    current = call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["todo"]
+    other = call("todo", "list", "--goal-id", GOAL_ID, "--todo-id", outcome["todo_ids"][0])["todo"]
+    assert current["explore_result_node_refs"] == [ATTACHMENT["node_id"]]
+    assert not other.get("explore_result_node_refs")
+    retained = inspect()
+    replay = call(*batch)
+    assert replay["goal_outcome_update"]["status"] == "replayed" and inspect() == retained
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

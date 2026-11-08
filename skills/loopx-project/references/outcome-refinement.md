@@ -141,8 +141,11 @@ For changed requirements or reviews, add this envelope to the **existing**
 its ordinary routing, Turn, checkpoint and delivery arguments. This does not
 replace them.
 
-If that same writeback includes an explicit Explore result, a newly authored
-complete review binds the exact additive result link expected from this batch.
+If that same writeback includes an explicit Explore result for work linked to
+the reviewed outcome, a newly authored complete review binds the exact additive
+result link expected from this batch. A valid result for separate same-Agent
+work leaves this outcome's basis and work links unchanged; both still use the
+existing ownership and intent validation.
 It remains stale until the Todo owner commits the link; failed delivery replays
 the original digest. Other work/evidence changes still require review. Do not
 repeat an unchanged review solely to acknowledge a successfully delivered

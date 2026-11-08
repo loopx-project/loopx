@@ -133,8 +133,11 @@ See the [Agent workflow](../../skills/loopx-project/references/outcome-refinemen
 for inline context, one-call writeback and upgrade/adoption limits.
 
 When one `refresh-state` explicitly supplies both a new complete outcome review
-and an Explore result, the review covers that same batch's exact additive Todo
-link. The typed owner hashes the prospective link against the original CAS
+and an Explore result for work linked to that outcome, the review covers that
+same batch's exact additive Todo link. A result for separate same-Agent work
+does not change the reviewed outcome's basis or work links. The typed owner
+validates the complete result-link intent and ownership in either case, then
+hashes a relevant prospective link against the original CAS
 snapshot; it does not write the link or rebind an old review. The basis becomes
 current only after the Todo owner commits the expected link. Failed delivery
 remains stale and exact replay retains its original digest. Other work changes
@@ -142,8 +145,10 @@ and additional evidence links still invalidate the review. Separately submitted
 and legacy completed reviews keep their original basis; no check result or
 independent-verification flag changes.
 
-中文：同一次 `refresh-state` 显式提交完整的新自查与 Explore 结果时，自查依据包含
-该批预期追加的精确 Todo 结果关联。typed owner 基于原 CAS 快照计算摘要，不代替
+中文：同一次 `refresh-state` 显式提交完整的新自查，以及该 outcome 关联工作的
+Explore 结果时，自查依据包含该批预期追加的精确 Todo 结果关联。同 Agent 的其他
+工作结果不改变本 outcome 的依据或关联；typed owner 在两种情况下均先验证完整
+意图和归属，再基于原 CAS 快照计算相关工作的摘要，不代替
 Todo owner 写关联，也不替旧自查更新依据。只有预期关联真实提交后依据才是 current；
 投递失败保持过期，原样重放保留原摘要。其他工作变化、额外证据关联仍使依据失效。
 分开提交或旧版本已完成的自查保持原义，独立检查与验证标记不变。

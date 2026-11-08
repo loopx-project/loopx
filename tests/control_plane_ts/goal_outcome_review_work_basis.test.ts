@@ -76,10 +76,10 @@ test("prospective review covers only the exact additive effect and never mutates
   assert.equal(current(linked(ordinary)), false, "separately reviewed state must not adopt a later link");
 });
 
-test("reviewed updates cannot rebind old reviews, replace work or act on unlinked/foreign work", () => {
+test("reviewed updates cannot rebind old reviews, replace work or act on foreign work", () => {
   const head = fixture();
   for (const invalid of [
-    {...update, status: "done"}, {...update, todo_id: "todo_unrelated"},
+    {...update, status: "done"},
     {...update, todo_id: "todo_missing"}, {...update, append_explore_result_node_refs: []},
     {...update, append_explore_result_node_refs: [node, "question_other"]},
     {...update, append_explore_result_node_refs: ["/local/path"]},
@@ -89,6 +89,27 @@ test("reviewed updates cannot rebind old reviews, replace work or act on unlinke
   assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "export"}, update));
   const foreign = withTodos(head, row => row.todo_id === todoId ? {...row, claimed_by: "other"} : row);
   assert.throws(() => refineGoalOutcome(foreign, goal, null, "author", review, update));
+});
+
+test("unrelated batch work is validated without changing the reviewed outcome's basis", () => {
+  const head = fixture(), other = {...update, todo_id: "todo_unrelated"};
+  const reviewed = {...head, goal_outcomes: refineGoalOutcome(head, goal, null, "author", review, other)};
+  assert.equal(current(reviewed), true, "an unrelated pending effect does not make this outcome stale");
+  const delivered = withTodos(reviewed, row => row.todo_id === other.todo_id
+    ? {...row, ...appendTodoExploreReferences(row, [node])} : row);
+  assert.equal(current(delivered), true);
+  assert.deepEqual(reviewed.goal_outcomes.outcomes[0].todo_ids, declaration.todo_ids);
+  for (const invalid of [
+    {...other, status: "done"}, {...other, append_explore_result_node_refs: []},
+    {...other, append_explore_result_node_refs: [node, "question_other"]},
+    {...other, append_explore_result_node_refs: ["/local/path"]},
+  ]) assert.throws(() => refineGoalOutcome(head, goal, null, "author", review, invalid));
+  const foreign = withTodos(head, row => row.todo_id === other.todo_id ? {...row, claimed_by: "other"} : row);
+  assert.throws(() => refineGoalOutcome(foreign, goal, null, "author", review, other));
+  assert.throws(() => refineGoalOutcome(head, goal, null, null, review, other));
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {outcome_id: "export"}, other));
+  assert.equal(current(withTodos(delivered, row => row.todo_id === todoId
+    ? {...row, text: "Changed reviewed work"} : row)), false);
 });
 
 for (const provider of ["file", "sqlite"] as const) test(`${provider}: exact CAS and receipts retain anticipated basis across restart and lost replies`, async t => {
