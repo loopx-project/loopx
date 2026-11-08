@@ -665,6 +665,12 @@ transition permits 2,000 additional default characters/bytes or 16,000 for full
 transaction detail; subsequent v1 growth and absolute ceilings remain guarded.
 This is migration qualification, not a net context-efficiency claim.
 
+Read-only capture publication uses the existing cross-platform private-IO owner:
+new files receive private POSIX permissions or a protected Windows DACL, while
+an unsafe existing transport directory is rejected without repair. This does
+not enable native continuity or change its platform qualification. Native
+Windows producer coverage is retained separately from local POSIX execution.
+
 Failed Session retry also delivers its callback input by the recorded request
 version after the existing complete-source check. Current requests supply the
 checked complete source; historical v0 supplies its original envelope, including

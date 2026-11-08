@@ -55,8 +55,26 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
     )
 
     try:
-        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=_private_transport_root(runtime_root)))
+        from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
+
+        # This is a write-once recovery file, not native continuity. Reuse the
+        # cross-platform private IO owner without enabling a native baseline.
+        runtime_root = runtime_root.expanduser().resolve()
+        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = runtime_root / "context-delivery"
+        try:
+            root.mkdir(mode=0o700)
+        except FileExistsError:
+            try:
+                require_private_path(root, directory=True)  # Never repair an existing leaf.
+            except OSError as error:
+                raise ValueError("machine context transport requires a private physical directory owned by this user") from error
+        else:
+            protect_private_path(root, directory=True)
+        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=root))
+        protect_private_path(directory, directory=True)
         reference = capture_context_projection(value, directory=directory, filename="required-context.json")
+        protect_private_path(Path(reference["path"]))
         if not index_and_select:
             return {key: reference[key] for key in ("path", "sha256", "command")}
         path, digest = Path(reference["path"]), reference["sha256"]

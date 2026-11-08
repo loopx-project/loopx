@@ -820,7 +820,14 @@ def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
 
 
 @pytest.mark.parametrize("scenario", [SCENARIOS[0], SCENARIOS[2]], ids=["small", "multi-agent"])
-def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenario: Scenario) -> None:
+def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenario: Scenario,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    from loopx.cli_commands import context_machine
+
+    def native_unavailable(_runtime):
+        raise ValueError("native continuity is unavailable")
+
+    monkeypatch.setattr(context_machine, "_private_transport_root", native_unavailable)
     with _stable_budget_fixture_root(tmp_path / scenario.name) as root:
         project, runtime, registry_path, state_file = _write_fixture(root, scenario)
         import_fixture_authority(registry_path, GOAL_ID)
@@ -833,9 +840,6 @@ def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenari
         assert payload["route"]["kind"] == "ready_for_host"
         assert payload["boundary"]["inspection_only"] is True
         assert not any(payload["effects"].values()) and state_file.read_bytes() == before
-        if os.name != "posix":
-            assert payload["work_contract"]["contract_binding"]
-            return
         assert_cli_output_baseline(CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"], scenario=scenario.name,
             output_format="json", text=text, measurement=measure_cli_output(text, output_format="json"))
         detail = payload["detail_ref"]
@@ -1291,37 +1295,34 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
         assert payload["boundary"]["inspection_only"] is True
         assert not any(payload["effects"].values()) and state_file.read_bytes() == before
         [source] = originals
-        if os.name == "posix":
-            detail = payload["detail_ref"]
-            assert json.loads(Path(detail["path"]).read_bytes()) == source
-            assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
-            assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
-            # The later read must remain bound to this preview when live facts change.
-            state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
-            selector = "/interaction_contract/agent_channel/work_context"
-            reader = shlex.split(detail["command"])
-            rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
-            page = json.loads(page_text)
-            assert rc == 0 and page["eof"], page
-            [selected] = json.loads(page["content"])["selections"]
-            assert selected == {"pointer": selector,
-                "value": source["interaction_contract"]["agent_channel"]["work_context"]}
-            assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
-            assert "contract_binding" not in payload["work_contract"]
-            if not include_agent_vision:
-                state_file.write_bytes(before)
-                # An insecure existing transport must not receive private data.
-                transport = runtime / "context-delivery"
-                transport.chmod(0o755)
-                captures = list(transport.iterdir())
-                fallback_code, fallback_text = _invoke_cli(command)
-                assert fallback_code == 0, fallback_text
-                fallback = _json_payload(fallback_text)
-                assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
-                assert fallback["boundary"]["inspection_only"] is True
-                assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
-        else:
-            assert payload["work_contract"] == source
+        detail = payload["detail_ref"]
+        assert json.loads(Path(detail["path"]).read_bytes()) == source
+        assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
+        assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
+        # The later read must remain bound to this preview when live facts change.
+        state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
+        selector = "/interaction_contract/agent_channel/work_context"
+        reader = shlex.split(detail["command"])
+        rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
+        page = json.loads(page_text)
+        assert rc == 0 and page["eof"], page
+        [selected] = json.loads(page["content"])["selections"]
+        assert selected == {"pointer": selector,
+            "value": source["interaction_contract"]["agent_channel"]["work_context"]}
+        assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+        assert "contract_binding" not in payload["work_contract"]
+        if os.name == "posix" and not include_agent_vision:
+            state_file.write_bytes(before)
+            # An insecure existing transport must not receive private data.
+            transport = runtime / "context-delivery"
+            transport.chmod(0o755)
+            captures = list(transport.iterdir())
+            fallback_code, fallback_text = _invoke_cli(command)
+            assert fallback_code == 0, fallback_text
+            fallback = _json_payload(fallback_text)
+            assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
+            assert fallback["boundary"]["inspection_only"] is True
+            assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
 
     writeback = payload["work_contract"]["replan_action_packet"][
         "writeback_contract"
