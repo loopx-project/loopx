@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
-from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
+from ..control_plane.capability_hooks import InteractionProjectionHookRegistration, TurnStartContextProjector
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..control_plane.quota.heartbeat_receipt import (
@@ -186,6 +186,7 @@ def record_automatic_heartbeat_stall(
     status_collector: Callable[..., dict[str, object]],
     decision_builder: Callable[..., dict[str, object]],
     host_observation_resolver: Callable[..., object],
+    turn_context_projector: TurnStartContextProjector | None = None,
 ) -> tuple[dict[str, object], dict[str, object], object, str]:
     """Commit and reproject the automatic no-spend heartbeat observation."""
 
@@ -263,8 +264,7 @@ def record_automatic_heartbeat_stall(
         turn_instance_id=turn_id,
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
-        include_explore_context=True,
-        explore_context_todo_id=args.todo_id,
+        turn_context_projector=turn_context_projector,
         goal_ref=goal_ref,
     )
     rebuilt["heartbeat_stall_writeback"] = {

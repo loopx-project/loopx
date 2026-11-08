@@ -297,6 +297,13 @@ def _prepare_quota_command_execution(
     return goal_ref, turn_start_hook_dispatch, context
 
 
+def _quota_turn_context_projector(args, *, registry_path: Path, runtime_root: Path):
+    from ..capabilities.explore.turn_context import turn_context_projector
+
+    return turn_context_projector(registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
+
+
 
 def _emit_quota_result(
     payload: dict[str, object],
@@ -576,6 +583,8 @@ def handle_quota_command(
                 retained_todo_id=retained_action_selection_todo_id,
             )
             heartbeat_receipt_existing = action_selection.receipt
+            context_projector = _quota_turn_context_projector(args,
+                registry_path=registry_path, runtime_root=runtime_root)
             payload = _export("build_live_quota_should_run_decision")(
                 status_payload,
                 goal_id=args.goal_id,
@@ -606,8 +615,7 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
-                include_explore_context=True,
-                explore_context_todo_id=args.todo_id,
+                turn_context_projector=context_projector,
                 context_navigation=native_context_activation(args)["progressive_enabled"],
                 goal_ref=goal_ref,
             )
@@ -681,6 +689,7 @@ def handle_quota_command(
                         context=context,
                         interaction_projection_hooks=interaction_projection_hooks,
                         turn_start_hook_dispatch=turn_start_hook_dispatch,
+                        turn_context_projector=context_projector,
                         action_selection=action_selection,
                         cache_metadata=cache_metadata,
                         goal_ref=goal_ref,

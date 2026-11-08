@@ -13,6 +13,7 @@ from ..runtime.time import now_utc_iso
 from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
+    TurnStartContextProjector,
     dispatch_interaction_projection_hooks,
 )
 from .effect_program import (
@@ -220,8 +221,12 @@ def _project_turn_start_required_reads(
     turn_instance_id: str | None,
     registry_path: Path,
     runtime_root: Path,
-) -> bool:
-    """Order evidence before work and report whether the decision changed."""
+    context_projector: TurnStartContextProjector | None = None,
+) -> Mapping[str, Any] | None:
+    """Order evidence after selection and retain its source dispatch."""
+
+    if context_projector is not None:
+        dispatch = context_projector(payload, dispatch)
 
     # Keep failure observations even when no evidence read was produced. The
     # typed envelope projects their cache/dependent-action policy for the host.
@@ -231,7 +236,7 @@ def _project_turn_start_required_reads(
         }
     projected = _turn_start_required_reads(dispatch)
     if not projected:
-        return False
+        return dispatch
     existing = payload.get("required_reads")
     required_reads = (
         [dict(item) for item in existing if isinstance(item, Mapping)]
@@ -270,7 +275,7 @@ def _project_turn_start_required_reads(
         registry_path=str(registry_path),
         runtime_root=str(runtime_root),
     )
-    return True
+    return dispatch
 
 
 def _fresh_operator_inbox_observation_count(
@@ -595,8 +600,7 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
-    include_explore_context: bool = False,
-    explore_context_todo_id: str | None = None,
+    turn_context_projector: TurnStartContextProjector | None = None,
     context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
@@ -758,21 +762,7 @@ def build_live_quota_should_run_decision(
             turn_start_hook_dispatch, registry=registry_path, runtime_root=runtime_root,
             goal_id=goal_id, agent_id=agent_id,
         )
-    if include_explore_context and agent_id:
-        from ...capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-
-        # Scope this read only after the shared decision has resolved receipt
-        # reentry and explicit selection. Discovery keeps its unbound view;
-        # settlement has no open work whose evidence needs to be focused.
-        channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
-        selected = payload.get("selected_todo") or {}
-        focus = (selected.get("todo_id") if payload.get("normal_delivery_allowed") is True
-                 and channel.get("delivery_allowed") is True and selected.get("status") == "open" else None)
-        turn_start_hook_dispatch = extend_explore(dict(turn_start_hook_dispatch or {}),
-            registry_path=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, agent_id=agent_id, todo_id=explore_context_todo_id,
-            selected_todo_id=focus)
-    _project_turn_start_required_reads(
+    turn_start_hook_dispatch = _project_turn_start_required_reads(
         payload,
         turn_start_hook_dispatch,
         available_capabilities=available_capabilities,
@@ -780,6 +770,7 @@ def build_live_quota_should_run_decision(
         turn_instance_id=turn_instance_id,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        context_projector=turn_context_projector,
     )
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
     projections = hook_dispatch["projections"]
