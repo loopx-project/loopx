@@ -41,6 +41,16 @@ test("initial work measurement feedback preserves linked scopes without choosing
   assert.equal(unknown.improvement, null);
   assert.ok(card.measurement_feedback.every(row => row.node_id !== "unlinked"));
   assert.ok(!Object.hasOwn(card, "authoritative") && !Object.hasOwn(card, "search_comparison"));
+  // Joint selection is useful before an optional decision is authored. The
+  // ordinary cue must allow continuing a productive route and keep the
+  // original uncertainty, authority and record-optional conditions intact.
+  assert.match(card.guidance, /expected accepted-outcome gain/);
+  assert.match(card.guidance, /remaining horizon/);
+  assert.match(card.guidance, /full implementation and validation cost/);
+  assert.match(card.guidance, /including search and confirmation/);
+  assert.match(card.guidance, /Continuing a supported route is valid/);
+  assert.match(card.guidance, /No outcome\/proxy profile has been selected/);
+  assert.match(card.guidance, /decision attachment remains optional/);
   assert.ok(!Object.hasOwn(graph, "work_yardsticks"));
   assert.ok(card.details_command.includes("--todo-id") && card.details_command.includes(todo.todo_id));
   assert.deepEqual(request, original);

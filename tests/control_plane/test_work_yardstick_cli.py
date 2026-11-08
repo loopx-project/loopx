@@ -261,6 +261,9 @@ def test_first_work_reads_linked_measurements_without_a_yardstick_decision(tmp_p
     start = page["content"].index(',"value":', page["content"].index(marker)) + len(',"value":')
     comparison, _ = json.JSONDecoder().raw_decode(page["content"], start)
     assert comparison["todo_id"] == TODO_ID
+    assert "expected accepted-outcome gain" in comparison["guidance"]
+    assert "remaining horizon" in comparison["guidance"]
+    assert "Continuing a supported route is valid" in comparison["guidance"]
     metrics = {row["metric"]: row for row in comparison["measurement_feedback"]}
     assert metrics["quality"]["best"]["candidate_ref"] == "candidate:b"
     assert metrics["screen"]["best"]["candidate_ref"] == "candidate:a"
