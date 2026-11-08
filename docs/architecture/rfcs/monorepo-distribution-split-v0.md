@@ -790,6 +790,35 @@ Approval needs a reviewed decision, not implementation progress or silence.
   exact expiry remains a release-owner decision. M1 is open. No module-count,
   loading-performance, split-package or R1 managed-Turn benefit is claimed.
 
+### 2026-11-04 — M1 public status owner migration
+
+- **Delta:** the complete `ChatStatusRequestMixin` and `goal_read_runtime_root`
+  implementation moves to `loopx.chat.status_api`. Chat HTTP and Todo detail
+  import that owner directly. The characterization prerequisite
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) is already merged.
+- **Direct migration:** the historical top-level `loopx.chat_status_api` module is
+  removed rather than retained as an alias or warning shim. The repository callers
+  and published-surface audit found no external importer; all active callers and
+  tests now use `loopx.chat.status_api`. This intentional compatibility exemption
+  applies only to this internal-only relocation and creates no general precedent
+  for removing a supported public import.
+- **Authority boundary:** retarget both exact owner-path entries in
+  `tests/architecture/test_source_session_registry_denial.py`, leaving every
+  denial assertion and the `_discovery_registry` exception unchanged. Real HTTP
+  coverage permits lifecycle-only registry discovery but refuses full status
+  before collector execution. Moving the presentation owner grants no new
+  runtime, source, provider or execution authority.
+- **Evidence:** owner tests now require the canonical import and absence of the
+  top-level shim. Existing HTTP, File/SQLite source routing, source loss/recovery
+  and delivery-review tests protect the original behavior. Absolute-import-
+  resolved AST comparison covers the complete owner; the denial oracle differs
+  only in its two owner paths.
+- **Remaining:** this is one public-owner M1 slice, not completion of the wider
+  public Chat migration, D3, split distributions or R1 managed minimal. The
+  removed internal-only top-level module is one representational cleanup, not
+  evidence of loading-performance or long-horizon benefit. Source and isolated-
+  wheel qualification do not establish an upgrade of an existing installed host.
+
 ### 2026-11-04 — Capability discovery selected loading
 
 - **Baseline:** `79b781865`. `capability list` / `show` and command help now
