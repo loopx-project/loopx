@@ -114,8 +114,13 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
       delete parent[last];
     } else Object.defineProperty(parent, last, {value: change.value, enumerable: true, writable: true, configurable: true});
   }
+  // JSON cloning owns containers while retaining primitive values. Exact
+  // equality already proves an unchanged primitive; containers and altered
+  // scalar values retain their full canonical digest comparison.
   for (const [key, value] of Object.entries(field)) {
-    if (key !== "goal_acceptance_contract" && (!Object.hasOwn(record, key) || canonicalAuthoritySha256(value) !== canonicalAuthoritySha256(record[key]))) {
+    const unchangedScalar = value === record[key] && (value === null || typeof value !== "object");
+    if (key !== "goal_acceptance_contract" && (!Object.hasOwn(record, key) ||
+        !unchangedScalar && canonicalAuthoritySha256(value) !== canonicalAuthoritySha256(record[key]))) {
       throw new EffectRuntimeRequestError("canonical Todo facts cannot be replaced by caller source differences");
     }
   }

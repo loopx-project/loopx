@@ -2318,6 +2318,35 @@ tracked 条目逐字节匹配源码，十七项源码专用、文档和媒体遗
 context/model/split-install、PostgreSQL host/wheel 以及每项冻结失败。
 原任务保持开放；本检查点不授权合入，也不宣告最小化内核完成。
 
+### 2026-11-08 — Canonical source 标量比较细化
+
+现有 `todo.read` owner 在完整 canonical field digest 与 JSON clone 之后，对完全相等的
+原始标量使用精确相等判断。容器和发生变化的标量保留完整 canonical digest 比较；
+缺失字段、source lane 新增、标量 fact 保护及过期 reference 拒绝继续由原 owner 负责。
+未引入 source allowlist、provider cache、protocol、配置或竞争的决策 owner。
+
+在 `main@aee777008` 上，一次新的合成完整 CLI caller trace 确认现有双 role native
+transaction 已被实际采用。Quota before/after projection 属于不同预算决策，重复的
+read recipe 不能据此变成 authority cache。本次有界重构留在现有 canonical source
+比较层，保留这两次决策。
+
+`read_transaction.ts` 最终 source SHA-256 `ac0ae4311e4fe5c385ec75b3569cd8ebbe98328189e2885b5ecdcccb11c476b3`
+通过 Python61、TypeScript56，以及真实隔离 PostgreSQL16.15 store391/service11；
+这些已资格验证的运行均无 skip。不可变原版通过所选 native PostgreSQL source 保护用例，
+将所有原始标量视为 unchanged 的 mutation 在同一用例失败。父级替换、删除和恢复，
+note/scope/count 变化与 provider state 读回继续覆盖。source/wheel × File/SQLite
+四次完整 101-Todo CLI lifecycle 保留 sum45、原完成时间、四份 receipt、一次 debit、
+restart、refusal/replay；每次都拥有并观测两条正常 native process exit。隔离 wheel
+runtime source bytes 与 checkout 一致。验证环境为 macOS arm64、CPython3.13.5、
+Node22.22.3。更早的工具链/setup 失败与 service-env skip 仍作为独立准备失败保留。
+
+本次减少重复标量 digest 工作，不代表 matched-cost、完整边际成本或 adoption 收益。
+冻结的 cost、attribution 与 normal-bytecode campaign 均保持原样。继续保留原完整
+transaction 与 I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel 及所有历史失败验收缺口。
+exact-head review、必需 CI/readiness 与 maintainer merge authority 仍是独立门；
+未宣称 installed-host upgrade 或 Goal 完成。
+
 ### 2026-11-09 — 复用已验证的完整 source basis bytes
 
 现有 Python Todo compatibility transport 将已经通过 canonical field digest

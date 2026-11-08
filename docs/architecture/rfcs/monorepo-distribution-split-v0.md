@@ -2985,6 +2985,42 @@ release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 PostgreSQL host/wheel and every frozen failure. The original task remains open;
 this checkpoint does not authorize merge or declare the minimal kernel complete.
 
+### 2026-11-08 — Canonical source scalar-comparison refinement
+
+The existing `todo.read` owner now uses exact equality for unchanged primitive
+fields after its complete canonical-field digest and JSON clone. Containers and
+altered scalar values keep the full canonical digest comparison; missing fields,
+source-lane additions, scalar-fact protections and stale-reference rejection
+remain with their current owners. No source allowlist, provider cache, protocol,
+configuration or competing decision owner is introduced.
+
+A fresh synthetic complete-CLI caller trace on `main@aee777008` confirms the
+existing two-role native transaction is adopted. Quota before/after projections
+belong to different budget decisions, so their repeated read recipes do not
+justify an authority cache. The bounded refactoring stays in the existing
+canonical source comparison instead of collapsing those decisions.
+
+Final `read_transaction.ts` SHA-256 `ac0ae4311e4fe5c385ec75b3569cd8ebbe98328189e2885b5ecdcccb11c476b3`
+passes 61 Python and 56 TypeScript cases plus real isolated PostgreSQL16.15
+store391/service11, zero skips in these qualified runs. The immutable original
+passes the selected native PostgreSQL source-protection case; a mutation that
+treats all primitives as unchanged fails it. Parent replacement, deletion and
+restoration, changed notes/scopes/counts and provider-state readback remain covered.
+Four complete 101-Todo source/wheel × File/SQLite CLI lifecycles preserve sum45,
+original completion time, four receipts, one debit, restart and refusal/replay;
+each owns and observes two normal native process exits. The isolated wheel's
+runtime source bytes match the checkout. Validation uses macOS arm64,
+CPython3.13.5 and Node22.22.3. Earlier toolchain/setup failures and a service-env
+skip remain preparation evidence, distinct from the qualified runs.
+
+This removes redundant scalar digest work; it is not a matched-cost or full
+marginal-cost/adoption result. Frozen cost, attribution and normal-bytecode
+campaigns remain unchanged. Preserve the original complete transaction and all
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel and historical failure gaps.
+Exact-head review, required CI/readiness and maintainer merge authority remain
+separate gates; no installed-host upgrade or Goal completion is claimed.
+
 ### 2026-11-09 — Reuse validated complete source-basis bytes
 
 The existing Python Todo compatibility transport now retains its validated
