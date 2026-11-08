@@ -1,14 +1,17 @@
 /** Python transport only; native callers consume readTodo in process. */
 import {createHash} from "node:crypto";
+import {gzipSync} from "node:zlib";
 import {readTodo, TODO_READ_REQUEST, TODO_READ_RESULT} from "./read_projection.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {MAX_LOCAL_SNAPSHOT_BYTES, openPrivateSnapshotSource} from "../effect_runtime_snapshot.ts";
+import {MAX_INLINE_RESPONSE_BYTES, MAX_LOCAL_SNAPSHOT_BYTES, openPrivateSnapshotSource} from "../effect_runtime_snapshot.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 
 const completeBytes = MAX_LOCAL_SNAPSHOT_BYTES - 2 * 1024 * 1024;
 const pieceBytes = Math.floor(completeBytes / 4) * 3;
+const inlineBytes = MAX_INLINE_RESPONSE_BYTES - 4096;
+const quotaPieceBytes = Math.floor(inlineBytes / 4) * 3;
 
 async function sourceFacts(value: unknown): Promise<JsonObject> {
   const ref = requireJsonObject(value, "Todo fact source reference");
@@ -48,18 +51,25 @@ export async function readTodoRuntime(value: unknown): Promise<JsonObject> {
       ...(input.include_full_source === true ? {items, evaluations} : {}),
       ...(input.include_task_orchestration_authority === true ? {orchestration} : {})};
   }
-  const bytes = Buffer.from(JSON.stringify(result), "utf8");
-  if (page === null && bytes.length <= completeBytes) return result;
+  const decoded = Buffer.from(JSON.stringify(result), "utf8");
+  // Keep one complete source transaction for a large quota bundle. The
+  // lossless adapter codec changes no rows or selection/wait semantics.
+  // Reads beyond the existing complete-frame budget retain their old paging.
+  const compressed = input.kind === "quota_projection" && decoded.length > inlineBytes && decoded.length <= completeBytes;
+  const bytes = compressed ? gzipSync(decoded) : decoded;
+  const size = compressed ? quotaPieceBytes : pieceBytes;
+  if (page === null && !compressed && bytes.length <= completeBytes) return result;
   const digest = createHash("sha256").update(bytes).digest("hex");
   const offset = page === null ? 0 : page.offset;
-  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset >= bytes.length || offset % pieceBytes !== 0 ||
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset >= bytes.length || offset % size !== 0 ||
       (page !== null && page.sha256 !== digest)) {
     return {schema_version: TODO_READ_RESULT, canonical: {status: "failed", reason_code: "canonical_snapshot_changed",
       reason: "Todo read result changed; restart the complete read, never append a newer page",
       source_authority: "unknown_fail_closed", decision_read_from_provider: false, legacy_fallback_used: false}};
   }
-  const end = Math.min(bytes.length, offset + pieceBytes);
+  const end = Math.min(bytes.length, offset + size);
   return {schema_version: TODO_READ_RESULT, result_piece: {offset, byte_count: bytes.length, sha256: digest,
+    ...(compressed ? {content_encoding: "gzip", decoded_byte_count: decoded.length} : {}),
     data: bytes.subarray(offset, end).toString("base64"),
     next: end === bytes.length ? null : {offset: end, sha256: digest, observed_at: observed}}};
 }
