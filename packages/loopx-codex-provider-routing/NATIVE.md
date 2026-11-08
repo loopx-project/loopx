@@ -53,12 +53,18 @@ request count. `--runtime-root` selects an existing owner; default is `~/.loopx`
 The doctor distinguishes installation readiness from message delivery, and never
 uses a model or checks an API key against an upstream service. An unstarted relay
 is a valid installation state; a healthy legacy or mismatched running daemon is
-not a qualified installation. Keep original-message acceptance as a separate
-end-to-end check.
+not a qualified installation. Since 0.15.4, `consumer_readiness` reports worker
+and steward independently. An unconfigured steward route does not block the
+worker. If a configured route is unavailable, or the two health responses
+identify different relay instances, installation verification fails and each
+route keeps its own status. The legacy `relay` field still reports the worker.
+Keep original-message acceptance as a separate end-to-end check.
 
 For upgrades, install the reviewed target into a new immutable environment and
-invoke its provider with `operation: "reconcile", execute: true`. The model
-transport's ordinary `ensure` also performs this reconciliation. An authenticated
+invoke its provider with `operation: "reconcile", execute: true`. This checks the
+configured steward route as well as the worker, without creating credentials.
+The model transport's ordinary `ensure` also performs reconciliation for its
+own route. An authenticated
 new-protocol daemon with a different loaded build stops new admissions, drains
 already accepted requests and releases its existing owner lock before one new
 daemon starts. The model, route credentials, key policy and message queue stay
