@@ -1993,6 +1993,55 @@ caller 的必需依赖闭包，再选一个完整可回退的加载改动并验�
 context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
 继续开放；本轮不合入 main、不升级 host。
 
+### 2026-11-08 — 反馈校验不加载写入适配器
+
+初始 runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中
+两个既有 retained-state 写入适配器改为按需加载。适配器不可用时，纯反馈校验
+仍可执行；parent 会在模块导入时失败。Reward mutation 在 registry 读取或
+写入前解析两个适配器，原 guard 与 writer 调用位置仍查找当前模块 binding。
+保留适配器对象 identity、调用中途 patch 行为、先 index 后 state 的锁顺序、
+TypeScript guard owner、凭证拒绝及 partial-write handling。本地兼容映射、
+模块 `__getattr__`／`__dir__` 与 computed `__all__` 保留全部 50 个原 star-export
+名称，包括后面的 append／render 函数。不新增 capability、provider、持久词汇、
+规则 owner 或跨请求 authority cache。
+
+两个相关组分别通过 291 个反馈策略及 48 个适配器／写入／恢复用例。独立的
+适配器不可用用例在 parent 上失败；head 保留纯校验，并在 reward mutation 前
+拒绝缺失 writer。聚焦 mypy／Ruff 通过。Production semantic advisory 未发现
+支持范围内的新 carrier；显式纳入测试文件超出该 scanner 支持的 `loopx/` 范围。
+测试中的 refusal 字符串仍是本地 fixture。
+
+重建单体 wheel 先断言隔离安装的模块所有权，再在非 checkout 工作目录、清空
+`PYTHONPATH` 后核对全部 1840 个 packaged tracked source。相同五个 source-only
+omission 保留；相对冻结 runtime candidate，仅 `effect_runtime.py` 和
+`feedback.py` 字节变化。首次 wheel 准备因缺少 Chat bundle 失败后，既有 dashboard
+Chat build 提供所需 bundle。四条新的 candidate source／wheel × File／SQLite
+101-Todo CLI 生命周期使用默认 bytecode，全部通过原 artifact、completion time、
+scope、四份 receipt、一次 debit、restart、refusal 与 replay oracle。每条的两个
+managed native daemon 均退出。这是新 runtime 正确性检查，不是新增 matched
+cost 样本。
+
+正常缓存 profile 仅检查已结算 synthetic recovery dry-run 的加载依赖。其
+410-module 闭包及嵌套 import／compile timing 不能证明默认 provider 性能、fresh
+authority 行为或生命周期成本。初始 profile 文件名遮蔽 stdlib，在 CLI 前失败，
+仍保留为准备失败。冻结样本及上一轮归因 pair 不重跑、不扩充、不重标签。
+不新增 whole-path 收益、PostgreSQL host／wheel、model／attention 或 installed
+adoption 资格。保留 peer hard-cut hold、全部历史失败、至少一个 minor release
+的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 及
+context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
+评审／readiness 继续开放；下一段加载决策仍属于既有 quota／context／refresh
+caller。本轮不合入 main，不升级 installed host。
+
+提交准备期间，维护者在 `481436a56b47220c7c43bd6e272c1fa59d5038fe` 合入
+#8302，该 head 未包含本次反馈改动。两个尚未提交远端的反馈／checkpoint commit
+移到基于目标 main `0ed909880` 的干净后续分支，反馈源码及聚焦测试字节相同。
+后续 wheel 先验证安装所有权，再匹配 1841 个 packaged tracked source，保留
+相同五个 omission。新的 source／wheel × File／SQLite 生命周期全部通过四组
+原 oracle，每条两个 native 均退出。在此变化的集成基线上，48 个写入／恢复及
+265 个共享反馈策略用例、mypy／Ruff 通过。这些检查验收后续提案的变化基线，
+初始运行保留为历史证据，不重跑或新增性能样本。后续提案仍需独立 exact-head
+评审／readiness，原 Task 的完整验收继续开放。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
