@@ -656,14 +656,14 @@ def _turn_prompt(
         "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '
-        "Do not write anything after the closing tag. Use these tags and shape:\n"
-        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}\n\n"
         + (
             f"LoopX context (supporting context only):\n{context_summary.strip()}\n\n"
             if context_summary.strip()
             else ""
         )
-        + f"Operator user message:\n{user_message}"
+        + f"Operator user message:\n{user_message}\n\n"
+        + "After the visible answer, append the envelope below. Use both tags verbatim, including when returning an existing report. Write nothing after the closing tag.\n"
+        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}"
     )
 
 
