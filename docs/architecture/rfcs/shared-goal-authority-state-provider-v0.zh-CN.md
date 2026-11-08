@@ -2668,6 +2668,15 @@ SQLite 证明与 provider-neutral 归档恢复共用持有私有状态的 TS 重
 当成 D2 通过。摘要规则收口推进投影恢复边界，但没有把其他调用方或默认切换标记完成；
 剩余工作按当前核对表归类，不再按 helper 迁移数量机械扣减。
 
+**2026-11-08 1 MiB 预算行实测关闭。** 正式 matched-1m 复测在 head `a9485073f`
+（含已合并的 #4931 读取证明复用；#5251 亦已合并）上执行，容量测量入口由
+#8256（2026-11-08 合并）修复——此前 quota 上下文捕获导航曾使冷 CLI 臂静默失败。
+原两条失败行现已通过：receipt p95 在 10k/100k 为 26.44/27.65 ms、scan-100 p95 为
+60.85/69.62 ms，均在 50/250 ms 预算内，无随历史深度退化，账本 13 passed /
+0 failed / 11 missing（证据见 #4224）。这关闭的是上述预算行，不是 D2：soak 已在
+9 天 22.85 小时处失败（已在 #4224 报告），恢复、consumer-lag 与 OS/runtime 矩阵
+仍缺。
+
 **当前开发节奏。** 上述 L1–L9 是领域分工，不是剩余 PR 数。原七行 PR 计划
 已被[逐项核对表](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md)取代：已合入的分页与恢复不再列为新 PR，
 caller 在途工作先整合，D2 自然时间资格单列。新增代码依次按完整来源、executor fence、
