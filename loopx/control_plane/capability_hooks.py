@@ -224,6 +224,25 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return {"goal_id": payload.get("goal_id"), "agent_id": agent_id}
 
 
+def _turn_context_binding_source(
+    payload: Mapping[str, Any], *, from_journal: bool = False,
+) -> Mapping[str, Any]:
+    from .quota.turn_envelope import (
+        COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+        complete_turn_host_source,
+        turn_plan_host_source,
+    )
+
+    if payload.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        source = complete_turn_host_source(
+            turn_plan_host_source(payload), operation="host_context_binding",
+            recorded_capability_result=from_journal,
+        )
+        assert source is not None
+        return source
+    return turn_context_source(payload)
+
+
 def dispatch_turn_context_hooks(
     payload: dict[str, Any],
     registrations: Sequence[TurnContextHookRegistration],
@@ -251,7 +270,7 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
-            source = turn_context_source(payload)
+            source = _turn_context_binding_source(payload)
             readback_only = (
                 result.get("context_fields") == {}
                 and result.get("instructions") == []
@@ -288,7 +307,9 @@ def dispatch_turn_context_hooks(
         payload["turn_context_hook_failures"] = failures
 
 
-def project_turn_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+def project_turn_context(
+    payload: Mapping[str, Any], *, from_journal: bool = False,
+) -> dict[str, Any]:
     context: dict[str, Any] = {}
     instructions: list[str] = []
     result_fields: dict[str, Any] = {}
@@ -302,7 +323,7 @@ def project_turn_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                 "capability_hook.turn_context.project",
                 {
                     "contribution": item,
-                    "source": turn_context_source(payload),
+                    "source": _turn_context_binding_source(payload, from_journal=from_journal),
                     "readback": {key: payload.get(key) for key in slots},
                 },
             )

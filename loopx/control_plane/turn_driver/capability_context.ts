@@ -1,4 +1,5 @@
 import type {JsonObject} from "../effect_program.ts";
+import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 import {withComposedCliSettlement} from "../quota/settlement_plan.ts";
@@ -23,6 +24,16 @@ const FIELD = /^[a-z][a-z0-9_]{2,95}$/;
 
 function contextSource(value: unknown, composedSettlement: boolean, bindReaderLocation = false): JsonObject {
   const source = requireJsonObject(value, "context source");
+  if (source.schema_version === "loopx_turn_host_request_v1") {
+    // These identities come from the complete-source validator. The basis
+    // does not include the reader location or regenerate a legacy signature.
+    const turnKey = requireNonEmptyString(source.turn_key, "context Turn key");
+    const sourceHash = requireNonEmptyString(source.source_decision_hash, "context source hash");
+    if (!ENVELOPED_SHA256_PATTERN.test(turnKey) || !ENVELOPED_SHA256_PATTERN.test(sourceHash)) {
+      throw new Error("invalid complete context binding");
+    }
+    return {turn_key: turnKey, source_decision_hash: sourceHash};
+  }
   // The replan reader generates commands that carry the capture's own hash.
   // Bind the governing action and settlement rather than these read addresses.
   const {replan_read_path: _readerPath, ...beforeReaderBinding} = source;
@@ -101,11 +112,20 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
       result_fields: contribution.result_fields, readback}});
   if (contribution.basis_digest !== normalized.basis_digest) {
     const source = requireJsonObject(input.source, "context source");
+    const {basis_digest: _currentBasis, ...value} = normalized;
+    if (source.schema_version === "loopx_turn_host_request_v1" && Object.hasOwn(source, "recorded_projection")) {
+      const legacyBasis = canonicalAuthoritySha256({source: contextSource(source.recorded_projection, false), ...value});
+      if (contribution.basis_digest === legacyBasis) {
+        // An already validated result can recover its original bounded slots.
+        // The historical basis is insufficient to deliver advice to a Host.
+        return {...normalized, context_fields: {}, instructions: [], basis_digest: legacyBasis};
+      }
+    }
     // An existing unversioned quota observation may already have been bound
     // to its exact reader. Preserve that basis only on an exact legacy match.
-    if ("heartbeat_receipt" in source && !Object.hasOwn(source, "contract_binding") &&
+    if (source.schema_version !== "loopx_turn_host_request_v1" &&
+        "heartbeat_receipt" in source && !Object.hasOwn(source, "contract_binding") &&
         typeof source.replan_read_path === "string") {
-      const {basis_digest: _currentBasis, ...value} = normalized;
       const legacyBasis = canonicalAuthoritySha256({source: contextSource(source, false, true), ...value});
       if (contribution.basis_digest === legacyBasis) return {...normalized, basis_digest: legacyBasis};
     }

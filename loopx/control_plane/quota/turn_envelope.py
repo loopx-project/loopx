@@ -165,6 +165,7 @@ def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
 def complete_turn_host_source(
     request: Mapping[str, Any], *, operation: str = "host_context",
     include_session_lineage: bool = False,
+    recorded_capability_result: bool = False,
 ) -> dict[str, Any] | None:
     if "schema_version" in request:
         assert_turn_host_request_version(request)
@@ -178,6 +179,7 @@ def complete_turn_host_source(
     adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
                if "turn_envelope" in request or operation != "complete_host_lineage" else {})
     return _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
+                                 **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
 
 
