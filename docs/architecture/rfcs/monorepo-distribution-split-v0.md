@@ -2569,7 +2569,7 @@ included.
 
 ### 2026-11-08 — Feedback validation without mutation-adapter loading
 
-Runtime `2c5212fdb15035c26c3e158420d67197d45715f2` makes the two existing
+Initial runtime `2c5212fdb15035c26c3e158420d67197d45715f2` makes the two existing
 retained-state mutation adapters in `loopx.feedback` load on demand. Pure
 feedback validation now works when those adapters are unavailable; the parent
 fails at module import. Reward mutation resolves both adapters before registry
@@ -2612,6 +2612,19 @@ D2/D5/D6/D3 and context/model/split-install/full-cost/adoption acceptance.
 The original task and independent exact-head review/readiness remain open;
 the next loading decision stays with the existing quota/context/refresh callers.
 No main merge or installed-host upgrade is included.
+
+During submission preparation, a maintainer merges #8302 at
+`481436a56b47220c7c43bd6e272c1fa59d5038fe`; that head excludes this feedback
+change. The two unsubmitted feedback/checkpoint commits move to a clean successor
+based on target main `0ed909880`, retaining identical feedback and focused-test
+bytes. The successor wheel matches 1,841 packaged tracked sources, with the same
+five omissions and installed ownership checked first. Its fresh source/wheel ×
+File/SQLite lifecycles pass all four original oracle sets and both native exits
+per case. On this changed integration baseline, 48 write/recovery and 265 shared
+feedback-policy cases, mypy and Ruff pass. These checks qualify the successor's
+changed baseline; the initial runs remain historical evidence. No performance
+sample is repeated or added. The successor still requires independent exact-head
+review/readiness; the original task's complete acceptance remains open.
 
 ## Appendix B: Decision log
 

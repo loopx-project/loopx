@@ -1995,7 +1995,7 @@ context／model／split-install、PostgreSQL host／wheel、full-cost／adoption
 
 ### 2026-11-08 — 反馈校验不加载写入适配器
 
-Runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中
+初始 runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中
 两个既有 retained-state 写入适配器改为按需加载。适配器不可用时，纯反馈校验
 仍可执行；parent 会在模块导入时失败。Reward mutation 在 registry 读取或
 写入前解析两个适配器，原 guard 与 writer 调用位置仍查找当前模块 binding。
@@ -2031,6 +2031,16 @@ adoption 资格。保留 peer hard-cut hold、全部历史失败、至少一个 
 context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
 评审／readiness 继续开放；下一段加载决策仍属于既有 quota／context／refresh
 caller。本轮不合入 main，不升级 installed host。
+
+提交准备期间，维护者在 `481436a56b47220c7c43bd6e272c1fa59d5038fe` 合入
+#8302，该 head 未包含本次反馈改动。两个尚未提交远端的反馈／checkpoint commit
+移到基于目标 main `0ed909880` 的干净后续分支，反馈源码及聚焦测试字节相同。
+后续 wheel 先验证安装所有权，再匹配 1841 个 packaged tracked source，保留
+相同五个 omission。新的 source／wheel × File／SQLite 生命周期全部通过四组
+原 oracle，每条两个 native 均退出。在此变化的集成基线上，48 个写入／恢复及
+265 个共享反馈策略用例、mypy／Ruff 通过。这些检查验收后续提案的变化基线，
+初始运行保留为历史证据，不重跑或新增性能样本。后续提案仍需独立 exact-head
+评审／readiness，原 Task 的完整验收继续开放。
 
 ## 附录 B：决策日志
 
