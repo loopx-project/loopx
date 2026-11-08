@@ -583,7 +583,7 @@ drill reaches both real CLI entries. This is an unmerged source proposal;
 installed adoption, remaining supported readers and original-quota accepted
 outcomes with complete costs still keep C1 open.
 
-The [explicit inline caller checkpoint](../../reference/contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
+The [explicit inline caller checkpoint](../../../reference/contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
 qualifies ordinary quota, its retained flag/detail spellings and full transaction
 inspection against their registered v1 carriers. The complete off/Markdown
 source and native/structured Host input remain intact; historical v0 readers
@@ -591,6 +591,16 @@ retain their original-version boundary. Matched source, File/SQLite and long-rou
 evidence justify revised presentation allowances, preserving the original
 failures and all line/growth/authority limits. This accepts additional inline
 cost, not an efficiency win, installed adoption or C1 closure.
+
+The capability seam still has live signature-projection callers:
+`capability_context.ts::contextSource` and
+`reward_memory.py::reward_memory_automation_enabled` are not historical-only
+readers. Their retirement requires migrating current capability registration,
+readback and original-version recovery together. The proposed shared capability
+namespace guard reserves `work_contract` and `source_decision_hash` across
+registration, context and optional result fields; rejected optional contributions
+must leave the original Host source usable. This uses one existing rule owner on
+both main and C1, rather than proving that C1 reduced the number of rule owners.
 
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and

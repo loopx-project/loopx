@@ -26,6 +26,44 @@ def _captured_request(original, tmp_path):
     return build_loopx_turn_host_request(plan)
 
 
+@pytest.mark.parametrize("field", ["work_contract", "source_decision_hash", "fixture_context"])
+@pytest.mark.parametrize("location", ["context_fields", "result_fields"])
+def test_optional_context_preserves_the_complete_host_source(
+    complete_host_request, field, location,
+):
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration, dispatch_turn_context_hooks, project_turn_context,
+    )
+
+    _, contract = complete_host_request
+    plan = build_loopx_turn_plan(contract, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id="context-source-boundary")
+    ordinary = build_loopx_turn_host_request(plan)
+    result = {"readback": {"fixture_readback": {}}, "context_fields": {},
+              "instructions": [], "result_fields": {}}
+    result[location] = {field: ("optional advice" if location == "context_fields"
+                               else {"type": "string", "maxLength": 240})}
+    registration = TurnContextHookRegistration(
+        "fixture.context", "fixture", ("fixture_readback",), lambda: deepcopy(result),
+    )
+    dispatch_turn_context_hooks(plan, (registration,))
+    request = build_loopx_turn_host_request(plan)
+    assert request["work_contract"] == ordinary["work_contract"]
+    assert request["source_decision_hash"] == ordinary["source_decision_hash"]
+    assert request["turn_key"] == ordinary["turn_key"]
+    if field == "fixture_context":
+        projected = project_turn_context(plan)
+        if location == "context_fields":
+            assert field in projected
+        else:
+            assert field in projected["capability_result_fields"]
+        assert "turn_context_hook_failures" not in plan
+    else:
+        assert plan["turn_context_hook_failures"] == [
+            {"hook_id": "fixture.context", "error_code": "context_hook_failed"}]
+        assert project_turn_context(plan) == {}
+
+
 def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_host_request, tmp_path):
     from loopx.control_plane.turn_driver.codex_cli import _prompt
 
