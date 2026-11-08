@@ -469,6 +469,8 @@ def test_real_mcp_terminal_completion_closes_out_after_spend(
         registry,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
