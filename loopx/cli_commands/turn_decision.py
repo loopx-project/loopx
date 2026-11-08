@@ -31,6 +31,7 @@ from ..capabilities.periodic_report.pending_intent import (
     periodic_report_pending_intent_interaction_hook,
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
+from ..control_plane.capability_hooks import TurnStartContextProjector
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.turn_envelope import (
     compose_turn_decision,
@@ -139,6 +140,7 @@ def _build_turn_decision(
     scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution,
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    turn_context_projector: TurnStartContextProjector | None = None,
     goal_ref: Mapping[str, object] | None = None,
     request_subject: Mapping[str, Any] | None = None,
 ) -> Callable[..., dict[str, Any]]:
@@ -192,6 +194,7 @@ def _build_turn_decision(
             receipt_bound_replan_obligation_id=bound_replan,
             turn_instance_id=turn_instance_id if bound_replan else None,
             turn_start_hook_dispatch=dict(turn_start_hook_dispatch or {}),
+            turn_context_projector=turn_context_projector,
             workspace_path=workspace_path,
             goal_ref=goal_ref,
             interaction_projection_hooks=(
@@ -305,6 +308,7 @@ def build_fresh_turn_decision_owner(
     runtime_root: Path,
     runtime_root_arg: str | None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    turn_context_projector: TurnStartContextProjector | None = None,
     goal_ref: Mapping[str, object] | None = None,
     request_subject: Mapping[str, Any] | None = None,
 ) -> FreshTurnDecisionOwner:
@@ -343,6 +347,7 @@ def build_fresh_turn_decision_owner(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
+            turn_context_projector=turn_context_projector,
             goal_ref=goal_ref, request_subject=request_subject,
         ),
         requested_todo_id=getattr(args, "todo_id", None), request_subject=request_subject,

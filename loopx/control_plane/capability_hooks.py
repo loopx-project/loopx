@@ -69,6 +69,11 @@ _POST_WRITEBACK_TRANSACTION_PARAMS_MAX_BYTES = 1_750_000
 
 InteractionProjectionProducer = Callable[[], Mapping[str, Any]]
 TurnStartProducer = Callable[[], Mapping[str, Any]]
+# Invocation-owned read composition after selection; no persisted policy or
+# provider authority is created by supplying this adapter.
+TurnStartContextProjector = Callable[
+    [Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any] | None
+]
 PostWritebackProducer = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 

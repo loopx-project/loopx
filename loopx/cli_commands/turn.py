@@ -221,10 +221,6 @@ def handle_turn_command(
             from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
             turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
                 registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
-            from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-            turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
-                registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
             if delegated_context is not None:
                 # Invocation material shares normal capture/delivery. It is not a
                 # capability observation, another decision or a new read command.
@@ -235,12 +231,17 @@ def handle_turn_command(
             # from the same live status, scheduler context and capability hooks, so
             # this Turn takes all of them -- and its later settle-against inputs --
             # from the shared decision owner instead of rebuilding them per command.
+            from ..capabilities.explore.turn_context import turn_context_projector
+
             decision_owner = build_fresh_turn_decision_owner(
                 args,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
                 runtime_root_arg=runtime_root_arg,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                turn_context_projector=turn_context_projector(registry_path=registry_path,
+                    runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                    todo_id=getattr(args, "todo_id", None)),
                 goal_ref=goal_ref,
                 request_subject=delegated_context.get("request_subject") if delegated_context else None,
             )
