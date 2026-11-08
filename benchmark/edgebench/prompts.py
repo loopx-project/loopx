@@ -17,7 +17,7 @@ def native_research_guidance() -> str:
     )
 
 
-def research_artifact_instructions(*, checkpoint: bool) -> str:
+def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = False) -> str:
     """Separate reproducibility data from candidate inputs for every native arm."""
     from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
 
@@ -27,6 +27,16 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         if checkpoint else
         "Terminal artifact collection retains this directory for analysis; "
         "that alone does not provide a resumable checkpoint. "
+    )
+    binding = (
+        "When a decision depends on comparing a local probe with a native result, "
+        "and sforge-submit --help lists --retain-archive and --json, retain the exact archive "
+        "with the planned submission. Use loopx-bind-native-candidate --help with the sealed "
+        "file manifest, original probe and native result. Use its verified candidate_ref for "
+        "both measurements and keep each measurement's original evaluation and input revision. "
+        "If source evidence is unavailable, keep the measurements separate. Do not resubmit "
+        "to recover source evidence.\n\n"
+        if native_probe else ""
     )
     return (
         "### Research Artifacts\n\n"
@@ -42,6 +52,7 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         "explicit until they have been copied and their references updated and checked. "
         "Older checkpoints preserve their original workspace files; this policy does "
         "not relocate or discard historical evidence.\n\n"
+        f"{binding}"
         "This storage guidance does not change submitted files, task acceptance, "
         "feedback access or execution authority. Capture and receiver verification "
         "still determine which artifacts are actually available.\n\n"

@@ -71,8 +71,13 @@ def candidate_snapshot(paths: list[Path], workspace: Path) -> tuple[str, list[di
     if not 1 <= len(files) <= 32 or len({row["path"] for row in files}) != len(files):
         raise ValueError("select one to 32 distinct candidate files")
     files.sort(key=lambda row: row["path"])
+    return candidate_manifest_sha256(files), files
+
+
+def candidate_manifest_sha256(files: list[dict[str, str]]) -> str:
+    """Digest the canonical probe manifest, ordered by relative path."""
     encoded = json.dumps(files, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest(), files
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _group_members(group_id: int) -> dict[int, bytes]:
