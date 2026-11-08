@@ -557,7 +557,7 @@ def build_heartbeat_prompt(
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
         **({"captured_envelope": True} if turn_envelope else {}),
-        **({"captured_context": True} if native_goal_host and context_delivery == "on" else {}),
+        **({"captured_context": True} if native_goal_host and effective_context_delivery == "on" else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(
@@ -599,7 +599,7 @@ def build_heartbeat_prompt(
         "agent_profile": agent_profile_prompt_projection(agent_profile),
         "registered_agents": normalized_registered_agents,
         "runtime_profile": runtime_profile,
-        **({"context_delivery": activation} if context_delivery == "on" else {}),
+        **({"context_delivery": activation} if effective_context_delivery == "on" else {}),
         "reward_memory_enabled": reward_memory_enabled,
         "scheduler_execution_context": scheduler_execution_context,
         **(

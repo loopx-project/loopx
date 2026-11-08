@@ -104,7 +104,20 @@ def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
     agent_id = (payload.get("agent_identity") or {}).get("agent_id")
     if not goal_id:
         return
-    plan = effect_runtime_result("work_item.context.plan", {"packet": payload})
+    # The typed planner needs the selection inputs, not the admission body
+    # that the public reader and final capture continue to own.
+    cli = interaction.get("cli_channel")
+    orchestration = payload.get("task_orchestration_contract")
+    plan = effect_runtime_result("work_item.context.plan", {"packet": {
+        "selected_todo": packet_selected,
+        "effective_action": payload.get("effective_action"),
+        "task_orchestration_contract": {
+            key: orchestration.get(key) for key in ("schema_version", "mode", "primary_todo_id")
+        } if isinstance(orchestration, dict) else {},
+        "interaction_contract": {"cli_channel": {
+            "selection_required": cli.get("selection_required"),
+        } if isinstance(cli, dict) else {}},
+    }})
     selected = plan.get("selected_todo")
     if isinstance(selected, dict) and isinstance(selected_text_snapshot, str):
         selected["_context_text_sha256"] = selected_text_snapshot

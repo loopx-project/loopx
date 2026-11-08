@@ -193,10 +193,10 @@ def main() -> int:
         repair_patterns,
         [
             "vision_replan_writeback_gap",
-            "no `goal_frontier_projection.acceptance_gaps[]`",
-            "--agent-id <agent-id>",
-            "--vision-unchanged-reason",
-            "vision_checkpoint_missing",
+            "use the matching outcome",
+            "retain unaffected requirements",
+            "fresh guard required by changed acceptance",
+            "without replacing the admitted Turn or replaying effects",
         ],
         source=REPAIR_PATTERNS,
     )

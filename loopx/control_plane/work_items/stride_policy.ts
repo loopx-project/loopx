@@ -371,11 +371,11 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
   const example: JsonObject = {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     basis: "uncertain_evidence", action: "verify", axes: {
-      work_slice: {plan: "Complete the work and checks needed to resolve the pending adoption decision.", reason: "Resolve decision-relevant uncertainty before expanding the route."},
-      route_distance: {plan: "Keep the current method; vary the unresolved assumption only.", reason: "The existing evidence does not yet distinguish a replacement route."},
-      validation_scope: {plan: "Check the disputed outcome and its relevant failure case under the same constraints.", reason: "Obtain independent evidence rather than repeat an unchanged check."}},
-    next_probe: {scope: "One complete decision-relevant verification.", prediction: "Distinguish the remaining explanations.",
-      adoption_criterion: "Applicable evidence supports the next slice.", cost_bound: "Bound full implementation and validation cost.", minimum_evidence: "A verified outcome, relevant failure evidence and attributable cost."}};
+      work_slice: {plan: "Complete the work and checks for the adoption decision.", reason: "Resolve adoption uncertainty before expanding."},
+      route_distance: {plan: "Vary only the unresolved assumption in the current method.", reason: "Evidence leaves the replacement route uncertain."},
+      validation_scope: {plan: "Verify the disputed outcome and failure case under the same constraints.", reason: "Obtain new independent evidence."}},
+    next_probe: {scope: "One complete decision-relevant check.", prediction: "Distinguish the remaining explanations.",
+      adoption_criterion: "Applicable evidence supports the next slice.", cost_bound: "Bound all implementation and validation costs.", minimum_evidence: "Verified outcome, relevant failure evidence and attributable cost."}};
   if (previous) example.previous_review = {reference_decision_ref: previous, adoption: "unknown", information_gain: "unknown", goal_gain: "unknown",
     evidence_refs: [], lesson: "Example only: inspect subsequent work and evidence before replacing these unknowns."};
   if (basis) example.explore_review = {revision: basis.revision, disposition: basis.availability === "unavailable" ? "unavailable" : "deferred",

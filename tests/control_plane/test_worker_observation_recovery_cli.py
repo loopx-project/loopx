@@ -12,6 +12,7 @@ import pytest
 import loopx
 from canonical_authority_fixture import isolate_sqlite_runtime
 from research_worker_readback_fixture import AGENT, GOAL, _write_authority
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.control_plane.quota.host_poll_receipts import (
     read_host_worker_observations,
     receipt_path_for_goal,
@@ -49,7 +50,7 @@ def _run_worker(runtime, registry, count, host, agent):
     ], cwd=host.parent / "project", capture_output=True, text=True, timeout=120)
 
 
-def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_cli"):
+def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_cli", wire=False):
     result = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
@@ -57,7 +58,10 @@ def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_
         "--runtime-profile", profile, *(["--record-host-poll"] if record else []), *extra,
     ], cwd=registry.parent / "project", capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout)
+    payload = (
+        json.loads(result.stdout) if wire
+        else read_cli_policy_payload(result.stdout, returncode=result.returncode)
+    )
     assert payload["ok"] is True, payload
     return payload
 
@@ -86,7 +90,7 @@ def test_original_capture_retains_the_emitted_poll_observation(
         native = tmp_path / "native-context"
         native.mkdir(mode=0o700)
         options.extend(["--codex-context-dir", str(native)])
-    emitted = _poll(runtime, registry, AGENT, record=observation != "off", extra=options,
+    emitted = _poll(runtime, registry, AGENT, record=observation != "off", extra=options, wire=True,
                     profile="codex_app_heartbeat" if wire == "native" else "generic_cli")
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
@@ -160,10 +164,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
 
-    def failed_publication(directory, payload):
+    def failed_publication(directory, payload, *, args, native_context):
         # Only the capture publisher fails; admission and receipt IO are real.
         with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
-            original_capture(directory, payload)
+            original_capture(directory, payload, args=args, native_context=native_context)
 
     monkeypatch.setattr(quota, "capture_decision", failed_publication)
     monkeypatch.chdir(tmp_path / "project")

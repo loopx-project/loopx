@@ -7,7 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
-  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreReadFailure, AuthorityStoreHead,
+  AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreSnapshotResult, AuthorityStoreReadFailure, AuthorityStoreHead,
   AuthorityStoreReceiptResult, AuthorityStoreReceiptBatchResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
   canonicalAuthorityObjectList, canonicalAuthoritySha256,
@@ -163,12 +163,16 @@ export class SqliteAuthorityStore implements AuthorityStore {
   readonly goalId: string;
   readonly existingOnly: boolean;
   readonly expectedIdentity: string | undefined;
+  readonly readAuthoritySnapshot?: () => Promise<AuthorityStoreSnapshotResult>;
 
   constructor(directory: string, goalId: string, options: {existingOnly?: boolean; expectedIdentity?: string} = {}) {
     this.goalId = requireAuthorityStoreId(goalId, "goal id");
     this.path = sqliteAuthorityPath(directory, this.goalId);
     this.existingOnly = options.existingOnly ?? false;
     this.expectedIdentity = options.expectedIdentity;
+    // Only an already selected read-only store offers the paired read. General
+    // stores retain their existing identity/initialization and load behavior.
+    if (this.existingOnly) this.readAuthoritySnapshot = this.readSnapshot.bind(this);
   }
 
   private open(write: boolean): DatabaseSync | null {
@@ -405,6 +409,27 @@ export class SqliteAuthorityStore implements AuthorityStore {
         provider_revision: current.provider_revision, head: current.state.projection};
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
+  }
+
+  private async readSnapshot(): Promise<AuthorityStoreSnapshotResult> {
+    let db: DatabaseSync | null = null;
+    let identity: AuthorityStoreIdentityResult = {status: "unavailable",
+      reason_code: "store_identity_unavailable", reason: "SQLite authority database is missing"};
+    try {
+      db = this.open(false);
+      if (!db) return {identity, authority: {status: "missing"}};
+      db.exec("BEGIN");
+      identity = {status: "available", store_identity: this.identity(db)};
+      const current = this.current(db);
+      return {identity, authority: current === null ? {status: "missing"} : {
+        status: "loaded", cursor: current.state.cursor.toString(),
+        provider_revision: current.provider_revision, head: current.state.projection}};
+    } catch (error) {
+      const failure = readFailure(error);
+      return {identity: identity.status === "available" ? identity : failure, authority: failure};
+    } finally { db?.close(); }
+    // No await while the transaction owns the connection. Neither the opened
+    // handle nor its head survives this method; final identity reopens the path.
   }
 
   /** No await between BEGIN and ROLLBACK: another DatabaseSync request must not

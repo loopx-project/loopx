@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {composeQuotaSummary, prepareQuotaSummary} from "../../loopx/control_plane/todos/quota_selection.ts";
+import {composeQuotaSummary, prepareQuotaSummary, materializeQuotaRow} from "../../loopx/control_plane/todos/quota_selection.ts";
+import {decodeTodoReadSource, pythonFieldInteger} from "../../loopx/control_plane/todos/read_codec.ts";
 
 function planning(): JsonObject {
   return {lanes: {
@@ -87,4 +88,46 @@ test("source provenance follows lane precedence even when equal identities carry
   assert.equal(selected.length, 1);
   assert.equal(selected[0]!.gate, true);
   assert.equal((selected[0]!.payload as JsonObject).text, "Preferred source");
+});
+
+test("native materialization preserves distant microseconds without double rounding", () => {
+  assert.equal(materializeQuotaRow({next_due_at: "2500-01-01T00:00:00.000001Z"}, null).due_at, 16725225600.000002);
+  assert.equal(materializeQuotaRow({next_due_at: "2500-01-01T00:00:00.000031Z"}, null).due_at, 16725225600.00003);
+  assert.equal(materializeQuotaRow({expires_at: "2500-01-01T00:00:00.999999Z"}, null).expires_at, 16725225600.999998);
+});
+
+test("native materialization retains microsecond clocks, profile precedence and explicit gate classification", () => {
+  const row = {todo_id: "todo_monitor", index: "2_0", text: "Observe the source", priority: "P1",
+    task_class: "continuous_monitor", status: "open", action_kind: "private_observation",
+    claimed_by: "agent-a", bound_agent: "agent-b", blocks_agent: "agent-c", excluded_agents: ["agent-b"],
+    global_gate: "false", watch_only: "true", next_due_at: "1970-01-01T00:00:00.123456Z",
+    expires_at: "1970-01-01T00:00:00.654321Z", required_capabilities: ["shell"], target_capabilities: ["network"]};
+  assert.deepEqual(materializeQuotaRow(row, {avoid_action_kinds: ["private_*"],
+    preferred_action_kinds: ["private_*"], default_task_classes: ["continuous_monitor"]}), {
+    presentation: [1, 999999, "", "todo_monitor"], claim: "agent-a", bound: "agent-b", blocks: "agent-c",
+    excluded: ["agent-b"], global: false, gate: false, removed: false, actionable: true,
+    due_at: 0.123456, expires_at: 0.654321, watch_only: true, task_class: "continuous_monitor",
+    priority: 1, index: 20, profile_rank: 2, required: ["shell"], targets: ["network"], raw_claimed: true,
+  });
+  assert.equal(materializeQuotaRow({...row, next_due_at: "2026-02-30T00:00:00Z"}, null).due_at, null);
+  assert.equal(materializeQuotaRow({...row, task_class: "advancement_task"}, null).gate, false);
+});
+
+test("native facts keep Python scalar IO and JSON presentation as separate boundaries", () => {
+  const floating = decodeTodoReadSource({record: {schema_version: "todo_item_v0", source_section: "Agent Todo",
+    index: 1, todo_id: "todo_float", text: "Read source", priority: "P1", updated_at: "retained-time"},
+    python_values: [[["index"], "1.0", "1.0", "1"]]});
+  assert.deepEqual(materializeQuotaRow(floating, null).presentation, [1, 999999, "retained-time", "todo_float"]);
+  assert.equal(materializeQuotaRow(floating, null).index, 1);
+  const decimal = decodeTodoReadSource({record: {index: "2.5"},
+    python_values: [[["index"], "2.5", "Decimal('2.5')", "2"]]});
+  assert.equal(pythonFieldInteger(decimal, "index"), 2);
+  assert.equal(pythonFieldInteger({index: "\u0662_\u0660"}, "index"), 20);
+  assert.equal(pythonFieldInteger({index: "1.0"}, "index"), 999999);
+  const first = {todo_id: "todo_same", text: "Preferred lane", task_class: "user_gate"};
+  const input = request({first_open_items: [first], items: [{...first, text: "Other lane", task_class: "advancement_task"}]}, {materialize_source: true});
+  const selected = (prepareQuotaSummary(input).selection as JsonObject).items as JsonObject[];
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0]!.gate, true);
+  assert.equal((selected[0]!.payload as JsonObject).text, "Preferred lane");
 });

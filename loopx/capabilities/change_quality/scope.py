@@ -1,12 +1,41 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import retire_owned_process
 
 CHANGE_QUALITY_SCOPE_SCHEMA_VERSION = "change_quality_scope_v0"
+
+
+# The scope reads a checkout the operator may not control. A repository blocked
+# on a stale index lock, a network mount or an oversized history must not hold
+# the receipt open with no answer, so every read shares one budget.
+GIT_PROBE_TIMEOUT_SECONDS = 10.0
+
+
+class GitProbeUnavailable(ValueError):
+    """Git did not answer inside the read budget, or could not start."""
+
+
+def _retire_owned_probe(process: subprocess.Popen[Any]) -> None:
+    """Stop the read's own session, then drop its pipes unread.
+
+    Git runs helpers -- fsmonitor hooks, pagers -- inside the session it starts
+    in, so killing the leader alone leaves them behind. An inherited pipe also
+    outlives the leader, so the pipes are closed instead of drained: a drain
+    would wait on work this call no longer owns.
+    """
+
+    try:
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # Cleanup is best effort. The read's own timeout or cancellation is the
+        # result the caller must receive, even when termination is unconfirmed.
+        pass
 
 
 def _git(
@@ -18,14 +47,35 @@ def _git(
     # text mode: a non-None encoding would silently flip bytes-mode callers
     # into text mode because CPython treats any of text/encoding/errors as
     # text-mode requests.
-    return subprocess.run(
-        ["git", "-C", str(repo_root), *args],
-        check=False,
-        text=text,
-        encoding="utf-8" if text else None,
-        errors="replace" if text else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    argv = ["git", "-C", str(repo_root), *args]
+    budget = GIT_PROBE_TIMEOUT_SECONDS
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            encoding="utf-8" if text else None,
+            errors="replace" if text else None,
+            start_new_session=os.name == "posix",
+        )
+    except OSError as exc:
+        raise GitProbeUnavailable(f"git {' '.join(args)} could not start: {exc}") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=budget)
+    except subprocess.TimeoutExpired:
+        _retire_owned_probe(process)
+        raise GitProbeUnavailable(
+            f"git {' '.join(args)} did not answer within {budget:.1f}s"
+        ) from None
+    except BaseException:
+        # A terminal Ctrl-C reaches this process's group, not the session the
+        # read started, so the cancellation retires its helpers here and then
+        # keeps travelling to its own handler.
+        _retire_owned_probe(process)
+        raise
+    return subprocess.CompletedProcess(
+        args=argv, returncode=process.returncode, stdout=stdout, stderr=stderr
     )
 
 

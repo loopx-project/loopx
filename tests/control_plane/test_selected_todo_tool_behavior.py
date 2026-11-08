@@ -85,8 +85,12 @@ def test_specialized_tool_preserves_the_shared_host_and_argument_contract() -> N
 
 
 def test_real_tool_loop_executes_action_selected_by_real_quota(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def reject_implicit_runtime() -> Path:
+        raise AssertionError("the fixture must not consult the host runtime route")
+
+    monkeypatch.setattr("loopx.paths.select_default_runtime_root", reject_implicit_runtime)
     fixture = _build_fixture(tmp_path / "oracle")
     requests: list[dict[str, Any]] = []
     commands = [

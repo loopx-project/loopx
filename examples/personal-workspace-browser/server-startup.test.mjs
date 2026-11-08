@@ -10,7 +10,12 @@ try {
   process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED = "1";
   process.env.LOOPX_PERSONAL_WORKSPACE_PORT = String(foreign.address().port);
   const {startServer} = await import("./fixture.mjs");
-  await assert.rejects(startServer(), /Packaged workspace server exited/);
+  await assert.rejects(startServer(), error => {
+    assert.match(error.message, /Packaged workspace server exited/);
+    const finalError = error.message.trimEnd().split("\n").at(-1);
+    assert.match(finalError, /^OSError: \[(?:Errno (?:48|98)|WinError 10048)\]/);
+    return true;
+  });
   assert.equal(await (await fetch(`http://127.0.0.1:${foreign.address().port}/chat/`)).text(), "unrelated page");
 } finally {
   foreign.closeAllConnections();

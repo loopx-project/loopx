@@ -496,7 +496,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
 
 
 def completed_result_review_readback(session: CodexChatAgentSession, turn_id: str, *,
-                                     known_turn_ids: set[str]) -> dict[str, Any] | None:
+                                     known_turn_ids: set[str], allow_untyped: bool = False) -> dict[str, Any] | None:
     """Read a closed partial result, never certify its effects for execution.
 
     A failed command (including a signal exit) is evidence to inspect, not
@@ -543,13 +543,15 @@ def completed_result_review_readback(session: CodexChatAgentSession, turn_id: st
                 return None
         if users != 1 or len(finals) != 1:
             return None
-        work = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
-        if (work is None or turns() != inventory
+        response = parse_agent_response(finals[0], protected_paths=[session.work_dir])
+        work = response.get("unfinished_work")
+        if (work is None and not allow_untyped or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
             return None
         return {"thread_id": session.thread_id, "turn_id": turn_id,
             "read_only_review": True, "completed_result_review": True,
             "unfinished_work": work, "visible_response": finals[0],
+            **({"untyped_result_review": True, "response": response} if work is None else {}),
             "native_inventory_sha256": hashlib.sha256(json.dumps([target, items],
                 sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
@@ -654,6 +656,7 @@ class CodexAppServerAdapter:
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
                                    completed_result_review: bool = False,
+                                   allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
@@ -667,6 +670,8 @@ class CodexAppServerAdapter:
 
         if completed_result_review and not read_only_review:
             raise ValueError("a completed result observation permits only read-only review")
+        if allow_untyped_result_review and not (completed_result_review and read_only_review):
+            raise ValueError("untyped result evidence permits only a completed read-only review")
         process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
             cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -683,7 +688,8 @@ class CodexAppServerAdapter:
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
                 if completed_result_review:
-                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set())
+                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set(),
+                        allow_untyped=allow_untyped_result_review)
                 else:
                     reader = interrupted_result_readback if read_only_review else failed_request_readback
                     proof = reader(native, turn_id)
