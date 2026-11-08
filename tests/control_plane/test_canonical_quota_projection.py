@@ -25,6 +25,15 @@ def test_provider_projection_uses_complete_source_differences_and_scope_exit(tmp
         reference = canonical_todo_source_reference(source)
         assert reference is not None, "the real native read must supply a validated reference"
         assert reference["changes"] == []
+        # Mapping insertion order is not a caller change. Reordering a complete
+        # native summary must retain its source without hiding scalar changes.
+        reordered = deepcopy(source)
+        entries = list(reordered.items())
+        reordered.clear()
+        reordered.update(reversed(entries))
+        assert canonical_todo_source_reference(reordered) == reference
+        reordered["items"][0]["done"] = 0
+        assert canonical_todo_source_reference(reordered) is None
         copied = deepcopy(source)
         proof = {"agent_id": fixture.AGENT_ID, "state": "waiting", "evidence": {"revision": 9007199254740993, "ratio": -0.0}}
         copied["vision_wait_states"] = [proof]

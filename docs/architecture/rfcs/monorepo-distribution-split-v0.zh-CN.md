@@ -2317,3 +2317,27 @@ tracked 条目逐字节匹配源码，十七项源码专用、文档和媒体遗
 保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、PostgreSQL host/wheel 以及每项冻结失败。
 原任务保持开放；本检查点不授权合入，也不宣告最小化内核完成。
+
+### 2026-11-09 — 复用已验证的完整 source basis bytes
+
+现有 Python Todo compatibility transport 将已经通过 canonical field digest
+验证的完整字节复用为 source basis；此前每个字段分别为 basis 和 digest 编码一次。
+basis 只作为 JSON 解码，mapping insertion order 不属于 source difference。
+完整 digest mismatch fallback、标量 fact 保护、request-scope provenance 与
+source/revision/lease/refusal/replay guards 均保留；未新增 decoder、cache、provider、
+配置、protocol 或竞争的决策 owner。
+
+在同一次真实隔离 SQLite field observation 上，不可变原版对两个字段编码四次，
+候选版编码两次；二者保留完整值与空 source differences。原版通过两个 mapping-order
+与标量保护 characterization 用例，候选版通过 File/SQLite 全部九个 canonical source
+用例。最终 `summary_item.py` SHA-256 `a8ca890eee547929060ac326fc8b85ca9c14a8fd5ec850deb2fe3e6586628513`
+与隔离 wheel 一致。source/wheel × File/SQLite 四条完整 101-Todo CLI lifecycle
+保留 sum45、原完成时间、四份 receipt、一次 debit、restart 和 refusal/replay，
+每条均观测两次正常 native exit。验证环境为 macOS arm64、CPython3.13.5、Node22.22.3。
+
+这是编码机制细化，不代表 matched-cost、完整边际成本或 adoption 资格。冻结的 cost、
+attribution 与 normal-bytecode campaign 保持不变。PostgreSQL host factory 缺失
+已有记录，其 store/service 验证不能成为 source/wheel host journey 资格。继续保留
+原完整验收以及 I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、installed-host、full-cost/adoption 与全部历史失败缺口。
+exact-head review、CI/readiness 和 maintainer merge authority 仍是独立门。
