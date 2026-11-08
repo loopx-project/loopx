@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import shlex
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -86,7 +90,7 @@ def write_fixture(root: Path, *, include_review: bool = False) -> tuple[Path, Pa
 
 
 def should_run(project: Path, runtime: Path, registry_path: Path, agent_id: str) -> dict:
-    return run_cli(
+    payload = run_cli(
         "quota",
         "should-run",
         "--goal-id",
@@ -98,6 +102,39 @@ def should_run(project: Path, runtime: Path, registry_path: Path, agent_id: str)
         runtime=runtime,
         cwd=project,
     )
+    if payload.get("schema_version") != "context_capture_navigation_v1":
+        return payload
+    # Read the original capture, never rerun admission to recover its decision.
+    # Full traversal here is a semantic test oracle, not a model read requirement.
+    command = payload["recovery"]["command"]
+    content = bytearray()
+    identity = None
+    while True:
+        words = shlex.split(command)
+        quota_index = words.index("quota")
+        assert words[quota_index + 1] == "context-read", command
+        result = subprocess.run(
+            words, cwd=REPO_ROOT, capture_output=True, text=True,
+            encoding="utf-8", errors="strict", check=False, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        page = json.loads(result.stdout)
+        assert page["ok"] is True and page["offset"] == len(content), page
+        page_identity = (page["sha256"], page["total_bytes"])
+        if identity is None:
+            identity = page_identity
+        assert page_identity == identity, page
+        chunk = page["content"].encode("utf-8")
+        assert chunk, "context read made no progress"
+        content.extend(chunk)
+        if page["eof"] is True:
+            assert len(content) == identity[1], page
+            assert hashlib.sha256(content).hexdigest() == identity[0], page
+            resolved = json.loads(content)
+            assert isinstance(resolved, dict), resolved
+            return resolved
+        assert page["next_offset"] == len(content) < identity[1], page
+        command = page["next_command"]
 
 
 def assert_same_peer_continuation() -> None:

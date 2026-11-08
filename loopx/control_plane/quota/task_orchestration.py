@@ -35,23 +35,6 @@ def task_orchestration_contract_is_actionable(
     return str(contract.get("execution_state") or "ready") == "ready"
 
 
-def apply_task_route_hint_override(
-    hint: dict[str, Any] | None,
-    override: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Apply the route patch returned by the TypeScript decision owner."""
-    if hint is None or override is None:
-        return hint
-    projected_hint = {
-        key: value for key, value in hint.items()
-        if not (override.get("omit_current_agent_next_action") is True
-                and key == "current_agent_next_action")
-    }
-    projected_hint.update({key: value for key, value in override.items()
-                           if key != "omit_current_agent_next_action"})
-    return projected_hint
-
-
 def task_orchestration_requires_material_change_stop(
     contract: dict[str, Any] | None,
     *,

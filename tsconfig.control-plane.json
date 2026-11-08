@@ -37,6 +37,8 @@
     "tests/control_plane_ts/effect_runtime_errors.test.ts",
     "tests/control_plane_ts/post_writeback_hook_transaction.test.ts",
     "tests/control_plane_ts/action_review_plan.test.ts",
+    "tests/control_plane_ts/goal_route_hint.test.ts",
+    "tests/control_plane_ts/action_portfolio.test.ts",
     "tests/control_plane_ts/goal_workspace_digest.test.ts",
     "tests/control_plane_ts/interaction_contract.test.ts",
     "tests/control_plane_ts/scheduler_arbitration.test.ts",

@@ -104,6 +104,8 @@ def test_settled_turn_never_constructs_successor_or_replan(
         pytest.fail("settled replay entered an executable action construction path")
 
     monkeypatch.setattr(should_run_packet, "_resolve_agent_lane_delivery_route", unexpected)
+    monkeypatch.setattr(should_run_packet, "capture_goal_route_context", unexpected)
+    monkeypatch.setattr(should_run_packet, "build_quota_planning_packet", unexpected)
     monkeypatch.setattr(should_run_packet, "build_replan_action_packet", unexpected)
     monkeypatch.setattr(should_run_packet, "_apply_agent_monitor_only_precedence", unexpected)
     status = quota_status_payload(
@@ -135,6 +137,7 @@ def test_settled_turn_never_constructs_successor_or_replan(
         "autonomous_replan_obligation",
         "action_portfolio",
         "protocol_action_packet",
+        "goal_route_hint",
     ):
         assert field not in payload
     assert payload["interaction_contract"]["agent_channel"]["must_attempt"] is False
