@@ -5,7 +5,7 @@
 - **交付成熟度：** M1 实现提案；M2/M3 未资格确认
 - **作者 / 归属：** LoopX maintainers
 - **创建日期：** 2026-11-05
-- **最近规范修订：** 2026-11-07
+- **最近规范修订：** 2026-11-08
 - **实现基线：** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
 - **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
@@ -420,6 +420,11 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 验收成果指标或代理分类。共享问题关联只表示证据关联，不是该 Todo 执行测量的不可变归属。
 首次决策仍为可选记录；默认关闭及按字段首次读取保留原语义。真实 File/SQLite reader
 资格与实际模型收益分别验收。
+初始测量提示与已有组合的比较复用同一局部选择指导：预计验收成果收益、剩余时间，
+以及完整实现、搜索和确认成本。证据支持的路线可以继续；局部增益本身不决定哪项
+投入最值得做。该指导不新增必做比较、评测调用、决策附件或复盘，也不根据指标名称
+或近期展示顺序推断 profile。更大的测量索引继续按需读取，不扩充每次首读。
+真实模型采用与成果收益仍未取得资格。
 反证要求在下一个具体选择处重新判断，不构成新的硬门、fidelity 认证、放松正确性约束的
 权限或每轮重规划指令。后续有意义的 capture 可复用 execution observation，把前次
 提议方法连到实际方法、候选和证据，也允许有据采用不同方法。

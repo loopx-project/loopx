@@ -5,7 +5,7 @@
 - **Delivery maturity:** M1 implementation proposal; M2/M3 unqualified
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-11-05
-- **Last normative revision:** 2026-11-07
+- **Last normative revision:** 2026-11-08
 - **Implementation baseline:** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
 - **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
@@ -544,6 +544,14 @@ immutable attribution of execution to that Todo. Recording the first decision
 remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
+The initial measurement cue and an established pair's comparison reuse the same
+local choice guidance: expected accepted-outcome gain, remaining horizon and
+complete implementation, search and confirmation cost. A supported route may
+continue; a local gain alone does not select the best next investment. This
+guidance adds no required comparison, evaluator call, decision attachment or
+review, and does not infer a profile from metric names or recent presentation
+order. A larger measurement index remains on demand rather than enlarging every
+opening read. Actual model adoption and outcome benefit remain unqualified.
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

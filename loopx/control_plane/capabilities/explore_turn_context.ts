@@ -9,7 +9,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
-import {projectWorkYardstickCue, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
+import {projectWorkYardstickCue, workYardstickChoiceGuidance, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
@@ -364,7 +364,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     return [{todo_id: todo.todo_id, measurement_feedback: visible,
       omitted_measurement_feedback: available.length - visible.length,
       details_command: command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"),
-      guidance: "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."}];
+      guidance: "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. " +
+        workYardstickChoiceGuidance() +
+        " No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."}];
   });
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,

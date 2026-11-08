@@ -128,6 +128,14 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
+/** Both declared pairs and first measurements support the same local choice.
+ * This is advisory work context, never another review or evaluation gate. */
+export function workYardstickChoiceGuidance(): string {
+  return "Weigh continuing, a different mechanism or a compatible combination by expected accepted-outcome gain, " +
+    "remaining horizon and full implementation and validation cost, including search and confirmation. Continuing a supported route is valid. " +
+    "Local improvement alone does not establish the best next investment; consider a bounded check when it could change the choice.";
+}
+
 function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision) {
   const pairFor = (profile: WorkYardstickProfile) => measuredPair(feedback.find(row => matchesProfile(row, profile)));
   const goal = pairFor(decision.authoritative);
@@ -145,7 +153,7 @@ function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decisi
     : (reversed ? "The proxy reverses the observed goal order. " : "") +
       "Use the better-scoring candidate under this scope as a comparison base when available. ";
   return {goal, ...(proxy ? {proxy, proxy_order_reversed: reversed} : {}),
-    guidance: opening + "Weigh continuing, a different mechanism or a compatible combination by expected end-to-end gain and full implementation and validation cost. Prefer a bounded check that can change the choice."};
+    guidance: opening + workYardstickChoiceGuidance()};
 }
 
 export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
