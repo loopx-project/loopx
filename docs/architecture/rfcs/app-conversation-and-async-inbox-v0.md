@@ -2055,6 +2055,16 @@ unfinished declaration; later native inputs must be correlated to Core. This
 observation does **not** certify settled effects. A failed or signal-terminated
 command cannot acquire replay authority through this route.
 
+One legacy source without typed unfinished work can also receive its own result
+review when an earlier, distinct source with exactly the same question, Session,
+binding and audience already has a qualified, delivered result review completed
+after the legacy answer. Core pins that canonical evidence and the legacy native
+final, not a prose failure classifier. The sibling answer never counts as delivery
+to this source, supplies an antecedent, settles effects or creates missing work
+intent. The original worker independently checks current artifacts and returns
+one read-only answer under this source's own idempotent identity. A legacy review
+cannot seed another legacy review; changed evidence and exhausted attempts hold.
+
 A new result review now requires an explicit observation that no original
 writable adapter is attached. An inconclusive effect readback while that owner
 is still attached remains a hold; it must not replace the owner with a model

@@ -1137,6 +1137,79 @@ test("unfinished completed work requires typed intent and pinned settled native/
   }
 });
 
+test("a delivered same-question review permits one independent legacy result read, never a business retry", () => {
+  const configured = planConversationBinding(request).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const response = {schema_version: "loopx_chat_agent_response_v0", message: "The original source could not be processed",
+    proposals: [], protected_action: null, gate: null};
+  const completed = {session_id: "original", turn_id: "legacy", client_turn_id: `external-${"f".repeat(24)}`,
+    message: "File this item", origin: "lark", status: "completed", response, upstream_turn_id: "native-legacy",
+    created_at: "2026-01-01T00:02:00Z", completed_at: "2026-01-01T00:03:00Z"};
+  const work = {remaining: "File the original item", dependency: "Source outage", effects_settled: true};
+  const original = {...completed, turn_id: "earlier", client_turn_id: `external-${"d".repeat(24)}`,
+    upstream_turn_id: "native-earlier", created_at: "2026-01-01T00:00:00Z",
+    completed_at: "2026-01-01T00:01:00Z", response: {...response, unfinished_work: work}};
+  const reviewed = {...completed, turn_id: "reviewed", client_turn_id: "earlier-review-1",
+    completed_at: "2026-01-01T00:04:00Z", response: {...response, message: "Verified the existing item in the catalog"}};
+  const reserved = {version: 21, client_turn_id: reviewed.client_turn_id, failed_turn_id: original.turn_id,
+    read_only_review: true, original_turn: original, binding_snapshot: row, unfinished_work: work};
+  const sibling = {request_ref: "d".repeat(24), binding_id: row.binding_id, session_id: "original", source,
+    message: completed.message, origin: "lark", command: null, status: "accepted", delivery_verified: true,
+    turn_id: reviewed.turn_id, context_recovery: reserved};
+  const related = {request: sibling, turn: reviewed, steering_observed: false};
+  const session = {session_id: "original", goal_id: null, agent_id: "codex", upstream_mode: "chat", status: "ready",
+    upstream_thread_id: "native", active_turn_id: null, project_context: context,
+    channel_id: `project.external.${row.binding_id}.${source.source_ref}`};
+  const native = {thread_id: "native", turn_id: "native-legacy", read_only_review: true,
+    completed_result_review: true, untyped_result_review: true, unfinished_work: null, response,
+    visible_response: response.message, native_inventory_sha256: "a".repeat(64)};
+  const packet = {request: {request_ref: "f".repeat(24), binding_id: row.binding_id, source, command: null,
+    status: "accepted", delivery_verified: true, session_id: "original", turn_id: completed.turn_id,
+    message: completed.message, origin: "lark"}, binding: row, current_session: session,
+    context_recovery: {version: 21, failed_turn: completed, observed_at: "2026-01-01T00:10:00Z",
+      live_work_owner: false, source_verified: true, stop_observed: false, steering_observed: false,
+      queued_input_present: false, attachments_present: false, related_result_review: related, native_observation: native}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.legacy_result_review, true);
+  assert.equal(plan.read_only_review, true);
+  assert.equal(plan.work_attempt, undefined);
+  assert.equal(plan.unfinished_work, undefined);
+  assert.ok(String(plan.client_turn_id).startsWith(`external-${packet.request.request_ref}-`));
+  assert.notEqual(plan.client_turn_id, reviewed.client_turn_id);
+  for (const change of [{related_result_review: null}, {source_verified: false}, {live_work_owner: true},
+    {stop_observed: true}, {steering_observed: true}, {queued_input_present: true}, {attachments_present: true},
+    {native_observation: {...native, untyped_result_review: false}},
+    {native_observation: {...native, response: {...response, message: "A different answer"}}},
+    {native_observation: {...native, all_effects_settled: true}},
+    {related_result_review: {...related, steering_observed: true}},
+    {related_result_review: {...related, turn: {...reviewed, completed_at: completed.completed_at}}},
+    {related_result_review: {...related, turn: {...reviewed, response: {...response, gate: {kind: "evidence_gap"}}}}}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  for (const change of [{request_ref: packet.request.request_ref}, {delivery_verified: false}, {message: "Different question"},
+    {binding_id: "0".repeat(24)}, {source: {...source, sender_ref: "0".repeat(24)}},
+    {context_recovery: {...reserved, legacy_result_review: true}},
+    {context_recovery: {...reserved, work_attempt: 1}},
+    {context_recovery: {...reserved, original_turn: {...original, completed_at: "2026-01-01T00:03:00Z"}}}]) {
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      related_result_review: {...related, request: {...sibling, ...change}}}}).recovery_candidate, false);
+  }
+  const own = {version: 21, failed_turn_id: completed.turn_id, client_turn_id: plan.client_turn_id,
+    original_turn: completed, read_only_review: true, legacy_result_review: true, related_result_review: related};
+  const admitted = {...completed, turn_id: "own-review", status: "queued", client_turn_id: plan.client_turn_id};
+  const interrupted = {...packet, request: {...packet.request, context_recovery: own},
+    context_recovery: {...packet.context_recovery, admitted_turn: admitted, native_observation: null},
+    current_session: {...session, status: "busy", active_turn_id: admitted.turn_id}};
+  assert.equal(planBoundConversationRequest(interrupted).admitted_turn_id, admitted.turn_id);
+  const held = {...interrupted, request: {...interrupted.request, turn_id: admitted.turn_id},
+    context_recovery: {...interrupted.context_recovery, retained_result_review: {reservation: own, turn: admitted}}};
+  assert.equal(planBoundConversationRequest(held).recovery_candidate, false, "A delivered review never obtains another attempt");
+});
+
 test("the App steward is an explicit source preference, never a new grant or peer fallback", () => {
   const steward = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
   const configured = planConversationBinding({...request, binding: steward}).state;
