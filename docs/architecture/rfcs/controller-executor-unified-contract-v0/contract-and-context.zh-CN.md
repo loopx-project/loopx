@@ -405,10 +405,21 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
 
-C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
+C1 首次跨入口切换必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
 完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
 新 writer，也不关闭 C1。最终切换须在全部受支持 reader 验收后删除活跃格式选择。
 临时 decoder 有具名 caller 与退出条件，不是面向用户的兼容视图。
+
+Turn 生命周期可以在 C1 父提案下单独评审，但须一起覆盖规划、最终 Host 输入、capture
+发布、journal 检查、原会话恢复及结算消费者。已迁移 Turn 使用一个完整来源及其已校验
+reader；这个分阶段边界保留普通 quota writer 和 thin-heartbeat 的现有契约。共享投影
+改动须保留这些未迁移 caller。历史 v0 decoder 服务已记录的 plan、request 和 journal，
+不能为非法的已提供 v1 来源兜底；其删除仍依赖未结工作及受支持恢复窗口核清。
+
+这属于 C1 的部分交付，不代表跨入口切换取得资格，也不证明上下文或成本收益。父提案
+仍负责普通 quota 与 heartbeat 迁移、最终输入／材料读取覆盖、全宿主配置，以及原单会话
+成果与完整成本对照。评审须包含匹配基线／候选版本的真实 provider 成果、拒绝敏感性和
+打包恢复。只有切片合入 main、父提案集成 main 后，父提案的差异才会减少；开 PR 不算。
 
 对 normal、selection、replan、wait、recovery 和 capability-off 的每个 fixture，
 在**三个边界**核对独立编写的义务：组合契约、重建交付、最终模型输入及必需材料读取。
@@ -434,6 +445,57 @@ C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一�
 恢复先前合格 profile。不能静默替换 native session 或重解释 pending 回执。删除字段/
 decoder 前证明 export、旧版本 readback 与降级行为；满足受支持保留/升级边界前保留旧
 reader。本文不单独授权破坏性迁移。
+
+#### Turn 消费方准备与指令保真
+
+独立 Turn 提案让普通 quota producer 保持已记录契约；更广的 quota／heartbeat 切换
+仍归父提案。未迁移 producer 的测试须守住这个边界。当前 Turn 规划直接消费完整来源，
+发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
+
+原生所选 Task 的准备阶段仍把同一经校验来源私下适配给
+`StewardTurnHost.prepare_native_task` 及其现有验证 receiver。该临时 v0 adapter
+不会成为第二份发布的 Host 输入或保存的候选 decision。这个共同部署的准备 API
+仍由父提案在 active-reader 退役时迁移；lease 规则继续归原 owner，正常请求和
+capture 只使用完整来源。
+
+原生所选 Task 在 kernel delivery guard 之前准备普通 managed lease，并在模型后验证时
+复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
+Task argv；拒绝和原结果恢复保留原会话与一次性效果。
+
+现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
+closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
+delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
+和 scheduler 效果仍归 Core。完整契约可以声明待执行的原材料读取：发布不等于已读，
+测试须真正执行 reader，并保留原正文与停止条件。
+
+一次性 research-team launcher 与 initializer 共同定位实际加载的 Core，包括隔离 wheel，
+仍保留 runtime 独占创建。源码和打包消费者验证，分别区别于已安装 App 采用、真实可选
+provider／模型行为及相对原 quota 的完整成本收益。这些修复不关闭 C1，也不授权部署或合并。
+
+默认 JSON Turn inspection 保留当前路由、权限、停止条件、所选工作与可执行的 Vision
+编写指引。支撑证据与诊断正文仍可从同一完整来源的不可变、摘要绑定 capture 读取；
+之后实时 Goal 改变也不能重定向该读取。私有 capture 不可用时回退到完整来源。
+投影仅供 inspection，不能提升为执行或来源 admission。拥挤默认入口仍保持既有
+26,000 字符上限。显式 v1 事务详情包含完整来源及事务、会话元数据；同一小型 fixture
+实测 26,886 字符，保留旧 v0 15,000 上限失败记录，仅该声明的 v1 详情采用
+30,000 字符上限。冻结的差分 caller 按各 checkout 支持的 Host argv 和记录的计划
+schema 测量；本拆分中的普通 quota 保持不变。
+同源迁移对照检查路由、actor／work、执行义务、范围／停止条件、必要读取、编写指引和
+效果。旧 Goal 文件读取与新版完整内联文件必须有相同的完整文件摘要；inspection
+详情的每次 reader 调用及字节另行计入。仅这一次合格的 v0→v1 迁移允许默认入口增加
+2,000 字符／字节，完整事务详情增加 16,000；后续 v1 增长和绝对上限仍受约束。
+这是迁移资格验证，不是上下文效率净收益结论。
+
+只读 capture 发布复用既有跨平台私有 IO owner：新文件设置私有 POSIX 权限或受保护的
+Windows DACL；不安全的既有 transport 目录直接拒绝，不自动修复。它不启用原生
+连续性，也不改变原生连续性的平台资格。保留 Windows 原生产者覆盖，并与本地
+POSIX 执行证据分开报告。
+
+失败 Session 重试也在既有完整来源校验之后，按请求记录版本传入回调参数：当前请求
+传入经校验的完整来源；历史 v0 仍传原 envelope，即使附带完整 sidecar。损坏或混合
+输入在 provider lookup 前拒绝。真实 File/SQLite 重试测试让回调实际读取参数，覆盖
+原 Session 恢复、actor／work 错配拒绝、保存来源不变及 Host／结果效果只发生一次。
+这些检查不证明真实模型采用，也不证明父 C1 相对原 quota 的完整成本收益。
 
 ### C1 基线边界与复用盘点
 

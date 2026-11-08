@@ -8,6 +8,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, sourceNumberTokens} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
 import {canonicalAuthorityJson, authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
@@ -33,12 +34,24 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
     (value: unknown, path: ProjectionPath) => string {
   if (supplied === undefined) return value => JSON.stringify(canonicalAuthorityJson(value));
   const tokens = sourceNumberTokens(source, supplied);
+  if (!tokens.length) return value => JSON.stringify([canonicalAuthorityJson(value), []]);
   const paths = contextObjectPaths(source);
+  const byPath = new Map(tokens.map(item => [JSON.stringify(item.path), item.token]));
   return (value, path) => {
-    const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;
-    const prefix = original ?? path;
-    const relative = tokens.filter(item => prefix.every((key, i) => item.path[i] === key))
-      .map(item => [item.path.slice(prefix.length), item.token]);
+    const relative: [ProjectionPath, string][] = [];
+    // Follow retained objects, including containers moved by source edits.
+    // Removed carriers must not leave ghost numeric facts in the new digest.
+    const visit = (item: unknown, origin: ProjectionPath, target: ProjectionPath): void => {
+      if (item !== null && typeof item === "object") {
+        const original = paths.get(item) ?? origin;
+        if (Array.isArray(item)) item.forEach((child, i) => visit(child, [...original, i], [...target, i]));
+        else Object.entries(item).forEach(([key, child]) => visit(child, [...original, key], [...target, key]));
+      } else if (typeof item === "number") {
+        const token = byPath.get(JSON.stringify(origin));
+        if (token !== undefined && Object.is(JSON.parse(token), item)) relative.push([target, token]);
+      }
+    };
+    visit(value, path, []);
     // Sort encoded relative paths, so original object insertion order is not
     // mistaken for a content difference. Keep token strings separate from data.
     relative.sort((left, right) => authorityUnicodeCompare(JSON.stringify(left[0]), JSON.stringify(right[0])));
@@ -48,15 +61,40 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
 
 /** Return only display edits, never round-trip unrelated source facts through
  * JavaScript numbers. References address the immutable input, including bodies
- * moved into source_projection. Python applies these edits without policy. */
+ * moved into source_projection. Native wire may omit same-path copies;
+ * identity derivation retains their numeric lineage. Python only applies edits. */
 export type ProjectionSourceValues = WeakMap<object, Map<string, ProjectionPath>>;
 
+/** Retain scalar lineage when a display lens copies or renames source fields. */
+export function contextProjectionRetainFields(source: JsonObject, values: ProjectionSourceValues) {
+  const paths = contextObjectPaths(source);
+  return (projected: JsonObject, original: JsonObject,
+      fields: readonly (string | readonly [string, string])[] = Object.keys(projected)): JsonObject => {
+    const path = paths.get(original), originals = values.get(original);
+    if (!path && !originals) return projected;
+    const retained = values.get(projected) ?? new Map<string, ProjectionPath>();
+    for (const field of fields) {
+      const [from, to] = typeof field === "string" ? [field, field] : field;
+      if (!Object.hasOwn(projected, to) || typeof projected[to] !== "number" ||
+          !Object.hasOwn(original, from) || typeof original[from] !== "number") continue;
+      const origin = originals?.get(from) ?? (path && [...path, from]);
+      if (origin) retained.set(to, origin);
+    }
+    if (retained.size) values.set(projected, retained);
+    return projected;
+  };
+}
+
 export function contextProjectionChanges(source: JsonObject, projected: JsonObject,
-    sourceValues?: ProjectionSourceValues): JsonObject {
+    sourceValues?: ProjectionSourceValues, base: JsonObject = source, omitSamePathSources = false): JsonObject {
   const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
   const visit = (before: unknown, after: unknown, path: ProjectionPath, parent?: object): void => {
     const original = parent && sourceValues?.get(parent)?.get(String(path.at(-1)));
-    if (original) { changes.push({path, from: original}); return; }
+    if (original) {
+      if (!omitSamePathSources || original.length !== path.length || original.some((key, i) => key !== path[i]))
+        changes.push({path, from: original});
+      return;
+    }
     if (Object.is(before, after)) return;
     const from = after !== null && typeof after === "object" ? paths.get(after) : undefined;
     if (from) { changes.push({path, from}); return; }
@@ -67,15 +105,25 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
       // Remove from the end so earlier indices retain their original meaning.
       for (let i = old.length - 1; i >= after.length; i--) changes.push({path: [...path, i], remove: true});
     } else if (jsonObject(after)) {
+      const start = changes.length;
       const old = jsonObject(before) ?? {};
       if (!jsonObject(before)) changes.push({path, value: {}});
       for (const key of Object.keys(old))
         if (!Object.hasOwn(after as JsonObject, key)) changes.push({path: [...path, key], remove: true});
       for (const [key, value] of Object.entries(after as JsonObject))
         visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key], after as object);
+      // Small scalar records can cost less than separate removal paths.
+      // Keep source-lineage and numeric edits on their existing exact codec.
+      if (changes.length - start > 1 && Object.values(after as JsonObject).every(
+          value => value === null || typeof value === "string" || typeof value === "boolean")) {
+        const edits = changes.slice(start), replacement = {path, value: after};
+        if (!edits.some(edit => "from" in edit) &&
+            Buffer.byteLength(JSON.stringify([replacement])) < Buffer.byteLength(JSON.stringify(edits)))
+          changes.splice(start, edits.length, replacement);
+      }
     } else changes.push({path, value: after});
   };
-  visit(source, projected, []);
+  visit(base, projected, []);
   return {changes};
 }
 
@@ -123,6 +171,64 @@ const DIAGNOSTIC_LANES = new Set([
   "recent_completed_advancement_items", "completed_without_successor_items",
   "other_agent_bound_user_action_items",
 ]);
+
+/** Complete contracts keep one literal copy of equal summary lanes. A reference
+ * names an array in this same signed document, never a fresh Todo read. Only
+ * registered lanes participate; counts, candidate collections and unknown fields
+ * retain their original values. Consumers resolve before applying display caps. */
+export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
+  let result = payload;
+  for (const role of ["agent", "user"] as const) {
+    const root = `${role}_todo_summary`, summary = jsonObject(payload[root]);
+    if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
+    let expanded = summary;
+    for (const lane of DIAGNOSTIC_LANES) {
+      const key = `${lane}_ref`;
+      if (!Object.hasOwn(summary, key)) continue;
+      const reference = summary[key];
+      const prefix = `$.${root}.`;
+      const owner = typeof reference === "string" && reference.startsWith(prefix)
+        ? reference.slice(prefix.length) : "";
+      if (Object.hasOwn(summary, lane) || !DIAGNOSTIC_LANES.has(owner)
+          || !Array.isArray(summary[owner]) || Object.hasOwn(summary, `${owner}_ref`)) {
+        throw new EffectRuntimeRequestError("Todo summary lane reference requires one literal array in the same summary");
+      }
+      expanded = {...expanded, [lane]: summary[owner]};
+      delete expanded[key];
+    }
+    if (expanded !== summary) result = {...result, [root]: expanded};
+  }
+  return result;
+}
+
+export function referenceQuotaSummaryLanes(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  let result = resolveQuotaSummaryLanes(payload);
+  for (const role of ["agent", "user"] as const) {
+    const root = `${role}_todo_summary`, summary = jsonObject(result[root]);
+    if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
+    const owners = new Map<string, string>();
+    let shared = summary;
+    // Retain the normally visible lane first. Full-source composition shares
+    // exact arrays, including any future item fields, without selecting work.
+    const preferred = role === "agent" ? "first_executable_items" : "first_open_items";
+    for (const lane of [preferred, ...DIAGNOSTIC_LANES].filter((key, index, keys) => keys.indexOf(key) === index)) {
+      const value = summary[lane];
+      if (!Array.isArray(value) || value.length === 0 || Object.hasOwn(summary, `${lane}_ref`)) continue;
+      const encoded = identity(value, [root, lane]);
+      const owner = owners.get(encoded);
+      if (!owner) { owners.set(encoded, lane); continue; }
+      const reference = `$.${root}.${owner}`;
+      const inlineBytes = Buffer.byteLength(JSON.stringify({[lane]: value}), "utf8");
+      const referenceBytes = Buffer.byteLength(JSON.stringify({[`${lane}_ref`]: reference}), "utf8");
+      if (inlineBytes <= referenceBytes) continue;
+      shared = {...shared, [`${lane}_ref`]: reference};
+      delete shared[lane];
+    }
+    if (shared !== summary) result = {...result, [root]: shared};
+  }
+  return result;
+}
 // The read codec adds these display fields to canonical records. Retain them
 // on visible items; they do not make a known diagnostic list a future schema.
 const ITEM_FIELDS = new Set<string>([...TODO_CANONICAL_READ_RECORD_FIELDS, "index", "content_revision"]);
@@ -139,13 +245,13 @@ export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
     const summary = jsonObject(payload[root]);
     if (summary?.schema_version !== "todo_summary_v0") continue;
     const seen = new Map<string, ProjectionPath>();
-    for (const [lane, rows] of Object.entries(summary)) {
-      if (!DIAGNOSTIC_LANES.has(lane) || !Array.isArray(rows)) continue;
+    const referenceRows = (rows: unknown, lanePath: ProjectionPath): void => {
+      if (!Array.isArray(rows)) return;
       rows.forEach((value, index) => {
         const row = jsonObject(value);
         if (!row || row.schema_version !== "todo_item_v0" || typeof row.todo_id !== "string"
             || !row.todo_id || !Object.keys(row).every(key => ITEM_FIELDS.has(key)) || !safeNumbers(row)) return;
-        const key = JSON.stringify(canonicalAuthorityJson(row)), path = [root, lane, index];
+        const key = JSON.stringify(canonicalAuthorityJson(row)), path = [...lanePath, index];
         const from = seen.get(key);
         if (!from) { seen.set(key, path); return; }
         // Keep the original literal as the target; references never form chains.
@@ -153,7 +259,13 @@ export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
         if (Buffer.byteLength(JSON.stringify(reference)) < Buffer.byteLength(JSON.stringify(row)))
           references.push({path, from, value: reference});
       });
-    }
+    };
+    for (const [lane, rows] of Object.entries(summary))
+      if (DIAGNOSTIC_LANES.has(lane)) referenceRows(rows, [root, lane]);
+    const scope = jsonObject(summary.claim_scope);
+    if (root === "agent_todo_summary" && scope?.schema_version === "agent_claim_scope_v0")
+      for (const lane of ["other_agent_claimed_items", "blocked_claimed_items"])
+        referenceRows(scope[lane], [root, "claim_scope", lane]);
   }
   return references;
 }

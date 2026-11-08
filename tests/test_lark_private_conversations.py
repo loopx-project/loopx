@@ -2027,7 +2027,9 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
     "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
     "settled-command", "later-settled-command", "unsettled-command",
-    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
+    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect",
+    "review-live", "review-live-source", "review-live-stop", "review-live-revoked", "review-live-equivalent", "review-live-unknown",
+    "review-live-reservation-crash", "review-live-enqueue-crash", "transient-observation"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -2135,7 +2137,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault == "unsettled-command":
             snapshot["items"][1]["item"]["exitCode"] = None
         inventory.write_text(json.dumps(snapshot))
-    if fault == "cold-native":
+    if fault == "cold-native" or str(fault).startswith("review-live"):
         runtime.adapters.pop(original["session_id"]).close_session()
     elif fault == "dead-native":
         runtime.adapters[original["session_id"]].close_session()
@@ -2196,12 +2198,44 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     artifact_before_recovery = artifact.read_bytes()
+    if fault == "transient-observation":
+        from loopx.extensions.lark import private_conversations
+
+        owner = runtime.adapters[original["session_id"]]
+        observe = owner.completed_work_observation
+        observations = 0
+        monotonic = private_conversations.time.monotonic
+        elapsed = 0
+        monkeypatch.setattr(private_conversations, "time", SimpleNamespace(
+            monotonic=lambda: monotonic() + elapsed, time=private_conversations.time.time))
+
+        def unavailable_once(**kwargs):
+            nonlocal observations
+            observations += 1
+            return None if observations == 1 else observe(**kwargs)
+
+        monkeypatch.setattr(owner, "completed_work_observation", unavailable_once)
+        selected.reconcile()
+        # An inconclusive inventory is not a reason to replace the original
+        # writable owner with a model review of its already delivered answer.
+        assert selected.core.read_request(ref)["turn_id"] == original["turn_id"]
+        assert runtime.adapters[original["session_id"]] is owner and owner.healthcheck()
+        assert artifact.read_bytes() == artifact_before_recovery
+        assert observations == 1
+        assert selected.core.quota_backlog_pending(selected.core.read_request(ref))
+        selected.reconcile()
+        assert observations == 1, "The original reply worker still respects its probe backoff"
+        elapsed = 61
+        clock += timedelta(seconds=61)
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
+    reviewed = fault == "cold-native" or str(fault).startswith("review-live")
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native",
+                 "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_bytes() == artifact_before_recovery
+        if fault in {"failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
+            assert runtime.adapters[original["session_id"]].healthcheck()
     elif reviewed:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2232,6 +2266,56 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         assert permissions["filesystem"][":workspace_roots"] == {".": "read"}
         assert permissions["network"]["enabled"] is False
         assert sum(row.get("method") == "turn/start" for row in recovery_calls) == 1
+        if str(fault).startswith("review-live"):
+            # An ordinary source request naturally restores the writable owner.
+            # Merely opening a cold reader must never manufacture effects proof.
+            later_message = event["content"] if fault == "review-live-equivalent" else "Newer follow-up: inspect another result."
+            later_event = provider.event("notes-app", "after-result-review", later_message)
+            transport.admit("notes-app", later_event)
+            later_ref = identity_ref(binding["provider_ref"], later_event["message_id"])
+            later = transport.core.read_request(later_ref)
+            assert runtime.wait_for_turn(session_id=later["session_id"], turn_id=later["turn_id"], timeout_sec=10)["status"] == "completed"
+            transport.reconcile_request(transport.root / f"{later_ref}.json")
+            before = artifact.read_bytes()
+            if fault == "review-live-source":
+                provider.messages[event["message_id"]]["content"] = "Changed original source"
+            elif fault == "review-live-stop":
+                transport.admit("notes-app", provider.event("notes-app", "after-review-stop", "/stop"))
+            elif fault == "review-live-revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif fault == "review-live-unknown":
+                snapshot = json.loads(inventory.read_text())
+                snapshot["items"].append({"turnId": turn["upstream_turn_id"], "item": {"id": "unknown", "type": "futureEffect"}})
+                inventory.write_text(json.dumps(snapshot))
+            selected = worker()
+            if fault in {"review-live-reservation-crash", "review-live-enqueue-crash"}:
+                enqueue = runtime.enqueue_turn
+                def crash_after_review(**kwargs):
+                    if fault == "review-live-enqueue-crash":
+                        enqueue(**kwargs)
+                    raise OSError("synthetic post-review admission crash")
+                monkeypatch.setattr(runtime, "enqueue_turn", crash_after_review)
+                with pytest.raises(OSError, match="post-review admission crash"):
+                    selected.reconcile()
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                selected = worker()
+            selected.reconcile()
+            resumed = selected.core.read_request(ref)
+            if fault in {"review-live", "review-live-reservation-crash", "review-live-enqueue-crash"}:
+                assert resumed["turn_id"] != continued["turn_id"]
+                assert resumed["context_recovery"]["work_attempt"] == 1
+                assert resumed["context_recovery"]["failed_turn_id"] == original["turn_id"]
+                assert runtime.wait_for_turn(session_id=resumed["session_id"], turn_id=resumed["turn_id"], timeout_sec=10)["status"] == "completed"
+                selected.reconcile_request(path)
+                assert artifact.read_text() == "first\nremaining\n"
+                assert json.loads(path.read_text())["deliveries"][presentation_phase(resumed, "terminal")]["verified"]
+                after_writes = list(provider.writes)
+                worker().reconcile()
+                assert provider.writes == after_writes
+            else:
+                assert resumed["turn_id"] == continued["turn_id"]
+                assert artifact.read_bytes() == before
+            assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2269,8 +2353,9 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
-    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native"),
-        "thread/start": 0, "thread/resume": int(reviewed)}
+    restored_owner = int(str(fault).startswith("review-live"))
+    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native") + 2 * restored_owner,
+        "thread/start": 0, "thread/resume": int(reviewed) + restored_owner}
     for method, count in expected_new.items():
         assert sum(row.get("method") == method for row in after_recovery_calls[len(before_recovery_calls):]) == count
 
@@ -2297,8 +2382,8 @@ def _app_projection_journey(fixture):
 def _drain_app_projection(transport, predicate):
     deadline = time.monotonic() + 10
     while not predicate():
-        transport.reconcile()
         assert time.monotonic() < deadline, transport.health()
+        transport.reconcile()
         time.sleep(.02)
 
 
@@ -2332,6 +2417,83 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         # Completed App inputs retain receipt feedback, never a processing
         # reaction on the assistant mirror or a different original request.
         assert {ref for _profile, ref, _emoji in provider.reaction_creates if ref.startswith("om_out_")} == user_mirrors
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("recovery", ["readback", "revoked"])
+def test_app_failed_turn_mirrors_only_its_terminal_notice_to_the_original_chat(ordinary, monkeypatch, recovery):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    event = provider.event(profile, "original-app-failure-source", "Original steward chat")
+    transport.admit(profile, event)
+    original = transport.core.pending()[0]
+    sid = original["session_id"]
+    try:
+        runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+        transport.reconcile()
+        with monkeypatch.context() as queued:
+            queued.setattr(runtime, "resume_session_queue", lambda **_: None)
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns", {
+                "message": "App request with typed terminal failure", "client_turn_id": "app-failed-once"})
+        assert status == 202 and turn["status"] == "queued"
+        turn_id = turn["turn_id"]
+        stale = store.append_message(sid, role="error", text="Unconfirmed synthetic stop detail", turn_id=turn_id)
+        _drain_app_projection(transport, lambda: any("你（App）" in text for _, text in provider.writes))
+        transport.reconcile()
+        path, = (transport.root / "web-projections").glob("*.json")
+        original_outbox = json.loads(path.read_text())
+        assert original_outbox["status"] == "delivered"
+        runtime.resume_session_queue(session_id=sid, work_dir=ordinary[-1], objective="")
+        failed = runtime.wait_for_turn(session_id=sid, turn_id=turn_id, timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "cyber_policy", failed
+        errors = [item for item in store.messages(sid) if item["turn_id"] == turn_id
+                  and item["role"] == "error" and item["text"] == failed["error"]]
+        canonical, = errors
+        duplicate = store.append_message(sid, role="error", text=failed["error"], turn_id=turn_id)
+        phase = "web." + canonical["message_id"]
+        turns_before = ordinary[4].read_bytes()
+        transcript = (store.sessions_root / sid / "messages.jsonl").read_bytes()
+        before = len(provider.writes)
+
+        def worker():
+            return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                runner=provider, cli_bin="lark-cli")
+
+        if recovery == "revoked":
+            binding = transport._binding(profile)
+            transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            restarted = worker()
+            for _ in range(3):
+                restarted.reconcile()
+            assert len(provider.writes) == before
+            assert phase not in json.loads(path.read_text())["deliveries"]
+        else:
+            provider.verify_replies = False
+            _drain_app_projection(worker(), lambda: len(provider.writes) == before + 1)
+            attempted = json.loads(path.read_text())["deliveries"][phase]
+            assert attempted["attempt"] and not attempted.get("verified")
+            provider.verify_replies = True
+            restarted = worker()
+            _drain_app_projection(restarted, lambda: json.loads(path.read_text())["deliveries"][phase].get("verified"))
+            restarted.reconcile()
+            outbox = json.loads(path.read_text())
+            assert outbox["status"] == "delivered"
+            assert outbox["deliveries"][phase]["attempt"] == attempted["attempt"]
+            for key, old in original_outbox["deliveries"].items():
+                assert {k: v for k, v in outbox["deliveries"][key].items() if k != "feedback"} == {
+                    k: v for k, v in old.items() if k != "feedback"}
+            assert "web." + stale["message_id"] not in outbox["deliveries"]
+            assert "web." + duplicate["message_id"] not in outbox["deliveries"]
+            assert len(provider.writes) == before + 1
+            sender, body = provider.writes[-1]
+            assert sender == profile and "上游安全策略拦截" in body and failed["completed_at"] in body
+            assert failed["error"] not in body and stale["text"] not in body
+            mirror = provider.messages[attempted["attempt"]["message_ref"]]
+            assert mirror["chat_id"] == event["chat_id"]
+        assert ordinary[4].read_bytes() == turns_before
+        assert (store.sessions_root / sid / "messages.jsonl").read_bytes() == transcript
+        assert len(store.list_sessions()) == 1
     finally:
         runtime.close()
 
@@ -2407,6 +2569,8 @@ def test_app_mirror_feedback_tracks_turn_only_changes_and_separate_sessions(ordi
         transport._web_projection_scan_at = 0
         _drain_app_projection(transport, lambda: not any(ref in targets.values() and emoji == "OnIt"
                                                        for _, ref, emoji in provider.reactions.values()))
+        if terminal == "failed":
+            _drain_app_projection(transport, lambda: sum("App 执行记录" in body for _, body in provider.writes) == 2)
         assert {(profile, ref, emoji) for profile, ref, emoji in provider.reactions.values() if ref in targets.values()} == {
             (profile, ref, "Get") for profile, ref in targets.items()}
         starts = ordinary[4].read_bytes()
@@ -2451,6 +2615,9 @@ def test_app_long_return_keeps_all_parts_and_does_not_repeat_identical_parts(ord
     text = ("A repeated output paragraph with its complete evidence.\n" * 4000) + "UNIQUE FINAL END"
     store.append_message(original["session_id"], role="agent", text=text,
         turn_id=turns[-1], message_id="synthetic-long-result")
+    # Discover the committed result immediately. This case exercises delivery,
+    # including recovery of repeated parts, independently of scan cadence.
+    transport._web_projection_scan_at = 0
     try:
         _drain_app_projection(transport, lambda: any("UNIQUE FINAL END" in t for _, t in provider.writes[before:]))
         # Each canonical character survives transport splitting; an identical
@@ -4390,6 +4557,93 @@ def test_group_outbound_joins_current_source_and_identity_before_root_read(ordin
         runtime.close()
 
 
+@pytest.mark.parametrize("captured_thread", [False, True])
+def test_private_reply_keeps_the_exact_quote_when_thread_id_is_optional(ordinary, captured_thread):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    parent = provider.event(profile, "private-quote-parent", "Original quote\n\n**Second paragraph**")
+    reply = provider.event(profile, "private-quote-reply", "My question\n\n**Keep its formatting**")
+    parent_id, reply_id = parent["message_id"], reply["message_id"]
+    thread_id = "omt_private_quote"
+    reply.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id if captured_thread else None)
+    child = provider.messages[reply_id]
+    child.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id, thread_message_position=0)
+    provider.messages[parent_id].update(thread_id=thread_id, thread_message_position=-1, thread_replies=[child])
+    try:
+        assert transport.admit(profile, reply)["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        redelivery = {**reply, "event_id": "redelivered-private-quote", "thread_id": None}
+        assert transport.admit(profile, redelivery)["status"] == "durably_accepted"
+        assert transport.admit(profile, {**redelivery, "thread_id": "omt_other"})["status"] == "source_conflict"
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        original, = [row for row in store.messages(sid) if row["role"] == "user"]
+        status, snapshot = ordinary[3](f"/api/chat/sessions/{sid}?message_limit=5&turn_id={tid}")
+        assert status == 200
+        visible = next(row for row in snapshot["messages"] if row["message_id"] == original["message_id"])
+        context = visible["reply_context"]
+        assert context["source_text"] == reply["content"]
+        assert context["parent"] == {"message_id": parent_id, "content": parent["content"], "complete": True}
+        assert context["thread"]["thread_id"] == thread_id
+        assert context["thread"]["before_message_id"] == reply_id
+        assert visible["text"] == original["text"] == request["message"]
+        transport.reconcile()
+        assert provider.topic_writes == [(reply["chat_id"], parent_id, "Runtime response.")]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("event_shape", ["compact", "full", "provider_without_thread"])
+def test_nested_private_reply_deduplicates_when_thread_history_is_unavailable(ordinary, event_shape):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    root = provider.event(profile, "nested-root", "Earlier topic")
+    parent = provider.event(profile, "nested-parent", "Exact quoted answer\n\n**Second paragraph**")
+    reply = provider.event(profile, "nested-reply", "My question\n\n**Keep its formatting**")
+    root_id, parent_id, reply_id = (row["message_id"] for row in (root, parent, reply))
+    thread_id = "omt_nested_child"
+    reply.update(parent_id=parent_id, root_id=root_id)
+    provider.messages[parent_id].update(parent_id=root_id, root_id=root_id, thread_id="omt_parent",
+        sender={"id": provider.profile_apps[profile], "sender_type": "app"})
+    child = provider.messages[reply_id]
+    child.update(parent_id=parent_id, root_id=root_id)
+    if event_shape != "provider_without_thread":
+        child.update(thread_id=thread_id, thread_message_position=-1)
+    if event_shape == "full":
+        reply["thread_id"] = thread_id
+    try:
+        assert transport.admit(profile, reply)["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        full = {**reply, "event_id": "nested-full-redelivery", "thread_id": thread_id}
+        expected = "source_conflict" if event_shape == "provider_without_thread" else "durably_accepted"
+        assert transport.admit(profile, full)["status"] == expected
+        compact = {**reply, "event_id": "nested-compact-redelivery"}
+        compact.pop("thread_id", None)
+        assert transport.admit(profile, compact)["status"] == "durably_accepted"
+        assert transport.admit(profile, {**full, "thread_id": "omt_parent"})["status"] == "source_conflict"
+        assert transport.admit(profile, {**full, "parent_id": root_id})["status"] == "source_conflict"
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        original, = [row for row in store.messages(sid) if row["role"] == "user"]
+        status, snapshot = ordinary[3](f"/api/chat/sessions/{sid}?message_limit=5&turn_id={tid}")
+        assert status == 200
+        visible = next(row for row in snapshot["messages"] if row["message_id"] == original["message_id"])
+        context = visible["reply_context"]
+        assert context["source_text"] == reply["content"]
+        assert context["parent"] == {"message_id": parent_id, "content": parent["content"], "complete": True}
+        assert "thread" not in context
+        assert visible["text"] == original["text"] == request["message"]
+        transport.reconcile()
+        replies = [args for args in provider.calls if "+messages-reply" in args and "--dry-run" not in args]
+        assert sum(args[args.index("--message-id") + 1] == reply_id for args in replies) == 1
+    finally:
+        runtime.close()
+
+
 def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary, monkeypatch):  # noqa: F811
     _, runtime, provider, transport = connect_group(ordinary)
     try:
@@ -5031,6 +5285,39 @@ def test_revocation_during_source_read_prevents_native_admission(ordinary):  # n
         assert transport.core.pending() == []
         assert store.list_sessions() == []
         assert provider.writes == []
+    finally:
+        runtime.close()
+
+
+def test_private_admission_reuses_the_effect_runtime_revision_for_one_event(ordinary, monkeypatch):  # noqa: F811
+    from loopx.control_plane import effect_runtime
+
+    store, runtime, provider, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    event = provider.event("notes-app", "runtime-revision", "Explain this workspace")
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    admission_thread = threading.get_ident()
+    fingerprints = []
+    original = effect_runtime._runtime_fingerprint
+
+    def fingerprint():
+        value = original()
+        if threading.get_ident() == admission_thread:
+            fingerprints.append(value)
+        return value
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", fingerprint)
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        assert len(fingerprints) == 1
+        admitted = transport.core.read_request(ref)
+        session_id, turn_id = admitted["session_id"], admitted["turn_id"]
+        assert runtime.wait_for_turn(session_id=session_id, turn_id=turn_id, timeout_sec=15)["status"] == "completed"
+
+        transport.admit("notes-app", event)
+        assert len(fingerprints) == 2
+        assert transport.core.read_request(ref)["turn_id"] == turn_id
+        assert len([row for row in store.messages(session_id) if row["role"] == "user"]) == 1
     finally:
         runtime.close()
 

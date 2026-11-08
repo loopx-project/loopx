@@ -323,7 +323,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
       const sources = at(context, sourcePath);
       required.context_details = {path: details.path, sha256: details.sha256,
-        command_template: details.command_template, source_path: details.path,
+        ...(typeof details.command_template === "string" ? {command_template: details.command_template} : {}),
+        source_path: details.path,
       unread_context_index: {
         source: {path: details.path, sha256: details.sha256},
         coverage_confirmed: false,
@@ -349,6 +350,14 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
     }
   }
+  // A signed source and its presentation have different content hashes even
+  // when the only edit is a same-view Todo reference. Keep an address for the
+  // original and include its cost when deciding whether the projection wins.
+  const signedSource = request.surface === "complete_turn";
+  const sourceNavigation = typeof details.command_template === "string"
+    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
+  if (signedSource && required !== context && required.context_details === undefined)
+    required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
@@ -363,7 +372,11 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   const transport = details.selection_command_args_template;
   const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
     && transport !== at(context, selectionPath);
-  if (bindTransport) parent(selectionPath)[selectionPath.at(-1)!] = transport;
+  if (bindTransport) {
+    parent(selectionPath)[selectionPath.at(-1)!] = transport;
+    if (signedSource && required.context_details === undefined)
+      required.context_details = sourceNavigation;
+  }
   if (staged) {
     if (required.context_details === undefined) {
       required = {...required, context_details: {path: details.path, sha256: details.sha256}};
@@ -425,7 +438,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
     ...(request.include_initial_read_plan === true && groups
-      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues);
+      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -434,7 +447,7 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   const values: ProjectionSourceValues = new WeakMap();
   const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
-  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
+  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
@@ -479,23 +492,85 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
+  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
+      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
+      replan.decision === "replan_required" &&
+      replan.settlement_only !== true) {
+    // The complete contract already carries the review facts: use its own
+    // obligations and the indexed outcome paths below, without another writer.
+    for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
+      include("replan_action_packet", field);
+    // An invalidated successor can reopen review under the same receipt. Show
+    // the current cause and basis before the agent chooses a writeback route.
+    const obligation = object(context.autonomous_replan_obligation);
+    const review = object(obligation?.replan_context);
+    if (obligation?.schema_version === "autonomous_replan_obligation_v0" &&
+        typeof replan.obligation_id === "string" && obligation.obligation_id === replan.obligation_id &&
+        review?.schema_version === "replan_context_v0" && review.obligation_id === replan.obligation_id) {
+      include("autonomous_replan_obligation", "obligation_id");
+      include("autonomous_replan_obligation", "stop_condition");
+      include("autonomous_replan_obligation", "replan_context", "context_id");
+      if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
+        include("autonomous_replan_obligation", "triggers", index, "kind"));
+    }
   }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed"])
     include("interaction_contract", "agent_channel", field);
+  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  if (turnBindingRequired)
+    for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
+      include("interaction_contract", "cli_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  const channel = object(interaction.agent_channel);
+  const sources = object(channel?.work_context)?.sources;
+  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const selectedTodo = object(context.selected_todo);
+  const identityAgent = object(context.agent_identity)?.agent_id;
+  const agentId = context.agent_id ?? identityAgent;
+  // Deliver the opted-in decision cue before work, while the candidate or
+  // test can still change. The template and evidence stay on their owner read.
+  const cueStart = pointers.length;
+  if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+      && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string"
+      && (identityAgent === undefined || identityAgent === agentId)) {
+    for (const {source, index} of sourceRows) {
+      const row = object(source), view = object(row?.content), graph = object(view?.graph);
+      if (row?.kind !== "explore_turn_context" || row.capability_id !== "explore"
+          || view?.ok !== true || view.graph_enabled !== true || view.goal_id !== context.goal_id
+          || view.agent_id !== agentId || (view.todo_id !== undefined && view.todo_id !== selectedTodo.todo_id)
+          || typeof object(graph?.work_yardstick_capture)?.guidance !== "string") continue;
+      const graphPath = [...work, "sources", index, "content", "graph"];
+      include(...graphPath, "work_yardstick_capture", "guidance");
+      const measurements = graph?.work_measurements;
+      if (Array.isArray(measurements)) {
+        const current = measurements.findIndex(card => object(card)?.todo_id === selectedTodo.todo_id);
+        if (current >= 0) include(...graphPath, "work_measurements", current);
+      }
+      const cues = graph?.work_yardsticks;
+      if (Array.isArray(cues)) {
+        const current = cues.findIndex(cue => object(cue)?.todo_id === selectedTodo.todo_id);
+        if (current >= 0) include(...graphPath, "work_yardsticks", current);
+      }
+      break;
+    }
+  }
+  // Place the cue after the run decision, before variable-size Goal and work
+  // fields. This also works when the full selection falls back to plain paging.
+  const decisionEnd = pointers.indexOf("/normal_delivery_allowed");
+  if (decisionEnd >= 0 && pointers.length > cueStart) {
+    const cuePointers = pointers.splice(cueStart);
+    pointers.splice(decisionEnd + 1, 0, ...cuePointers);
+  }
   // If the full starting selection needs paging, put the current decision and
   // its read obligations in one independently readable opening. The rest is
   // still required under the original ordering and authority.
   const opening = pointers.splice(0);
   include(...work, "user_todos");
-  const channel = object(interaction.agent_channel);
-  const sources = object(channel?.work_context)?.sources;
-  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
   // A complete scoped preference can be larger than a reader page. Visit
   // current narrative sources first, with their availability and provenance,
   // before selecting other sources' metadata: complete-parent coalescing keeps
@@ -565,7 +640,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const cli = object(interaction.cli_channel);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(cli?.settlement_plan);
-  const steps = plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)
+  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
+    && Array.isArray(plan.ordered_steps)
     ? plan.ordered_steps : undefined;
   const prepared = object(cli?.execution_preparation);
   const identity = object(plan?.identity);
@@ -582,9 +658,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
     && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));
-  for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
-    "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-    if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
+  if (!turnBindingRequired)
+    for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+      "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
+      if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
   if (cli?.selection_required === true) {
@@ -639,6 +716,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include("context_details", "unread_context_index", field);
     include("context_details", "instruction");
     include("context_details", "command_template");
+  } else if (details && known(details, ["command_template", "path", "sha256"])) {
+    include("context_details");
   } else include("context_details", "unread_context_index");
   return {opening, remaining: pointers};
 }

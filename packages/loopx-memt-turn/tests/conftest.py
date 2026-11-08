@@ -5,10 +5,6 @@ import json
 import threading
 
 import pytest
-from tokenizers import Tokenizer, models
-from transformers import PreTrainedTokenizerFast
-from memt_sglang.models.common.snapshot_identity import snapshot_identity
-
 from loopx_memt_turn.config import Config
 
 
@@ -92,6 +88,11 @@ def provider():
 
 @pytest.fixture
 def config(tmp_path, provider):
+    # Only native-memory tests need the separately installed client/tokenizer.
+    from tokenizers import Tokenizer, models
+    from transformers import PreTrainedTokenizerFast
+    from memt_sglang.models.common.snapshot_identity import snapshot_identity
+
     workspace, tokenizer = tmp_path / "workspace", tmp_path / "tokenizer"
     workspace.mkdir()
     tokenizer.mkdir()
@@ -110,3 +111,19 @@ def config(tmp_path, provider):
     provider.snapshot_identity = snapshot_identity(model_config, provider.tokenizer)
     return Config(workspace=str(workspace), state_dir=str(tmp_path / "private"), tokenizer=str(tokenizer),
                   base_url=provider.url, enabled=True, timeout_seconds=10)
+
+
+@pytest.fixture
+def preflight_config(tmp_path, monkeypatch):
+    """Invalid input must stop before opening the optional native runtime."""
+    from loopx_memt_turn import host
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def unexpected_execution(*_args):
+        raise AssertionError("preflight refusal reached provider execution")
+
+    monkeypatch.setattr(host, "execute", unexpected_execution)
+    return Config(workspace=str(workspace), state_dir=str(tmp_path / "private"),
+                  tokenizer=str(tmp_path / "tokenizer"), enabled=True)

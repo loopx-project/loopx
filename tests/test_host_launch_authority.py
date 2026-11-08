@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from loopx.cli import main as cli_main
 from loopx.cli_commands import lark_inbox, turn_decision
 from loopx.configure_goal import configure_goal
@@ -170,7 +172,7 @@ def _cli(registry: Path, runtime: Path, *arguments: str):
             "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", *arguments,
         ])
-    return code, json.loads(output.getvalue())
+    return code, read_cli_policy_payload(output.getvalue(), returncode=code)
 
 
 def _mirror(source: Path, runtime: Path) -> Path:

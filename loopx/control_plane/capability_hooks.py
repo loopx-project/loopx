@@ -69,6 +69,11 @@ _POST_WRITEBACK_TRANSACTION_PARAMS_MAX_BYTES = 1_750_000
 
 InteractionProjectionProducer = Callable[[], Mapping[str, Any]]
 TurnStartProducer = Callable[[], Mapping[str, Any]]
+# Invocation-owned read composition after selection; no persisted policy or
+# provider authority is created by supplying this adapter.
+TurnStartContextProjector = Callable[
+    [Mapping[str, Any], Mapping[str, Any] | None], dict[str, Any] | None
+]
 PostWritebackProducer = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
@@ -194,6 +199,13 @@ class PostWritebackHookRegistration:
 
 def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Use the host envelope or the native quota identity, without new authority."""
+    if "work_contract" in payload:
+        from .quota.turn_envelope import turn_plan_host_source
+        from .quota.turn_envelope import complete_turn_host_source
+
+        source = complete_turn_host_source(turn_plan_host_source(payload), operation="plan_work")
+        assert source is not None
+        return source
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope
@@ -237,12 +249,18 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
+            source = turn_context_source(payload)
+            readback_only = (
+                result.get("context_fields") == {}
+                and result.get("instructions") == []
+                and result.get("result_fields") == {}
+            )
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    "source": turn_context_source(payload),
+                    **({"readback_only": True} if readback_only else {"source": source}),
                 },
             )
             readback = contribution.pop("readback")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +22,7 @@ from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
 )
+from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 from loopx.control_plane.work_items.goal_route_hint import build_goal_route_hint
 from loopx.quota import build_quota_should_run, render_quota_should_run_markdown
 
@@ -196,7 +196,7 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
         text=True,
         check=True,
     )
-    guard = json.loads(result.stdout)
+    guard = QuotaToolContext.from_output(result.stdout).packet
     assert guard["effective_action"] == "reassignment_required"
     assert guard["should_run"] is False
     assert guard["agent_scope_frontier"]["schema_version"] == "agent_scope_frontier_v1"

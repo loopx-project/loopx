@@ -17,6 +17,7 @@ import pytest
 import loopx.extensions.process_runtime as process_runtime
 from loopx.extensions.process_runtime import (
     force_terminate_process,
+    retire_owned_process,
     remove_owned_tree,
     run_capped_process,
     terminate_process_tree,
@@ -222,6 +223,34 @@ def test_force_posix_observer_timeout_has_bounded_self_reap(monkeypatch):
     observer.kill.assert_called_once_with()
     assert 0 < observer.wait.call_args.kwargs["timeout"] <= .05
     observer.stdout.close.assert_called_once_with()
+
+
+class _NoStreamsProcess:
+    """Stand-in for a Popen whose pipes ``communicate`` already released."""
+
+    stdin = None
+    stdout = None
+    stderr = None
+
+
+def test_retire_owned_process_never_widens_a_sub_grace_budget(monkeypatch):
+    """A 20 ms cleanup stays inside 20 ms; it is not raised to a 50 ms floor."""
+
+    process = _NoStreamsProcess()
+    captured = {}
+
+    def record_termination(process, *, process_tree_owned, timeout):
+        captured["timeout"] = timeout
+        captured["owned"] = process_tree_owned
+
+    monkeypatch.setattr(process_runtime, "force_terminate_process", record_termination)
+    started = time.monotonic()
+    retire_owned_process(process, process_tree_owned=True, timeout=.02)
+    elapsed = time.monotonic() - started
+
+    assert captured["owned"] is True
+    assert 0 < captured["timeout"] <= .016
+    assert elapsed < .05
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])

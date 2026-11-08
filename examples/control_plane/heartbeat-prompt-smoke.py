@@ -927,6 +927,8 @@ def main() -> int:
             GOAL_ID,
             "--active-state",
             str(ACTIVE_STATE),
+            "--context-delivery",
+            "auto",
         ],
         cwd=REPO_ROOT,
         check=True,
@@ -939,6 +941,7 @@ def main() -> int:
         active_state=ACTIVE_STATE,
         reward_memory_enabled=False,
         registry_path=cli_registry,
+        context_delivery="auto",
     )
     assert cli_payload["task_body"] == cli_expected_payload["task_body"], cli_payload
     assert set(cli_payload) == {
@@ -965,6 +968,8 @@ def main() -> int:
             GOAL_ID,
             "--active-state",
             str(ACTIVE_STATE),
+            "--context-delivery",
+            "auto",
             "--full",
         ],
         cwd=REPO_ROOT,
@@ -979,6 +984,7 @@ def main() -> int:
         full=True,
         reward_memory_enabled=False,
         registry_path=cli_registry,
+        context_delivery="auto",
     )
     assert cli_full_payload["task_body"] == cli_full_expected_payload["task_body"], cli_full_payload
     assert cli_full_payload["thin"] is False, cli_full_payload
@@ -999,6 +1005,8 @@ def main() -> int:
             GOAL_ID,
             "--active-state",
             str(ACTIVE_STATE),
+            "--context-delivery",
+            "auto",
             "--compact",
         ],
         cwd=REPO_ROOT,
@@ -1013,6 +1021,7 @@ def main() -> int:
         compact=True,
         reward_memory_enabled=False,
         registry_path=cli_registry,
+        context_delivery="auto",
     )
     assert cli_compact_payload["task_body"] == cli_compact_expected_payload["task_body"], cli_compact_payload
     assert cli_compact_payload["compact"] is True, cli_compact_payload
@@ -1031,6 +1040,8 @@ def main() -> int:
             GOAL_ID,
             "--active-state",
             str(ACTIVE_STATE),
+            "--context-delivery",
+            "auto",
             "--brief",
         ],
         cwd=REPO_ROOT,
@@ -1045,6 +1056,7 @@ def main() -> int:
         brief=True,
         reward_memory_enabled=False,
         registry_path=cli_registry,
+        context_delivery="auto",
     )
     assert cli_brief_payload["task_body"] == cli_brief_expected_payload["task_body"], cli_brief_payload
     assert cli_brief_payload["brief"] is True, cli_brief_payload
@@ -1064,6 +1076,8 @@ def main() -> int:
             GOAL_ID,
             "--active-state",
             str(ACTIVE_STATE),
+            "--context-delivery",
+            "auto",
             "--thin",
         ],
         cwd=REPO_ROOT,
@@ -1078,6 +1092,7 @@ def main() -> int:
         thin=True,
         reward_memory_enabled=False,
         registry_path=cli_registry,
+        context_delivery="auto",
     )
     assert cli_thin_payload["task_body"] == cli_thin_expected_payload["task_body"], cli_thin_payload
     assert cli_thin_payload["schema_version"] == HEARTBEAT_AGENT_INPUT_SCHEMA_VERSION
