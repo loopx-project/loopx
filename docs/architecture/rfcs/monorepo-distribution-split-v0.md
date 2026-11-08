@@ -2273,6 +2273,66 @@ observations. Original Task/vision, independent exact-head review,
 I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 PostgreSQL host/wheel, full-cost/adoption gaps and all frozen failures remain.
 
+### Refresh summary transaction checkpoint
+
+At runtime `68fae1d0` integrated with main `87a153d4d`, a complete-lifecycle caller trace
+locates two independent native User/Agent summary requests inside one refresh
+qualification. The existing Python adapter now passes the pair through the
+existing TypeScript Todo transaction. That owner validates the source and each
+request, sharing complete provider materialization when their references match.
+Independent metadata, clock/actor binding and all source/identity/revision/WAL,
+lease, receipt/recovery checks remain; supplied sources or references from a closed request scope retain
+the standalone path. No authority is cached across requests. This is an internal
+existing CLI/readback improvement with no new product operation or configuration.
+
+The same 101-Todo source/wheel File/SQLite lifecycles preserve sum45, original
+completion time, four receipts, one debit, restart, refusal/replay and settlement
+readback. A recursive dropped-scope response mutation fails the independent
+scope oracle in the real SQLite CLI; its disposable daemon is stopped. The
+instrumented lifecycle reduces todo.read26 to24 and each refresh summary pair
+from two RPCs to one; that is a mechanism diagnostic, not a latency result.
+Current113 Python/63 TypeScript, typing/mypy and isolated real PostgreSQL16.15
+store391/service11 pass, zero skips in the qualified runs; both servers stopped.
+All24 PR production files match the isolated wheel. The first missing argument
+and first service-env skip are retained as failed/unqualified attempts. Standard
+premerge passes six direct and18/19 selected checks, retaining the unchanged
+peer hard-cut scanner failure. The public-boundary subcheck is clean; separate
+complete local checks still expose unrelated registered-Goal authority errors.
+
+Five matched, interleaved, unprofiled default-SQLite source episodes per arm
+compare main `b78246ff7`, the prior proposal `94c99e28a` and runtime
+`fc032cbf5`, before the later main integration. Each fixture driver uses that
+arm's exact CLI interpreter; all15 prequota PID-set checks preserve the same
+prewarmed daemon. The earlier overlapping-validator and mismatched-interpreter
+campaigns are retained only as diagnostics. Runtime isolation is preserved.
+
+| Observation median | Main | Prior proposal | Refresh proposal |
+| --- | ---: | ---: | ---: |
+| Lifecycle wall, seconds | 22.092 | 23.620 | 22.033 |
+| Timed child + sampled daemon CPU after setup, seconds | 14.756 | 15.353 | 14.907 |
+| Sampled daemon disk counter, bytes | 8,888,320 | 8,310,784 | 8,093,696 |
+| Sampled daemon logical-write counter, bytes | 13,946,880 | 13,840,384 | 13,107,200 |
+| Observed daemon lifetime peak, bytes | 141,508,280 | 139,887,008 | 138,510,608 |
+
+Wall ranges are21.898–24.716 /22.615–24.863 /21.824–24.767s;
+setup medians2.336/2.404/2.392s and final teardown0.062/0.062/0.058s are
+separate. All five refresh candidates are faster than the prior proposal, but
+three are slower than main and ranges overlap. Timed child CPU includes the
+independent verifier. These counters exclude complete exit/helper/harness,
+provenance, model and attention costs; disk counters and sampled lifetime peaks
+are not physical-device writes or continuous system peaks. The complete benefit
+remains unqualified. These observations do not qualify the later main integration,
+or replace historical/frozen failures. The integrated production hashes remain
+identical, and its four source/wheel File/SQLite lifecycles were rerun.
+
+
+The original full declaration and every historical/frozen failure remain. I3
+for at least one minor release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, full-cost/adoption and
+independent exact-head review remain open. No main merge or installed-host
+upgrade is included. Further implementation must follow the complete cost
+comparison and preserve every current freshness/authority fence.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
