@@ -37,11 +37,11 @@ for index in range(24):
     node=f'group-question-{index}'
     title=f'{index+1}. 相同预算下的候选比较：保留负结果、失败和未知成本；哪些证据能支持下一步？'
     events.append(build_explore_node_event(goal_id=goal,node_id=node,title=title,node_kind='question',
-        recorded_at=f'2026-01-04T00:00:{index:02}Z'))
+        recorded_at=f'2026-01-04T{23 if index==23 else 0:02}:00:{index:02}Z'))
     for version,status in enumerate(('refuted','tentative')):
         events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'group-finding-{index}-{version}',
             title=f'候选 {index+1} · 记录 {version+1}',summary=f'原始观察 {index+1}/{version+1}：局部指标不同，完整收益和费用仍未知。',
-            status=status,recorded_at=f'2026-01-04T0{version+1}:00:{index:02}Z'))
+            status=status,recorded_at=f'2026-01-0{5 if index==23 else 4}T0{version+1}:00:{index:02}Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 路线阅读','events':events},ensure_ascii=False))
 `, path], {cwd: repoRoot});
 }
@@ -71,7 +71,7 @@ export const researchRouteReadingScenario = {
       writeRouteReadingFixture(fixture);
       const capture = JSON.parse(await readFile(fixture));
       owner = await startHistoryOwner(fixture);
-      page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true});
+      page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true, timezoneId: "Asia/Shanghai"});
       if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
       const url = new URL("/chat/?goalId=synthetic-route-reading&view=research&statusUrl=%2Fstatus.json", owner.base).href;
       let state = "deep", analysisWrites = 0, releaseLoading;
@@ -253,9 +253,14 @@ export const researchRouteReadingScenario = {
         await page.goto(url);
         const day = history.locator('[data-research-day="2026-01-04"]');
         await day.waitFor();
+        const dayText = await day.innerText();
         await history.locator(".research-history-canvas").focus();
         // WebKit can activate the button while leaving focus on the canvas.
         await day.evaluate(button => button.click());
+        await reader.locator(".research-question-index").waitFor();
+        await page.screenshot({path: resolve(outputDir, `research-day-group-${locale}-${width}.png`), animations: "disabled"});
+        assert.match(dayText, /2026-01-04 UTC/, "UTC grouping stays explicit beside the local record range");
+        assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/, "Opening a date group preserves its time basis");
         await reader.locator(".research-question-index button").nth(3).click();
         await page.keyboard.press("Escape");
         await reader.locator(".research-question-index").waitFor();
@@ -307,9 +312,19 @@ export const researchRouteReadingScenario = {
         await page.keyboard.press("Escape");
         await page.waitForFunction(() => document.activeElement?.closest("[data-research-node]")?.getAttribute("data-research-node") === "group-question-4");
         await page.reload(); await reader.locator(".research-question-index").waitFor();
+        assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/, "Reload preserves the date group's UTC basis");
         await page.keyboard.press("Escape");
         await page.waitForFunction(() => document.activeElement?.getAttribute("data-research-day") === "2026-01-04");
       }
+      await history.getByRole("button", {name: "Graph", exact: true}).click();
+      const graphDay = history.locator('[data-research-day="2026-01-04"]');
+      assert.match(await graphDay.innerText(), /2026-01-04 UTC/);
+      await graphDay.click();
+      assert.match(await reader.locator("h3").innerText(), /2026-01-04 UTC/);
+      assert.equal(await reader.locator(".research-question-index li").count(), 24,
+        "The late UTC record remains in its UTC group across local midnight");
+      await page.keyboard.press("Escape");
+      await history.getByRole("button", {name: "Timeline", exact: true}).click();
       // A saved multi-node selection retains the same local collection. A
       // forged parent cannot borrow unrelated questions for its navigation.
       const clustered = new URL(url);
