@@ -695,6 +695,7 @@ def _monitor_advancement_authoring_fields(
     *,
     material_change: bool,
     monitor_todo_id: Any,
+    material_change_scope: Any = None,
     successor_todo_ids: list[str],
 ) -> dict[str, Any]:
     """Attach the optional cross-command recipe outside the hot-path reducer."""
@@ -704,6 +705,7 @@ def _monitor_advancement_authoring_fields(
     return {
         "authoring_contract": build_monitor_advancement_authoring_contract(
             monitor_todo_id=str(monitor_todo_id or "") or None,
+            material_change_scope=str(material_change_scope or "") or None,
             successor_todo_ids=successor_todo_ids,
         )
     }
@@ -1074,6 +1076,7 @@ def record_quota_monitor_poll_for_decision(
         _monitor_advancement_authoring_fields(
             material_change=result.get("material_change") is True,
             monitor_todo_id=result.get("todo_id"),
+            material_change_scope=result.get("material_change_scope"),
             successor_todo_ids=(
                 [str(item) for item in successor_todo_ids]
                 if isinstance(successor_todo_ids, list)

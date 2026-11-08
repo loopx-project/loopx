@@ -27,28 +27,53 @@ export function monitorChangeScopeDigest(scope: string): string {
   return createHash("sha256").update(scope, "utf8").digest("hex").slice(0, 24);
 }
 
-export function parseMonitorScopeGenerations(value: unknown): Map<string, number> {
+interface MonitorScopeState {
+  generation: number;
+  resultDigest: string | null;
+}
+
+function parseMonitorScopeStates(value: unknown): Map<string, MonitorScopeState> {
   if (value === null || value === undefined || value === "") return new Map();
   if (typeof value !== "string") {
     throw new EffectRuntimeRequestError("material_change_scope_generations must be a string");
   }
-  const result = new Map<string, number>();
+  const result = new Map<string, MonitorScopeState>();
   for (const entry of value.split(",")) {
-    const [digest, generationText, ...extra] = entry.split(":");
+    const [digest, generationText, resultDigest, ...extra] = entry.split(":");
     const generation = Number(generationText);
     if (extra.length > 0 || !SCOPE_DIGEST_PATTERN.test(digest ?? "") ||
-        !/^\d+$/u.test(generationText ?? "") || !Number.isSafeInteger(generation)) {
+        !/^\d+$/u.test(generationText ?? "") || !Number.isSafeInteger(generation) ||
+        (resultDigest !== undefined && !SCOPE_DIGEST_PATTERN.test(resultDigest))) {
       throw new EffectRuntimeRequestError("material_change_scope_generations is malformed");
     }
     if (result.has(digest!)) {
       throw new EffectRuntimeRequestError("material_change_scope_generations contains a duplicate scope");
     }
-    result.set(digest!, generation);
+    result.set(digest!, { generation, resultDigest: resultDigest ?? null });
   }
   if (result.size > MONITOR_SCOPE_GENERATION_LIMIT) {
     throw new EffectRuntimeRequestError(
       `material_change_scope_generations exceeds ${MONITOR_SCOPE_GENERATION_LIMIT} retained scopes`,
     );
+  }
+  return result;
+}
+
+function serializeMonitorScopeStates(states: Map<string, MonitorScopeState>): string {
+  return [...states.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([digest, state]) =>
+      state.resultDigest === null
+        ? `${digest}:${state.generation}`
+        : `${digest}:${state.generation}:${state.resultDigest}`,
+    )
+    .join(",");
+}
+
+export function parseMonitorScopeGenerations(value: unknown): Map<string, number> {
+  const result = new Map<string, number>();
+  for (const [digest, state] of parseMonitorScopeStates(value)) {
+    result.set(digest, state.generation);
   }
   return result;
 }
@@ -61,7 +86,24 @@ export function serializeMonitorScopeGenerations(generations: Map<string, number
 }
 
 export function monitorScopeGeneration(value: unknown, scope: string): number {
-  return parseMonitorScopeGenerations(value).get(monitorChangeScopeDigest(scope)) ?? 0;
+  return parseMonitorScopeStates(value).get(monitorChangeScopeDigest(scope))?.generation ?? 0;
+}
+
+export function monitorScopeResultAdvances(
+  value: unknown,
+  scope: string,
+  resultHash: string,
+  previousScope: unknown,
+  previousHash: string,
+): boolean {
+  const state = parseMonitorScopeStates(value).get(monitorChangeScopeDigest(scope));
+  if (!state) return true;
+  if (state.resultDigest !== null) {
+    return state.resultDigest !== monitorChangeScopeDigest(resultHash);
+  }
+  return normalizeMonitorChangeScope(previousScope) === scope
+    ? resultHash !== previousHash
+    : true;
 }
 
 export function advanceMonitorScopeGeneration(
@@ -69,19 +111,25 @@ export function advanceMonitorScopeGeneration(
   scope: string | null,
   generation: number,
   advances: boolean,
+  resultHash: string | null = null,
 ): JsonObject {
-  const generations = parseMonitorScopeGenerations(value);
+  const states = parseMonitorScopeStates(value);
   if (scope !== null && advances) {
     const digest = monitorChangeScopeDigest(scope);
-    if (!generations.has(digest) && generations.size >= MONITOR_SCOPE_GENERATION_LIMIT) {
+    if (!states.has(digest) && states.size >= MONITOR_SCOPE_GENERATION_LIMIT) {
       throw new EffectRuntimeRequestError(
         `Monitor already retains ${MONITOR_SCOPE_GENERATION_LIMIT} scoped transitions; create an independent Monitor before adding another scope`,
       );
     }
-    generations.set(digest, generation);
+    const resultDigest =
+      typeof resultHash === "string" && resultHash.length > 0
+        ? monitorChangeScopeDigest(resultHash)
+        : null;
+    states.set(digest, { generation, resultDigest });
   }
   return {
-    encoded: serializeMonitorScopeGenerations(generations),
-    scope_generation: scope === null ? null : generations.get(monitorChangeScopeDigest(scope)) ?? 0,
+    encoded: serializeMonitorScopeStates(states),
+    scope_generation:
+      scope === null ? null : states.get(monitorChangeScopeDigest(scope))?.generation ?? 0,
   };
 }

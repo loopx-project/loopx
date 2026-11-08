@@ -136,8 +136,10 @@ function planWriteback(input: MonitorBatchInput) {
     goal_id: input.goal_id, todo_id: monitor.todo_id, monitor_effect_id: input.operation_id,
     target_key: transition.target_key || null, result_hash: observation.result_hash,
     material_change: observation.material_change, material_change_generation: transition.material_change_generation,
-    material_change_scope: transition.material_change_scope ?? null,
-    scoped_material_change_generation: transition.scoped_material_change_generation ?? null,
+    ...(transition.material_change_scope == null ? {} : {
+      material_change_scope: transition.material_change_scope,
+      scoped_material_change_generation: transition.scoped_material_change_generation ?? null,
+    }),
     consecutive_no_change: transition.consecutive_no_change, last_checked_at: observation.generated_at,
     next_due_at: transition.next_due_at ?? null, cadence: transition.cadence || null,
     todo_update: {ok: true, todo_id: monitor.todo_id, monitor_poll_transition: transition},

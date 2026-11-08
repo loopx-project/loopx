@@ -45,16 +45,18 @@ test("scoped material generations retain independent case and run transitions", 
     8,
   );
   const persisted = {...existing, ...alpha.metadata};
+  // Distinct scopes advance independently even when they share the same result_hash.
   const beta = planMonitorMetadata(request({
     existing: persisted,
     observation: observation({
       monitor_effect_id: "effect-b",
       generated_at: "2030-01-01T02:00:00Z",
-      result_hash: "after-b",
+      result_hash: "after",
       material_change_scope: "case-b/run-2",
     }),
   }));
   assert.equal(beta.metadata.material_change_generation, "9");
+  assert.equal(beta.transition?.material_change_applied, true);
   assert.equal(
     monitorScopeGeneration(beta.metadata.material_change_scope_generations, "case-a/run-1"),
     8,
@@ -64,6 +66,33 @@ test("scoped material generations retain independent case and run transitions", 
     9,
   );
   assert.equal(beta.transition?.scoped_material_change_generation, 9);
+  // Repeating the same result_hash on the same scope does not advance again,
+  // even if another scope polled in between with a different result_hash.
+  const gamma = planMonitorMetadata(request({
+    existing: {...persisted, ...beta.metadata},
+    observation: observation({
+      monitor_effect_id: "effect-c",
+      generated_at: "2030-01-01T03:00:00Z",
+      result_hash: "after-b",
+      material_change_scope: "case-b/run-2",
+    }),
+  }));
+  assert.equal(gamma.metadata.material_change_generation, "10");
+  const repeatAlpha = planMonitorMetadata(request({
+    existing: {...persisted, ...beta.metadata, ...gamma.metadata},
+    observation: observation({
+      monitor_effect_id: "effect-d",
+      generated_at: "2030-01-01T04:00:00Z",
+      result_hash: "after",
+      material_change_scope: "case-a/run-1",
+    }),
+  }));
+  assert.equal(repeatAlpha.transition?.material_change_applied, false);
+  assert.equal(repeatAlpha.metadata.material_change_generation, "10");
+  assert.equal(
+    monitorScopeGeneration(repeatAlpha.metadata.material_change_scope_generations, "case-a/run-1"),
+    8,
+  );
   assert.throws(() => planMonitorMetadata(request({
     observation: observation({material_change: false, material_change_scope: "case-a/run-1"}),
   })), /requires --material-change/);

@@ -8,6 +8,7 @@ import { evaluateSchedulerStateTransition, SCHEDULER_STATE_TRANSITION_REQUEST_SC
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import {
   advanceMonitorScopeGeneration,
+  monitorScopeResultAdvances,
   normalizeMonitorChangeScope,
   parseMonitorScopeGenerations,
 } from "./monitor_scope.ts";
@@ -199,10 +200,19 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   }
   const previousHash = text(existing.result_hash);
   if (reactivate && replay) throw new EffectRuntimeRequestError("a historical Monitor observation cannot reactivate completed work");
-  const advances = !replay && material && (reactivate || resultHash !== previousHash);
+  const resultAdvances = scope === null
+    ? resultHash !== previousHash
+    : monitorScopeResultAdvances(
+        existing.material_change_scope_generations,
+        scope,
+        resultHash,
+        existing.material_change_scope,
+        previousHash,
+      );
+  const advances = !replay && material && (reactivate || resultAdvances);
   const generation = previousGeneration + Number(advances);
   const scoped = advanceMonitorScopeGeneration(
-    existing.material_change_scope_generations, scope, generation, advances,
+    existing.material_change_scope_generations, scope, generation, advances, resultHash,
   );
   const noChange = replay ? previousNoChange : material || (previousHash && previousHash !== resultHash)
     ? 0 : previousNoChange + 1;
@@ -226,7 +236,10 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   return {metadata, transition: {monitor_effect_id: effectId || null, provider_replayed: replay,
     result_hash: resultHash, material_change: material, material_change_applied: advances,
     material_change_generation: generation, consecutive_no_change: noChange, last_checked_at: generatedAt,
-    material_change_scope: scope, scoped_material_change_generation: scoped.scope_generation,
+    ...(scope === null ? {} : {
+      material_change_scope: scope,
+      scoped_material_change_generation: scoped.scope_generation,
+    }),
     target_key: target || null, cadence: cadence || null, next_due_at: due}};
 }
 

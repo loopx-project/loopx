@@ -59,18 +59,19 @@ test("canonical monitor poll retains scoped generations across unrelated transit
   const {store, request} = await seeded();
   const first = await executeCoordinationMonitorPoll(store, {
     ...request,
-    intent: {},
     observation: {...request.observation, material_change_scope: "case-a/run-1"},
   });
   assert.equal(first.status, "applied", JSON.stringify(first));
+  // A second scope reporting the identical result_hash still advances its own
+  // scoped generation and can author its own successor.
   const second = await executeCoordinationMonitorPoll(store, {
     ...request,
     operation_id: "poll-b",
-    intent: {},
+    intent: {...request.intent, next_agent_todo: "Deliver case-b result"},
     observation: {
       ...request.observation,
       generated_at: "2026-09-01T01:00:00Z",
-      result_hash: "result-b",
+      result_hash: request.observation.result_hash,
       material_change_scope: "case-b/run-2",
     },
   });
