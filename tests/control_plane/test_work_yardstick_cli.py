@@ -545,6 +545,57 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert "work_yardsticks" not in disabled and disabled["measurement_feedback"] == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path, provider, monkeypatch):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=wide_write_scope())
+    refs = ["result:preview-a", "result:preview-b"]
+    plain = attachment()
+    chosen = plain.pop("work_yardstick_decision")
+    plain["evidence_refs"] = refs
+    plain["measurements"] = [
+        {**chosen["proxy"], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": ref, "value": value}
+        for candidate, ref, value in zip(("a", "b"), refs, (8, 6))
+    ]
+
+    def retain(turn_id, payload):
+        evidence = tmp_path / f"{turn_id}.json"
+        evidence.write_text(json.dumps(payload))
+        receipt = refresh(project, runtime, path, turn_id, evidence, "--delivery-boundary", "in_flight_continuation")
+        result = receipt["explore_result_delivery"]
+        assert result["ok"]
+        run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"],
+            turn_instance_id=turn_id))
+        return result
+
+    first = retain("previous-proxy", plain)
+    selected = attachment()
+    selected.update(node_id=first["node_id"], evidence_refs=[*refs, "result:outcome-a", "result:outcome-b"])
+    selected["work_yardstick_decision"]["counterevidence_refs"] = refs
+    selected["measurements"] = [
+        {**chosen["authoritative"], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": f"result:outcome-{candidate}", "value": value}
+        for candidate, value in (("a", 20), ("b", 14))
+    ]
+    result = retain("current-decision", selected)
+    before = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert before["search_comparison"]["proxy_order_reversed"] is False
+
+    late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
+            "measurements": [{**plain["measurements"][1], "value": 99}]}
+    retain("later-duplicate-reference", late)
+    after = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert after["source_finding_id"] == result["finding_id"]
+    assert after["search_comparison"] == before["search_comparison"]
+    turn = binding("inspect-original-citation")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    page = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)
+    assert "proxy reverses the observed goal order" not in page["content"]
+    assert "candidate:a" in page["content"]
+
+
 def test_sqlite_current_work_to_ordinary_turn_to_concrete_action_and_readback(tmp_path):
     project, runtime, path = setup(tmp_path)
     source = tmp_path / "capture.json"

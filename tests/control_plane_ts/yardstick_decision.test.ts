@@ -164,6 +164,16 @@ test("a current decision can reuse explicitly cited measurements written before 
   const differentTarget = {...recorded, work_yardstick: {binding, decision: {...declared,
     target: {...declared.target, acceptance_ref: "acceptance:another-target"}}}};
   assert.equal(project(differentTarget).proxy, undefined);
+
+  const later = {...recorded, finding_id: "later-preview", recorded_order: 3,
+    // Claimed observation time is older. Only recorded order binds the citation.
+    last_updated_at: "2025-12-31T23:59:59Z", evidence_refs: [cited[1]!],
+    measurements: [{...recorded.measurements[1]!, value: 1}]};
+  const after = projectWorkYardstickCue({...binding, enabled: true, findings: [source, later, recorded]})!;
+  assert.deepEqual(after.search_comparison, comparison);
+  const unknown = projectWorkYardstickCue({...binding, enabled: true,
+    findings: [source, {...recorded, recorded_order: undefined}]})!;
+  assert.equal(unknown.search_comparison.proxy, undefined);
 });
 
 test("only strictly older committed replay preserves a stale predecessor as history", () => {
