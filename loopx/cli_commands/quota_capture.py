@@ -379,12 +379,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         presentation = payload
         if args.initial_read and activation["progressive_enabled"] and not complete:
             from .quota_presentation import _project_quota_cli_payload
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
 
-            # Match the ordinary selection guard's view while keeping the
-            # digest-bound original available for detail recovery.
+            # Keep the saved bytes intact. Stage unstaged readers against the
+            # exact path just verified here, including a digest-bound copy.
             presentation = _project_quota_cli_payload(
-                payload, argparse.Namespace(quota_command="should-run"), frozenset(), None,
-                captured_decision_path=str(path),
+                project_captured_replan_cli_view(payload, captured_decision_path=str(path)),
+                argparse.Namespace(quota_command="should-run"), frozenset(), None,
             )
             if "host_poll_receipt" in payload:
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]

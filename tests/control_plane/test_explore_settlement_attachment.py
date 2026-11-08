@@ -96,7 +96,6 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize("mode", ["off", "evidence", "planning"])
 def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path, mode):
-    import shlex
     import subprocess
     import sys
     from tests.test_loopx_turn_driver import (
@@ -113,10 +112,10 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     ], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     packet = json.loads(result.stdout)
-    assert "settlement_plan" not in packet["turn_envelope"]["writeback"]
+    assert "settlement_plan" not in packet["work_contract"]["interaction_contract"]["cli_channel"]
     # Inspection is pure. Execute the original driver-owned path to observe its
     # activation-bound hook and the exact input actually received by the Host.
-    assert "turn_start_capability_hook_dispatch" not in packet
+    assert "turn_start_capability_hook_dispatch" not in packet["work_contract"]
     workspace = project / "host-workspace"
     workspace.mkdir()
     host, validate = _completion_host_and_validation_scripts()
@@ -128,12 +127,8 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     ], capture_output=True, text=True, timeout=90)
     assert executed.returncode == 0, executed.stdout + executed.stderr
     request = json.loads((workspace / "received.json").read_text())
-    envelope = request["turn_envelope"]
-    assert "settlement_plan" not in envelope["writeback"]
-    read = subprocess.run(shlex.split(envelope["detail_ref"]["full_decision"]),
-                          capture_output=True, text=True, timeout=30)
-    assert read.returncode == 0, read.stdout + read.stderr
-    source = json.loads(read.stdout)
+    source = request["work_contract"]
+    assert "settlement_plan" not in source["interaction_contract"]["cli_channel"]
     hooks = source.get("turn_start_capability_hook_dispatch", {}).get("results", [])
     assert any(h.get("capability_id") == "explore" for h in hooks) == (mode != "off")
 

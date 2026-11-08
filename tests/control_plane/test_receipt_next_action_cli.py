@@ -230,7 +230,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
-    fixture._configure_autonomous_replan_fixture(project, runtime, registry)
+    fixture._configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
     state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
 
     def run(*args: str) -> tuple[int, dict]:

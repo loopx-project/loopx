@@ -2356,7 +2356,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const precision = replanReadPrecision(payload, request.source_number_tokens);
     const sourceEdits = request.source_edits === true;
     const identity = precision?.identity ?? (sourceEdits ? contextSourceIdentity(payload) : undefined);
-    const view = replanCliView(payload, identity, undefined, precision);
+    const packet = object(payload.replan_action_packet);
+    // A staged capture has already pinned its reader to a checked source.
+    // An unstaged copy needs the path verified by the current capture reader.
+    const view = packet.review !== undefined || packet.writeback !== undefined ? payload
+      : replanCliView(payload, identity, replanReadCommands(payload,
+        request.captured_decision_path ?? payload.replan_read_path), precision);
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
   if (operation === "compose_complete") {

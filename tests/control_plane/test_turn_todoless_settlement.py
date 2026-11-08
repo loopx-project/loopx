@@ -27,7 +27,7 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if replan:
-        _configure_autonomous_replan_fixture(project, runtime, registry)
+        _configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
     else:
         state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
         state.write_text('---\nstatus: active\nowner_mode: goal\nobjective: "Answer the fixture request."\n---\n\n'

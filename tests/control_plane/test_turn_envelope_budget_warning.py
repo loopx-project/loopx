@@ -172,7 +172,7 @@ def test_installed_skill_defers_delegation_policy_to_enabled_provider(tmp_path):
     )
     contribution = enabled["contributions"][0]
     assert any(
-        "max_children is a configured ceiling" in item
+        "within max_children" in item
         for item in contribution["guidance"]
     )
     assert contribution["facts"]["capacity_contract"] == {

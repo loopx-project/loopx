@@ -361,11 +361,14 @@ def bind_turn_decision_capture(
     )
 
 
-def project_captured_replan_cli_view(payload: dict[str, Any]) -> dict[str, Any]:
-    """Stage replan reads without round-tripping unchanged source values."""
+def project_captured_replan_cli_view(
+    payload: dict[str, Any], *, captured_decision_path: str | None = None,
+) -> dict[str, Any]:
+    """Stage replan reads against the verified capture without rewriting its source."""
     if not isinstance(payload.get("replan_read_path"), str):
         return payload
-    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True)
+    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True,
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
 
