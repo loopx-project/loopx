@@ -1,5 +1,6 @@
 """Independent original-source returns through the existing worker and native protocol."""
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -66,7 +67,8 @@ turn_count = len(json.load(open({str(inventory)!r}))["turns"]) if __import__("os
     return artifact
 
 
-@pytest.mark.parametrize("fault", [None, "source-changed", "stop", "revoked", "reservation-crash", "enqueue-crash"])
+@pytest.mark.parametrize("fault", [None, "source-changed", "stop", "revoked", "reservation-crash", "enqueue-crash",
+    "compacted-source", "precision-failure", "precision-reservation-crash", "precision-enqueue-crash"])
 def test_original_worker_returns_each_legacy_message_without_replaying_business(ordinary, monkeypatch, fault):  # noqa: F811
     store, runtime, contexts, _, capture, fake, workspace = ordinary
     contexts.workspace_grant = "workspace_write"
@@ -106,6 +108,17 @@ def test_original_worker_returns_each_legacy_message_without_replaying_business(
         assert runtime.wait_for_turn(session_id=reviewed["session_id"], turn_id=reviewed["turn_id"], timeout_sec=10)["status"] == "completed"
         transport.reconcile_request(earlier[3])
         assert transport.core.read_request(reviewed["request_ref"])["delivery_verified"] is True
+        if fault == "compacted-source" or str(fault).startswith("precision-"):
+            # Actual old event compaction leaves nanosecond filesystem stamps.
+            # They exceed JSON/JS integer precision but do not change an answer.
+            peer_path = transport.core.root / f"{reviewed['request_ref']}.json"
+            peer = json.loads(peer_path.read_text())
+            peer["context_recovery"]["original_turn"]["event_compaction_revision"] = [7, 123, 2**60 + 123]
+            peer_path.write_text(json.dumps(peer))
+            turn_path = store._turn_path(reviewed["session_id"], reviewed["turn_id"])
+            peer_turn = json.loads(turn_path.read_text())
+            peer_turn["event_compaction_revision"] = [8, 456, 2**60 + 789]
+            turn_path.write_text(json.dumps(peer_turn))
         if fault == "source-changed":
             provider.messages[legacy[0]["message_id"]]["content"] = "A changed instruction"
         elif fault == "stop":
@@ -115,10 +128,29 @@ def test_original_worker_returns_each_legacy_message_without_replaying_business(
         def worker():
             return LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
                 runner=provider, cli_bin="lark-cli")
-        if fault in {"reservation-crash", "enqueue-crash"}:
+        failed_preparation = None
+        if str(fault).startswith("precision-"):
+            # Deliberately restore the released serialization defect at the
+            # real worker/Core boundary. No synthetic success receipt is added.
+            with monkeypatch.context() as old_release:
+                old_release.setattr(external_conversations.result_review_evidence,
+                    "related_review_basis", deepcopy)
+                old_worker = worker()
+                old_worker.reconcile()
+                failed_request = old_worker.core.read_request(legacy[1]["request_ref"])
+                failed_preparation = runtime.wait_for_turn(session_id=failed_request["session_id"],
+                    turn_id=failed_request["turn_id"], timeout_sec=10)
+                assert failed_preparation["status"] == "failed"
+                assert failed_preparation["error_code"] == "host_gate" and failed_preparation["upstream_turn_id"] is None
+                assert failed_preparation["delta_count"] == 0 and failed_preparation["response"] is None
+                assert [e["kind"] for e in store.events_after(failed_request["session_id"], failed_request["turn_id"], None)] == [
+                    "turn.queued", "turn.failed"]
+                old_worker.reconcile_request(legacy[3])
+            clock += timedelta(seconds=61)
+        if fault in {"reservation-crash", "enqueue-crash", "precision-reservation-crash", "precision-enqueue-crash"}:
             enqueue = runtime.enqueue_turn
             def crash(**kwargs):
-                if fault == "enqueue-crash":
+                if fault in {"enqueue-crash", "precision-enqueue-crash"}:
                     enqueue(**kwargs)
                 raise OSError("synthetic lost admission acknowledgement")
             monkeypatch.setattr(runtime, "enqueue_turn", crash)
@@ -136,6 +168,15 @@ def test_original_worker_returns_each_legacy_message_without_replaying_business(
             recovery = returned["context_recovery"]
             assert recovery["legacy_result_review"] and recovery["read_only_review"]
             assert "unfinished_work" not in recovery and "work_attempt" not in recovery
+            if failed_preparation is not None:
+                assert recovery["review_preparation_attempt"] == 1
+                assert recovery["client_turn_id"].endswith("-preparation-1")
+                assert "preparation_attempt" not in recovery
+                assert recovery["preparation_failed_turn_id"] == failed_preparation["turn_id"]
+                assert len(returned["context_recovery_history"]) == 1
+                old_failure = store.load_turn(returned["session_id"], failed_preparation["turn_id"])
+                assert old_failure["status"] == "failed" and old_failure["upstream_turn_id"] is None
+                assert old_failure["error"] == failed_preparation["error"]
             review = runtime.wait_for_turn(session_id=returned["session_id"], turn_id=returned["turn_id"], timeout_sec=10)
             assert review["status"] == "completed", review
             assert review["response"]["message"] == "Verified existing result: catalog-item:verified"
