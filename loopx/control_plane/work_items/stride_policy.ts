@@ -240,6 +240,10 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   const harness = source.harness as JsonObject | undefined;
   const findings = Array.isArray(graph?.writeback_results) ? graph.writeback_results as JsonObject[] : [];
   const recent = Array.isArray(graph?.recent_findings) ? graph.recent_findings as JsonObject[] : [];
+  const measurementFeedback = (Array.isArray(graph?.measurement_feedback) ? graph.measurement_feedback : [])
+    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const workYardsticks = (Array.isArray(graph?.work_yardsticks) ? graph.work_yardsticks : [])
+    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const branches = Array.isArray(harness?.selected_branches) ? harness.selected_branches as JsonObject[] : [];
   const candidates = source.harness_enabled === true ? comparisonCandidates(harness?.comparison_candidates) : [];
   const audits = branches.flatMap(branch => {
@@ -260,6 +264,12 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     revision: createHash("sha256").update(JSON.stringify([goal, agent, source.graph_enabled,
       source.harness_enabled, [...byId.values()].slice(0, 6), ...(candidates.length ? [candidates] : [])])).digest("hex"),
     finding_refs: [...byId.values()].slice(0, 6),
+    ...(measurementFeedback.length ? {measurement_feedback: measurementFeedback} : {}),
+    ...(typeof graph?.omitted_measurement_feedback === "number" && graph.omitted_measurement_feedback > 0
+      ? {omitted_measurement_feedback: graph.omitted_measurement_feedback} : {}),
+    ...(workYardsticks.length ? {work_yardsticks: workYardsticks} : {}),
+    ...(typeof graph?.omitted_work_yardsticks === "number" && graph.omitted_work_yardsticks > 0
+      ? {omitted_work_yardsticks: graph.omitted_work_yardsticks} : {}),
     ...(candidates.length ? {comparison_candidates: candidates} : {}),
     ...(harness?.omitted_comparison_candidates !== undefined ? {
       omitted_comparison_candidates: harness.omitted_comparison_candidates} : {}),
