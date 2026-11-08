@@ -1208,6 +1208,39 @@ test("a delivered same-question review permits one independent legacy result rea
   const held = {...interrupted, request: {...interrupted.request, turn_id: admitted.turn_id},
     context_recovery: {...interrupted.context_recovery, retained_result_review: {reservation: own, turn: admitted}}};
   assert.equal(planBoundConversationRequest(held).recovery_candidate, false, "A delivered review never obtains another attempt");
+  const failedPreparation = {...admitted, status: "failed", response: null, upstream_turn_id: null,
+    error_code: "host_gate", delta_count: 0, completed_at: "2026-01-01T00:08:00Z"};
+  const events = [{kind: "turn.queued", payload: {delivery_mode: "session_queue"}},
+    {kind: "turn.failed", payload: {error_code: "host_gate"}}];
+  const beforeModel = {...packet, request: {...packet.request, context_recovery: own, turn_id: failedPreparation.turn_id},
+    context_recovery: {...packet.context_recovery, retained_result_review: {reservation: own, turn: failedPreparation},
+      admitted_turn: failedPreparation, result_review_preparation: {turn: failedPreparation, events}}};
+  const prepared = planBoundConversationRequest(beforeModel);
+  assert.equal(prepared.recovery_eligible, true);
+  assert.equal(prepared.read_only_review, true);
+  assert.equal(prepared.review_preparation_attempt, 1);
+  assert.equal(prepared.original_result_turn_id, completed.turn_id);
+  assert.equal(prepared.client_turn_id, String(plan.client_turn_id).replace(/-review-1$/, "-preparation-1"));
+  assert.equal(prepared.work_attempt, undefined);
+  for (const change of [{upstream_turn_id: "possibly-dispatched"}, {delta_count: 1}, {response},
+    {error_code: "runtime_error"}, {client_turn_id: "another-review"}]) {
+    assert.equal(planBoundConversationRequest({...beforeModel, context_recovery: {...beforeModel.context_recovery,
+      result_review_preparation: {turn: {...failedPreparation, ...change}, events}}}).recovery_eligible, false);
+  }
+  for (const change of [{source_verified: false}, {stop_observed: true}, {native_observation: null},
+    {result_review_preparation: {turn: failedPreparation, events: [...events, {kind: "turn.started"}]}}]) {
+    assert.equal(planBoundConversationRequest({...beforeModel,
+      context_recovery: {...beforeModel.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  const retriedReservation = {...own, client_turn_id: prepared.client_turn_id,
+    review_preparation_attempt: 1, preparation_failed_turn_id: failedPreparation.turn_id};
+  const admittedPreparation = {...admitted, turn_id: "prepared-review", client_turn_id: prepared.client_turn_id};
+  const lostAck = {...beforeModel, request: {...beforeModel.request, context_recovery: retriedReservation,
+    context_recovery_history: [own]}, current_session: {...session, status: "busy", active_turn_id: admittedPreparation.turn_id},
+    context_recovery: {...beforeModel.context_recovery, admitted_turn: admittedPreparation, native_observation: null}};
+  assert.equal(planBoundConversationRequest(lostAck).admitted_turn_id, admittedPreparation.turn_id);
+  assert.equal(planBoundConversationRequest({...lostAck, request: {...lostAck.request, turn_id: admittedPreparation.turn_id}})
+    .recovery_candidate, false, "A second preparation recovery is never granted");
 });
 
 test("the App steward is an explicit source preference, never a new grant or peer fallback", () => {
