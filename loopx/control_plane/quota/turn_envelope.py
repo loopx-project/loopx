@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from copy import deepcopy
 import json
 from dataclasses import dataclass
 from typing import Any, cast
+import zlib
 
-from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
+from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -118,6 +120,15 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
+    if operation == "compose_complete" and request.get("source_edits") is True and isinstance(payload, Mapping):
+        # Keep the original source for applying edits. Larger inputs retain
+        # the existing snapshot route.
+        raw = _encode_rpc_json(payload)
+        if 16 * 1024 <= len(raw) <= 1024 * 1024:
+            data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
+            if len(data) + 128 < len(raw):
+                del request["payload"]
+                request["source_transport"] = {"encoding": "deflate-base64-json-v0", "data": data}
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")

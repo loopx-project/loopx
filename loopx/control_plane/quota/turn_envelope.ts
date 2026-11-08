@@ -5,6 +5,7 @@ import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -2350,6 +2351,25 @@ function contextPresentationPlan(request: JsonObject): JsonObject {
   return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
 }
 
+function decodeCompositionSource(request: JsonObject): JsonObject {
+  const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
+  const {encoding, data} = transport;
+  const maxSourceBytes = 1024 * 1024;
+  if (Object.hasOwn(request, "payload") || encoding !== "deflate-base64-json-v0" ||
+      typeof data !== "string" || data.length > maxSourceBytes ||
+      data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+  }
+  let source: unknown;
+  try {
+    const decoded = inflateSync(Buffer.from(data, "base64"), {maxOutputLength: maxSourceBytes});
+    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(decoded));
+  } catch {
+    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
+  }
+  return requireJsonObject(source, "complete Turn decision source");
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2388,9 +2408,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
   if (operation === "compose_complete") {
-    const result = composeCompleteTurnDecision(request);
+    const input = request.source_transport === undefined ? request
+      : {...request, payload: decodeCompositionSource(request)};
+    const result = composeCompleteTurnDecision(input);
     return request.source_edits === true
-      ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
+      ? contextProjectionChanges(requireJsonObject(input.payload, "complete Turn source"), result) : result;
   }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);
