@@ -1136,6 +1136,51 @@ Registration retains the source hash, and changed or missing sources mark the
 saved capture historical. Re-registering a source with this additional
 projection can create a new pack identity; old packs are never rewritten.
 
+#### Audit one captured session
+
+Suppose a session records two ordinary requests and one compaction request.
+The three response IDs in this synthetic capture give these counts.
+
+| Captured requests | Input | Cached input (subset) | Output |
+| --- | ---: | ---: | ---: |
+| Two ordinary requests | 140 | 80 | 15 |
+| One compaction request | 20 | 10 | 7 |
+| All three requests | 160 | 90 | 22 |
+
+If **Session counters** show 140 input and 15 output, **Request coverage** can
+verify `ordinary_requests` as the counter basis and show the full 160 input
+and 22 output separately. If the counters already show 160 and 22, coverage
+can verify `all_requests`. The compaction row is already part of those totals.
+The checkpoint's copy of the compaction record shares its response ID. Omit
+the copy in the first capture and the session counters still show 140 and 15.
+**Request coverage** reports unavailable.
+[Reconciliation fixture and readback test](../../tests/capabilities/test_trajectory_assessment_store.py)
+
+Use the same Goal and runtime as registration. Set `PACK_ID` to the pack ID
+returned at registration and `OWNER_GOAL` to its owning Goal.
+
+```sh
+loopx --format json benchmark trajectory-packs --goal-id "$OWNER_GOAL" |
+  jq -e --arg pack "$PACK_ID" '
+    .packs[] | select(.pack_id == $pack) | .solver_usage |
+    {artifact_sha256, applicability, projection: (.projection |
+      {session_id, start, end, input_tokens, cached_input_tokens,
+       output_tokens, request_coverage})}'
+```
+
+Keep the pack ID and source hash with the review. Use **Download selected
+usage** to capture the relevant Turn line ranges, then check the request and
+checkpoint in those ranges of the original JSONL. Replaying model behavior
+also requires the original request inputs and runtime.
+
+以一条合成会话为例，两次普通请求合计 140 个输入 token、15 个输出 token，
+一次压缩用去 20 个输入和 7 个输出。若会话计数只覆盖普通请求，查看「请求覆盖」
+里的全量 160 个输入、22 个输出。若会话计数已覆盖全部请求，压缩用量就是其中
+一部分。压缩记录与检查点副本共用一个响应 ID。缺少关联记录时仍可读到会话计数，
+请求级核对会显示不可用。复核时记录 pack ID 和源文件哈希，用「下载所选用量」
+保存相关轮次的行号，再到同一份 JSONL 中核对。回放模型行为还需要原始请求输入
+和运行环境。
+
 ### LoopX packet share of model input
 
 Research → Sources and usage also exposes **LoopX input share**. For the same
@@ -1245,6 +1290,19 @@ once. Duplicate response receipts remain deduplicated by the existing request
 reconciler. Late/unmatched calls and unclassified commands stay explicit.
 Python only transports the original line positions, literal argv and return
 metadata; neither command arguments nor returned text enter this projection.
+Code Mode can wrap several operations in one custom tool call. A command
+completion carrying only its own identity and the Turn does not link the
+command to an issuing call or response. These completions do not classify the
+whole call or assign its returned text to LoopX.
+
+When no requests are recognized and any calls are unclassified or unmatched,
+the command-request input shares are unknown (`null`). The saved `tokens`
+object still sums the recognized subset, so an empty sum is zero. Research and
+the comparison reader withhold command token values and deltas in that case,
+including for older packs that saved zero shares. They retain the counts and
+do not rewrite those packs. When some requests are recognized, their sums and
+shares describe only that subset. Without unresolved calls, a measured empty
+subset can show zero.
 
 Keep three overlapping observations separate:
 
@@ -1302,6 +1360,9 @@ disable it; no ledger migration, source rewrite or runtime activation is needed.
 返回保留，不将其认作纯控制、全部开销或可省成本。输入已含缓存、输出已含推理，
 压缩镜像不重复计数；模型耗时与实扣未知。对照沿同一 TS owner 校验原 Goal、案例、
 修订、窗口、方法及独立 Session，并保留原 run/pack/来源和时间，不据此核准科学配对。
+Code Mode 的命令完成记录若缺少外层调用或响应 ID，不能据此归属请求或混合返回文本。
+识别数为零且仍有未分类或未匹配调用时，占比为 `null`；保存的 `tokens` 仅是已识别
+子集之和。研究页与对照会隐藏此时的命令用量和差值，旧包同样按此读取但不改写。
 不平均百分比；归因缺失/部分、方法变化、来源失效或零分母保持未知。比例下降但绝对
 输入增加会明确提示。浏览零模型调用，不重采集、不重写旧包或账本；旧包缺字段不补零。
 既有 GET reader 在注册 Goal/来源命名空间中校验两个显式 pack，调用同一 builtin；

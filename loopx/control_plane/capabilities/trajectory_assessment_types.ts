@@ -106,7 +106,10 @@ export interface TrajectorySolverUsage {
 
 export type TrajectoryLoopXRequests = {method: 'codex_ordered_loopx_requests_v1'} & (
   {status: 'observed'; total_requests: number; recognized_requests: number; mixed_call_requests: number;
-    unmatched_calls: number; unclassified_calls: number; tokens: TrajectoryRequestTokens;
+    unmatched_calls: number; unclassified_calls: number;
+    /** Sums of the recognized subset; an empty subset does not measure unresolved calls. */
+    tokens: TrajectoryRequestTokens;
+    /** Unknown when no requests are recognized and any calls are unclassified or unmatched. */
     input_fraction: number | null; uncached_input_fraction: number | null;
     /** Neither ordered tool records nor token receipts measure generation latency or money. */
     model_seconds: null; charged_cost: null;

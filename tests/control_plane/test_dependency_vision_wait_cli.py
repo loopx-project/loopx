@@ -14,6 +14,7 @@ import pytest
 
 from loopx.cli import main
 from test_dated_vision_wait_cli import REPO, isolated_effect  # noqa: F401
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 GOAL = "dependency-vision-fixture"
 AGENT = "agent-waiter"
@@ -36,7 +37,7 @@ def public_goal(request, tmp_path, monkeypatch):
         with redirect_stdout(output):
             result = main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-        payload = json.loads(output.getvalue())
+        payload = read_cli_policy_payload(output.getvalue(), returncode=result)
         assert result == expected_exit, payload
         return payload
 

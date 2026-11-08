@@ -8059,6 +8059,196 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
     assert settled["interaction_contract"]["agent_channel"]["must_attempt"] is False
 
 
+@pytest.mark.parametrize("goal_commitment", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_turn_closes_automatically_archived_todo_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, goal_commitment: bool,
+) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    # A real validator checks a synthetic result; its counter detects any
+    # repeated validation during closeout or receipt recovery.
+    project, runtime, registry_path = _write_fixture(tmp_path, claimed=False)
+    state_path = _configure_read_only_todo(project)
+    artifact = project / "result.json"
+    artifact.write_text('{"sum":45}\n', encoding="utf-8")
+    counter = project / "validator-count.txt"
+    validator = (
+        "import json; from pathlib import Path; "
+        f"assert json.loads(Path({str(artifact)!r}).read_text()) == {{'sum':45}}; "
+        f"p=Path({str(counter)!r}); "
+        "p.write_text(str(int(p.read_text())+1 if p.exists() else 1))"
+    )
+    argv = quote(json.dumps([sys.executable, "-c", validator]), safe="")
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate ",
+            f"action_kind=validate validation_command_argv={argv} ", 1,
+        ) + "".join(
+            f"\n- [x] [P2] Completed synthetic history {index}.\n"
+            f"  <!-- loopx:todo todo_id=todo_history_{index:04d} status=done "
+            "task_class=advancement_task action_kind=validate -->\n"
+            for index in range(100)
+        ),
+        encoding="utf-8",
+    )
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    _initialize_fixture_authority(project, runtime, provider=provider,
+                                  handoff_mode="hard_lease", leases=[])
+    goal_counter = project / "goal-validator-count.txt"
+    if goal_commitment:
+        # A failed cross-task Goal check cannot replace or block the local
+        # validator, nor become accepted just because this Todo closes.
+        checks = tmp_path / "goal-checks.json"
+        checks.write_text(json.dumps({
+            "scope": {"kind": "goal"}, "objective": "Fulfil the overall commitment",
+            "non_goals": [], "bindings": [], "criteria": [{
+                "id": "overall-commitment", "description": "Overall work remains incomplete",
+                "validation_argv": [sys.executable, "-c",
+                    "from pathlib import Path; "
+                    f"p=Path({str(goal_counter)!r}); "
+                    "p.write_text(str(int(p.read_text())+1 if p.exists() else 1)); "
+                    "raise SystemExit(1)"],
+            }],
+        }), encoding="utf-8")
+        rc, inspected = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                                 "--goal-id", GOAL_ID)
+        assert rc == 0, inspected
+        rc, configured = _run_cli(
+            registry_path, runtime, "goal-acceptance", "configure", "--goal-id", GOAL_ID,
+            "--document", str(checks), "--operation-id", "overall-check",
+            "--expected-provider-revision", inspected["provider_revision"], "--execute",
+        )
+        assert rc == 0, configured
+        rc, failed = _run_cli(registry_path, runtime, "goal-acceptance", "verify",
+                             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--execute")
+        assert rc == 1 and failed["checks_passed"] is False, failed
+        assert goal_counter.read_text() == "1"
+    claim_id = "original-archive-closeout-claim"
+    rc, claim = _run_cli(registry_path, runtime, "todo", "claim",
+                        "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID,
+                        "--claim-operation-id", claim_id)
+    assert rc == 0, claim
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry_path, runtime, "quota", "should-run",
+                        "--codex-app", *binding)
+    assert rc == 0 and guard["normal_delivery_allowed"], guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    ordinary_args = ("todo", "complete", *binding, "--claim-operation-id", claim_id,
+                     "--evidence", "artifact:verified-sum")
+    rc, ordinary = _run_cli(registry_path, runtime, *ordinary_args)
+    assert rc == 0 and ordinary["validation_receipt"]["passed"], ordinary
+    rc, archived = _run_cli(registry_path, runtime, "todo", "list",
+                           "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                           "--include-archived")
+    assert rc == 0, archived
+    assert archived["todo"]["archive_state"] == "archive"
+    assert archived["todo"]["status"] == "done"
+    completed_at = archived["todo"]["completed_at"]
+    terminal_args = (*ordinary_args, "--no-follow-up")
+    rc, premature = _run_cli(registry_path, runtime, *terminal_args)
+    assert rc == 1, premature
+    assert "requires matching writeback and quota spend receipts" in premature["error"]
+    assert _spend_run_count(runtime) == 0
+
+    rc, written = _run_cli(
+        registry_path, runtime, "refresh-state", *binding,
+        "--classification", "archived_result_verified",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--vision-state", "vision_closed",
+        "--vision-acceptance", "The independently verified sum is durably recorded.",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    assert rc == 0, written
+    spend_args = ("quota", "spend-slot", *binding, "--slots", "1",
+                  "--source", "heartbeat", "--execute")
+    for _ in range(2):
+        rc, spent = _run_cli(registry_path, runtime, *spend_args)
+        assert rc == 0, spent
+    validation_runs = counter.read_text()
+    assert validation_runs == "1"
+
+    # A reused validation receipt cannot authorize replacing the artifact that
+    # the archived Todo accepted. Changing only evidence must fail before the
+    # terminal receipt exists and after that receipt can be replayed.
+    replacement_args = tuple(
+        "artifact:unvalidated-replacement" if arg == "artifact:verified-sum" else arg
+        for arg in terminal_args
+    )
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
+    rc, preserved = _run_cli(registry_path, runtime, "todo", "list",
+                             "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                             "--include-archived")
+    assert rc == 0, preserved
+    assert preserved["todo"]["evidence"] == "artifact:verified-sum"
+    assert counter.read_text() == validation_runs
+    assert _spend_run_count(runtime) == 1
+
+    # An unrelated archived task, another actor, and a different claim or Turn
+    # cannot borrow the completed task's original receipt or settlement.
+    attempts = [
+        ("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+         "--todo-id", "todo_history_0000"),
+        tuple("unregistered-actor" if arg == AGENT_ID else arg for arg in terminal_args),
+        tuple("unrelated-claim" if arg == claim_id else arg for arg in terminal_args),
+        tuple("different-turn" if arg == TURN_ID else arg for arg in terminal_args),
+        (*terminal_args, "--clear-claim"),
+    ]
+    for attempt in attempts:
+        rc, refused = _run_cli(registry_path, runtime, *attempt)
+        assert rc == 1, refused
+        assert _spend_run_count(runtime) == 1
+        assert counter.read_text() == validation_runs
+    assert refused["error_code"] == "coordination_operation_identity_mismatch", refused
+
+    rc, terminal = _run_cli(registry_path, runtime, *terminal_args)
+    assert rc == 0, terminal
+    assert terminal["completion_continuation"] == "no_followup"
+    assert terminal["completion_recovery"] == "same_turn_terminal_closeout"
+    assert terminal["completion_identity_key"] == ordinary["completion_identity_key"]
+    assert terminal["validation_receipt"] == ordinary["validation_receipt"]
+    assert [row["step_kind"] for row in terminal["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    evidence_index = terminal_args.index("--evidence")
+    omitted_evidence = terminal_args[:evidence_index] + terminal_args[evidence_index + 2:]
+    empty_evidence = (*terminal_args[:evidence_index + 1], "", *terminal_args[evidence_index + 2:])
+    for args in (omitted_evidence, empty_evidence):
+        rc, refused = _run_cli(registry_path, runtime, *args)
+        assert rc == 1 and "requires --note or --evidence" in refused["error"], refused
+    completion_note = ("--note", "Close the original independently verified result.")
+    for args in (terminal_args, ordinary_args,
+                 (*omitted_evidence, *completion_note), (*empty_evidence, *completion_note)):
+        rc, replay = _run_cli(registry_path, runtime, *args)
+        assert rc == 0 and replay["idempotent_replay"], replay
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
+    rc, final = _run_cli(registry_path, runtime, "todo", "list",
+                        "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                        "--include-archived")
+    assert rc == 0, final
+    assert final["todo"]["archive_state"] == "archive"
+    assert final["todo"]["completed_at"] == completed_at
+    assert final["todo"]["evidence"] == "artifact:verified-sum"
+    assert final["todo"]["completion_turn_key"] == identity["effect_id"]
+    assert counter.read_text() == validation_runs
+    assert _spend_run_count(runtime) == 1
+    assert _classification_count(runtime, "archived_result_verified") == 1
+    if goal_commitment:
+        rc, overall = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                               "--goal-id", GOAL_ID)
+        assert rc == 0, overall
+        assert overall["goal_acceptance_contract"]["status"] == "failed"
+        assert goal_counter.read_text() == "1"
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_read_only_settlement_omits_non_causal_delivery_workspace(
     tmp_path: Path,

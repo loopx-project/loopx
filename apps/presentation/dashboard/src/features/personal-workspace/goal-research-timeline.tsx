@@ -12,8 +12,8 @@ import {ContextHelp} from "./context-help";
 type Copy = Record<string, string>;
 type Props = {
   timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
-  selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string) => void;
-  onSelect: (id: string, finding?: string) => void; onSelectMany: (ids: string[]) => void; onPhase: (index: number | null) => void;
+  selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string, button: HTMLButtonElement) => void;
+  onSelect: (id: string, finding?: string) => void; onSelectMany: (ids: string[], button: HTMLButtonElement) => void; onPhase: (index: number | null) => void;
   timeLabel: (value: number) => string; dayLabel: (value: number) => string;
 };
 
@@ -84,7 +84,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
       : `${ids.length} nearby research items · ${timeLabel(group.items[0]!.first!)} — ${timeLabel(group.items.at(-1)!.first!)} · Read every record and source`;
     return <button key={ids[0]} type="button" title={title} aria-label={title} aria-pressed={selected} data-research-nodes={ids.join(" ")}
       className={`research-timeline-marker is-cluster${selected ? " is-selected" : ""}${group.items.some(item => inPhase(item.first)) ? "" : " is-dimmed"}`}
-      style={{left: pct(group.at)}} onClick={() => onSelectMany(ids)}><span>{ids.length}</span></button>;
+      style={{left: pct(group.at)}} onClick={event => onSelectMany(ids, event.currentTarget)}><span>{ids.length}</span></button>;
   });
   const trail = groupExploreTimelineDecisions(timeline, phase);
   const decisionOutcomes = [...new Set(timeline.decisions.map(item => item.sections!.decision!.outcome))];
@@ -189,7 +189,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
         <div className="research-row-label"><strong>{copy.singles} · {groupedIds.size}</strong></div>
         <div className="research-unlinked-days">{dayGroups.map(group => <button type="button" key={group.day} data-research-day={group.day} aria-pressed={selectedDay === group.day}
           className={`${selectedDay === group.day ? "is-selected" : ""}${group.nodes.some(node => inPhase(timeline.nodes.get(node.id)!.first)) ? "" : " is-dimmed"}`}
-          onClick={() => onGroupSelect(group.day)}><time>{group.day || (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions}</strong></button>)}</div>
+          onClick={event => onGroupSelect(group.day, event.currentTarget)}><time>{group.day ? `${group.day} UTC` : (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions}</strong></button>)}</div>
       </> : null}
       {swarm.length ? <>
         <div className="research-row-label"><strong>{copy.singles} · {swarm.length}</strong></div>

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +22,52 @@ RUNNER = (
     Path(__file__).resolve().parents[2]
     / "examples/control_plane/cli-output-probe-runner.py"
 )
+
+
+def test_runner_imports_frozen_support_with_an_older_checkout(tmp_path: Path) -> None:
+    workload = tmp_path / "workload"
+    workload.mkdir()
+    runner = workload / RUNNER.name
+    shutil.copyfile(RUNNER, runner)
+    shutil.copyfile(cli_output_fixture.__file__, workload / "cli_output_fixture.py")
+
+    historical = tmp_path / "historical"
+    legacy_tests = historical / "tests" / "control_plane"
+    legacy_tests.mkdir(parents=True)
+    for package in (legacy_tests, legacy_tests.parent):
+        (package / "__init__.py").touch()
+    (legacy_tests / "cli_output_fixture.py").write_text(
+        "# Older checkout with no current observation helper.\n", encoding="utf-8"
+    )
+    probe_source = workload / "probe.py"
+    probe_source.write_text(
+        "from pathlib import Path\n"
+        "from tests.control_plane.cli_output_fixture import measure_cli_context_for_oracle\n"
+        "assert Path(measure_cli_context_for_oracle.__code__.co_filename) == "
+        "Path(__file__).with_name('cli_output_fixture.py')\n"
+        "print('frozen fixture support loaded')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable, str(runner),
+            "--test-source", str(probe_source),
+            "--semantics-source", str(workload / "unused_semantics.py"),
+            "--fixture-root", str(workload / "unused_fixture"),
+            "--receipt", str(workload / "unused_receipt.json"),
+        ],
+        cwd=workload,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join((str(historical), str(RUNNER.parents[2]))),
+            "LOOPX_USAGE_PING": "0",
+        },
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "frozen fixture support loaded"
 
 
 @pytest.fixture

@@ -258,10 +258,6 @@ def _dispatch_quota_turn_start_hooks(
         )
         dispatch = extend_cadence_turn_start_dispatch(dispatch, registry_path=registry_path,
             runtime_root=root, goal_id=args.goal_id, agent_id=args.agent_id)
-    if args.agent_id:
-        from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-        dispatch = extend_explore(dispatch, registry_path=registry_path, runtime_root=root,
-            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
@@ -299,14 +295,12 @@ def _prepare_quota_command_execution(
     return goal_ref, turn_start_hook_dispatch, context
 
 
-def _attach_turn_start_hook_dispatch(
-    payload: dict[str, object],
-    dispatch: Mapping[str, object] | None,
-) -> None:
-    if dispatch and (dispatch.get("registered_count") or dispatch.get("failures")):
-        payload["turn_start_capability_hook_dispatch"] = {
-            key: value for key, value in dispatch.items() if key != "contexts"
-        }
+def _quota_turn_context_projector(args, *, registry_path: Path, runtime_root: Path):
+    from ..capabilities.explore.turn_context import turn_context_projector
+
+    return turn_context_projector(registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
+
 
 def _emit_bounded_settlement(payload, args, *, runtime_root, reader_argv, print_payload):
     """Preserve the committed receipt even when bounded result delivery fails."""
@@ -386,8 +380,9 @@ def _emit_quota_result(
         _export("attach_host_poll_receipt")(
             context.status_payload, args, payload, registry_path=registry_path,
         )
+    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
-        captured_digest = capture_decision(capture_directory, payload)
+        captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
             from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
@@ -432,7 +427,6 @@ def _emit_quota_result(
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
-    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     deferred_context = getattr(args, "defer_context_presentation", False)
     if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):
@@ -603,6 +597,8 @@ def handle_quota_command(
                 retained_todo_id=retained_action_selection_todo_id,
             )
             heartbeat_receipt_existing = action_selection.receipt
+            context_projector = _quota_turn_context_projector(args,
+                registry_path=registry_path, runtime_root=runtime_root)
             payload = _export("build_live_quota_should_run_decision")(
                 status_payload,
                 goal_id=args.goal_id,
@@ -636,13 +632,13 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                turn_context_projector=context_projector,
                 context_navigation=(
                     native_context_activation(args)["progressive_enabled"]
                     and not bool(getattr(args, "turn_envelope", False))
                 ),
                 goal_ref=goal_ref,
             )
-            _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)
             action_selection_preflight = (
                 _export("reconcile_requested_quota_action_selection")(
                     payload,
@@ -713,6 +709,7 @@ def handle_quota_command(
                         context=context,
                         interaction_projection_hooks=interaction_projection_hooks,
                         turn_start_hook_dispatch=turn_start_hook_dispatch,
+                        turn_context_projector=context_projector,
                         action_selection=action_selection,
                         cache_metadata=cache_metadata,
                         goal_ref=goal_ref,

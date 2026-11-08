@@ -7,6 +7,9 @@ from __future__ import annotations
 # explicit reader budgets remain available for same-capture recovery.
 NATIVE_CONTEXT_PAGE_BYTES = 64000
 NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 64000
+# Native openings cross a tool boundary, whether attached or linked. When
+# that tool's cap is unknown, avoid the bulk-reader profile.
+NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES = 12000
 # Keep the configuration declaration usable by older installed readers too.
 NATIVE_CONTEXT_LARGE_OUTPUT_BYTES = 64000
 NATIVE_CONTEXT_HISTORY_TOKENS = 20000

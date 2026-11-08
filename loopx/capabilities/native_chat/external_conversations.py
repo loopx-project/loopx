@@ -111,6 +111,18 @@ class ChatExternalConversations:
             and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web", "external"}
             and datetime.fromisoformat(item["created_at"]) > created for item in messages)
 
+    def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Read correlation only; the typed owner still checks continuation eligibility."""
+        reservation = row.get("context_recovery") or {}
+        if reservation.get("work_attempt") == 1:
+            history = row.get("context_recovery_history") or []
+            reservation = history[-1] if history else {}
+        if (reservation.get("read_only_review") is not True or not reservation.get("unfinished_work")
+                or reservation.get("answer_review") or reservation.get("history_review")):
+            return None
+        reviewed = self.controller.store.turn_for_client(row["session_id"], reservation["client_turn_id"])
+        return {"reservation": reservation, "turn": reviewed} if reviewed else None
+
     def _context_recovery_plan(self, row: dict[str, Any], *,
                                observation: dict[str, Any] | None = None,
                                source_verified: bool = False,
@@ -129,6 +141,11 @@ class ChatExternalConversations:
         turn = store.load_turn(str(row.get("session_id") or ""), str(row.get("turn_id") or ""))
         if not session or not turn:
             return {}
+        retained_review = self._retained_result_review(row)
+        if retained_review is not None:
+            turn = store.load_turn(row["session_id"], retained_review["reservation"]["failed_turn_id"])
+            if turn is None:
+                return {}
         if selected_binding is None and discovery_only:
             # A queue hint must not serialize provider identity IO across all
             # historical failures. Reuse the same typed planner with the local
@@ -144,17 +161,29 @@ class ChatExternalConversations:
             if (reservation.get("routing_attempt") or reservation.get("quota_attempt") or reservation.get("preparation_attempt")
                 or reservation.get("read_only_review") or reservation.get("work_attempt")
                 or reservation.get("metadata_review"))
-            and reservation.get("failed_turn_id") == row["turn_id"] else None)
+            and reservation.get("failed_turn_id") == turn["turn_id"]
+            and (retained_review is None or reservation.get("work_attempt") == 1) else None)
         events = store.events_after(session["session_id"], turn["turn_id"], None)
         anchors = [event["payload"]["native_input"] for event in events
                    if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
         session = self._original_native_session(session, anchors)
         original = None
         review = self._completed_work_review(row)
-        if review and review["client_turn_id"] == turn["client_turn_id"]:
+        review_turn = store.load_turn(session["session_id"], row["turn_id"])
+        if review and review_turn and review["client_turn_id"] == review_turn["client_turn_id"]:
             original = store.load_turn(session["session_id"], review["failed_turn_id"])
             if original is not None:
                 events += store.events_after(session["session_id"], original["turn_id"], None)
+        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
+        live_work_owner = False
+        if unfinished:
+            from .codex_adapter import CodexAppServerAdapter
+            with self.controller.lock:
+                adapter = self.controller.adapters.get(row["session_id"])
+            live_work_owner = (isinstance(adapter, CodexAppServerAdapter) and not adapter.session.read_only_review
+                and adapter.upstream_thread_id == session["upstream_thread_id"])
+        if retained_review is not None:
+            events += store.events_after(session["session_id"], retained_review["turn"]["turn_id"], None)
         # This only selects read-only result probes. Adoption still requires
         # the exact original anchor, native final, current source and typed rule.
         from ...chat import _review_openings
@@ -163,7 +192,6 @@ class ChatExternalConversations:
         later_equivalent = None
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
         runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
-        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
@@ -178,8 +206,11 @@ class ChatExternalConversations:
             work_turn = original or turn
             messages = (discovery_reads.user_messages(session["session_id"])
                         if discovery_reads is not None else store.messages(session["session_id"]))
+            internal_turns = {turn["turn_id"], work_turn["turn_id"]}
+            if retained_review is not None:
+                internal_turns.add(retained_review["turn"]["turn_id"])
             later_equivalent = self._has_later_equivalent_input(row, work_turn, messages,
-                internal_turns={turn["turn_id"], work_turn["turn_id"]})
+                internal_turns=internal_turns)
         from ...chat_manager import steward_machine_defaults
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
@@ -212,6 +243,8 @@ class ChatExternalConversations:
                     for item in (discovery_reads.source_controls() if discovery_reads is not None
                                  else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
+                **({"retained_result_review": retained_review} if retained_review is not None else {}),
+                **({"live_work_owner": live_work_owner} if unfinished else {}),
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
                 "executor_configuration": steward_machine_defaults(self.controller) if metadata_capacity else None,
@@ -372,7 +405,7 @@ class ChatExternalConversations:
                 from ...chat import _review_openings
                 _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
                 invalid_metadata = ((turn.get("response") or {}).get("gate") or {}).get("kind") == "response_metadata_invalid"
-                if not open_literal and not invalid_metadata:
+                if not open_literal and not invalid_metadata and not self._retained_result_review(row):
                     return False  # A lexical probe hint, never permission to adopt or send.
             return self._context_recovery_plan(row, discovery_only=True,
                 discovery_reads=discovery_reads).get("recovery_candidate") is True
@@ -398,8 +431,10 @@ class ChatExternalConversations:
             if not plan.get("recovery_candidate"):
                 return row
             session = self.controller.store.load_session(row["session_id"])
-            turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
-            assert session is not None and turn is not None
+            current_turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+            turn = (self.controller.store.load_turn(row["session_id"], plan["failed_turn_id"])
+                    if plan.get("completed_review_turn_id") else current_turn)
+            assert session is not None and turn is not None and current_turn is not None
             if plan.get("recover_native_result"):
                 return self._recover_native_result(path, row, session, turn, source_observation)
             metadata_review = plan.get("metadata_review") is True
@@ -525,7 +560,9 @@ class ChatExternalConversations:
                 # its execution and newer input may legitimately have advanced.
                 # The typed planner below must still prove that exact receipt.
                 if not plan.get("admitted_turn_id") and (self.controller.store.load_session(row["session_id"]) != session
-                        or self.controller.store.load_turn(row["session_id"], row["turn_id"]) != turn
+                        or self.controller.store.load_turn(row["session_id"], current_turn["turn_id"]) != current_turn
+                        or plan.get("completed_review_turn_id")
+                        and self.controller.store.load_turn(row["session_id"], turn["turn_id"]) != turn
                         or source_requests() != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
@@ -551,7 +588,7 @@ class ChatExternalConversations:
                 if recovery is None or recovery.get("client_turn_id") != plan["client_turn_id"]:
                     if recovery is not None:
                         row.setdefault("context_recovery_history", []).append(deepcopy(recovery))
-                    recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": row["turn_id"],
+                    recovery = {"version": MANAGER_CONTEXT_VERSION, "failed_turn_id": turn["turn_id"],
                         "native_observation": proof, "source_observation": source,
                         "client_turn_id": plan["client_turn_id"],
                         "failure_notice_delivery_verified": row["delivery_verified"]}
@@ -578,6 +615,9 @@ class ChatExternalConversations:
                             presentation_key=f"{MANAGER_CONTEXT_VERSION}.work.1", not_before=plan["not_before"])
                         if plan.get("work_original_turn_id"):
                             recovery["work_original_turn_id"] = plan["work_original_turn_id"]
+                        if plan.get("completed_review_turn_id"):
+                            recovery.update(completed_review_turn_id=plan["completed_review_turn_id"],
+                                original_turn=deepcopy(turn), binding_snapshot=selected["binding"])
                     for kind in ("routing", "quota", "preparation"):
                         if plan.get(f"{kind}_attempt") is not None:
                             recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
@@ -1244,6 +1284,18 @@ class ChatExternalConversations:
         if continuation.get("work_original_turn_id"):
             self._check_reviewed_work(session, turn, continuation)
         proof = continuation.get("native_observation") or {}
+        if continuation.get("completed_review_turn_id"):
+            row = self.read_request(continuation["request_ref"])
+            retained = self._retained_result_review(row)
+            original = self.controller.store.load_turn(session["session_id"], continuation["failed_turn_id"])
+            binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
+            if (not retained or retained["turn"]["turn_id"] != continuation["completed_review_turn_id"]
+                    or retained["turn"].get("status") != "completed" or original != continuation["original_turn"]
+                    or binding != continuation["binding_snapshot"]
+                    or self._source_stop_observed(row, original or {}, self.controller.store.events_after(
+                        session["session_id"], continuation["failed_turn_id"], None))):
+                raise CodexChatAgentError("The retained work source, review or grant changed; continuation stopped.",
+                    error_code="host_gate", gate=None)
         if (self.controller.store.queued_turns(session["session_id"])
                 or completed_work_readback(native, str(proof.get("turn_id") or ""),
                     known_turn_ids=self._settled_native_turn_ids(session["session_id"])) != proof):

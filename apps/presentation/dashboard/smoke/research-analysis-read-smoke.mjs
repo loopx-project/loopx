@@ -10,10 +10,11 @@ import {renderToStaticMarkup} from "react-dom/server";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
 import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
-import {ResearchGoalNavigation} from "../src/features/personal-workspace/goal-research-workbench.tsx";
+import {fetchExploreResults} from "../src/data/chat.ts";
+import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-research-workbench.tsx";
 
-// A case belongs to a source-scoped child Goal. Parent navigation must never
-// combine private-source siblings or turn organization into execution.
+// The persisted directory can organize explicitly linked physical sources.
+// Navigation must not turn organization into shared evidence or execution.
 const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
 const study = caseFixture.analyses[0].case_study;
 const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
@@ -29,13 +30,26 @@ const goals = [
   {goalId:'child',parentGoalId:'parent',title:'Local case'},
   {goalId:'foreign',parentGoalId:'parent',title:'Foreign case',sourceAccess:{namespace:'other',label:'Other',readOnly:true}},
 ];
-const navigate = goalId => renderToStaticMarkup(createElement(ResearchGoalNavigation, {
-  goalId, goals, zh:false, onSelect: () => {throw Error('read navigated');},
+const navigate = goalId => renderToStaticMarkup(createElement(GoalResearchWorkbench, {
+  goalId, goals, zh: false, active: true, refreshRevision: 0,
+  statusNotice: createElement("p", null, "Loading status"), onSelectGoal: () => {throw Error('read navigated');},
 }));
 assert.ok(navigate('parent').includes('Local case'));
-assert.ok(!navigate('parent').includes('Foreign case'));
+assert.ok(navigate('parent').includes('Foreign case'));
 assert.ok(navigate('child').includes('Benchmark'));
-assert.equal(navigate('foreign'), '', 'An absent same-source parent is not a navigation grant');
+assert.ok(navigate('foreign').includes('Benchmark'), 'Explicit directory links retain their local parent');
+
+// Transport uses the workspace view; immutable findings still identify the native Goal.
+const sourceFetch = globalThis.fetch, sourceWindow = globalThis.window;
+try {
+  globalThis.window = {location: {href: "http://127.0.0.1:12345/chat/"}};
+  globalThis.fetch = async input => {
+    assert.equal(new URL(input, window.location.href).searchParams.get("goal_id"), "view-a");
+    return Response.json({ok: true, goal_id: "native", total: 0, items: [], next_cursor: null});
+  };
+  assert.equal((await fetchExploreResults("view-a", undefined, undefined, "native")).goal_id, "native");
+  await assert.rejects(fetchExploreResults("view-a"), /mismatch/);
+} finally { globalThis.fetch = sourceFetch; globalThis.window = sourceWindow; }
 
 // A language-specific cache miss must not hide the same registered pack's
 // older, unspecified-language result or turn a read into model execution.

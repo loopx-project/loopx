@@ -175,14 +175,15 @@ Darwin native-checkpoint refusal remains in force.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
-with that original path/hash for ordinary work. An admitted replan with staged
-review and writeback commands uses the existing replan projection in a private
-presentation. Its readers retain the original guard's path and hash. The
+with that original path and hash. The shared presentation owner prepares the
+initial review and writeback routes for an admitted replan from the verified
+capture. Their readers retain the original guard's path and hash. The
 projection command also carries the Goal, Agent, Turn and private cache location. The
 native tool presents the saved decision using the same native lifecycle projector;
-no guard, checkpoint, admission or debit is repeated. Cold delivery supplies the
-full body and its target; qualified warm delivery supplies the exact delta.
-The small response points to bounded reads and an original full-read fallback.
+no guard, checkpoint, admission or debit is repeated. The file view can be full or a qualified exact delta. With `--initial-read`,
+the bounded response includes a first selection page and its continuation in
+top-level `content` and `next_command`. Forward them to the model along with
+`navigation`; use its original full-read fallback for literal recovery.
 Invalidated or unavailable baselines keep full input. If enabled native preparation cannot
 establish safe recovery, the command returns a typed transport failure with the
 original full-read reference and receipt; use that explicit reference without

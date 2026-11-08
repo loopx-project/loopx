@@ -275,6 +275,12 @@ it or starts model work. Before every write and receipt recovery, Core rechecks
 the Session, current binding and audience, and the provider verifies the original
 source. Posts identify the App speaker, stay in canonical append order within
 that outbox and retain complete long text through the existing rich-post parts.
+An exact App-origin terminal error also projects a public-safe failure notice
+with the original completion time. The notice is derived from the stored Turn
+and its matching error row, without exporting raw diagnostics. It uses the same
+outbox and message identity, so an already-mirrored input can receive its
+historical failure notice once after recovery. Earlier stop errors and completed
+Turns do not qualify as failures.
 Distinct canonical messages and parts get distinct provider idempotency keys,
 including when their text is identical; callers without that identity retain
 their existing receipt digest. Known attempts are read back before continuation;
@@ -2049,6 +2055,15 @@ unfinished declaration; later native inputs must be correlated to Core. This
 observation does **not** certify settled effects. A failed or signal-terminated
 command cannot acquire replay authority through this route.
 
+A new result review now requires an explicit observation that no original
+writable adapter is attached. An inconclusive effect readback while that owner
+is still attached remains a hold; it must not replace the owner with a model
+review of an already delivered partial answer. The existing reply-worker probe
+backoff remains in force. A later fresh settled-effect proof can admit the same
+single remaining-work continuation without a new user input. Unknown ownership
+also holds. Previously reserved reviews retain their exact queue-adoption checks;
+this rule does not manufacture ownership after a native process has been lost.
+
 The original worker uses its existing Session, queue and project binding. Fresh
 source and grant checks, an idle queue, the backoff, and stop/steering/attachment
 guards still apply. With a live adapter, the readback uses that same adapter
@@ -2075,6 +2090,16 @@ review gate, loss of native ownership, superseding input or an uncertain effect
 leaves the original obligation pending. An admitted continuation stays visible
 while it is failed, gated, unfinished or awaiting verified result delivery.
 The review itself grants no execution authority and can run only once.
+
+A completed review does not consume the original one-shot `work-1` reservation.
+If the original writable owner later becomes available through ordinary work,
+the existing reply worker can reconsider the retained original declaration.
+It must obtain fresh settled native-effect proof and recheck the exact original
+source, grant, completed review and binding snapshot. A later equivalent source
+submission still holds the old work. Review output and cold-reader inventory
+cannot substitute for that proof. Admission and dispatch use the existing
+continuation checks, and a crash adopts the same reserved Turn. A failed or
+still-incomplete continuation remains pending and gets no additional attempt.
 
 ### File-backed idle recovery observations
 

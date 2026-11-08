@@ -1,4 +1,4 @@
-"""Same-work SQLite journey: evidence → ordinary Turn → real action → readback.
+"""Same-work journey: evidence → ordinary Turn → real action → readback.
 
 The deterministic actor proves transport/adoption attribution, not model quality
 or a causal benchmark gain. No evaluator, credentials or active Goal are used.
@@ -6,13 +6,21 @@ or a causal benchmark gain. No evaluator, credentials or active Goal are used.
 import hashlib
 from itertools import groupby
 import json
+import shlex
 
+import pytest
 
+from benchmark.runtime.context_delivery import preflight_context_instruction
 from tests.control_plane.test_quota_settlement_cli import (
-    _initialize_fixture_authority, _projected_cli_args, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
+    _configure_read_only_todo, _heartbeat_receipt_count, _initialize_fixture_authority, _projected_cli_args,
+    _spend_run_count, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
 )
-from loopx.capabilities.explore.result_log import explore_result_log_path, load_explore_result_events
+from loopx.capabilities.explore.result_log import (
+    append_explore_result_event, build_explore_finding_event, build_explore_node_event,
+    explore_result_log_path, load_explore_result_events,
+)
 from loopx.capabilities.explore.turn_context import explore_turn_context
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from loopx.presentation.explore_results_api import _result_rows
 
 
@@ -36,8 +44,10 @@ def attachment():
         evidence_refs=["result:reversal"], work_yardstick_decision=decision())
 
 
-def setup(tmp_path, enabled=True, *, active=False):
+def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scope=None, read_only=False):
     project, runtime, path = _write_fixture(tmp_path)
+    if read_only:
+        _configure_read_only_todo(project)
     config = json.loads(path.read_text())
     if active:
         config["goals"][0]["status"] = "active"
@@ -46,8 +56,10 @@ def setup(tmp_path, enabled=True, *, active=False):
     config["goals"][0]["explore_graph"] = {"enabled": True}
     config["goals"][0]["quota"]["allowed_slots"] = 4
     config["goals"][0].setdefault("execution_profile", {})["yardstick_enabled"] = enabled
+    if write_scope is not None:
+        config["goals"][0]["coordination"]["write_scope"] = write_scope
     path.write_text(json.dumps(config))
-    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    _initialize_fixture_authority(project, runtime, provider=provider)
     return project, runtime, path
 
 
@@ -75,6 +87,306 @@ def context(runtime, path, *, detail=True):
     if detail and cues:
         return explore_turn_context(**params, result_node=cues[0]["node_id"])
     return compact
+
+
+def starting_page(project, runtime, path, turn, saved, monkeypatch):
+    data = saved.read_bytes()
+    assert json.loads(data)["effective_action"] == "normal_run"
+    native = saved.parent / "native"
+    native.mkdir(mode=0o700)
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_CODEX_CONTEXT_DIR": str(native)}
+    prompt = preflight_context_instruction(env, saved, hashlib.sha256(data).hexdigest(), turn[-1])
+    argv = shlex.split(prompt.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    with monkeypatch.context() as patch:
+        patch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        patch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        page = run(project, runtime, path, *argv[argv.index("quota"):])
+    assert saved.read_bytes() == data
+    return page
+
+
+def wide_write_scope():
+    return [
+        f"modules/component-{i:03d}/experiments/artifact-encodings/public-validation/"
+        "accepted-input-compatibility/fixture-baseline/ordered-results/recorded-comparison/**"
+        for i in range(100)
+    ]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled, monkeypatch):
+    project, runtime, path = setup(tmp_path, enabled, active=True)
+    turn = binding("yardstick-before-choice")
+    capture = tmp_path / "capture"
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+                "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    assert guard["schema_version"] == "context_capture_navigation_v1"
+    opening = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)["content"]
+    # The independently readable page carries the decision cue. The complete
+    # attachment template stays available on the existing Explore reader.
+    cue_path = "/content/graph/work_yardstick_capture/guidance"
+    assert (cue_path in opening) is enabled
+    assert "/content/graph/work_yardstick_capture/template" not in opening
+    graph = context(runtime, path, detail=False)["graph"]
+    if enabled:
+        assert "use one bounded accepted-outcome comparison" in opening
+        assert graph["work_yardstick_capture"]["optional"] is True
+        assert graph["work_yardstick_capture"]["template"]["proxy"] is None
+    else:
+        assert "work_yardstick_capture" not in graph
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(tmp_path, provider, monkeypatch):
+    scope = wide_write_scope()
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=scope)
+    source = tmp_path / "finding.json"
+    source.write_text(json.dumps(attachment()))
+    receipt = refresh(project, runtime, path, "prior-finding", source, "--delivery-boundary", "in_flight_continuation")
+    assert receipt["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id="prior-finding"))
+
+    turn = binding("wide-goal-before-choice")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    saved = capture / "decision.json"
+    original = saved.read_bytes()
+    opening = starting_page(project, runtime, path, turn, saved, monkeypatch)
+    assert opening["offset"] == 0 and not opening["eof"]
+    assert len(json.dumps(opening, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 12000
+    content = opening["content"]
+    graph = context(runtime, path, detail=False)["graph"]
+    guidance_at = content.index(',"value":', content.index('/graph/work_yardstick_capture/guidance"'))
+    cue_at = content.index(',"value":', content.index('/graph/work_yardsticks/0"'))
+    guidance, _ = json.JSONDecoder().raw_decode(content, guidance_at + len(',"value":'))
+    cue, _ = json.JSONDecoder().raw_decode(content, cue_at + len(',"value":'))
+    assert guidance == graph["work_yardstick_capture"]["guidance"]
+    assert cue == graph["work_yardsticks"][0] and cue["todo_id"] == TODO_ID
+
+    _, reference = read_context_read_reference(opening["reference_file"])
+    assert reference["sha256"] == hashlib.sha256(original).hexdigest()
+    chunks = [content]
+    offset = len(content.encode())
+    page = opening
+    while not page["eof"]:
+        assert page["next_offset"] == offset
+        words = shlex.split(page["next_command"])
+        page = run(project, runtime, path, *words[words.index("quota"):])
+        _, follow = read_context_read_reference(page["reference_file"])
+        assert follow["path"] == reference["path"] and follow["sha256"] == reference["sha256"]
+        assert page["offset"] == offset
+        chunks.append(page["content"])
+        offset += len(page["content"].encode())
+    assert offset == page["total_bytes"]
+    values = {row["pointer"]: row["value"] for row in json.loads("".join(chunks))["selections"]}
+    assert values["/effective_action"] == "normal_run"
+    assert values["/goal_boundary"] == json.loads(original)["goal_boundary"]
+    assert values["/goal_boundary"]["write_scope"] == scope
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn[-1]) == _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("enabled", [None, False])
+def test_disabled_yardstick_preserves_exact_first_read_option(tmp_path, provider, enabled, monkeypatch):
+    project, runtime, path = setup(tmp_path, False, active=True, provider=provider)
+    if enabled is None:
+        config = json.loads(path.read_text())
+        del config["goals"][0]["execution_profile"]["yardstick_enabled"]
+        path.write_text(json.dumps(config))
+    turn = binding("off-exact-first-read")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    saved = capture / "decision.json"
+    original = saved.read_bytes()
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_CODEX_CONTEXT_DIR": str(native)}
+    prompt = preflight_context_instruction(env, saved, hashlib.sha256(original).hexdigest(), turn[-1])
+    # This existing optional route is an agent decision, not an instruction to
+    # drain an unrelated default opening when the policy is off.
+    assert "For known fields, replace --initial-read with repeated --select pointers" in prompt
+    argv = shlex.split(prompt.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    argv.remove("--initial-read")
+    wanted = ["/effective_action", "/normal_delivery_allowed", "/heartbeat_receipt",
+              "/selected_todo", "/goal_id"]
+    for pointer in wanted:
+        argv.extend(["--select", pointer])
+    with monkeypatch.context() as patch:
+        patch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        patch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        page = run(project, runtime, path, *argv[argv.index("quota"):])
+    assert page["eof"]
+    values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+    assert values == {pointer: json.loads(original)[pointer[1:]] for pointer in wanted}
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn[-1]) == 1 and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_first_work_reads_linked_measurements_without_a_yardstick_decision(tmp_path, provider, monkeypatch):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=wide_write_scope())
+    source = tmp_path / "finding.json"
+    finding = attachment()
+    profiles = decision()
+    del finding["work_yardstick_decision"]
+    finding["evidence_refs"] = ["result:a", "result:b"]
+    finding["measurements"] = [
+        {**profiles[profile], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": f"result:{candidate}", "value": value}
+        for profile, points in [("authoritative", [("a", 10), ("b", 20)]),
+                                ("proxy", [("a", 9), ("b", 8)])]
+        for candidate, value in points
+    ]
+    source.write_text(json.dumps(finding))
+    receipt = refresh(project, runtime, path, "plain-measurements", source,
+                      "--delivery-boundary", "in_flight_continuation")
+    assert receipt["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id="plain-measurements"))
+    events_before = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+    turn = binding("first-linked-comparison")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    saved = capture / "decision.json"
+    original = saved.read_bytes()
+    page = starting_page(project, runtime, path, turn, saved, monkeypatch)
+    assert page["offset"] == 0 and not page["eof"]
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 12000
+    marker = "/content/graph/work_measurements/0\""
+    start = page["content"].index(',"value":', page["content"].index(marker)) + len(',"value":')
+    comparison, _ = json.JSONDecoder().raw_decode(page["content"], start)
+    assert comparison["todo_id"] == TODO_ID
+    metrics = {row["metric"]: row for row in comparison["measurement_feedback"]}
+    assert metrics["quality"]["best"]["candidate_ref"] == "candidate:b"
+    assert metrics["screen"]["best"]["candidate_ref"] == "candidate:a"
+    assert metrics["quality"]["latest"]["measurement"]["value"] == 20
+    assert comparison["omitted_measurement_feedback"] == 0
+    assert "search_comparison" not in comparison and "authoritative" not in comparison
+    assert "work_yardsticks" not in context(runtime, path, detail=False)["graph"]
+    assert load_explore_result_events(explore_result_log_path(runtime, GOAL_ID)) == events_before
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, turn[-1]) == _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_receipt_reentry_keeps_the_selected_work_outside_the_global_context_window(tmp_path, provider, enabled, monkeypatch):
+    project, runtime, path = setup(tmp_path, enabled, active=True, provider=provider)
+    identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    todo_ids = [TODO_ID]
+    for index in range(4):
+        added = run(project, runtime, path, "todo", "add", "--goal-id", GOAL_ID,
+            "--role", "agent", "--claimed-by", AGENT_ID, "--priority", "P1",
+            "--text", f"Validate independent representation {index}",
+            "--task-class", "advancement_task", "--action-kind", "validate",
+            "--target-key", f"representation-{index}")
+        todo_ids.append(added["todo_id"])
+    log = explore_result_log_path(runtime, GOAL_ID)
+    for index, todo in enumerate(todo_ids):
+        node = f"question-{index}"
+        run(project, runtime, path, "todo", "update", *identity, "--todo-id", todo,
+            "--explore-result-node-ref", node)
+        append_explore_result_event(log, build_explore_node_event(goal_id=GOAL_ID,
+            agent_id=AGENT_ID, node_id=node, title=node, node_kind="question", status="exploring"))
+        evidence = f"result:representation-{index}"
+        append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL_ID,
+            agent_id=AGENT_ID, node_id=node, finding_id=f"finding-{index}",
+            title=f"Observed representation {index}", status="confirmed", evidence_refs=[evidence],
+            measurements=[{**decision()["authoritative"], "value": index,
+                "candidate_ref": f"candidate:{index}", "evidence_ref": evidence}]))
+    global_view = run(project, runtime, path, "explore", "turn-context", *identity)
+    visible = {card["todo_id"] for card in global_view["graph"].get("work_measurements", [])}
+    target = next(todo for todo in todo_ids if todo not in visible)
+    events_before = load_explore_result_events(log)
+    turn_id = "selected-context-reentry"
+    turn = [*identity, "--turn-instance-id", turn_id]
+    command = ["quota", "should-run", "--codex-app", *turn,
+               "--context-delivery", "on", "--delta-delivery", "off"]
+
+    def capture(name, *options):
+        directory = tmp_path / name
+        run(project, runtime, path, *command, *options, "--decision-output-dir", str(directory))
+        saved = directory / "decision.json"
+        return saved, json.loads(saved.read_bytes())
+
+    _, discovery = capture("discovery")
+    assert discovery["interaction_contract"]["cli_channel"]["selection_required"]
+    assert discovery["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    _, chosen = capture("chosen", "--todo-id", target)
+    receipts_after_selection = _heartbeat_receipt_count(runtime, turn_id)
+    saved, reentered = capture("reentered")
+    assert chosen["selected_todo"]["todo_id"] == reentered["selected_todo"]["todo_id"] == target
+    assert reentered["effective_action"] == "normal_run" and reentered["normal_delivery_allowed"]
+    assert reentered["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert chosen["heartbeat_receipt"]["settlement_identity"] == reentered["heartbeat_receipt"]["settlement_identity"]
+    sources = reentered["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    view = next(source["content"] for source in sources if source.get("kind") == "explore_turn_context")
+    if enabled:
+        assert view["todo_id"] == target
+        assert [card["todo_id"] for card in view["graph"]["work_measurements"]] == [target]
+    else:
+        assert "todo_id" not in view and "work_measurements" not in view["graph"]
+        # The public CLI wraps the same view with invocation-routing metadata.
+        expected = {key: value for key, value in global_view.items() if key != "source_runtime_route"}
+        reference = view["graph"].get("result_writeback_guidance_ref")
+        if reference is not None:
+            # An existing native profile shares the unchanged guidance through
+            # this same capture. Verify the target before comparing its view.
+            assert reference == "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].optional_attachments[0].guidance"
+            shared = reentered["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]["guidance"]
+            graph = dict(expected["graph"])
+            assert graph.pop("result_writeback_guidance") == shared
+            expected = {**expected, "graph": {**graph, "result_writeback_guidance_ref": reference}}
+        assert view == expected
+    opening = starting_page(project, runtime, path, turn, saved, monkeypatch)["content"]
+    assert ("/content/graph/work_measurements/0" in opening) is enabled
+    assert target in opening
+    assert load_explore_result_events(log) == events_before
+    assert _heartbeat_receipt_count(runtime, turn_id) == receipts_after_selection
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_receipt_settlement_does_not_require_a_closed_work_context(tmp_path, provider):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, read_only=True)
+    turn_id = "settlement-context-reentry"
+    turn = binding(turn_id)
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *turn)
+    original_identity = guard["heartbeat_receipt"]["settlement_identity"]
+
+    def reenter(expected):
+        counts = _heartbeat_receipt_count(runtime, turn_id), _spend_run_count(runtime)
+        replay = run(project, runtime, path, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn_id)
+        channel = replay["interaction_contract"]["agent_channel"]
+        assert replay["normal_delivery_allowed"] is False and channel["delivery_allowed"] is False
+        assert replay["effective_action"] == expected
+        assert replay["heartbeat_receipt"]["settlement_identity"] == original_identity
+        assert channel["work_context"]["complete"]
+        assert all(source.get("error_code") != "context_source_unavailable"
+                   for source in channel["work_context"].get("sources", []))
+        assert (_heartbeat_receipt_count(runtime, turn_id), _spend_run_count(runtime)) == counts
+
+    run(project, runtime, path, "todo", "complete", *turn, "--claimed-by", AGENT_ID,
+        "--evidence", "artifact:verified-synthetic-evidence")
+    reenter("unsettled_host_turn_recovery")
+    archived = run(project, runtime, path, "todo", "archive-completed", "--goal-id", GOAL_ID,
+        "--max-active-done", "0", "--execute")
+    assert archived["moved_count"] == 1
+    reenter("unsettled_host_turn_recovery")
+    run(project, runtime, path, "refresh-state", *turn,
+        "--classification", "validated_change", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks")
+    reenter("unsettled_host_turn_recovery")
+    run(project, runtime, path, "quota", "spend-slot", *turn,
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    reenter("heartbeat_settled_skip")
+    assert _heartbeat_receipt_count(runtime, turn_id) == _spend_run_count(runtime) == 1
 
 
 def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_changes(tmp_path):
@@ -114,7 +426,7 @@ def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_change
     assert comparison["preferred_candidate_ref"] == "candidate:new-d"
 
 
-def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path):
+def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path, monkeypatch):
     project, runtime, path = setup(tmp_path, active=True)
     acceptance = tmp_path / "acceptance.json"
     acceptance.write_text(json.dumps(dict(outcome_id="encoded-artifact", owner_agent_id=AGENT_ID,
@@ -160,7 +472,10 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert first["explore_result_delivery"]["ok"]
     run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"], turn_instance_id="turn-pair"))
 
-    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-compare"))
+    compare_turn = binding("turn-compare")
+    capture = tmp_path / "compare"
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *compare_turn,
+                "--decision-output-dir", str(capture))
     compact = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                   "--todo-id", TODO_ID)["graph"]["work_yardsticks"][0]
     assert compact["comparison_candidate_ref"] == "candidate:dictionary"
@@ -168,6 +483,13 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert "different mechanism or a compatible combination" in compact["comparison_cue"]
     assert "full implementation and validation cost" in compact["comparison_cue"]
     assert compact["comparison_cue"] in json.dumps(guard)
+    opening = starting_page(project, runtime, path, compare_turn, capture / "decision.json", monkeypatch)["content"]
+    # A page may end in a later entry. Decode the complete cue before that
+    # boundary without relying on any subsequent context read.
+    cue_start = opening.index(',"value":', opening.index("/content/graph/work_yardsticks/"))
+    delivered, _ = json.JSONDecoder().raw_decode(opening, cue_start + len(',"value":'))
+    assert delivered["todo_id"] == TODO_ID
+    assert delivered["comparison_candidate_ref"] == "candidate:dictionary"
     detailed = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                    "--todo-id", TODO_ID, "--result-node", compact["node_id"])["graph"]["work_yardsticks"][0]
     assert detailed["next_action"] == choice["next_action"]
@@ -178,7 +500,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
 
     # Deterministic consumer. Combine the evidenced baseline with an independent
     # representation change and verify the original end-to-end outcome.
-    selected_base = {"candidate:dictionary": base}[compact["comparison_candidate_ref"]]
+    selected_base = {"candidate:dictionary": base}[delivered["comparison_candidate_ref"]]
     runs = [[index, len(list(group))] for index, group in groupby(selected_base["indices"])]
     artifact = project / "combined-encoding.json"
     artifact.write_bytes(encode({"keys": selected_base["keys"], "runs": runs}))

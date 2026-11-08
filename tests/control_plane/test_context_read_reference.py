@@ -30,6 +30,7 @@ def pinned_initial_view(payload, directory):
     plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
     capture = {key: base["recovery"][key] for key in ("path", "sha256")}
     return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        max_page_output_bytes=64000,
         initial_read_plan={"initial": True, "plan": plan, "capture": capture})
 
 

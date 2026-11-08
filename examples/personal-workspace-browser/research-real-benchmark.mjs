@@ -266,11 +266,11 @@ export const researchRealBenchmarkScenario = {
     const coverageEntries = [];
     coverageEntries.push(...await readUnanalyzedNativeResults(browser, collectCoverage));
     const observations = [];
-    for (const [arm, fixture] of [
-      ["grid-on", "edgebench-grid-context-on-20261103-history.json"],
-      ["grid-off", "edgebench-grid-context-off-20261103-history.json"],
-      ["ad", "edgebench-ad-20261023-history.json"],
-      ["schema", "edgebench-schema-20261025-history.json"],
+    for (const [arm, fixture, entries] of [
+      ["grid-on", "edgebench-grid-context-on-20261103-history.json", 31],
+      ["grid-off", "edgebench-grid-context-off-20261103-history.json", 11],
+      ["ad", "edgebench-ad-20261023-history.json", 254],
+      ["schema", "edgebench-schema-20261025-history.json", 92],
     ]) {
       const path = resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures", fixture);
       const capture = JSON.parse(await readFile(path, "utf8"));
@@ -295,11 +295,11 @@ export const researchRealBenchmarkScenario = {
         await history.getByRole("button", {name: "Search research records", exact: true}).click();
         const records = history.locator(".research-record-search");
         const search = records.getByRole("searchbox", {name: "Search research records"});
-        assert.equal(await records.locator(".research-record-entry").count(), Math.min(50, capture.events.length));
-        while (await records.getByRole("button", {name: /Show more records/}).count()) {
-          await records.getByRole("button", {name: /Show more records/}).click();
+        assert.equal(await records.locator(".research-record-entry").count(), Math.min(50, entries));
+        while (await records.getByRole("button", {name: /Show more entries/}).count()) {
+          await records.getByRole("button", {name: /Show more entries/}).click();
         }
-        assert.equal(await records.locator(".research-record-entry").count(), capture.events.length, "Later real records stay reachable across display pages");
+        assert.equal(await records.locator(".research-record-entry").count(), entries, "Later real entries stay reachable across display pages");
         const received = page.waitForEvent("download");
         await records.getByRole("button", {name: "Download matches (JSON)", exact: true}).click();
         const download = await received;

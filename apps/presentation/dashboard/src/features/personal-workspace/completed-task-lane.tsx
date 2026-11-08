@@ -68,7 +68,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     setViewport({ top: 0, height: scroll.current?.clientHeight ?? 600 });
   }
   const refreshSnapshot = useEffectEvent(() => resetSnapshot(historySearch));
-  useEffect(() => { refreshSnapshot(); }, [refreshRevision]);
+  useEffect(() => { refreshSnapshot(); }, [refreshRevision, goal.sourceAccess?.namespace]);
   const needsPage = cursor === undefined || viewport.top + viewport.height >= rows.length * rowHeight - rowHeight * 2;
   useEffect(() => {
     if (!enabled || !visible || (!needsPage && !more) || cursor === null || error || request.current) return;
@@ -77,6 +77,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     setBusy(true);
     setMore(false);
     const query = new URLSearchParams({ goal_id: goal.goalId });
+    if (goal.sourceAccess) query.set("source_namespace", goal.sourceAccess.namespace);
     if (agentId !== "all") query.set("agent_id", agentId);
     if (cursor) query.set("cursor", cursor);
     if (historySearch) query.set("q", historySearch);
@@ -93,7 +94,7 @@ export function CompletedTaskLane({ goal, agentId, seed, enabled, refreshRevisio
     }).catch(() => { if (!controller.signal.aborted) setError(true); }).finally(() => {
       if (!controller.signal.aborted) { request.current = null; setBusy(false); }
     });
-  }, [enabled, visible, needsPage, cursor, error, retry, goal.goalId, agentId, busy, more, historySearch]);
+  }, [enabled, visible, needsPage, cursor, error, retry, goal.goalId, goal.sourceAccess?.namespace, agentId, busy, more, historySearch]);
   useEffect(() => {
     if (scroll.current) scroll.current.scrollTop = 0;
     setViewport({ top: 0, height: scroll.current?.clientHeight ?? 600 });

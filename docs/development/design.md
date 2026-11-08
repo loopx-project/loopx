@@ -222,6 +222,11 @@ and expose earlier records in place. Counts and date spans describe the selected
 time range. Keep negative and tentative record counts visible when older rows
 are folded, and open each row's exact finding in the existing reader.
 
+In the loaded-record list, a node and its unambiguously linked finding share an
+entry after a complete read. Show the finding status beside the node's lifecycle
+status and retain each event, time and source when opened. Keep raw record
+counts, search and export independent of display grouping.
+
 Reading a question from a day or nearby-point group keeps that collection as
 navigation context. Offer a compact question selector and previous/next controls
 inside the reader, rather than requiring repeated trips through a long list.
