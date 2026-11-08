@@ -7,6 +7,8 @@
  * `sqlite_authority_consumer_lag.test.ts`, never imported. */
 import {existsSync} from "node:fs";
 import {readFile, rename, writeFile} from "node:fs/promises";
+import {join} from "node:path";
+import {setTimeout as sleep} from "node:timers/promises";
 import { SqliteAuthorityStore } from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 
 const CONSUMER_CURSOR_SCHEMA = "loopx_sqlite_consumer_lag_cursor_test_v0";
@@ -29,9 +31,27 @@ async function loadCursor(path: string, goalId: string): Promise<string | null> 
   return record.last_consumed_cursor;
 }
 
-const [directory, goalId, cursorPath, limitArg] = process.argv.slice(2);
+const [directory, goalId, cursorPath, limitArg, holdDir, holdAfterArg] = process.argv.slice(2);
 const store = new SqliteAuthorityStore(directory!, goalId!);
 const limit = Number(limitArg);
+// Rendezvous for a deterministic mid-stream kill: once the durable cursor
+// has passed holdAfter and unconsumed pages remain, announce readiness and
+// block until the parent releases (or kills) — so the SIGKILL always lands
+// on a consumer that is provably stopped mid-journal, never one that has
+// already finished and exited on its own.
+const holdAfter = Number(holdAfterArg ?? "0");
+const hold = async (cursor: string): Promise<void> => {
+  if (!holdDir || Number(cursor) < holdAfter) return;
+  await writeFile(join(holdDir, "hold-ready"), cursor, {mode: 0o600});
+  const deadline = Date.now() + 30000;
+  while (!existsSync(join(holdDir, "hold-release"))) {
+    if (Date.now() > deadline) {
+      process.stdout.write(`${JSON.stringify({hold_expired: true})}\n`);
+      process.exit(1);
+    }
+    await sleep(25);
+  }
+};
 await new Promise<void>(resolve => process.stdout.write("ready\n", () => resolve()));
 for await (const _chunk of process.stdin) {
   for (;;) {
@@ -60,6 +80,7 @@ for await (const _chunk of process.stdin) {
       process.exit(1);
     }
     await persistCursor(cursorPath!, goalId!, next);
+    if (page.has_more) await hold(next);
     if (!page.has_more) {
       process.stdout.write(`${JSON.stringify({done: true, last_cursor: next})}\n`);
       process.exit(0);

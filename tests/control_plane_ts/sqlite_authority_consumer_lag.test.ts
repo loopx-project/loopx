@@ -339,9 +339,15 @@ test("SQLite consumer restart after a real process kill resumes from the durable
 
   // Real child process, real SIGKILL: the only state that survives the kill
   // is the durable cursor file (and the stdout log collected by the parent).
+  // The rendezvous directory makes the kill deterministic: the child blocks
+  // at its hold point with unconsumed pages remaining, so the SIGKILL always
+  // lands mid-journal regardless of process scheduling.
+  const killAfterCursor = 12 * PAGE;
+  const holdDir = join(root, "consumer-hold");
+  await mkdir(holdDir, {recursive: true});
   const child = spawn(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
     fileURLToPath(new URL("./sqlite_authority_consumer_process.ts", import.meta.url)),
-    root, GOAL_ID, cursorPath, String(PAGE)],
+    root, GOAL_ID, cursorPath, String(PAGE), holdDir, String(killAfterCursor)],
   {stdio: ["pipe", "pipe", "pipe"]});
   t.after(() => child.kill());
   let output = "", error = "";
@@ -358,19 +364,19 @@ test("SQLite consumer restart after a real process kill resumes from the durable
   assert.equal(error, "");
   child.stdin.end("go");
 
-  // Kill mid-stream: wait until the durable cursor has advanced well into
-  // the journal, then SIGKILL while more than half the pages remain, so the
-  // child never gets to exit on its own before the kill lands.
-  const killAfterCursor = 12 * PAGE;
+  // Kill at the child's controlled hold point: hold-ready exists only after
+  // the durable cursor passed killAfterCursor AND the child verified more
+  // pages remain, so the kill provably lands on a blocked mid-journal
+  // consumer instead of racing the child's own completion.
+  const holdReady = join(holdDir, "hold-ready");
   const killDeadline = Date.now() + 30000;
-  for (;;) {
-    if (existsSync(cursorPath)) {
-      const persisted = JSON.parse(await readFile(cursorPath, "utf8")) as PersistedCursor;
-      if (Number(persisted.last_consumed_cursor) >= killAfterCursor) break;
-    }
-    assert.ok(Date.now() < killDeadline, "consumer child did not advance its durable cursor");
+  while (!existsSync(holdReady)) {
+    assert.ok(Date.now() < killDeadline, "consumer child did not reach its hold point");
     await new Promise(resolve => setTimeout(resolve, 5));
   }
+  const heldAtCursor = Number(await readFile(holdReady, "utf8"));
+  assert.ok(heldAtCursor >= killAfterCursor, "the child held only after the durable cursor advanced");
+  assert.ok(heldAtCursor < ledger.length, "the child held with unconsumed transactions remaining");
   child.kill("SIGKILL");
   const killed = await closed;
   assert.notEqual(killed.code, 0);
