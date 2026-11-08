@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 _SENSITIVE_ENV_NAME_PATTERN = re.compile(
@@ -259,6 +259,7 @@ def _shell_segments(command: str) -> tuple[tuple[str, ...], ...]:
             if current:
                 segments.append(tuple(current))
                 current = []
+            segments.append((token,))
         else:
             current.append(token)
     if current:
@@ -544,7 +545,7 @@ def _xargs_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
 def _assignment_words(value: str) -> bool:
     """Return whether a literal shell word list contains only assignments."""
 
-    if "$(" in value or "`" in value or "$" in value:
+    if any(character in value for character in "$`*?["):
         return False
     try:
         words = shlex.split(value)
@@ -556,67 +557,114 @@ def _assignment_words(value: str) -> bool:
     )
 
 
-def _proven_assignment_expansions(command: str) -> frozenset[str]:
-    """Find bounded loop variables proven to expand only to assignments.
+def _unwrapped_shell_command(tokens: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    executable, arguments = _shell_executable(tokens)
+    while executable in {"command", "builtin"} and arguments:
+        if executable == "command":
+            wrapped = _shell_wrapper_command(executable, arguments)
+        else:
+            wrapped = arguments[1:] if arguments[0] == "--" else arguments
+        executable, arguments = _shell_executable(wrapped)
+    return executable, arguments
 
-    Benchmark task scripts commonly iterate over a literal list of environment
-    configurations, then pass that list to ``env`` before a fixed task command.
-    Only literal ``for`` values and the exact ``${name#*:}`` suffix transform
-    are accepted. Dynamic loop values and other shell transforms stay unknown.
+
+def _shell_segments_with_assignment_proofs(
+    segments: tuple[tuple[str, ...], ...],
+) -> Iterator[tuple[tuple[str, ...], frozenset[str]]]:
+    """Expose proofs only after assignment inside one simple literal loop.
+
+    This is deliberately not a shell interpreter. Branches, nested loops,
+    pipelines, background work and evaluation with side effects get no proof.
+    A loop's binding is established anew on every iteration; proofs cannot
+    enter from its prefix or escape past ``done``. Mutation invalidates both
+    source and derived facts before a subsequent use can rely on them.
     """
 
-    assignment_variables: set[str] = set()
-    assignment_suffix_variables: set[str] = set()
-    segments = _shell_segments(command)
-    for segment_index, segment in enumerate(segments):
+    loop_starts = [i for i, part in enumerate(segments) if part[0] == "for"]
+    body_starts = [i for i, part in enumerate(segments) if part[0] == "do"]
+    body_ends = [i for i, part in enumerate(segments) if part[0] == "done"]
+    # ``do command`` executes the first body command in the same segment.
+    commands = tuple(
+        part[1:] if part[0] in {"do", "done"} else part for part in segments
+    )
+    unsupported = any(
+        part[0]
+        in {
+            ".",
+            "eval",
+            "source",
+            "if",
+            "then",
+            "else",
+            "elif",
+            "fi",
+            "while",
+            "until",
+            "case",
+            "esac",
+            "select",
+            "function",
+            "{",
+            "}",
+        }
+        or part[0].startswith("(")
+        or any(token in {"()", "((", "))", "!"} for token in part)
+        or any("$(" in token or "`" in token for token in part)
+        or any(re.search(r"\$\{[^}]*=", token) for token in part)
+        or (part[0] and part[0][0] in ";&|\n" and any(c not in ";\n" for c in part[0]))
+        # Aliases and asynchronous traps can change an otherwise proven name.
+        or _unwrapped_shell_command(part)[0] in {"trap", "declare", "typeset", "local"}
+        for part in commands
+        if part
+    )
+    body_start = body_end = -1
+    loop_variable = ""
+    values: list[str] = []
+    if not unsupported and len(loop_starts) == len(body_starts) == len(body_ends) == 1:
+        loop_start, body_start, body_end = (
+            loop_starts[0],
+            body_starts[0],
+            body_ends[0],
+        )
+        header = segments[loop_start]
         if (
-            len(segment) < 3
-            or segment[0] != "for"
-            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", segment[1]) is None
-            or segment[2] != "in"
+            loop_start < body_start < body_end
+            and len(header) >= 3
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", header[1])
+            and header[2] == "in"
         ):
-            continue
-        variable = segment[1]
-        values = list(segment[3:])
-        found_do = False
-        for continued in segments[segment_index + 1 :]:
-            if continued and continued[0] == "do":
-                found_do = True
-                break
-            values.extend(continued)
-        if not found_do:
-            continue
-        if values and all(_assignment_words(value) for value in values):
-            assignment_variables.add(variable)
-        if values and all(
-            ":" in value and _assignment_words(value.split(":", 1)[1])
-            for value in values
-        ):
-            assignment_suffix_variables.add(variable)
+            loop_variable = header[1]
+            values = list(header[3:])
+            for part in segments[loop_start + 1 : body_start]:
+                if not all(c in ";\n" for c in part[0]):
+                    values.extend(part)
+            if any(c in value for value in values for c in "$`*?[{}~()<>"):
+                values = []
+                loop_variable = ""
 
-    changed = True
-    while changed:
-        changed = False
-        for segment in segments:
-            for token in segment:
-                suffix = re.fullmatch(
-                    r"([A-Za-z_][A-Za-z0-9_]*)=\$\{"
-                    r"([A-Za-z_][A-Za-z0-9_]*)#\*:\}",
-                    token,
-                )
-                if suffix and suffix.group(2) in assignment_suffix_variables:
-                    if suffix.group(1) not in assignment_variables:
-                        assignment_variables.add(suffix.group(1))
-                        changed = True
-
-    if any(
-        _shell_executable(segment)[0] in {".", "eval", "source"} for segment in segments
-    ):
-        return frozenset()
-    invalidated: set[str] = set()
-    for segment in segments:
-        executable, arguments = _shell_executable(segment)
+    assignments: set[str] = set()
+    suffixes: set[str] = set()
+    for index, part in enumerate(segments):
+        if index == body_start and loop_variable and values:
+            if all(_assignment_words(value) for value in values):
+                assignments.add(loop_variable)
+            if all(
+                ":" in value and _assignment_words(value.split(":", 1)[1])
+                for value in values
+            ):
+                suffixes.add(loop_variable)
+        if index == body_end:
+            assignments.clear()
+            suffixes.clear()
+        tokens = commands[index]
+        yield tokens, frozenset(assignments)
+        if not (loop_variable and body_start <= index < body_end):
+            continue
+        executable, arguments = _unwrapped_shell_command(tokens)
         if executable in {
+            ".",
+            "eval",
+            "source",
             "declare",
             "export",
             "local",
@@ -624,35 +672,38 @@ def _proven_assignment_expansions(command: str) -> frozenset[str]:
             "readonly",
             "typeset",
             "unset",
-        }:
-            mutated_names = {
-                argument.split("=", 1)[0]
-                for argument in arguments
-                if not argument.startswith("-")
-            }
-            invalidated.update(assignment_variables.intersection(mutated_names))
-        if executable == "printf" and "-v" in arguments:
-            variable_index = arguments.index("-v") + 1
-            if variable_index < len(arguments):
-                invalidated.add(arguments[variable_index])
-        if executable in {"getopts", "mapfile", "readarray"}:
-            invalidated.update(assignment_variables.intersection(arguments))
-        for token in segment:
+            "getopts",
+            "mapfile",
+            "readarray",
+            "let",
+        } or (executable == "printf" and "-v" in arguments):
+            assignments.clear()
+            suffixes.clear()
+        for token in tokens:
             assignment = re.fullmatch(
-                r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", token, flags=re.DOTALL
+                r"([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?(\+)?=(.*)",
+                token,
+                flags=re.DOTALL,
             )
             if assignment is None:
                 break
-            variable, value = assignment.groups()
-            if variable not in assignment_variables:
+            variable, subscript, append, value = assignment.groups()
+            if subscript or append:
+                assignments.clear()
+                suffixes.clear()
                 continue
             suffix = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)#\*:\}", value)
-            if suffix and suffix.group(1) in assignment_suffix_variables:
-                continue
-            if not _assignment_words(value):
-                invalidated.add(variable)
-    assignment_variables.difference_update(invalidated)
-    return frozenset(assignment_variables)
+            proven_value = _assignment_words(value) or (
+                suffix is not None and suffix.group(1) in suffixes
+            )
+            assignments.discard(variable)
+            if variable in suffixes:
+                assignments.clear()
+                suffixes.discard(variable)
+            # Prefix assignments on a utility invocation do not persist, and
+            # argv expansion sees the old binding rather than this new value.
+            if not executable and proven_value:
+                assignments.add(variable)
 
 
 def _shell_value_has_credential_read(value: str) -> bool:
@@ -678,6 +729,10 @@ def _env_command_has_credential_probe(
 ) -> bool:
     """Separate environment listing from a bounded literal command wrapper."""
 
+    # The shell evaluates options, assignments and child argv before env runs.
+    # Skipping a wrapper operand must never discard its environment-read evidence.
+    if any(_shell_value_has_credential_read(argument) for argument in arguments):
+        return True
     index = 0
     while index < len(arguments):
         option = arguments[index]
@@ -707,8 +762,6 @@ def _env_command_has_credential_probe(
             r"[A-Za-z_][A-Za-z0-9_]*=(.*)", argument, flags=re.DOTALL
         )
         if assignment:
-            if _shell_value_has_credential_read(assignment.group(1)):
-                return True
             index += 1
             continue
         expansion = re.fullmatch(
@@ -787,12 +840,13 @@ def _shell_segment_has_credential_probe(
 
 
 def _shell_command_has_credential_probe(command: str) -> bool:
-    assignment_expansions = _proven_assignment_expansions(command)
     return any(
         _shell_segment_has_credential_probe(
             segment, assignment_expansions=assignment_expansions
         )
-        for segment in _shell_segments(command)
+        for segment, assignment_expansions in _shell_segments_with_assignment_proofs(
+            _shell_segments(command)
+        )
     )
 
 
