@@ -717,7 +717,7 @@ def _execute_cli(command: str, state: _QualificationState) -> dict[str, Any]:
     vision = argument_value(tokens or [], "--agent-vision-json")
     if vision:
         draft = (state.fixture.project_root / vision).resolve()
-        if not draft.is_relative_to(state.fixture.project_root.resolve()) or not draft.is_file():
+        if not draft.is_relative_to(state.fixture.project_root.resolve()):
             raise _TerminalToolViolation("vision_draft_outside_workspace")
     if tokens and "--format" not in tokens:
         command = shlex.join([tokens[0], "--format", "json", *tokens[1:]])

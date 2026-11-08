@@ -575,6 +575,118 @@ def test_terminal_corrects_rejected_vision_within_original_budget(tmp_path: Path
 
 
 @pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
+def test_terminal_authors_missing_draft_after_unchanged_cli_rejection(tmp_path: Path) -> None:
+    fixture = _build_fixture(tmp_path / "oracle")
+    before_rejection: dict[str, bytes] = {}
+
+    def authority_files():
+        root = tmp_path / "actor"
+        return {str(path.relative_to(root)): path.read_bytes()
+                for tree in (root / "runtime", root / "project/.codex", root / "project/.loopx", root / "home")
+                for path in tree.rglob("*") if path.is_file()}
+
+    def initial_read(request):
+        navigation = json.loads(request["messages"][-1]["content"])
+        tokens = shlex.split(navigation["first_read_command"])
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            tokens[tokens.index(option) + 1] = "64000"
+        return ScriptedExecToolAction(command=shlex.join(tokens))
+
+    def latest_context_page(request):
+        for message in reversed(request["messages"]):
+            if message.get("role") != "tool" or not message["content"].startswith("{"):
+                continue
+            page = json.loads(message["content"])
+            if page.get("schema_version") == "context_capture_selection_page_v1":
+                return page
+        raise AssertionError("Expected the current capture's completed selected read")
+
+    def vision_read(request):
+        page = latest_context_page(request)
+        assert page["eof"] is True
+        assert json.loads(page["content"])["selections"]
+        navigation = json.loads(next(message["content"] for message in request["messages"]
+                                     if message.get("role") == "tool"))
+        return ScriptedExecToolAction(command=navigation["recovery"]["command"] +
+            " --select /interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring")
+
+    def missing_writeback(request):
+        page = latest_context_page(request)
+        assert page["eof"] is True
+        assert json.loads(page["content"])["selections"][0]["value"]["minimal_example"]
+        assert not (tmp_path / "actor/project/.scratch/vision.json").exists()
+        before_rejection.update(authority_files())
+        return writeback(request)
+
+    def draft(request):
+        rejected = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
+        assert rejected["ok"] is False and rejected["appended"] is False
+        assert authority_files() == before_rejection
+        vision = {
+            "schema_version": "goal_vision_replan_contract_v0", "state": "vision_closed",
+            "vision_patch": {"acceptance_summary": "Original proof and Todo validation were checked."},
+            "path_delta": {
+                "outcome": "no_change", "prior_assumption": "Delivery needed validation.",
+                "observed_reality": "The proof and original Todo validation were checked.",
+                "retained": ["Validated delivery"], "evidence_refs": ["fixture-settlement-proof"],
+            },
+        }
+        return ScriptedExecToolAction(command="cat > .scratch/vision.json <<'JSON'\n" +
+                                      json.dumps(vision) + "\nJSON")
+
+    def writeback(request):
+        return ScriptedExecToolAction(command=_writeback_action(request).command +
+                                      " --agent-vision-json .scratch/vision.json")
+
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command), initial_read,
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"), vision_read,
+        partial(_completion_action, kind="validation"), missing_writeback, draft,
+        writeback, _spend_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="missing-draft-correction", fixture_root=tmp_path / "actor")
+    assert receipt["qualification_passed"] is True, receipt
+    assert receipt["tool_call_count"] == len(transport.requests) == TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS
+    assert receipt["settlement_receipt_steps"] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
+
+
+@pytest.mark.parametrize("path_kind", ["outside", "symlink"])
+def test_terminal_missing_draft_recovery_does_not_allow_path_escape(tmp_path: Path, path_kind: str) -> None:
+    if path_kind == "symlink" and os.name == "nt":
+        pytest.skip("Windows symlink creation needs separate privileges")
+    fixture = _build_fixture(tmp_path / "oracle")
+    outside = tmp_path / "owner-vision.json"
+    outside.write_text("Private owner artifact.\n")
+
+    def writeback(request):
+        target = outside
+        if path_kind == "symlink":
+            target = tmp_path / "actor/project/.scratch/vision.json"
+            target.parent.mkdir(exist_ok=True)
+            target.symlink_to(outside)
+        return ScriptedExecToolAction(command=_writeback_action(request).command +
+                                      " --agent-vision-json " + shlex.quote(str(target)))
+
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"), writeback,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="escaped-vision-draft", fixture_root=tmp_path / "actor")
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "vision_draft_outside_workspace"
+    assert receipt["settlement_receipt_steps"] == ["validation"]
+    assert outside.read_text() == "Private owner artifact.\n"
+
+
+@pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
 @pytest.mark.parametrize("failed_drafts", [1, 7])
 def test_terminal_shell_error_can_be_corrected_without_resetting_budget(
     tmp_path: Path, failed_drafts: int,
