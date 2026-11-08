@@ -5783,6 +5783,7 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
     transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     transport.reconcile_app_feedback = lambda: 0
@@ -5822,8 +5823,13 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def drive(step, **_):
-        step()
-        assert full.wait(2)
+        # Historical discovery now hands its result back to the same scanner.
+        # Drive that real handoff before asserting the unchanged pool bound.
+        deadline = time.monotonic() + 2
+        while not full.is_set() and time.monotonic() < deadline:
+            step()
+            full.wait(.01)
+        assert full.is_set()
         clock[0] = 101
         step()  # No free capacity: do not put the remaining old requests off.
         paths.append(write("late"))
@@ -5863,6 +5869,7 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
     transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
     transport.reconcile_app_feedback = lambda: 0
@@ -5894,9 +5901,14 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         runtime_controller=None, private_conversations=transport)
 
     def drive(step, **_):
-        step()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            step()
+            with changed:
+                if changed.wait_for(lambda: len(started) == slots, .01):
+                    break
         with changed:
-            assert changed.wait_for(lambda: len(started) == slots, 2)
+            assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
         fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
         step()  # Retain the new discovery while every existing slot is held.
