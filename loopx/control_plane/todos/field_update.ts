@@ -1,6 +1,6 @@
 /** Pure field intent planning. Admission, leases, validation and commit stay
  * with the calling lifecycle transaction; this result grants no write right. */
-import { normalizeTodoWorkRequirements } from "./work_requirements.ts";
+import { appendTodoExploreReferences, normalizeTodoWorkRequirements } from "./work_requirements.ts";
 import {planTodoPriority} from "./priority.ts";
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
@@ -215,15 +215,7 @@ export function planTodoFieldUpdate(value: unknown): TodoFieldUpdatePlan {
     if (present(intent.explore_result_node_refs)) {
       throw new EffectRuntimeRequestError("cannot replace and append Explore references together");
     }
-    const additions = normalizeTodoWorkRequirements({
-      explore_result_node_refs: intent.append_explore_result_node_refs,
-    }).explore_result_node_refs as string[];
-    const existing = normalizeTodoWorkRequirements({
-      explore_result_node_refs: block.explore_result_node_refs ?? [],
-    }).explore_result_node_refs as string[];
-    Object.assign(updates, normalizeTodoWorkRequirements({
-      explore_result_node_refs: [...existing, ...additions],
-    }));
+    Object.assign(updates, appendTodoExploreReferences(block, intent.append_explore_result_node_refs));
   }
   // Public update carries the effective scope and raw observation once. The
   // field plan composes validation and generation without another RPC.
