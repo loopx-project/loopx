@@ -3209,3 +3209,37 @@ or normal-bytecode campaign is rerun or relabeled. I3/minor-release, M1/#8011,
 full R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel,
 installed-host, full-cost/adoption and all historical gaps remain open. Exact-head
 review, required CI/readiness and maintainer merge authority still apply.
+
+### 2026-11-09 — Current-main required-Vision refusal qualification
+
+The proposal incorporates `main@aa475b29f` and its merged #8388 qualification
+repair at integration `2dd6c3d97`. The existing qualification adapter preserves
+the native `refresh-state` refusal output for required Vision while retaining
+its nonzero status and existing feedback bound. A missing stride cannot append
+writeback or spend; the caller can inspect the structured refusal, correct the
+same draft and then settle once. The typed writer remains the decision owner.
+
+On macOS arm64 with CPython 3.11.15 and Node 22.22.3, the complete existing
+required-Vision family passes 35 cases from source and 35 from an isolated wheel.
+The source-pinned `a3b589610` adapter fails the new missing-stride correction
+case. An initial comparison accidentally loaded the candidate through pytest's
+checkout insertion; that pass is invalid as a baseline result. The corrected
+comparison and wheel run verify every loaded LoopX module's package origin.
+These are scripted synthetic native-CLI qualification cases, not model results.
+
+The wheel matches 1,921 directly corresponding tracked ZIP entries, including
+the qualification adapter. This count is not compared with historical inventory
+methods. `read_transaction.ts` and `summary_item.py` retain the bytes qualified
+at `86d08a01c`; the earlier complete 101-Todo File/SQLite source/wheel lifecycle
+and PostgreSQL API/store evidence are retained, not rerun or relabeled. Standard
+premerge at the integration head passes six direct and nineteen selected checks.
+The bounded refactoring pass needs no additional production abstraction here;
+the existing writer and feedback boundary already own this behavior.
+
+The review published for `86d08a01c` remains historical evidence for that head.
+The updated proposal still needs current-head CI, review and merge readiness;
+this qualification grants no merge authority. Preserve the original transaction,
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, installed-host, complete-cost
+and adoption gaps, and all frozen negative results. No kernel completion or
+whole-path benefit is claimed.

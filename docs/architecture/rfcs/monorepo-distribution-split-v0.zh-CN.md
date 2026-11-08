@@ -2498,3 +2498,29 @@ campaign。I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、PostgreSQL host/wheel、installed-host、完整成本/adoption
 及全部历史缺口保持开放。exact-head review、必需 CI/readiness 和 maintainer 合入
 权限仍分别适用。
+
+### 2026-11-09 — 最新 main 的必需 Vision 拒绝资格
+
+提案接入 `main@aa475b29f` 及其已合入的 #8388 资格修正，集成 head 为
+`2dd6c3d97`。现有资格适配器为必需 Vision 保留原生 `refresh-state` 的拒绝输出，
+同时保留非零退出状态和原有反馈大小边界。缺少 stride 时不能追加写回或扣额；
+调用方可以读取结构化拒绝、纠正同一份草稿，再结算一次。typed writer 继续拥有决策。
+
+在 macOS arm64、CPython 3.11.15 和 Node 22.22.3 上，现有完整必需 Vision 家族
+在源码和隔离 wheel 中各通过 35 项。固定到 `a3b589610` 源码的旧适配器在新增的
+缺 stride 纠正用例中失败。初次对照因 pytest 插入 checkout 路径而意外加载候选，
+该通过不能作为基线结果；纠正后的对照及 wheel 运行核验了全部已加载 LoopX 模块的
+包来源。这些是脚本控制的合成原生 CLI 资格用例，不是真实模型结果。
+
+wheel 的 1,921 个直接对应已跟踪 ZIP 条目字节匹配，包含资格适配器；不与历史盘点
+方法比较数量。`read_transaction.ts` 和 `summary_item.py` 保留 `86d08a01c`
+已验证的字节，先前完整 101-Todo File/SQLite 源码与 wheel 生命周期及 PostgreSQL
+API/store 证据继续保留，不重跑或重标签。集成 head 的标准 premerge 通过六项直接
+检查及十九项选中检查。此次有界重构审视无需再添加生产抽象，现有 writer 和反馈
+边界已拥有该行为。
+
+针对 `86d08a01c` 发布的 review 仍是该 head 的历史证据；更新后的提案仍需当前
+head 的 CI、review 和 merge readiness，本次资格不授予合入权。原事务、I3/minor-release、
+M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
+PostgreSQL host/wheel、installed-host、完整成本和 adoption 缺口及全部冻结负面结果
+均保留。不宣称最小内核完成或完整路径收益。
