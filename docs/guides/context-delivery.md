@@ -134,6 +134,13 @@ same registered source in the current session and epoch. The current source
 revision and Turn controls still appear. A change to the narrative or its
 source, an incomplete read, or compaction restores the current text.
 
+For ready work on the same registered route and Todo, the native first read can
+reference an exact write-scope list that the session already received in full.
+The rest of the current boundary, including guards and stops, still appears.
+If unsure about a path, select `/goal_boundary/write_scope` from the current
+recovery reader. Changes to the list or route, incomplete reads and compaction
+restore the current list.
+
 ### Read and recover the right object
 
 Use the path, digest and command returned by the current response. A native

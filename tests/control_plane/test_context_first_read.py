@@ -1185,3 +1185,127 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert Path(fallback[0]["reference_file"]) == ordinary
     assert {key: value for key, value in after.items() if key != body_pointer} == facts
     assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configuration = json.loads(registry.read_text())
+    scopes = [f"docs/areas/{i:03d}/entrypoints/public-fixture/**" for i in range(270)]
+    configuration["goals"][0]["quota"]["allowed_slots"] = 6
+    coordination = configuration["goals"][0]["coordination"]
+    coordination["write_scope"] = scopes
+    registry.write_text(json.dumps(configuration))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal, captures = tmp_path / "journal", tmp_path / "captures"
+    journal.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    event = setup(journal, monkeypatch)
+    scope_path = "/goal_boundary/write_scope"
+
+    def cli(*args, registry_path=registry):
+        code, payload = _run_cli(registry_path, runtime, *args, cwd=project)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    def binding(turn):
+        return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn)
+
+    def capture(turn, registry_path=registry):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
+                   *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
+                   registry_path=registry_path)
+
+    def settle(turn, registry_path=registry):
+        cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
+        spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
+                    registry_path=registry_path)
+        assert spent["appended"]
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            words = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]], cwd=project)
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(page["content"] for page in pages)), size
+
+    cli("todo", "claim", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--claimed-by", AGENT_ID)
+    cold, cold_facts, _ = read(capture("scope-cold")["first_read_command"])
+    assert cold_facts[scope_path] == scopes and len(cold) > 1
+    assert scope_path not in cold[0].get("previously_delivered_fields", [])
+    deliver(journal, event, cold[:1])
+    settle("scope-cold")
+
+    first_complete, complete_facts, _ = read(capture("scope-unobserved")["first_read_command"])
+    assert scope_path not in first_complete[0].get("previously_delivered_fields", [])
+    assert complete_facts[scope_path] == scopes
+    deliver(journal, event, first_complete)
+    settle("scope-unobserved")
+
+    guard = "Check the current authorization before writing outside the project."
+    configuration["goals"][0]["guards"] = [guard]
+    registry.write_text(json.dumps(configuration))
+    current = capture("scope-warm")
+    _, source_ref = read_context_read_reference(current["recovery"]["reference_file"])
+    original = Path(source_ref["path"])
+    raw = original.read_bytes()
+    boundary = json.loads(raw)["goal_boundary"]
+    warm, warm_facts, warm_bytes = read(current["first_read_command"])
+    _, restored_scope, scope_bytes = read(current["recovery"]["command"] + " --select " + scope_path)
+    assert restored_scope[scope_path] == scopes
+    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    restored, restored_facts, restored_bytes = read(current["first_read_command"])
+    assert scope_path not in restored[0].get("previously_delivered_fields", [])
+    assert restored_facts[scope_path] == scopes and original.read_bytes() == raw
+    deliver(journal, event, restored)
+    settle("scope-warm")
+
+    alternate_registry = registry.with_name("alternate-registry.json")
+    alternate_registry.write_bytes(registry.read_bytes())
+    rebound, rebound_facts, _ = read(capture("scope-rebound", alternate_registry)["first_read_command"])
+    assert scope_path not in rebound[0].get("previously_delivered_fields", [])
+    assert rebound_facts[scope_path] == scopes
+    settle("scope-rebound", alternate_registry)
+
+    coordination["write_scope"] = scopes[:-1] + ["docs/areas/fresh-scope/**"]
+    registry.write_text(json.dumps(configuration))
+    changed, changed_facts, _ = read(capture("scope-revised")["first_read_command"])
+    assert scope_path not in changed[0].get("previously_delivered_fields", [])
+    assert changed_facts[scope_path] == coordination["write_scope"]
+    settle("scope-revised")
+    off = cli("quota", "should-run", "--codex-app", "--context-delivery", "off", *binding("scope-off"))
+    assert off["goal_boundary"]["write_scope"] == coordination["write_scope"]
+    assert "first_read_command" not in off
+    assert _heartbeat_receipt_count(runtime, "scope-warm") == 1 and _spend_run_count(runtime) == 5
+
+    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": restored_bytes,
+                      "warm_pages": len(warm), "recovery_pages": len(restored), "scope_selection_bytes": scope_bytes}))
+    assert scope_path in warm[0].get("previously_delivered_fields", []) and scope_path not in warm_facts
+    assert warm_facts["/goal_boundary/guards"] == [guard]
+    for key, value in boundary.items():
+        if key != "write_scope":
+            assert warm_facts[f"/goal_boundary/{key}"] == value
+    assert warm_facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "scope-warm"
+    assert {key: value for key, value in restored_facts.items()
+            if key != "/goal_boundary" and not key.startswith(scope_path)} == warm_facts
+    assert restored_bytes - warm_bytes > 10_000

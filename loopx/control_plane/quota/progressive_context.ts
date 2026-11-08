@@ -18,7 +18,8 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceFile?: string};
+type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
+export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
@@ -28,11 +29,13 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
-function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
+function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactBody): ReusableReadField[] {
+  const exactFields = exactBody && at(context, exactBody.path) !== undefined
+    ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
   const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
   const sources = at(context, base);
-  if (!Array.isArray(sources)) return [];
-  return sources.flatMap<ReusableReadField>((value, i) => {
+  if (!Array.isArray(sources)) return exactFields;
+  return [...exactFields, ...sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
@@ -42,7 +45,7 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
         (content.status === undefined || content.status === "loaded") &&
         typeof content.state_file === "string" && completeGoalNarrative(content))
       return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-        sourceFile: content.state_file}];
+        sourceIdentity: content.state_file}];
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
@@ -72,22 +75,22 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
       }
       return fields;
     }) : [];
-  });
+  })];
 }
 
 function observedSectionDigest(body: string, field?: ReusableReadField): string {
-  // Same text at a reused array index is insufficient after a Goal file rebind.
-  const value = field?.sourceFile === undefined ? body : JSON.stringify([field.sourceFile, body]);
+  // Matching content is insufficient when a field is bound to another source.
+  const value = field?.sourceIdentity === undefined ? body : JSON.stringify([field.sourceIdentity, body]);
   return createHash("sha256").update(value).digest("hex");
 }
 
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
-export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
+export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
-  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
   const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
   for (const [address, field] of fields)
     if (paths.some(parent => pathStartsWith(field.path, parent))) covered.set(address, field);
@@ -124,11 +127,11 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
 
 /** Only registered, previously delivered bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
-function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
+function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: ReusableExactBody): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
   if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
-  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
   const parents = new Set([...fields.values()].flatMap(({path}) => path.map((_, i) => pointer(path.slice(0, i)))));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
@@ -182,7 +185,7 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   return {selections: grouped, reused};
 }
 
-function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
+function inlineReadSections(request: JsonObject, required: JsonObject, exactBody?: ReusableExactBody): JsonObject {
   const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {
     if (source === shown) { paths.push(path); return; }
@@ -191,7 +194,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject): JsonObje
       (source as JsonObject)[key], (shown as JsonObject)[key], [...path, Array.isArray(source) ? Number(key) : key]);
   };
   visit(original, required, []);
-  return contextReadSectionDigests(request, paths);
+  return contextReadSectionDigests(request, paths, exactBody);
 }
 
 /** Return paths instead of round-tripping the caller's JSON numeric values
@@ -449,7 +452,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -464,11 +467,11 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
-  const observed = observe && pointers.length ? observedFirstRead(codec, pointers) : undefined;
+  const observed = observe && pointers.length ? observedFirstRead(codec, pointers, exactBody) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
-    read_sections: inlineReadSections(request, required.context),
+    read_sections: inlineReadSections(request, required.context, exactBody),
     ...(request.include_initial_read_plan === true && groups
       ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, undefined, true);
 }
