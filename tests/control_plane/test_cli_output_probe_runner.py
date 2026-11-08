@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import runpy
 import re
@@ -22,6 +23,110 @@ RUNNER = (
     Path(__file__).resolve().parents[2]
     / "examples/control_plane/cli-output-probe-runner.py"
 )
+
+
+def _quota_control_fixture():
+    """Independent control values shared by the historical and complete codecs."""
+    value = {
+        "mode": "should-run", "goal_id": "fixture-goal", "decision": "run",
+        "should_run": True, "effective_action": "normal_run",
+        "agent_identity": {"agent_id": "worker-a"},
+        "selected_todo": {"todo_id": "todo_fixture", "text": "Verify the decisive tail constraint.",
+            "priority": "P0", "status": "open", "task_class": "advancement_task",
+            "action_kind": "implement", "claimed_by": "worker-a"},
+        "goal_boundary": {"rule": "stay_in_scope_or_stop", "write_scope": ["docs/**"],
+            "stop_condition": "Stop before any unapproved external effect."},
+        "interaction_contract": {
+            "agent_channel": {"must_attempt": True, "delivery_allowed": True, "quiet_noop_allowed": False,
+                "required_reads": [{"source": "goal_state", "ordering": "before_work", "command": "cat goal.md"},
+                                   {"source": "fixture", "ordering": "before_work", "command": "cat tail.md"}]},
+            "cli_channel": {"next_cli_actions": ["refresh original-turn", "spend original-turn"],
+                "spend_allowed_now": False, "spend_after_validation": True, "spend_policy": "once after verified writeback"},
+            "user_channel": {"notify": "DONT_NOTIFY", "action_required": False},
+        },
+        "work_lane_contract": {"must_attempt_work": True, "obligation": "advance_one_bounded_segment"},
+        "execution_obligation": {"must_attempt_work": True, "notify_is_execution_gate": False},
+        "execution_profile": {"minimum_scale": "multi_surface_or_implementation", "numeric_fixture": 1.0},
+        "task_scope": "goal_all_read_claimed_run_global_read_v0", "replan_action_packet": None,
+        "scheduler_hint": {"action": "none"},
+    }
+    return value
+
+
+def test_quota_observation_preserves_current_controls_across_declared_carriers():
+    observe = runpy.run_path(str(RUNNER))["_quota_control_observation"]
+    source = _quota_control_fixture()
+    complete = {**copy.deepcopy(source), "schema_version": "loopx_turn_envelope_v1"}
+    legacy = {key: source[key] for key in ("mode", "goal_id", "decision", "should_run", "effective_action")}
+    legacy.update(schema_version="loopx_turn_envelope_v0", agent_id="worker-a",
+        action={**source["interaction_contract"]["agent_channel"], "selected_todo": {
+            **{k: v for k, v in source["selected_todo"].items() if k != "text"},
+            "text_ref": "action.recommended_action"}, "recommended_action": source["selected_todo"]["text"]},
+        required_reads=source["interaction_contract"]["agent_channel"]["required_reads"],
+        writeback=source["interaction_contract"]["cli_channel"],
+        user=source["interaction_contract"]["user_channel"], boundary=source["goal_boundary"],
+        scheduler=source["scheduler_hint"], contract_capsule={key: source[key] for key in (
+            "work_lane_contract", "execution_obligation", "execution_profile", "task_scope")})
+    old, current = observe(legacy), observe(complete)
+    assert old["controls_sha256"] == current["controls_sha256"] == observe(source)["controls_sha256"]
+    assert old["field_sha256"] == current["field_sha256"] and len(old["field_sha256"]) == 19
+    assert old["source_schema"] != current["source_schema"]
+    legacy["action"]["selected_todo"]["text_ref"] = "unrelated.text"
+    with pytest.raises(AssertionError):
+        observe(legacy)
+    assert observe({**complete, "schema_version": "unknown"}) is None
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("goal_id",), "wrong-goal"), (("agent_identity", "agent_id"), "other-worker"),
+    (("decision",), "skip"), (("should_run",), False), (("effective_action",), "quota_skip"),
+    (("selected_todo", "text"), "Omit the decisive tail constraint."),
+    (("goal_boundary", "stop_condition"), "Ignore the original stop."),
+    (("interaction_contract", "agent_channel", "delivery_allowed"), False),
+    (("interaction_contract", "agent_channel", "required_reads"), []),
+    (("interaction_contract", "cli_channel", "next_cli_actions"), ["spend different-turn"]),
+    (("interaction_contract", "cli_channel", "spend_allowed_now"), True),
+    (("work_lane_contract", "must_attempt_work"), False),
+    (("execution_obligation", "notify_is_execution_gate"), True),
+    (("execution_profile", "numeric_fixture"), 1),  # 1 and 1.0 are distinct source values.
+    (("task_scope",), "wrong-scope"), (("replan_action_packet",), {"required": True}),
+    (("interaction_contract", "user_channel", "notify"), "NOTIFY"),
+    (("interaction_contract", "user_channel", "action_required"), True),
+    (("scheduler_hint", "action"), "apply"),
+])
+def test_quota_observation_rejects_changed_control_values(path, replacement):
+    observe = runpy.run_path(str(RUNNER))["_quota_control_observation"]
+    original = _quota_control_fixture()
+    changed = copy.deepcopy(original)
+    parent = changed
+    for field in path[:-1]:
+        parent = parent[field]
+    parent[path[-1]] = replacement
+    assert observe(original)["controls_sha256"] != observe(changed)["controls_sha256"]
+    assert observe(original)["field_sha256"] != observe(changed)["field_sha256"]
+
+
+def test_legacy_markdown_control_basis_requires_actual_matching_printed_values():
+    runner = runpy.run_path(str(RUNNER))
+    source = _quota_control_fixture()
+    observation = runner["_quota_control_observation"](source)
+    body = "# LoopX Quota Should Run\n\n" + "\n".join([
+        "- goal_id: `fixture-goal`", "- agent_identity: agent_id=worker-a agent_model=peer_v1",
+        "- decision: `run`", "- should_run: `True`", "- effective_action: `normal_run`",
+    ])
+    fields = runner["_quota_markdown_field_observations"](body)
+    assert len(fields) == 5 and all(observation["field_sha256"][k] == v for k, v in fields.items())
+    assert not runner["_quota_markdown_field_observations"](body + "\n- goal_id: `duplicate`")
+    assert not runner["_quota_markdown_field_observations"](body.replace("- decision: `run`", ""))
+    base = {"row_id": "surface/quota_should_run/small/json", "format": "json",
+        "continuation_instructions": {}, "quota_controls": observation}
+    rendered = {"row_id": "surface/quota_should_run/small/markdown", "format": "markdown",
+        "quota_markdown_fields": fields}
+    assert runner["_link_turn_warning_basis"]([base, rendered])[1]["quota_controls"] == observation
+    rendered = {**rendered, "quota_markdown_fields": runner["_quota_markdown_field_observations"](
+        body.replace("fixture-goal", "wrong-goal"))}
+    with pytest.raises(AssertionError, match="Markdown quota controls differ"):
+        runner["_link_turn_warning_basis"]([base, rendered])
 
 
 def test_runner_imports_frozen_support_with_an_older_checkout(tmp_path: Path) -> None:

@@ -145,7 +145,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "selectors for scheduler, agent-todos, user-todos, goal-boundary, "
             "or all"
         ),
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
+        semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
         max_chars={
             # The same explicitly imported fixture on base/head emits 24,099
@@ -933,7 +933,10 @@ def assert_cli_output_baseline(
     assert_cli_output_semantics(spec.surface_id, output_format=output_format,
         text=text, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
         markdown_anchor=spec.markdown_anchor,
-        output_contract_version=spec.output_contract_version if output_format == "json" else None)
+        # The v1 quota Markdown is a complete JSON carrier. Other default
+        # Markdown (including heartbeat bodies) keeps its narrative contract.
+        output_contract_version=(spec.output_contract_version if output_format == "json"
+            or spec.output_contract_version == "loopx_turn_envelope_v1" else None))
 
 
 def assert_cli_output_mode_variant(

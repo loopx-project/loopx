@@ -1940,6 +1940,33 @@ def test_explicit_version_qualification_rejects_old_or_incomplete_carriers(
         check({key: value for key, value in valid.items() if key != "interaction_contract"})
 
 
+@pytest.mark.parametrize("damage", ["no-json", "truncated-json", "wrong-version", "missing-binding"])
+def test_default_quota_markdown_requires_its_declared_complete_carrier(damage):
+    spec = CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"]
+    # This oracle checks carrier declaration and required roots. Full source
+    # integrity and original-control values have separate real-producer tests.
+    valid = {key: {} for key in spec.semantic_json_keys}
+    valid["schema_version"] = spec.output_contract_version
+    def check(text):
+        assert_cli_output_baseline(spec, scenario="small", output_format="markdown",
+            text=text, measurement=measure_cli_output(text, output_format="markdown"))
+    prefix = spec.markdown_anchor + "\n\n"
+    check(prefix + "```json\n" + json.dumps(valid) + "\n```")
+    if damage == "no-json":
+        text = prefix + "A heading is not the complete source."
+    elif damage == "truncated-json":
+        text = prefix + "```json\n{\n```"
+    else:
+        broken = dict(valid)
+        if damage == "wrong-version":
+            broken["schema_version"] = "loopx_turn_envelope_v0"
+        else:
+            broken.pop("contract_binding")
+        text = prefix + "```json\n" + json.dumps(broken) + "\n```"
+    with pytest.raises(AssertionError):
+        check(text)
+
+
 def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
     # Keep the original public CLI fixture and expand only its authored scope
     # to the supported boundary. JSON/body budgets must fit complete guidance.

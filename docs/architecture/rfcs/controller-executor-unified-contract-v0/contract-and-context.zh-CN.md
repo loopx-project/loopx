@@ -584,6 +584,20 @@ C1 完整计划给出一条合并写回命令，扣额由运行时执行并返�
 和前提都在捕获的计划中保留。不同的备用命令或未知计划继续展示；原字段仍可精确
 补读，直接输出不变。
 
+#### 完整 quota consumer 资格与按需分节恢复
+
+main `36289306`／C1 `94cd16bb` 的固定 98 行对照保留原 28 行失败。新 consumer
+先验证完整 v1 Markdown carrier 及 19 项原始当前控制值，再给予有界、一次性的
+carrier 增长余量。相同版本增长、变化／缺失控制继续受约束。新资格下没有机械门
+失败，仍有 28 行显式语义／成本审阅；生产者实测 stdout 成本未变。见
+[预算 owner 的决定](../../../reference/contracts/interface-budget-contract.md#complete-quota-carrier-differential-qualification)。
+该控制子集不证明完整来源等价、模型采用或效率净收益，不关闭父 C1 验收。
+
+薄提示明确从原来源的所需分节及原身份恢复，保留行动前工作上下文、显式全文义务和
+capture／handoff flags。完整来源可用，不等于丢失上下文后无条件重读整包。措辞和
+成功 fixture 都不证明 retention，也不授权重新准入。原 quota 单会话的成果／完整
+成本、真实 caller 退役、维护资格及独立审阅仍开放，之后才考虑双会话实验。
+
 ### C1 基线边界与复用盘点
 
 基线是**原路径中调用者实际收到的 quota 交付**，不是内部原始 decision。

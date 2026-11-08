@@ -67,10 +67,10 @@ def test_thin_cli_keeps_dependency_reads_and_original_capture_recovery(tmp_path,
     # The correction removes the ordinary whole-file obligation, preserving
     # the positive read, control, conditional recovery and transport duties.
     for obligation in (
-        "work_context and required_reads before acting", "goals, criteria",
-        "constraints and stops", "only the original capture sections needed", "selection", "replan", "missing/truncated",
-        "referenced details", "lost-context", "complete original source and identity",
-        "not fresh admission", "explicit full-read obligations", "capture/handoff flags",
+        "work_context and required_reads before acting", "applicable goals/criteria/constraints/stops",
+        "only needed original sections", "selection", "replan", "missing/truncated",
+        "detail refs", "execution/lost context", "needed original sections/identity",
+        "never re-admit", "explicit full reads", "capture/handoff flags",
         "same-Turn repair", "settlement_plan.ordered_steps",
     ):
         assert obligation in body, obligation

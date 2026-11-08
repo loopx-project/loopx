@@ -805,6 +805,26 @@ receipt. Both retain the original commands, ordering and preconditions in
 the captured plan. A distinct fallback or unknown plan remains visible;
 the exact original field is still readable, and direct output is unchanged.
 
+#### Complete quota consumer qualification and needed-section recovery
+
+The fixed 98-row main `36289306` / C1 `94cd16bb` comparison retains its original
+28 failures. The updated consumer checks the complete v1 Markdown carrier and
+19 matching original current-control values before applying bounded, one-time
+carrier growth allowances. Same-version growth and changed/missing controls
+remain guarded. The new qualification has no mechanical row failures and 28
+explicit semantic/cost review rows; the producer's measured stdout costs are
+unchanged. See the [owned budget decision](../../../reference/contracts/interface-budget-contract.md#complete-quota-carrier-differential-qualification).
+This control subset is not complete-source parity, model adoption or a net
+efficiency result, and does not close the parent C1 acceptance.
+
+Thin recovery now explicitly asks for needed sections of the original source
+and its identity, while retaining current work context before action, explicit
+full-read duties and capture/handoff flags. Complete-source availability does
+not impose an unconditional full reread after context loss. Neither the wording
+nor a successful fixture proves retention or authorizes fresh admission.
+Original-quota single-session outcomes/full costs, real caller retirement,
+maintenance qualification and independent review remain open before dual runs.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw

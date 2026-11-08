@@ -685,7 +685,7 @@ def render_thin_heartbeat_task_body(
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
 Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs.
-Recover execution/lost context with full original source and identity; never re-admit.
+Recover execution/lost context from needed original sections/identity; never re-admit.
 Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair.
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh
