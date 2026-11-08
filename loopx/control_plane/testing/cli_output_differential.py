@@ -709,20 +709,16 @@ def _complete_turn_plan_migration(base: dict[str, Any], candidate: dict[str, Any
         and candidate.get("output_contract_version") == ("loopx_turn_plan_v1" if row.startswith("variant/") else None))
 
 
-_QUOTA_CONTROL_FIELDS = frozenset({
-    "goal_id", "agent_id", "decision", "should_run", "effective_action",
-    "selected_todo", "execution", "boundary", "required_reads", "next_cli_actions",
-    "spend", "work_lane_contract", "execution_obligation", "execution_profile",
-    "task_scope", "replan_action_packet", "notify", "user_action_required", "scheduler_action",
-})
-
-
 def _matching_quota_controls(base: dict[str, Any], candidate: dict[str, Any]) -> bool:
     before, after = base.get("quota_controls"), candidate.get("quota_controls")
     if not isinstance(before, dict) or not isinstance(after, dict):
         return False
     fields = before.get("field_sha256")
-    return bool(isinstance(fields, dict) and set(fields) == _QUOTA_CONTROL_FIELDS
+    # The frozen probe owns the source-field inventory; its independent tests
+    # pin every field and mutation. Compare its bounded witness here without
+    # creating another inventory/consumer of retired source fields.
+    return bool(isinstance(fields, dict) and len(fields) == 19
+        and all(isinstance(key, str) and key for key in fields)
         and all(isinstance(value, str) and len(value) == 64 for value in fields.values())
         and fields == after.get("field_sha256")
         and isinstance(before.get("controls_sha256"), str) and len(before["controls_sha256"]) == 64

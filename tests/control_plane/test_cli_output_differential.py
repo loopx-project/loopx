@@ -2283,6 +2283,24 @@ def test_same_version_quota_cannot_drop_its_control_witness(side, damage):
                for failure in _compare_row(base, candidate)["failures"])
 
 
+@pytest.mark.parametrize("damage", ["empty", "missing", "extra", "empty-key", "invalid-digest"])
+def test_equal_but_malformed_quota_witnesses_do_not_qualify(damage):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    _, current = _quota_source_rows()
+    fields = current["quota_controls"]["field_sha256"]
+    if damage == "empty":
+        fields.clear()
+    elif damage == "missing":
+        fields.pop("required_reads")
+    elif damage == "extra":
+        fields["unrelated"] = "a" * 64
+    elif damage == "empty-key":
+        fields[""] = fields.pop("required_reads")
+    else:
+        fields["required_reads"] = None
+    assert _compare_row(current, copy.deepcopy(current))["failures"]
+
+
 def test_thin_source_read_guidance_requires_complete_ordered_recovery_contract():
     from pathlib import Path
     from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe

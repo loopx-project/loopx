@@ -175,8 +175,7 @@ def _quota_markdown_field_observations(text: str) -> dict[str, str]:
         return {}
     values["should_run"] = values["should_run"] == "True"
     actors = re.findall(r"^- agent_id: `([^`\n]*)`$", text, re.MULTILINE)
-    if not actors:
-        actors = re.findall(r"^- agent_identity: agent_id=(\S+) agent_model=\S+$", text, re.MULTILINE)
+    actors += re.findall(r"^- agent_identity: agent_id=(\S+) agent_model=\S+$", text, re.MULTILINE)
     if len(actors) != 1:
         return {}
     values["agent_id"] = actors[0]

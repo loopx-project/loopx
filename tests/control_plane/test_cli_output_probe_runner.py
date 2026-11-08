@@ -69,7 +69,13 @@ def test_quota_observation_preserves_current_controls_across_declared_carriers()
             "work_lane_contract", "execution_obligation", "execution_profile", "task_scope")})
     old, current = observe(legacy), observe(complete)
     assert old["controls_sha256"] == current["controls_sha256"] == observe(source)["controls_sha256"]
-    assert old["field_sha256"] == current["field_sha256"] and len(old["field_sha256"]) == 19
+    assert old["field_sha256"] == current["field_sha256"]
+    assert set(current["field_sha256"]) == {
+        "goal_id", "agent_id", "decision", "should_run", "effective_action", "selected_todo",
+        "execution", "boundary", "required_reads", "next_cli_actions", "spend", "work_lane_contract",
+        "execution_obligation", "execution_profile", "task_scope", "replan_action_packet",
+        "notify", "user_action_required", "scheduler_action",
+    }
     assert old["source_schema"] != current["source_schema"]
     legacy["action"]["selected_todo"]["text_ref"] = "unrelated.text"
     with pytest.raises(AssertionError):
@@ -117,6 +123,7 @@ def test_legacy_markdown_control_basis_requires_actual_matching_printed_values()
     fields = runner["_quota_markdown_field_observations"](body)
     assert len(fields) == 5 and all(observation["field_sha256"][k] == v for k, v in fields.items())
     assert not runner["_quota_markdown_field_observations"](body + "\n- goal_id: `duplicate`")
+    assert not runner["_quota_markdown_field_observations"](body + "\n- agent_id: `worker-a`")
     assert not runner["_quota_markdown_field_observations"](body.replace("- decision: `run`", ""))
     base = {"row_id": "surface/quota_should_run/small/json", "format": "json",
         "continuation_instructions": {}, "quota_controls": observation}
