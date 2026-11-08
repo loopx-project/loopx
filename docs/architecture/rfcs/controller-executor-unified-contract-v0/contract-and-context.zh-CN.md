@@ -442,6 +442,14 @@ capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 贡献后，原 Host 来源仍须可用。main 与 C1 均复用同一个既有规则 owner，这不证明
 C1 已减少规则 owner 的数量。
 
+失败会话重试也是活跃 reader。本提案中的
+`session_recovery.py::assess_failed_turn_retry_request` 为 v1 请求向绑定回调交付
+校验后的完整决定；已记录的 v0 请求仍交付原 envelope，即使同时携带完整来源副本。
+无效或混合的当前输入在 provider IO 前拒绝，返回的绑定仍由既有 lineage owner 检查。
+File／SQLite 资格验证须使用实际读取入参的回调，确认拒绝不改 capture／journal 字节，
+恢复原 Session 且不重复 Host 结果或结算效果。这一 reader 修复不证明 installed 采用或
+C1 已完成退役。
+
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
 验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，

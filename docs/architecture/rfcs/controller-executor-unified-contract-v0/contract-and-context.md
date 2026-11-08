@@ -602,6 +602,16 @@ registration, context and optional result fields; rejected optional contribution
 must leave the original Host source usable. This uses one existing rule owner on
 both main and C1, rather than proving that C1 reduced the number of rule owners.
 
+Failed-session retry is also a live reader. In this proposal,
+`session_recovery.py::assess_failed_turn_retry_request` gives the binding callback
+the checked complete decision for a v1 request. A recorded v0 request retains its
+original envelope, including when it has a complete-source sidecar. Invalid or
+mixed current input fails before provider IO; the existing lineage owner still
+checks the returned binding. File/SQLite qualification must use a callback that
+reads its argument, preserve capture/journal bytes on refusal, and resume the
+original Session without duplicate Host results or settlement effects. This
+reader repair does not establish installed adoption or complete C1 retirement.
+
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and
 retirement condition. Relocation must include reference resolution; an omitted
