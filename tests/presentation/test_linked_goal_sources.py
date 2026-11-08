@@ -25,7 +25,8 @@ from loopx.capabilities.explore.result_log import (
 from loopx.control_plane.status.goal_source import GoalSource
 
 
-def native_source(w, name='original', task_text='Check the original question against its evidence', done=False):
+def native_source(w, name='original', task_text='Check the original question against its evidence', done=False,
+                  task_evidence=None, task_note=None):
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
@@ -44,6 +45,10 @@ def native_source(w, name='original', task_text='Check the original question aga
     rows, _, _ = parse_todo_source(state.read_text())
     for todo in rows['agent']:
         todo['schema_version'] = 'todo_item_v0'
+        if task_evidence is not None:
+            todo['evidence'] = task_evidence
+        if task_note is not None:
+            todo['note'] = task_note
     initialize_canonical_authority(runtime, 'solver-goal', build_todo_runtime_shadow_projection(
         goal_id='solver-goal', todos=rows['agent'], handoff_mode='soft_claim'), state_path=state, provider='sqlite')
     for goal in (('research-owner', 'other-owner') if name == 'original' else ()):
@@ -76,6 +81,47 @@ def native_source(w, name='original', task_text='Check the original question aga
             return json.load(response)
 
     return raw, request, {path: path.read_bytes() for path in (registry, state, log)}
+
+
+@pytest.mark.parametrize('done', [False, True])
+def test_linked_task_details_keep_complete_evidence_and_notes(workspace, done):
+    evidence = 'Independent verification. ' + '证据🙂 ' * 180 + ' Retained baseline: reference-v2.'
+    note = 'Conditions and limitations. ' + '完整备注 ' * 180 + ' Attribution remains unknown.'
+    raw, request, before = native_source(workspace, done=done, task_evidence=evidence, task_note=note)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    query = {'goal_id': 'solver-goal', 'todo_id': 'todo_original', 'source_namespace': namespace}
+    endpoint = '/api/chat/todo/detail?'
+    detail = request(endpoint + urlencode(query))
+    assert detail['evidence'] == evidence and detail['note'] == note
+    assert detail['status'] == ('done' if done else 'open')
+    assert detail['source_access']['namespace'] == namespace
+    assert 'review_basis' not in detail
+
+    for changed in ({'source_namespace': 'f' * 64}, {'todo_id': 'todo_missing'}):
+        with pytest.raises(HTTPError) as refused:
+            request(endpoint + urlencode({**query, **changed}))
+        error = json.load(refused.value)
+        assert not error['ok'] and not {'text', 'evidence', 'note'} & error.keys()
+
+    source_registry = Path(raw['registry'])
+    source_registry.unlink()
+    with pytest.raises(HTTPError) as unavailable:
+        request(endpoint + urlencode(query))
+    assert unavailable.value.code == 503
+    assert 'Retained baseline' not in unavailable.value.read().decode()
+    source_registry.write_bytes(before[source_registry])
+    assert request(endpoint + urlencode(query))['evidence'] == evidence
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert not workspace['count'].exists()
+
+
+def test_linked_task_details_preserve_absent_metadata(workspace):
+    raw, request, _ = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    detail = request('/api/chat/todo/detail?' + urlencode({
+        'goal_id': 'solver-goal', 'todo_id': 'todo_original', 'source_namespace': GoalSource.parse(raw).namespace}))
+    assert detail['evidence'] is None and detail['note'] is None
 
 
 @pytest.mark.parametrize("separate_chat_store", [False, True])
