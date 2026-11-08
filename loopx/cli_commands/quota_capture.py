@@ -671,7 +671,8 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
 
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
                                      runtime_root: Path, directory: Path | None,
-                                     reader_argv: list[str] | None = None) -> dict[str, Any]:
+                                     reader_argv: list[str] | None = None,
+                                     page_attached: bool = False) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
     A plain read-only should-run remains read-only. Private transport files do
@@ -689,11 +690,12 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
-        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=page_attached,
+        reader_argv=reader_argv)
     readable = model_context_reference(view, reader_argv=reader_argv)
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
-    return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
+    return readable if page_attached or len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
 
 
 def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
@@ -721,6 +723,10 @@ def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
             instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
         # An opening is useful only as a complete, independently readable
         # page. Keep the ordinary cursor when even the opening cannot fit.
+        page["read_instruction"] = (
+            "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
+            "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
+            "EOF does not establish retention, authority or freshness.")
         page["navigation"] = navigation
         return page if len(_native_output_bytes(page)) <= output_bytes else None
     except (OSError, ValueError):
@@ -786,6 +792,12 @@ def _saved_replan_presentation_source(path: Path, payload: dict[str, Any]) -> tu
     return original, source
 
 
+def _context_page_output_enabled(args: argparse.Namespace, activation: dict[str, Any]) -> bool:
+    return activation["enabled"] or (
+        args.quota_command == "context-project" and getattr(args, "initial_read", False)
+        and activation["progressive_enabled"])
+
+
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
@@ -802,11 +814,10 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     try:
         activation = native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
-        if saved_page and (args.format != "json" or not activation["enabled"] or args.offset != 0
-                or args.reference_file or args.selection_sha256
-                or (args.initial_read and args.select)):
-            raise ValueError("Use an enabled native JSON context-project with either --initial-read or --select "
-                "at offset zero. Use context-read for replay or continuation.")
+        if saved_page and (args.format != "json" or not _context_page_output_enabled(args, activation) or args.offset != 0
+                or args.reference_file or args.selection_sha256 or (args.initial_read and args.select)):
+            raise ValueError("Use JSON context-project at offset zero with native delivery or progressive --initial-read. "
+                "Choose either --initial-read or --select. Use context-read for replay or continuation.")
         caller_output_limit = getattr(args, "max_page_output_bytes", None)
         output_limit = caller_output_limit
         if args.initial_read:
@@ -846,9 +857,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Recovery is presentation of this exact saved decision, including its
         # original Turn. It does not need a supported host or a native session.
         try:
-            return progressive_context_capture_view(payload, args,
+            navigation = progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
-                directory=None, reader_argv=reader_argv)
+                directory=None, reader_argv=reader_argv, page_attached=saved_page)
+            if saved_page:
+                return _saved_context_read_page(args, navigation, initial_reference=None,
+                    initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
+            return navigation
         except EffectRuntimeRejected as exc:
             # A valid file digest does not validate the decision inside it. The
             # source owner rejected this signed Turn; expose recovery only.
@@ -1275,7 +1290,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
-        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or enabled native JSON context-project"}, args.format, str)
+        print_payload({"ok": False, "reason": "--initial-read requires context-read or JSON context-project"}, args.format, str)
         return 1
     list_depth = getattr(args, "list_depth", None)
     if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
@@ -1298,7 +1313,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     settlement_output = (args.quota_command == "spend-slot" and args.format == "json"
         and bool(getattr(args, "turn_instance_id", None)) and bool(getattr(args, "agent_id", None)))
     budget_scope_error = ("max-page-output-bytes is only supported by JSON context-read "
-        "or enabled native should-run/context-project, or Turn-bound JSON spend-slot")
+        "or enabled native should-run/context-project, progressive context-project --initial-read, "
+        "or Turn-bound JSON spend-slot")
     if has_output_limit and args.quota_command != "context-read" and not settlement_output and (
         args.quota_command not in ("should-run", "context-project") or args.format != "json"
         or (getattr(args, "context_delivery", None) == "off" and getattr(args, "delta_delivery", None) != "auto")):
@@ -1326,7 +1342,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         return 1
     if has_output_limit and args.quota_command != "context-read" and not settlement_output:
         try:
-            if not native_context_activation(args)["enabled"]:
+            if not _context_page_output_enabled(args, native_context_activation(args)):
                 raise QuotaCommandValidationError(budget_scope_error)
             if args.max_page_output_bytes <= 0:
                 raise QuotaCommandValidationError("max-page-output-bytes must be positive")

@@ -1100,11 +1100,13 @@ def test_retry_lost_navigation_uses_original_predecessor(tmp_path, monkeypatch):
     assert not registry.exists() and not runtime.exists()
 
 
-@pytest.mark.parametrize(("repeat", "limit", "staged"), [
-    (1, None, False), (480, None, True), (480, 6400, True), (480, 64000, False),
-], ids=["small", "unknown", "lower", "sufficient"])
+@pytest.mark.parametrize(("repeat", "limit", "staged", "page_bytes", "paged"), [
+    (1, None, False, None, False), (480, None, True, None, False),
+    (480, 6400, True, None, False), (480, 64000, False, None, False),
+    (1100, 40000, True, 40000, False), (98, 12000, False, 900, True),
+], ids=["small", "unknown", "lower", "sufficient", "explicit-reader-window", "tight-reader-window"])
 def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selection(
-        tmp_path, monkeypatch, repeat, limit, staged):
+        tmp_path, monkeypatch, repeat, limit, staged, page_bytes, paged):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     runtime, registry, context = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "native"
@@ -1118,9 +1120,12 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     selection_args = "quota should-run --todo-id {todo_id}"
     if saved_limit is not None:
         selection_args += f" --max-page-output-bytes {saved_limit}"
+    # The paged case must exceed the window even before supporting context.
+    stop = "Stop before publishing. " * 100 if paged else None
     original = tmp_path / "original.json"
     original.write_text(json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
         "heartbeat_receipt": receipt, "effective_action": "normal_run",
+        **({"goal_boundary": {"stop": stop}} if stop is not None else {}),
         "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
             "cli_channel": {"selection_command": {"command_args_template": selection_args}}, "agent_channel": {
             "work_context": {"sources": [{"source": "goal_state", "ordering": "before_work",
@@ -1145,8 +1150,9 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     code, reference = cli(*project)
     assert code == 0 and "content" not in reference
     assert reference["instruction"].startswith("Start with first_read_command")
-    code, first = cli(*project, "--initial-read")
-    assert code == 0 and first["offset"] == 0 and first["eof"]
+    window = ["--page-bytes", str(page_bytes)] if page_bytes is not None else []
+    code, first = cli(*project, "--initial-read", *window)
+    assert code == 0 and first["offset"] == 0 and first["eof"] is not paged
     assert list(first).index("content") < list(first).index("navigation")
     navigation = first["navigation"]
     assert "top-level content" in navigation["instruction"]
@@ -1154,7 +1160,16 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     assert "without reading an older baseline" in navigation["instruction"]
     assert "Start with first_read_command" not in navigation["instruction"]
     assert ("remaining_read_command" in navigation) == staged
-    assert "next_command" not in first
+    assert ("navigation.remaining_read_command" in first["read_instruction"]) == staged
+    if staged:
+        assert "Before work" in first["read_instruction"]
+    assert ("next_command" in first) is paged
+    if page_bytes is not None:
+        for command in (navigation["first_read_command"], navigation.get("remaining_read_command"),
+                        first.get("next_command")):
+            if command is not None:
+                words = shlex.split(command)
+                assert int(words[words.index("--page-bytes") + 1]) == page_bytes
     # Read the saved same-Turn selection recipe from the committed projection.
     # An implicit cap for this page does not become an explicit guard option.
     operation = follow(navigation["recovery"]["command"] + " --select /interaction_contract/cli_channel/selection_command")
@@ -1163,14 +1178,20 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     words = shlex.split(template)
     budget = int(words[words.index("--max-page-output-bytes") + 1]) if "--max-page-output-bytes" in words else None
     assert budget == (limit if limit is not None else saved_limit)
+    recovery_limit = limit if limit is not None else 64000
     limit = limit if limit is not None else 12000
     assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
 
-    def finish(page):
+    def finish(page, *, limit=None, content_limit=None):
         body = bytearray()
         while True:
             assert page["offset"] == len(body)
-            body.extend(page["content"].encode())
+            if limit is not None:
+                assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+            content = page["content"].encode()
+            if content_limit is not None:
+                assert len(content) <= content_limit
+            body.extend(content)
             if page["eof"]:
                 assert len(body) == page["total_bytes"]
                 return bytes(body)
@@ -1185,20 +1206,32 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
             "session_id": "session", "cwd": str(tmp_path)})
     files = set(context.rglob("*"))
     journal = (context / "session.json").read_bytes()
-    body = finish(first)
-    assert finish(follow(navigation["first_read_command"])) == body
+    body = finish(first, content_limit=page_bytes)
+    assert finish(follow(navigation["first_read_command"]), content_limit=page_bytes) == body
     selected = {item["pointer"]: item["value"] for item in json.loads(body)["selections"]}
     assert selected["/heartbeat_receipt"] == receipt
     assert selected["/effective_action"] == "normal_run"
+    if stop is not None:
+        assert selected["/goal_boundary"] == {"stop": stop}
     requirement = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
     if staged:
         assert requirement not in selected and "Before work" in navigation["instruction"]
-        remaining = finish(follow(navigation["remaining_read_command"]))
+        remaining = finish(follow(navigation["remaining_read_command"]), content_limit=page_bytes)
         detail = {item["pointer"]: item["value"] for item in json.loads(remaining)["selections"]}
         assert not selected.keys() & detail.keys()
         assert detail[requirement] == text
     else:
         assert selected[requirement] == text
+    # Clients that receive navigation before the initial read use the same
+    # transport budget even when the capture has much more required content.
+    recipe = shlex.split(reference["first_read_command"])
+    assert int(recipe[recipe.index("--max-page-output-bytes") + 1]) == limit
+    for view in (reference, navigation):
+        recovery = shlex.split(view["recovery"]["command"])
+        assert int(recovery[recovery.index("--max-page-output-bytes") + 1]) == recovery_limit
+    linked = json.loads(finish(follow(reference["first_read_command"]), limit=limit))["selections"]
+    fields = {item["pointer"]: item["value"] for item in linked}
+    assert fields[requirement] == text and fields["/heartbeat_receipt"] == receipt
     assert original.read_bytes() == raw and (context / "session.json").read_bytes() == journal
     assert set(context.rglob("*")) == files
     if repeat == 1:
