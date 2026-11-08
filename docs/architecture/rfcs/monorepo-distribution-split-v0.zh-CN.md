@@ -1993,6 +1993,44 @@ caller 的必需依赖闭包，再选一个完整可回退的加载改动并验�
 context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
 继续开放；本轮不合入 main、不升级 host。
 
+### 2026-11-08 — Turn 装配中的报告构造加载
+
+既有 `periodic-report` Python provider 与 CLI Turn 适配层改为按需解析报告源、
+预设、阶段投影和请求导出。在 runtime 版本
+`7858d96e83ef98174cc43870e283f8f0e6f40c0b`，禁用订阅不会导入这些构造 provider。
+能力包已有 lazy exports，本次修复的是实际装配调用方。订阅校验仍由原 owner
+负责，包括 cadence 使用 profile 中的日程校验器。Goal override、live machine
+defaults、配置 warning、原导出身份与 patch 点、hook profile digest/policy version、
+source 选择、receipt replay 和权限保持；不新增 capability、配置、UI、持久化词汇
+或决策 owner。
+
+与基线 `c263f7c78353fcaa914f23475d4d99d07eab7c01` 对照，11 个相同合成配置场景
+保持 hook 输出、trigger 决策及完整配置错误消息一致。冷进程拒绝 oracle 在修复前
+因禁用装配导入 report source 而失败；8 个聚焦场景现覆盖缺省、禁用继承、override、
+非法禁用配置、无副作用读取和导出／patch 兼容。最初更强的禁止规则也拒绝了原
+profile 日程校验器；该失败探针保留，本阶段保持校验器，不绕过它。
+
+Source 与独立构建 wheel 的 File/default-SQLite console 路径通过原始完整
+101-Todo 生命周期：fixture/artifact 不变、4 个 receipts、一次 debit、source/lease/
+拒绝／重启／重放读回，以及每条路径 2 个自有 native 退出。先验证安装 package
+归属，再比对 1,920 个实际存在的 tracked entries；17 个 source-only 或文档／媒体
+省略明确保留。Wheel 测试依赖和 frontend build 准备失败仍记录为失败。
+隔离 PostgreSQL 16 store/service 套件通过 391/11 场景，零 skip；service 首轮
+因缺少环境声明而跳过的记录仍保留。这不资格 PostgreSQL host/wheel 路径。
+报告相关套件通过 100 场景；较广的 digest inventory 检查在未改动 Todo selector
+上出现一条完全相同的 baseline/head 失败，该检查仍为失败。
+
+独立报告装配探针在 macOS arm64/CPython 3.13.5 下，两侧使用正常 bytecode、一次
+不计样本的预热，对禁用／启用场景各做 8 对交替观察。禁用 wall/CPU 中位数为
+修复前 0.255/0.111 s、修复后 0.246/0.107 s；启用为 0.331/0.117 s 和
+0.321/0.113 s。加载的 LoopX modules 从 196 降到 179/182。小样本与并行测试下
+的这些观察不证明明显提速、持续尾延迟或完整 CLI/Node/model/attention 成本收益。
+早先冻结的 20-cost、归因及正常 bytecode 实验未重跑、扩充或重标签。
+本阶段可独立回滚的增量是关闭态构造隔离。采纳仍需同 head review、CI/readiness
+和明确的受保护合并授权。I3 至少保留一个 minor release，M1/#8011、完整
+R0/V10/R1、D2/D5/D6/D3、context/model/split-install、full-cost/adoption 缺口
+及所有历史失败均保持开放；既有 runtime composition 工作继续跨越这些边界。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
