@@ -44,13 +44,18 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
-                                     capture_root: Path | None = None) -> None:
+                                     capture_root: Path | None = None,
+                                     capture_directory: Path | None = None) -> None:
     """Retain caller display/capture options in the existing selection command.
 
     Only transport argv is composed here; the typed quota owner still selects the
     action and owns admission. Each selection invocation allocates a new capture.
     """
     root = getattr(args, "decision_output_root", None)
+    # A prepared reference binds one immutable directory. Same-Turn
+    # selection uses its parent to create a fresh sibling capture.
+    if capture_directory is not None and getattr(args, "prepared_capture_reference", False):
+        capture_root = capture_directory.parent
     if root is None and capture_root is None:
         return
     interaction = payload.get("interaction_contract")
