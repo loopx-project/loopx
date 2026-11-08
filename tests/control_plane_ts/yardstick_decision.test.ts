@@ -100,6 +100,35 @@ test("goal and proxy join the same two candidates regardless of declared order a
     assert.equal(shared.source_finding_id, measured.finding_id);
     assert.deepEqual(shared.search_comparison, result);
   }
+
+  // Same-parent sibling reversal: a rejected sibling (candidate:a) with a
+  // stronger proxy score or a later proxy-only screen (candidate:d) must not
+  // hide the paired proxy reversal between incumbent (candidate:b) and a
+  // second sibling (candidate:c).
+  const siblingSecond = {...measured, finding_id: "finding-sibling-c", recorded_order: 2,
+    work_yardstick: {binding, decision: {...decision, proxy: timeProxy, prior_finding_id: measured.finding_id}},
+    measurements: [
+      {...authoritative, value: 1, candidate_ref: "candidate:c", evidence_ref: "result:goal-c"},
+      {...timeProxy, value: 3, candidate_ref: "candidate:c", evidence_ref: "result:screen-c"},
+    ]};
+  const screenOnly = {...siblingSecond, finding_id: "finding-screen-d", recorded_order: 3,
+    work_yardstick: {binding, decision: {...decision, proxy: timeProxy, prior_finding_id: siblingSecond.finding_id}},
+    measurements: [
+      {...timeProxy, value: 1, candidate_ref: "candidate:d", evidence_ref: "result:screen-d"},
+    ]};
+  for (const rows of [[siblingSecond, measured], [screenOnly, siblingSecond, measured]]) {
+    const feedback = projectExploreMeasurementFeedback(rows);
+    const cue = projectWorkYardstickCue({...binding, enabled: true, findings: rows, measurement_feedback: feedback})!;
+    const comparison = cue.search_comparison as Record<string, any>;
+    assert.equal(comparison.goal.previous_best.candidate_ref, "candidate:b");
+    assert.equal(comparison.goal.latest.candidate_ref, "candidate:c");
+    assert.equal(comparison.goal.preferred_candidate_ref, "candidate:b");
+    assert.equal(comparison.proxy.previous_best.candidate_ref, "candidate:b");
+    assert.equal(comparison.proxy.latest.candidate_ref, "candidate:c");
+    assert.equal(comparison.proxy.preferred_candidate_ref, "candidate:c");
+    assert.equal(comparison.proxy_order_reversed, true);
+    assert.match(comparison.guidance, /proxy reverses the observed goal order/);
+  }
 });
 
 test("only strictly older committed replay preserves a stale predecessor as history", () => {

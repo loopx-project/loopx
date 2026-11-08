@@ -866,7 +866,7 @@ export const researchHistoryScenario = {
           if (response.status() === 409) return route.fulfill({response});
           assert.equal(response.status(), 200);
           const value = await response.json();
-          if (new URL(route.request().url()).searchParams.get("view") === "history") pages.push(value);
+          if (query.get("view") === "history") pages.push({goalId: query.get("goal_id"), packet: value});
           await route.fulfill({response, json: value});
         });
         await page.route("**/api/chat/todo/detail?*", async route => {
@@ -889,7 +889,8 @@ export const researchHistoryScenario = {
       const history = page.getByRole("region", {name: "研究历程", exact: true});
       await history.getByRole("status").filter({hasText: "76 / 76"}).waitFor();
       assert.equal(pages.length, 2, "The complete Portfolio checkpoint requires every bounded HTTP page");
-      assert.deepEqual(pages.flatMap(value => value.items).map(row => row.event_id), capture.events.map(row => row.event_id));
+      assert.deepEqual(pages.filter(value => value.goalId === capture.goal_id)
+        .flatMap(value => value.packet.items).map(row => row.event_id), capture.events.map(row => row.event_id));
       assert.equal(await history.locator('.analysis-read-empty').count(), 0,
         'No analysis source must not add another explanation card above the recorded history');
       const sourceHelp = history.getByRole('button', {name: '分析来源未就绪', exact: true});
@@ -1006,7 +1007,10 @@ export const researchHistoryScenario = {
         await page.locator('.personal-goal-link',{hasText:other.display_name}).click();
         assert.equal(new URL(page.url()).searchParams.get('view'), 'research', 'Comparing Goals must keep the research reading context');
         await history.getByRole('status').filter({hasText:`${other.events.length} / ${other.events.length}`}).waitFor();
-        assert.deepEqual(pages.flatMap(value=>value.items).map(row=>row.event_id),other.events.map(row=>row.event_id),`${label}: all original pages, without cross-Goal records`);
+        // A prior Goal's retry can finish after navigation. Bind observations to
+        // the requested Goal; foreign records inside its response still fail.
+        assert.deepEqual(pages.filter(value=>value.goalId===other.goal_id)
+          .flatMap(value=>value.packet.items).map(row=>row.event_id),other.events.map(row=>row.event_id),`${label}: all original pages, without cross-Goal records`);
         assert.equal(await history.locator('.research-history-detail').count(),0, 'A different Goal must not adopt the prior evidence selection');
         assert.equal(await history.locator('.research-route').count(),0);
         await page.goBack();

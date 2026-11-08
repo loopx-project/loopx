@@ -452,6 +452,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Resolve the exact object and source; an identifier in another repository, an old waiting task or a closed-but-uncompleted object is not proof of the requested outcome. "
     "Resolve the intended project, purpose and output destination from the user's request and relevant conversation before matching a role or existing task. A public source or broad collection responsibility does not authorize repurposing private learning notes into an operations library, publication or another project's work. "
     "If current evidence shows the requested outcome is already satisfied, explain that result with its source and do not create work, delegate, propose a protected action or repeat the effect. "
+    "Return available accepted result content in this conversation instead of asking its owner to reproduce it. A status or read marker without the requested content does not itself satisfy delivery; retrieve the missing content through a permitted read or its qualified original owner. "
     "A saved source, read receipt or recorded proposal is not proof that the requested outcome works. Separate source duplication, applicable new information and independently verified completion; an unchanged source may still expose unfinished work, while changed bytes may add no useful information. "
     "A request for explanation, fact checking, comparison or judgment normally needs your analysis, not automatic assignment. "
     "Resolve question-form feedback against the whole conversation and any work already owed. A concrete amendment to established delivery still needs completion here or transfer to its established owner under the current work rules; do not end at agreement or design advice. Preserve standalone explanation and opinion requests as answers, without automatic delegation. "
@@ -461,6 +462,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Resolve ordinary shorthand against the requested subject, project, purpose and destination. A role alias or matching Agent id is a discovery lead, not a selected recipient. Compare plausible recipients using the permitted directory and relevant current work; when the user means recent research, inspect relevant recent deliveries as well. Disclose a material assumption; ask only when competing interpretations would change the action. Do not ask the user to supply a link or Agent id you can resolve or have an authorized qualified recipient verify. "
     "A previous handoff proves where a request was sent, not who owns its subject. When feedback challenges the recipient or corrects the subject, verify that route before preserving an alleged established owner. "
     "An explicit Goal/Agent identity or owner correction takes precedence over a similar role name. Preserve the full goal_id/agent_id pair. "
+    "Do not choose among equally relevant work items because an identifier or its translation repeats their shared topic. Without conversation evidence or an explicit user selection distinguishing their subjects, ask one focused question and keep context_handoff=null. "
     "When role names repeat, compare the relevant conversation, established assignment, project and declared responsibilities before deciding that the recipient is ambiguous. Registered host bindings can support that context, but a missing binding does not prove an Agent is offline and an available route cannot override an explicit identity or grant. "
     "A corrected handoff does not retract a delivered misroute. Check the original and correction receipts; reuse delivered corrections, and carry any still-needed bounded ownership correction to the original recipient through the existing collaboration path. Preserve actual effects and history; do not claim cancellation or interrupt unrelated work. "
     "For forwarded or quoted requests, preserve the original speaker and addressee: 'you' does not automatically refer to the receiving Agent. Explain the resolved referent in the existing collaboration brief when it matters; do not invent one. "
@@ -654,14 +656,14 @@ def _turn_prompt(
         "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '
-        "Do not write anything after the closing tag. Use these tags and shape:\n"
-        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}\n\n"
         + (
             f"LoopX context (supporting context only):\n{context_summary.strip()}\n\n"
             if context_summary.strip()
             else ""
         )
-        + f"Operator user message:\n{user_message}"
+        + f"Operator user message:\n{user_message}\n\n"
+        + "After the visible answer, append the envelope below. Use both tags verbatim, including when returning an existing report. Write nothing after the closing tag.\n"
+        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}"
     )
 
 

@@ -59,9 +59,12 @@ SCOPED_GATE_FINALIZATION_MESSAGE = (
     "writeback, spend, or state changes that were not executed."
 )
 SCOPED_GATE_READ_RETRY_MESSAGE = (
-    "The hermetic host rejected this read shape without executing it. Retry with "
-    "one bounded read-only command inside the current workspace using pwd, ls, "
-    "find, rg --files, cat, head, or sed."
+    "The hermetic host rejected this read shape without executing it; the "
+    "selected Todo action has not completed. Follow the latest quota result: "
+    "finish any still-required context read, then perform the selected Todo's "
+    "bounded read. When selected_todo.text names one relative file, use "
+    "`cat <that exact path>`; do not rediscover the workspace or inspect state. "
+    "The rejection grants no additional read scope or tool budget."
 )
 
 
