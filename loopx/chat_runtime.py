@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -191,16 +192,25 @@ class _TurnEventBuffer:
         changes = dict(self.progress)
         if not changes.get("first_event_at"):
             changes.pop("first_event_at", None)
-        self.store.update_turn(
-            self.session_id,
-            self.turn_id,
-            expected_statuses={"starting", "running"} if "status" in changes else None,
-            **changes,
-        )
-        self.store.update_session(
-            self.session_id,
-            last_activity_at=str(changes["last_activity_at"]),
-        )
+        try:
+            self.store.update_turn(
+                self.session_id,
+                self.turn_id,
+                expected_statuses={"starting", "running"} if "status" in changes else None,
+                **changes,
+            )
+            self.store.update_session(
+                self.session_id,
+                last_activity_at=str(changes["last_activity_at"]),
+            )
+        except OSError as exc:
+            if force or exc.errno != errno.ENOSPC:
+                raise
+            # An ancillary progress snapshot must not abandon a live provider.
+            # Keep it dirty for the next normal checkpoint, without a hot retry
+            # or another model invocation. Start/close still require persistence.
+            self.last_checkpoint_at = now
+            return
         self.metadata_dirty = False
         self.last_checkpoint_at = now
 
