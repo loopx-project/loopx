@@ -602,6 +602,31 @@ def _clean_worktree(path: Path) -> bool:
     ).stdout.strip()
 
 
+def _prune_missing_candidate(repo: Path, worktree: Path) -> None:
+    """Drop this candidate's admin entry when Git removed the directory already.
+
+    Only the path this function is given is considered; other worktrees, stale
+    or not, stay untouched so a sync never repairs unrelated state.
+    """
+
+    listed = _git(repo, "worktree", "list", "--porcelain", check=False)
+    if listed.returncode != 0:
+        return
+    target = worktree.resolve()
+    for line in listed.stdout.split("\n"):
+        if line.startswith("worktree "):
+            candidate = Path(line.removeprefix("worktree "))
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            if resolved != target:
+                continue
+            if not candidate.exists():
+                _git(repo, "worktree", "prune", "--expire", "now", check=False)
+            return
+
+
 def _build_candidate(
     repo: Path,
     *,
@@ -610,8 +635,13 @@ def _build_candidate(
 ) -> tuple[str | None, dict[str, Any] | None]:
     temporary_root = Path(tempfile.mkdtemp(prefix="loopx-integration-branch-"))
     worktree = temporary_root / "candidate"
-    added = False
+    # `git worktree add` registers the candidate in the common dir before the
+    # checkout hook runs, so a budget that expires inside that hook has already
+    # written state we own. Track the attempt, not its success: the candidate
+    # must be unregistered even when the command never returned.
+    attempted = False
     try:
+        attempted = True
         _git(
             repo,
             "worktree",
@@ -621,7 +651,6 @@ def _build_candidate(
             str(worktree),
             start_sha,
         )
-        added = True
         for source in sources:
             result = _git(
                 worktree,
@@ -644,8 +673,20 @@ def _build_candidate(
                 }
         return _resolve_commit(worktree, "HEAD"), None
     finally:
-        if added:
-            _git(repo, "worktree", "remove", "--force", str(worktree), check=False)
+        if attempted:
+            # Remove this candidate's own registration while its directory
+            # still exists; a cleanup failure must not replace the timeout or
+            # cancellation that ended the attempt.
+            _git(
+                repo,
+                "worktree",
+                "remove",
+                "--force",
+                "--force",
+                str(worktree),
+                check=False,
+            )
+            _prune_missing_candidate(repo, worktree)
         shutil.rmtree(temporary_root, ignore_errors=True)
 
 

@@ -89,3 +89,54 @@ def test_a_read_that_cannot_start_still_raises_oserror(
 
     with pytest.raises(OSError, match="git is not installed"):
         core._git(repo, "rev-parse", "--show-toplevel")
+
+
+def _worktree_list(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the hook is a POSIX script")
+def test_a_timed_out_worktree_add_leaves_no_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A budget that expires inside post-checkout must still unregister it.
+
+    Git registers the worktree in the common dir before the hook runs, so the
+    command never returns while the registration already exists.
+    """
+
+    repo = _repository(tmp_path)
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    hook = repo / ".git" / "hooks" / "post-checkout"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\nsleep 3\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    scratch = tmp_path / "scratch-root"
+    monkeypatch.setattr(core.tempfile, "mkdtemp", lambda prefix=None: str(scratch))
+    monkeypatch.setattr(core, "GIT_READ_TIMEOUT_SECONDS", 0.4)
+
+    before = _worktree_list(repo)
+    with pytest.raises(core.IntegrationBranchError, match="did not answer within"):
+        core._build_candidate(repo, start_sha=head, sources=[])
+    after = _worktree_list(repo)
+
+    assert after == before, "the candidate stayed registered after the timeout"
+    assert "prunable" not in after
+    assert not scratch.exists(), "the temporary root survived the timeout"
+
+    hook.unlink()
+    recovered, failure = core._build_candidate(repo, start_sha=head, sources=[])
+    assert failure is None
+    assert recovered == head
+    assert _worktree_list(repo) == before
