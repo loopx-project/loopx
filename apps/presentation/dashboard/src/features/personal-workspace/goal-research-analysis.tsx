@@ -87,7 +87,10 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     return value.comparison;
   }, [goalId, readSourceUrl, outputLanguage]);
   const [citation, setCitation] = useState<Citation | null>(null);
-  const [citationError, setCitationError] = useState("");
+  const [citationFailure, setCitationFailure] = useState<{
+    message: string; sourceScope: string; packId: string; analysisKey: string;
+    route: string; selection: Record<string, string>;
+  } | null>(null);
   const [citationBusy, setCitationBusy] = useState(false);
   const citeGeneration = useRef(0);
   const sourcePanel = useRef<HTMLElement>(null);
@@ -145,7 +148,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     // pending reads/actions before a new scope can display the old snapshot.
     if (scope.current.packId !== next.packId) {
       generation.current++; readSequence.current++; submitting.current = false;
-      citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);
+      citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false);
       setPending(false); setCancelPending(false); setError("");
       setReadState(previous => ({scope: sourceScope, packId: next.packId, snapshot: previous.scope === sourceScope && previous.snapshot
         ? previous.snapshot.pack?.pack_id === next.packId ? previous.snapshot : {...previous.snapshot, pack: null, originalPack: null, originalReadError: ""} : null, error: "", loading: true}));
@@ -171,8 +174,11 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const currentSnapshot = snapshot;
   const pack = currentSnapshot?.pack ?? null;
   const readingPack = currentSnapshot?.originalPack ?? pack;
+  const failedCitation = citationFailure?.sourceScope === sourceScope && citationFailure.packId === readingPack?.pack_id
+    && citationFailure.analysisKey === readingPack.analysis_key ? citationFailure : null;
+  const citationError = failedCitation?.message ?? "";
   const savedOriginal = Boolean(currentSnapshot?.originalPack);
-  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
+  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
   useEffect(() => {
     if ((!citation && !citationBusy && !citationError) || !active) return;
     // A response can arrive before React mounts the source panel. Move only
@@ -235,18 +241,23 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const p = readingPack;
     if (!p) return;
     if (origin) sourceTrigger.current = origin;
-    const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
+    const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationFailure(null);
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
       ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
     try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`)); if (current === citeGeneration.current) setCitation(value);}
-    catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
+    catch (e) {
+      if (current === citeGeneration.current) setCitationFailure({
+        message: errorText(e), sourceScope, packId: p.pack_id, analysisKey: p.analysis_key, route, selection,
+      });
+    }
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
   const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
-  const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
-    close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
+  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route) : undefined;
+  const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+    close: () => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
 
@@ -358,11 +369,11 @@ export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Control
     if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
   }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
   return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
-    <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
+    <header className="case-reader-toolbar">{(packs.length > 1 || (packs.length === 1 && !p?.case_study)) ? <label>{a.zh ? "解读版本" : "Study version"}
       <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
         {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
-      </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+      </select></label> : null}<button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
     {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
       scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
@@ -452,7 +463,11 @@ export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
   return <section className="research-analysis analysis-source" ref={a.sourcePanel} tabIndex={-1} aria-label={zh ? "引用原文" : "Cited original"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.closeCitation();}}}>
     <header><h4>{zh ? "引用原文" : "Cited original"}</h4><button type="button" onClick={a.closeCitation} aria-label={zh ? "关闭原文" : "Close source"}><X size={14} aria-hidden/></button></header>
     {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
-    {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
+    {a.citationError ? <div className="analysis-read-error" role="alert">
+      <span>{a.citationError}</span>
+      <button type="button" onClick={a.retryCitation} aria-label={zh ? "重试读取原文" : "Retry reading source"}>
+        <RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
+    </div> : null}
     {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p>
       {a.citation.evidence_kind === "usage_counters" ? <p>{zh ? "计数事件：前一累计观测、本轮开始、末次计数及完成（如有）。仅显示计数字段；提示词、工具内容与账户信息不传入浏览器。" : "Counter events: preceding cumulative observation, Turn start, latest counters and completion if present. Only counter fields are shown; prompts, tool content and account metadata stay outside the browser."}</p> : null}
       <CitationContent key={`${a.pack?.analysis_key}:${a.citation.source_id}:${a.citation.first_line}:${a.citation.last_line}`} citation={a.citation} zh={zh}/></> : null}
