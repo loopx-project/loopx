@@ -474,6 +474,77 @@ def test_legacy_delivery_only_receipt_does_not_block_steward_conversation(stewar
     assert sum(p["method"] == "turn/start" for p in packets) == 1
 
 
+def test_steward_chat_reads_goal_status_only_when_the_executor_asks(steward, monkeypatch):
+    from loopx import goal_portfolio
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    registry = json.loads(runtime.registry_path.read_text())
+    registry["goals"] = [{"id": "alpha"}, {"id": "beta"}]
+    runtime.registry_path.write_text(json.dumps(registry))
+
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text().replace(
+        '    elif method == "turn/start":',
+        '''    elif request_id in {900, 901}:
+        evidence = json.loads(request["result"]["contentItems"][0]["text"])
+        if request_id == 900:
+            assert request["result"]["success"]
+            assert [row["goal_id"] for row in evidence["rows"]] == ["beta"]
+            assert evidence["source"]["coverage"]["attempted"] == 1
+            print(json.dumps({"id": 901, "method": "item/tool/call", "params": {
+                "threadId": "durable-thread", "turnId": active_turn, "tool": "loopx_manager_read",
+                "arguments": {"view": "portfolio", "goal_id": "ungranted"}}}), flush=True)
+        else:
+            assert evidence == {"ok": False, "error": "goal_outside_available_scope"}
+            print(json.dumps({"method": "item/agentMessage/delta", "params": {
+                "threadId": "durable-thread", "turnId": active_turn, "delta": "Read one Goal."}}), flush=True)
+            print(json.dumps({"method": "turn/completed", "params": {
+                "threadId": "durable-thread", "turn": {"id": active_turn, "status": "completed"}}}), flush=True)
+        continue
+    elif method == "turn/start":''',
+    ).replace(
+        "        response = 'Visible runtime response.",
+        '''        if "Read the current status of beta" in json.dumps(request["params"]["input"]):
+            print(json.dumps({"id": 900, "method": "item/tool/call", "params": {
+                "threadId": "durable-thread", "turnId": active_turn, "tool": "loopx_manager_read",
+                "arguments": {"view": "portfolio", "goal_id": "beta"}}}), flush=True)
+            continue
+        response = 'Visible runtime response.''',
+    )
+    fake.write_text(source)
+    reads = []
+    collect_status = goal_portfolio.collect_status
+
+    def observe_status(**kwargs):
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        reads.append((kwargs.get("goal_id"), sum(row.get("method") == "turn/start" for row in calls)))
+        return collect_status(**kwargs)
+
+    monkeypatch.setattr(goal_portfolio, "collect_status", observe_status)
+
+    def ask(key, text):
+        event = provider.event("steward-app", key, text)
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        assert finish(runtime, row)["status"] == "completed"
+        return row
+
+    first = ask("plain-question", "Which approved PRs are still open?")
+    assert reads == []
+    events = store.events_after(first["session_id"], first["turn_id"], None)
+    context = next(event["payload"] for event in events if event["kind"] == "manager.context")
+    assert context["coverage"]["attempted"] == 0 and context["coverage"]["complete"] is False
+    assert [(row["goal_id"], row["quality"], row["progress"]) for row in context["goals"]] == [
+        ("alpha", "omitted", "unknown"), ("beta", "omitted", "unknown"),
+    ]
+    second = ask("scoped-question", "Read the current status of beta")
+    assert second["session_id"] == first["session_id"]
+    assert reads == [("beta", 2)]
+    events = store.events_after(second["session_id"], second["turn_id"], None)
+    read = next(event["payload"] for event in events if event["kind"] == "manager.evidence_read")
+    assert read["goal_id"] == "beta"
+
+
 def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inherit(steward):
     store, runtime, provider, transport, binding, _, _ = steward
     transport.admit("steward-app", provider.event("steward-app", "empty", "What new work do you manage?"))

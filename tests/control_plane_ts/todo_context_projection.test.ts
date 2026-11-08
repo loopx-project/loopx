@@ -197,6 +197,19 @@ test("summary display matches pre-cutover synthetic CLI characterization", () =>
   }
 });
 
+test("one complete source projects all existing views without changing their oracle", () => {
+  const source = {source: {record: structuredClone(displayFixture.source)}, handoff_gates: []};
+  const before = structuredClone(source);
+  const result = projectTodoContextPage({summary_display_views: source});
+  assert.deepEqual(result.summary, displayFixture.summary);
+  assert.deepEqual(result.planning, displayFixture.planning);
+  assert.deepEqual(result.terminal, displayFixture.terminal);
+  assert.deepEqual(source, before);
+  assert.throws(() => projectTodoContextPage({summary_display_views: source, summary_display: {}}));
+  assert.throws(() => projectTodoContextPage({summary_display_views: {...source, include_terminal: true}}));
+  assert.throws(() => projectTodoContextPage({summary_display_views: {source: null}}));
+});
+
 test("handoff preserves identity and nested precedence without granting completion", () => {
   const item = {todo_id: "todo_original", role: "agent", status: "open", claimed_by: "Agent A",
     text: "Read the complete requirement", note: "Keep the unfinished validation", evidence: "opaque evidence",
