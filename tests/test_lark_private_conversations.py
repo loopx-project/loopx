@@ -5120,6 +5120,39 @@ def test_revocation_during_source_read_prevents_native_admission(ordinary):  # n
         runtime.close()
 
 
+def test_private_admission_reuses_the_effect_runtime_revision_for_one_event(ordinary, monkeypatch):  # noqa: F811
+    from loopx.control_plane import effect_runtime
+
+    store, runtime, provider, transport = connect(ordinary)
+    binding = transport.bindings.read()["bindings"][0]
+    event = provider.event("notes-app", "runtime-revision", "Explain this workspace")
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    admission_thread = threading.get_ident()
+    fingerprints = []
+    original = effect_runtime._runtime_fingerprint
+
+    def fingerprint():
+        value = original()
+        if threading.get_ident() == admission_thread:
+            fingerprints.append(value)
+        return value
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", fingerprint)
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        assert len(fingerprints) == 1
+        admitted = transport.core.read_request(ref)
+        session_id, turn_id = admitted["session_id"], admitted["turn_id"]
+        assert runtime.wait_for_turn(session_id=session_id, turn_id=turn_id, timeout_sec=15)["status"] == "completed"
+
+        transport.admit("notes-app", event)
+        assert len(fingerprints) == 2
+        assert transport.core.read_request(ref)["turn_id"] == turn_id
+        assert len([row for row in store.messages(session_id) if row["role"] == "user"]) == 1
+    finally:
+        runtime.close()
+
+
 def test_core_admission_verifies_once_inside_both_fences_including_replay(ordinary, monkeypatch):  # noqa: F811
     from contextlib import contextmanager
     from loopx.capabilities.native_chat import external_conversations
