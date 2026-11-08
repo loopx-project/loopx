@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, IO, cast
 
 _PROCESS_IO_CHUNK_BYTES = 64 * 1024
 _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
@@ -588,24 +588,11 @@ def run_capped_process(
 ) -> CappedProcessResult:
     """Run a provider while bounding both output streams during execution."""
 
-    process = subprocess.Popen(
-        list(argv),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-        env=dict(env) if env is not None else None,
-        cwd=cwd,
-        start_new_session=os.name == "posix",
-        creationflags=(
-            int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
-            if os.name == "nt" else 0
-        ),
-    )
-    stdin_stream = process.stdin
-    assert stdin_stream is not None
-    assert process.stdout is not None
-    assert process.stderr is not None
+    # Keep the object before initialization can publish a PID and then unwind.
+    # Pre-PID failures remain the native constructor's boundary.
+    process = cast(subprocess.Popen[bytes], subprocess.Popen.__new__(subprocess.Popen))
+    threads: list[threading.Thread] = []
+    stdin_stream: IO[bytes]
 
     stdout = bytearray()
     stderr = bytearray()
@@ -648,33 +635,53 @@ def run_capped_process(
             except (OSError, ValueError):
                 pass
 
-    threads = [
-        threading.Thread(
-            target=read_stream,
-            args=(process.stdout, stdout),
-            kwargs={"overflow_kind": "response_too_large"},
-            name="loopx-extension-stdout-reader",
-            daemon=True,
-        ),
-        threading.Thread(
-            target=read_stream,
-            args=(process.stderr, stderr),
-            kwargs={"overflow_kind": "stderr_too_large"},
-            name="loopx-extension-stderr-reader",
-            daemon=True,
-        ),
-        threading.Thread(
-            target=write_stdin,
-            name="loopx-extension-stdin-writer",
-            daemon=True,
-        ),
-    ]
-    for thread in threads:
-        thread.start()
-
-    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
     timed_out = False
     try:
+        subprocess.Popen.__init__(
+            process,
+            list(argv),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            env=dict(env) if env is not None else None,
+            cwd=cwd,
+            start_new_session=os.name == "posix",
+            creationflags=(
+                int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
+                if os.name == "nt" else 0
+            ),
+        )
+        assert process.stdin is not None
+        stdin_stream = process.stdin
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        threads = [
+            threading.Thread(
+                target=read_stream,
+                args=(process.stdout, stdout),
+                kwargs={"overflow_kind": "response_too_large"},
+                name="loopx-extension-stdout-reader",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=read_stream,
+                args=(process.stderr, stderr),
+                kwargs={"overflow_kind": "stderr_too_large"},
+                name="loopx-extension-stderr-reader",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=write_stdin,
+                name="loopx-extension-stdin-writer",
+                daemon=True,
+            ),
+        ]
+        for thread in threads:
+            thread.start()
+
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
         while process.poll() is None:
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
@@ -685,12 +692,17 @@ def run_capped_process(
                 terminate_process_tree(process, termination_grace_seconds)
                 break
     except BaseException:
-        terminate_process_tree(process, termination_grace_seconds)
+        if getattr(process, "pid", None) is not None:
+            terminate_process_tree(process, termination_grace_seconds)
         raise
     finally:
         for thread in threads:
-            thread.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
-        for stream in (process.stdout, process.stderr):
+            if thread.ident is not None:
+                thread.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+        for stream in (getattr(process, "stdin", None), getattr(process, "stdout", None),
+                       getattr(process, "stderr", None)):
+            if stream is None:
+                continue
             try:
                 stream.close()
             except (OSError, ValueError):
