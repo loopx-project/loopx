@@ -3,8 +3,14 @@
 .research-goal-navigation h2 { font-size: 22px; font-weight: 600; margin-block: 16px; }
 .research-goal-navigation button { font: inherit; color: var(--pw-text); background: none; text-align: start; cursor: pointer; min-height: 44px; }
 .research-parent-goal { border: 0; padding: 8px 0; }
+.research-child-heading { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 12px; }
+.research-child-heading > span, .research-child-timing { color: var(--pw-muted); font-size: var(--text-caption); }
 .research-child-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px,100%), 1fr)); gap: 16px; }
-.research-child-goals button { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--pw-line); border-radius: 8px; padding: 20px; overflow-wrap: anywhere; }
+.research-child-goals button { display: flex; align-items: start; justify-content: space-between; gap: 12px; border: 1px solid var(--pw-line); border-radius: 8px; padding: 16px; overflow-wrap: anywhere; }
+.research-child-body, .research-child-timing { display: grid; min-width: 0; }
+.research-child-body { gap: 6px; }
+.research-child-timing { gap: 2px; font-variant-numeric: tabular-nums; }
+.research-child-timing time { white-space: nowrap; }
 .research-goal-navigation button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
 .case-reader-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--pw-line); padding-block: 8px 16px; }
 .case-reader-toolbar label { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: var(--text-body); }

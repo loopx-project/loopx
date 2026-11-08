@@ -197,19 +197,28 @@ async function commit(store: AuthorityStore, request: JsonObject, head: Authorit
 /** Append planning requirements without configuring checks or changing Goal/Todo intent. */
 export async function refineGoalAcceptanceOutcome(store: AuthorityStore, value: JsonObject): Promise<JsonObject> {
   const request = canonicalAuthorityObject(value, "outcome refinement request");
-  acceptanceKeys(request, [...REQUEST_FIELDS, "refinement"], [...LOCAL_FIELDS, "goal_ref"]);
+  acceptanceKeys(request, [...REQUEST_FIELDS, "refinement"], [...LOCAL_FIELDS, "goal_ref", "reviewed_work_update"]);
   for (const key of ["goal_id", "operation_id", "expected_provider_revision"]) requireAuthorityStoreId(request[key], key);
   acceptanceRequire(request.actor_agent_id === null || typeof request.actor_agent_id === "string" && !!request.actor_agent_id, "outcome actor is required");
   acceptanceRequire(request.dry_run === undefined || typeof request.dry_run === "boolean", "dry_run must be boolean");
   const command = receiptFor(request, "refine");
+  const readback = async (result: JsonObject): Promise<JsonObject> => {
+    // Older refreshes stored the same review before considering their later
+    // attachment. Exact legacy recovery is read-only; never upgrade its basis.
+    if (result.reason_code !== "coordination_operation_identity_mismatch" || request.reviewed_work_update === undefined) return result;
+    const {reviewed_work_update: _update, ...legacyRequest} = request;
+    const legacy = await receiptFor(legacyRequest, "refine").receipt.read(store);
+    return legacy?.status === "replayed" ? legacy : result;
+  };
   const replay = await command.receipt.read(store);
-  if (replay) return replayWithCurrentProjection(store, replay, String(request.goal_id));
+  if (replay) return replayWithCurrentProjection(store, await readback(replay), String(request.goal_id));
   const observation = await command.receipt.observe(store);
-  if (observation.kind === "receipt") return replayWithCurrentProjection(store, observation.result, String(request.goal_id));
+  if (observation.kind === "receipt") return replayWithCurrentProjection(store, await readback(observation.result), String(request.goal_id));
   const head = current(observation.authority, request);
   if (!loaded(head)) return source(store, head);
   const goalId = String(request.goal_id), goalRef = requestGoalRef(request);
-  const state = refineGoalOutcome(head.head, goalId, goalRef, request.actor_agent_id as string | null, request.refinement);
+  const state = refineGoalOutcome(head.head, goalId, goalRef, request.actor_agent_id as string | null, request.refinement,
+    request.reviewed_work_update);
   const next: JsonObject = {...head.head, goal_outcomes: state};
   // Bind a first exact-lifetime declaration to the same lifecycle owner as checks.
   if (goalRef !== null && readGoalAcceptanceLifecycle(head.head, goalId) === null) {

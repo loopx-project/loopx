@@ -303,6 +303,7 @@ export const goalMastheadScenario = {
       } finally { coverageEntries.push(...await ui.close()); }
     }
     for (const locale of ["zh-CN", "en"]) for (const mode of ["mixed", "bounded", "optional", "complete", "mixed-complete", "empty", "unknown"]) {
+      const partial = !["complete", "mixed-complete", "optional"].includes(mode);
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,
         viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
@@ -338,14 +339,15 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
-        const partial = !["complete", "mixed-complete", "optional"].includes(mode);
+        assert.equal(needs.value, expected, `${locale} ${mode}: only complete classified rows qualify a blocking total`);
         const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
         if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
         const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
         if (partial) assert.match(coverageHelp, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
-        if (mode === "mixed-complete") assert.match(needs.sub, locale === "en" ? /20 optional/ : /20 项可选/);
-        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
+        if (mode === "optional" || mode === "mixed-complete") {
+          const optional = mode === "optional" ? 21 : 20;
+          assert.match(needs.sub, new RegExp(`${optional} ${locale === "en" ? "optional" : "项可选"}`));
+        }
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");

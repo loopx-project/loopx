@@ -101,6 +101,13 @@ in a `manager.context` event, and supplies it to the executor. Chat prose is
 never the inventory. Normal manager questions no longer silently use a limited
 frontend projection; explicitly choosing status-only still uses that projection.
 
+An ordinary Codex turn in a bound steward conversation starts with the current
+authorized Goal directory. Its unread status rows carry omitted coverage. When
+an answer needs Goal status, the executor uses `loopx_manager_read` with
+`view=portfolio` to collect the requested scope. Each read rechecks the grant.
+Native execution, observations and prompt-only endpoints keep their existing
+evidence preparation.
+
 The manager channel's model and reasoning effort follow its executor. On the
 interactive CLI endpoint the defaults are `gpt-6.1-sol` with `xhigh` reasoning; on
 the managed host they are the managed execution profile

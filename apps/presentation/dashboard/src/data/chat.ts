@@ -3026,3 +3026,30 @@ export async function fetchExploreResults(goalId: string, cursor?: string, readS
   });
   return page;
 }
+
+const researchHistoryTimingSchema = z.object({
+  ok: z.literal(true),
+  goal_id: z.string(),
+  source_namespace: z.string().nullable(),
+  first_recorded_at: z.iso.datetime().nullable(),
+  last_recorded_at: z.iso.datetime().nullable(),
+  untimed_record_count: z.number().int().nonnegative(),
+  strategy_recorded_at: z.iso.datetime().nullable(),
+}).refine(value => value.first_recorded_at === null
+  ? value.last_recorded_at === null
+  : value.last_recorded_at !== null && Date.parse(value.first_recorded_at) <= Date.parse(value.last_recorded_at));
+export type ResearchHistoryTiming = z.infer<typeof researchHistoryTimingSchema>;
+
+export async function fetchResearchHistoryTiming(
+  goalId: string, originalGoalId: string, namespace: string | null, directoryUrl: string | undefined, signal: AbortSignal,
+): Promise<ResearchHistoryTiming> {
+  const statusUrl = namespace ? `/status.json?source_namespace=${namespace}` : directoryUrl;
+  const query = new URLSearchParams({goal_id: goalId, view: "history-timing"});
+  const timing = researchHistoryTimingSchema.parse(await requestJson<unknown>(
+    sourceReadApiUrl(statusUrl, `/api/chat/explore-results?${query}`), {signal},
+  ));
+  if (timing.goal_id !== originalGoalId || timing.source_namespace !== namespace) {
+    throw new Error("Research timing source mismatch");
+  }
+  return timing;
+}

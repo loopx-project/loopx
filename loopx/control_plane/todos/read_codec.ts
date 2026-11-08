@@ -95,7 +95,7 @@ export function readScopes(value: unknown): JsonObject[] {
 function listValues(value: unknown): unknown[] {
   return Array.isArray(value) ? value : text(value || "").split(/[,;|]/u).filter(Boolean);
 }
-function readCapabilities(value: unknown): string[] {
+export function readCapabilities(value: unknown): string[] {
   const result: string[] = [];
   for (const raw of listValues(value)) {
     try {
@@ -148,6 +148,36 @@ export function decodeTodoReadSource(value: JsonObject): JsonObject {
 }
 export function pythonFieldText(row: JsonObject | unknown[], key: string | number): string {
   return pythonValues.get(row)?.get(String(key))?.[0] as string ?? scalarText((row as JsonObject)[key]);
+}
+/** JSON alone cannot retain Python's strict int/float presentation distinction. */
+export function pythonFieldIsInteger(row: JsonObject, key: string): boolean {
+  return typeof row[key] === "number" && Number.isInteger(row[key]) &&
+    !pythonValues.get(row)?.has(key);
+}
+
+/** Tuple/set JSON arrays retain their original Python container distinction. */
+export function pythonFieldIsList(row: JsonObject, key: string): boolean {
+  return Array.isArray(row[key]) && !pythonValues.get(row)?.has(key);
+}
+
+/** Python int() spelling is scalar IO; selection and ordering stay with owners. */
+export function pythonFieldInteger(row: JsonObject, key: string, fallback = 999999): number {
+  const value = row[key], scalar = pythonValues.get(row)?.get(key);
+  if (scalar !== undefined && scalar.length > 2) return typeof scalar[2] === "string" ? Number(scalar[2]) : fallback;
+  if (value == null) return fallback;
+  if (typeof value === "boolean") return Number(value);
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : fallback;
+  if (typeof value !== "string") return fallback;
+  // Python permits decimal Unicode digits and single separating underscores.
+  let digits = "";
+  for (const character of stripPythonWhitespace(value)) {
+    if (!/\p{Nd}/u.test(character)) {digits += character; continue;}
+    const code = character.codePointAt(0)!;
+    let start = code;
+    while (start > 0 && /\p{Nd}/u.test(String.fromCodePoint(start - 1))) start--;
+    digits += String((code - start) % 10);
+  }
+  return /^[+-]?[0-9](?:_?[0-9])*$/.test(digits) ? Number(digits.replaceAll("_", "")) : fallback;
 }
 function fieldRepr(row: JsonObject | unknown[], key: string | number): string {
   return pythonValues.get(row)?.get(String(key))?.[1] as string ?? repr((row as JsonObject)[key]);

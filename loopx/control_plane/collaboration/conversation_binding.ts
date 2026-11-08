@@ -567,7 +567,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     // the reviewer says; neither a delivered review nor its failure is replay authority.
     const originalResult = reservation?.original_turn as JsonObject | undefined;
     const originalResponse = originalResult?.response as JsonObject | undefined;
-    const retainedWork = reservation?.read_only_review === true && reservation.answer_review !== true
+    const retainedWork = reservation != null && reservation.answer_review !== true
+      && (reservation.read_only_review === true || reservation.work_attempt === 1
+        && typeof reservation.completed_review_turn_id === "string" && !pureResultText(response))
       && turn?.client_turn_id === reservation.client_turn_id && originalResult?.status === "completed"
       && originalResult.session_id === row.session_id && originalResult.turn_id === reservation.failed_turn_id
       && originalResult.turn_id !== row.turn_id && originalResponse != null
@@ -710,6 +712,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  if (recovery.retained_result_review != null) {
+    return planWorkAfterResultReview(recovery, row, current, failed, selected, version);
+  }
   const runtimePreparation = planRuntimePreparationRecovery(recovery, row, current, failed, version);
   if (runtimePreparation !== null) return runtimePreparation;
   const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
@@ -1128,6 +1133,46 @@ function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   return work;
 }
 
+function planWorkAfterResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  original: JsonObject, selected: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const retained = requireJsonObject(recovery.retained_result_review, "retained result review");
+  const reservation = requireJsonObject(retained.reservation, "original review reservation");
+  const reviewed = requireJsonObject(retained.turn, "completed result review");
+  const previous = requireJsonObject(row.context_recovery, "current recovery reservation");
+  const history = Array.isArray(row.context_recovery_history) ? row.context_recovery_history as JsonObject[] : [];
+  const continuing = previous.work_attempt === 1;
+  const expected = continuing ? history.at(-1) : previous;
+  const work = original.response != null && typeof original.response === "object" && !Array.isArray(original.response)
+    ? unfinishedProjectWork(original.response as JsonObject) : null;
+  // A delivered read-only report retains intent. Only a fresh observation by
+  // the original writable owner can admit the already bounded remaining work.
+  if (selected.context_kind !== "project" || current.agent_id !== "codex" || work === null
+      || !isDeepStrictEqual(expected, reservation) || reservation.read_only_review !== true
+      || reservation.answer_review === true || reservation.history_review === true || reservation.work_attempt != null
+      || reservation.version !== version || !isDeepStrictEqual(reservation.binding_snapshot, selected)
+      || reservation.client_turn_id !== `external-${row.request_ref}-recovery-${version}-review-1`
+      || !isDeepStrictEqual(reservation.original_turn, original) || !isDeepStrictEqual(reservation.unfinished_work, work)
+      || original.status !== "completed" || original.session_id !== current.session_id
+      || original.turn_id !== reservation.failed_turn_id || original.client_turn_id !== `external-${row.request_ref}`
+      || original.message !== row.message || original.origin !== row.origin
+      || reviewed.status !== "completed" || reviewed.session_id !== current.session_id
+      || reviewed.turn_id !== row.turn_id || reviewed.turn_id === original.turn_id
+      || reviewed.client_turn_id !== reservation.client_turn_id || reviewed.message !== row.message
+      || reviewed.origin !== row.origin || typeof reviewed.upstream_turn_id !== "string" || !reviewed.upstream_turn_id
+      || !pureResultText(reviewed.response as JsonObject | null)
+      || history.some(item => item.work_attempt != null)
+      || continuing && (previous.failed_turn_id !== original.turn_id
+        || previous.completed_review_turn_id !== reviewed.turn_id)) return no;
+  const admitted = continuing ? recovery.admitted_turn : null;
+  if (admitted == null && (recovery.live_work_owner !== true || recovery.later_equivalent_input_present !== false)) return no;
+  const proof = recovery.native_observation as JsonObject | null | undefined;
+  if (proof != null && (proof.completed_work !== true || proof.all_effects_settled !== true)) return no;
+  const plan = planUnfinishedWork({...recovery, admitted_turn: admitted}, {...row, turn_id: original.turn_id},
+    current, original, continuing ? previous : null, version);
+  return plan.work_attempt === 1 ? {...plan, completed_review_turn_id: reviewed.turn_id} : no;
+}
+
 function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: JsonObject,
   completed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
@@ -1185,6 +1230,10 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
 function planCompletedResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
   completed: JsonObject, previous: JsonObject | null, version: number, work: JsonObject): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  // An inconclusive effect observation must not replace the original writable
+  // owner with a result reader. Keep that owner for the next fresh work proof.
+  // Already reserved reviews retain their own adoption and execution checks.
+  if (previous === null && recovery.live_work_owner !== false) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
   if (current.steward_context != null || completed.client_turn_id !== `external-${row.request_ref}`
       || completed.message !== row.message || completed.origin !== row.origin
