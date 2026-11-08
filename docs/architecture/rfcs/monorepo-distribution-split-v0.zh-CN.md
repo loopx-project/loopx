@@ -573,6 +573,27 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
   拆包或 R1 managed Turn 收益。
 
+### 2026-11-04 — M1 公开 status owner 迁移
+
+- **变化：** 完整 `ChatStatusRequestMixin` 与 `goal_read_runtime_root` 实现迁入
+  `loopx.chat.status_api`，Chat HTTP 与 Todo detail 直接导入该 owner。刻画前置
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) 已合入。
+- **直接迁移：** 历史顶层 `loopx.chat_status_api` 模块直接删除，不保留 alias 或
+  warning shim。仓库调用方与公开面审计均未发现外部 importer；所有活跃调用方和
+  测试改用 `loopx.chat.status_api`。该兼容豁免仅适用于这个内部模块迁移，不构成
+  删除受支持公开 import 的通用先例。
+- **权限边界：** 同步重定向
+  `tests/architecture/test_source_session_registry_denial.py` 的两个精确 owner
+  路径项，全部拒绝断言及 `_discovery_registry` 例外不变。真实 HTTP 覆盖允许仅生命周期
+  registry 的发现，但在 collector 执行前拒绝完整 status。移动 presentation owner
+  不授予新的 runtime、来源、provider 或执行权威。
+- **证据：** owner 测试要求 canonical import，并断言顶层 shim 不存在。既有 HTTP、
+  File／SQLite 源路由、源丢失／恢复和 delivery review 测试保护原行为。解析为绝对
+  import 后的 AST 对比覆盖完整 owner；拒绝 oracle 仅有两个 owner 路径差异。
+- **剩余：** 这是 M1 的一个公开 owner 片，不关闭更广的公开 Chat 迁移、D3、发行物
+  拆分或 R1 managed minimal。删除内部顶层模块属于表示层整理，不代表加载性能或
+  长程成果收益。源码与隔离 wheel 验证不等于升级既有已安装宿主。
+
 ### 2026-11-04 — Capability 发现路径的所选加载
 
 - **基线：** `79b781865`。`capability list` / `show` 及命令帮助复用既有
