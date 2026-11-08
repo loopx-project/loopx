@@ -602,29 +602,77 @@ def _clean_worktree(path: Path) -> bool:
     ).stdout.strip()
 
 
-def _prune_missing_candidate(repo: Path, worktree: Path) -> None:
-    """Drop this candidate's admin entry when Git removed the directory already.
+def _unregister_candidate(repo: Path, worktree: Path) -> bool:
+    """Drop only this candidate's registration; report whether none is left.
 
-    Only the path this function is given is considered; other worktrees, stale
-    or not, stay untouched so a sync never repairs unrelated state.
+    ``git worktree prune --expire now`` has no path filter: it would also
+    discard stale registrations that belong to unrelated checkouts. Git keeps
+    one admin directory per registration under ``<common>/worktrees``, and its
+    ``gitdir`` file names the checkout it belongs to, so this candidate's own
+    entry is found and removed without touching any other state.
     """
 
-    listed = _git(repo, "worktree", "list", "--porcelain", check=False)
-    if listed.returncode != 0:
-        return
-    target = worktree.resolve()
-    for line in listed.stdout.split("\n"):
-        if line.startswith("worktree "):
-            candidate = Path(line.removeprefix("worktree "))
-            try:
-                resolved = candidate.resolve()
-            except OSError:
-                resolved = candidate
-            if resolved != target:
-                continue
-            if not candidate.exists():
-                _git(repo, "worktree", "prune", "--expire", "now", check=False)
-            return
+    common = _git(repo, "rev-parse", "--git-common-dir")
+    root = Path(common.stdout.strip())
+    if not root.is_absolute():
+        root = repo / root
+    target = os.path.normcase(str((worktree / ".git").resolve()))
+    try:
+        admins = list((root / "worktrees").iterdir())
+    except FileNotFoundError:
+        return True
+    removed = True
+    for admin in admins:
+        try:
+            pointer = (admin / "gitdir").read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
+        except OSError:
+            removed = False
+            continue
+        if not pointer:
+            continue
+        if os.path.normcase(str(Path(pointer).resolve())) != target:
+            continue
+        shutil.rmtree(admin, ignore_errors=True)
+        removed = removed and not admin.exists()
+    return removed
+
+
+def _retire_candidate_worktree(repo: Path, worktree: Path) -> bool:
+    """Remove this candidate's checkout and only its registration.
+
+    Runs while an earlier timeout or cancellation is unwinding, so nothing
+    here may replace that result: the removal command is best effort, the
+    directory goes away regardless, and a registration that cannot be dropped
+    stays visible in ``git worktree list`` instead of being repaired by a
+    command that would also touch other worktrees.
+    """
+
+    removed = False
+    try:
+        result = _git(
+            repo,
+            "worktree",
+            "remove",
+            "--force",
+            "--force",
+            str(worktree),
+            check=False,
+        )
+        removed = result.returncode == 0
+    except (IntegrationBranchError, OSError, subprocess.SubprocessError):
+        # The removal command has its own budget; its failure, or a timeout in
+        # that command, must not skip the rest of this cleanup.
+        removed = False
+    finally:
+        shutil.rmtree(worktree, ignore_errors=True)
+    if removed:
+        return True
+    try:
+        return _unregister_candidate(repo, worktree)
+    except (IntegrationBranchError, OSError, subprocess.SubprocessError):
+        return False
 
 
 def _build_candidate(
@@ -640,6 +688,7 @@ def _build_candidate(
     # written state we own. Track the attempt, not its success: the candidate
     # must be unregistered even when the command never returned.
     attempted = False
+    attempt_error: BaseException | None = None
     try:
         attempted = True
         _git(
@@ -672,22 +721,22 @@ def _build_candidate(
                     "error": detail,
                 }
         return _resolve_commit(worktree, "HEAD"), None
+    except BaseException as error:
+        attempt_error = error
+        raise
     finally:
-        if attempted:
-            # Remove this candidate's own registration while its directory
-            # still exists; a cleanup failure must not replace the timeout or
-            # cancellation that ended the attempt.
-            _git(
-                repo,
-                "worktree",
-                "remove",
-                "--force",
-                "--force",
-                str(worktree),
-                check=False,
-            )
-            _prune_missing_candidate(repo, worktree)
+        # Both steps below run while a timeout or cancellation may be
+        # unwinding: neither may replace that result with its own failure, and
+        # the directory must go even when the removal command never answered.
+        registration_dropped = not attempted or _retire_candidate_worktree(
+            repo, worktree
+        )
         shutil.rmtree(temporary_root, ignore_errors=True)
+        if not registration_dropped and attempt_error is not None:
+            attempt_error.add_note(
+                "this candidate's worktree registration could not be removed; "
+                "`git worktree list` reports it as prunable"
+            )
 
 
 def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
