@@ -12,37 +12,49 @@ def reward_memory_automation_enabled(
     *,
     operation: str,
 ) -> bool:
-    """Project verified capability automation into the host IO contract.
+    return operation in enabled_reward_memory_automation(payload, operation)
+
+
+def enabled_reward_memory_automation(
+    payload: Mapping[str, Any] | None,
+    *operations: str,
+) -> frozenset[str]:
+    """Read the owning binding once for the requested operations.
 
     The experiment resolver owns enablement, config/receipt verification and
     provider policy. A recall packet's presence or old context is not opt-in.
     """
     if not isinstance(payload, Mapping):
-        return False
+        return frozenset()
     recall = payload.get("reward_memory_recall")
-    if not isinstance(recall, Mapping):
-        return False
-    experiment = recall.get("experiment")
-    envelope = payload.get("turn_envelope")
+    experiment = recall.get("experiment") if isinstance(recall, Mapping) else None
     if (
         not isinstance(experiment, Mapping)
         or experiment.get("enabled") is not True
         or experiment.get("available") is not True
         or experiment.get("configured_for_agent") is not True
-        or experiment.get(operation) is not True
     ):
-        return False
-    source = None
+        return frozenset()
+    eligible = frozenset(operation for operation in operations if experiment.get(operation) is True)
+    if not eligible:
+        return eligible
+    envelope = payload.get("turn_envelope")
     if "work_contract" in payload:
-        from .capability_hooks import turn_context_source
+        from .quota.turn_envelope import complete_turn_host_source, turn_plan_host_source
 
         try:
-            source = turn_context_source(payload)
+            source = complete_turn_host_source(
+                turn_plan_host_source(payload), operation="capability_automation_source",
+            )
         except (ValueError, RuntimeError):
-            return False
+            return frozenset()
+        if source is None:
+            return frozenset()
         boundary = source.get("boundary")
     elif isinstance(envelope, Mapping):
-        boundary = envelope.get("boundary")
+        # Retain the recorded legacy Host binding.
+        source = envelope
+        boundary = source.get("boundary")
     elif "turn_envelope" not in payload:
         # App guards carry the same verified capability projection directly;
         # they are not host requests and do not contain a TurnEnvelope.
@@ -57,37 +69,34 @@ def reward_memory_automation_enabled(
             or not isinstance(identity, Mapping)
             or identity.get("registered") is not True
         ):
-            return False
-        # Reuse the typed quota projection rather than interpreting another
-        # copy of the legacy quota boundary in this compatibility adapter.
-        from .quota.turn_envelope import quota_action_signature_document
-
-        boundary = quota_action_signature_document(payload).get("boundary")
-    else:
-        return False
-    try:
+            return frozenset()
         from .capability_hooks import turn_context_source
+        from .quota.turn_envelope import quota_capability_automation_source
 
-        if source is None:
+        boundary = quota_capability_automation_source(payload).get("boundary")
+        try:
             source = turn_context_source(payload)
-    except ValueError:
-        return False
+        except ValueError:
+            return frozenset()
+    else:
+        return frozenset()
     capabilities = (
         boundary.get("capabilities") if isinstance(boundary, Mapping) else None
     )
     memory = (
         capabilities.get("reward_memory") if isinstance(capabilities, Mapping) else None
     )
-    return (
-        isinstance(memory, Mapping)
-        and memory.get(operation) is True
-        # Recall resolves the binding again after admission. A stale envelope
-        # must not resurrect a now unavailable or disabled binding.
-        and bool(source.get("goal_id"))
-        and experiment.get("goal_id") == source.get("goal_id")
-        and bool(source.get("agent_id"))
-        and experiment.get("agent_id") == source.get("agent_id")
-    )
+    # Recall resolves the binding again after admission. A stale envelope
+    # must not resurrect a now unavailable or disabled binding.
+    if (
+        not isinstance(memory, Mapping)
+        or not source.get("goal_id")
+        or experiment.get("goal_id") != source.get("goal_id")
+        or not source.get("agent_id")
+        or experiment.get("agent_id") != source.get("agent_id")
+    ):
+        return frozenset()
+    return frozenset(operation for operation in eligible if memory.get(operation) is True)
 
 
 def reward_memory_host_coverage() -> list[dict[str, str]]:
@@ -212,6 +221,7 @@ def reward_memory_goal_policy(
 
 
 __all__ = [
+    "enabled_reward_memory_automation",
     "reward_memory_automation_enabled",
     "reward_memory_goal_policy",
     "reward_memory_host_coverage",
