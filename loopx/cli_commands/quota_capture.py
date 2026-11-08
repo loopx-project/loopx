@@ -425,14 +425,12 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         presentation = payload
         if args.initial_read and activation["progressive_enabled"] and not complete:
-            from .quota_presentation import _project_quota_cli_payload
+            from ..control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
 
-            # Match the ordinary selection guard's view while keeping the
-            # digest-bound original available for detail recovery.
-            presentation = _project_quota_cli_payload(
-                payload, argparse.Namespace(quota_command="should-run"), frozenset(), None,
-                captured_decision_path=str(path),
-            )
+            # Project the historical capture for its opening. Current guards
+            # already use the complete decision and never need this adapter.
+            presentation = compact_quota_should_run_cli_payload(project_captured_replan_cli_view(payload))
             if "host_poll_receipt" in payload:
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]
         prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
@@ -452,6 +450,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             full_reference = _capture_read_reference(projected["recovery"],
                 page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
             reference = dict(full_reference)
+        else:
+            bind_capture_selection_transport(projected, args, capture_root=root)
         native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
@@ -577,6 +577,9 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
+        if getattr(args, "prepared_capture_reference", False):
+            # The next selection creates a sibling under this physical parent.
+            directory = Path(os.path.realpath(directory.parent, strict=True)) / directory.name
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.
         directory.mkdir(mode=0o700)

@@ -421,10 +421,13 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("enabled,compacted", [(False, False), (True, False), (True, True)],
-    ids=["off", "on", "on-after-compaction"])
-def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted):
-    """The saved guard is presented after SessionStart, then really bound once."""
+@pytest.mark.parametrize("enabled,compacted,placement", [
+    (False, False, "physical"), (True, False, "physical"), (True, True, "physical"),
+    (True, False, "alias-before-session"), (True, False, "explicit-before-session"),
+    (True, False, "explicit-root"),
+], ids=["off", "on", "on-after-compaction", "alias-before-session", "explicit-before-session", "explicit-root"])
+def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted, placement):
+    """Execute same-Turn selection from the saved guard with and without SessionStart."""
     from benchmark.runtime.checkpoint import capture_before_replan
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -434,6 +437,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         _heartbeat_receipt_count, _spend_run_count, _write_fixture,
     )
 
+    import subprocess
+
+    tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path / "authority")
     _configure_selectable_alternative(project)
@@ -462,25 +468,50 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         "LOOPX_CONTEXT_DELIVERY": "on" if enabled else "off", "LOOPX_CODEX_CONTEXT_DIR": str(native)}
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
-    body = capture_before_replan(env, receipt, "Current work.")
+    alias = tmp_path / "capture parent alias"
+    if placement != "physical":
+        run = subprocess.run
+
+        def through_alias(argv, **kwargs):
+            if "--prepared-capture-reference" in argv:
+                argv = list(argv)
+                i = argv.index("--decision-output-dir") + 1
+                requested = Path(argv[i])
+                alias.symlink_to(requested.parent, target_is_directory=True)
+                argv[i] = str(alias / requested.name)
+            return run(argv, **kwargs)
+
+        # Change only how the CLI reaches the directory already allocated by
+        # the checkpoint runner. Guard, capture, projection and selection are real.
+        with monkeypatch.context() as scoped:
+            scoped.setattr("benchmark.runtime.checkpoint.subprocess.run", through_alias)
+            body = capture_before_replan(env, receipt, "Current work.")
+    else:
+        body = capture_before_replan(env, receipt, "Current work.")
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
     if enabled:
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         source = Path(command[command.index("--capture-file") + 1])
         assert source.parent != wake and source.is_relative_to(wake)
-        assert source.read_bytes() == original_guard
-        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(original_guard).hexdigest()
+        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(source.read_bytes()).hexdigest()
+        if placement != "physical":
+            command[command.index("--capture-file") + 1] = str(alias / source.relative_to(source.parent.parent))
     else:
         source = wake / "checkpoint-start-view.json"
     raw = source.read_bytes()
+    if enabled:
+        assert raw == original_guard
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
     event = {"session_id": "native-session", "cwd": str(project), "hook_event_name": "SessionStart", "source": "startup"}
-    monkeypatch.setenv("CODEX_THREAD_ID", event["session_id"])
+    lifecycle = enabled and placement not in {"alias-before-session", "explicit-before-session"}
     monkeypatch.chdir(project)
-    if enabled:
+    if lifecycle:
+        monkeypatch.setenv("CODEX_THREAD_ID", event["session_id"])
         codex_context_hook(str(native), event)
+    else:
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
 
     def consume(wire):
         data = bytearray()
@@ -490,7 +521,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         while True:
             assert page["ok"] and page["offset"] == len(data)
             data.extend(page["content"].encode())
-            codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
+            if lifecycle:
+                codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
             if page["eof"]:
                 assert hashlib.sha256(data).hexdigest() == machine_reference_oracle(wire)["sha256"]
                 return json.loads(data)
@@ -498,11 +530,17 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             rc, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=project)
             assert rc == 0, page
 
+    page_limit = 8000 if placement == "explicit-before-session" else 32000
     if enabled:
-        command.extend(("--max-page-output-bytes", "32000"))
+        command.extend(("--max-page-output-bytes", str(page_limit)))
+        expected_root = source.parent.parent
+        if placement in {"explicit-root", "explicit-before-session"}:
+            expected_root = tmp_path / "explicit capture root"
+            expected_root.mkdir(mode=0o700)
+            command.extend(("--decision-output-root", str(expected_root)))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
         assert rc == 0 and cold["navigation"]["mode"] == "full" and cold["offset"] == 0, cold
-        assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+        assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
         presented = consume(cold["navigation"])
         if compacted:
             codex_context_hook(str(native), {**event, "hook_event_name": "PreCompact"})
@@ -514,20 +552,47 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     parsed = build_parser().parse_args(argv[1:])
     assert (parsed.context_delivery == "on") is enabled
     assert parsed.codex_context_dir == (str(native) if enabled else None)
-    assert parsed.max_page_output_bytes == (32000 if enabled else None)
+    assert parsed.max_page_output_bytes == (page_limit if enabled else None)
     assert argv.count("--decision-output-root") == 1
+    if placement == "alias-before-session":
+        rejected_argv = argv.copy()
+        rejected_argv[rejected_argv.index("--decision-output-root") + 1] = str(alias)
+        rc, rejected = _run_cli(registry, runtime, *rejected_argv[1:], cwd=project)
+        assert rc == 1 and "no guard was run" in rejected["reason"], rejected
+        assert list(expected_root.glob("*/decision.json")) == [source]
+        assert _heartbeat_receipt_count(runtime, turn) == 1
     rc, bound = _run_cli(registry, runtime, *argv[1:], cwd=project)
     assert rc == 0, bound
     if enabled:
-        assert bound["mode"] == ("full" if compacted else "delta"), bound
-        assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
-        current = Path(machine_reference_oracle(bound)["recovery"]["path"])
-        captured = json.loads(current.with_name("decision.json").read_bytes())
-        required = json.loads(current.read_bytes())
-        assert json.dumps(required["quota"], sort_keys=True) == json.dumps(captured["quota"], sort_keys=True)
-        delivered = consume(bound)
-        if not compacted:
-            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
+        assert Path(parsed.decision_output_root) == expected_root
+        assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
+        [selected_capture] = set(expected_root.glob("*/decision.json")) - {source}
+        digest = machine_reference_oracle(bound)["capture_sha256"]
+        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(selected_capture),
+            "--capture-sha256", digest, "--select", "/heartbeat_receipt/settlement_identity", cwd=project)
+        assert rc == 0 and page["eof"], page
+        [identity] = json.loads(page["content"])["selections"]
+        selected_receipt = identity["value"]
+        assert (selected_receipt["goal_id"], selected_receipt["agent_id"], selected_receipt["turn_instance_id"],
+                selected_receipt["todo_id"]) == (GOAL_ID, AGENT_ID, turn, TODO_ID)
+        if placement in {"explicit-root", "explicit-before-session"}:
+            assert list(source.parent.parent.glob("*/decision.json")) == [source]
+        if placement == "explicit-before-session":
+            assert bound["mode"] == "full", bound
+            assert machine_reference_oracle(cold)["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+            for key in ("first_read_command", "command"):
+                rc, first_page = _run_cli(registry, runtime, *shlex.split(bound[key])[1:], cwd=project)
+                assert rc == 0 and first_page["ok"], first_page
+                assert len(json.dumps(first_page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
+        if lifecycle:
+            assert bound["mode"] == ("full" if compacted else "delta"), bound
+            current = Path(machine_reference_oracle(bound)["recovery"]["path"])
+            captured = json.loads(current.with_name("decision.json").read_bytes())
+            required = json.loads(current.read_bytes())
+            assert json.dumps(required["quota"], sort_keys=True) == json.dumps(captured["quota"], sort_keys=True)
+            delivered = consume(bound)
+            if not compacted:
+                assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
