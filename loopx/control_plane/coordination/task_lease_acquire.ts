@@ -102,7 +102,9 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
         recovery: {
           action: "inspect_own_conflicting_lease",
           execution_authority_granted: false,
-          reason: "Inspect the active lease for your other Todo. Release it only after confirming that execution has stopped; otherwise keep it and use an isolated worktree for independent code edits.",
+          reason: foreignConflictCount > 0
+            ? "Inspect the active lease for your other Todo. Releasing it after execution has stopped will not clear the other listed conflicting holder(s); coordinate shared writes or use an isolated worktree for independent code edits."
+            : "Inspect the active lease for your other Todo. Release it only after confirming that execution has stopped; otherwise keep it and use an isolated worktree for independent code edits.",
           inspect: {command: "loopx task-lease inspect", cli_args: ["task-lease", "inspect",
             "--goal-id", input.goal_id, "--todo-id", String(ownConflict.todo_id)]},
           release: {command: "loopx task-lease release", cli_args: ["task-lease", "release",
@@ -120,10 +122,7 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
         ...ownConflictRecovery,
-        // Own conflicts get a bounded inspect/release route above. Foreign
-        // leases remain immutable and visible only when no own recovery can
-        // resolve the caller's collision.
-        ...(conflictLeases.length && ownConflict === null ? {conflicts: conflictLeases} : {})});
+        ...(conflictLeases.length ? {conflicts: conflictLeases} : {})});
     }
     const objective = decision.outcome === "apply" ? goalObjectiveWorkGuard(head.head, input.owner) : null;
     if (objective !== null) return failed(String(objective.reason_code), String(objective.reason), {goal_objective_guard: objective});

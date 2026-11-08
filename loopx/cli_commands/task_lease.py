@@ -48,6 +48,16 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
     if isinstance(recovery, dict) and payload.get("error_code") == "canonical_authority_required":
         lines.append(f"- recovery: `{recovery['action']}`")
         lines.append(f"- backup_required: `{recovery['backup_required']}`")
+    elif isinstance(recovery, dict) and recovery.get("action") == "inspect_own_conflicting_lease":
+        lines.append(f"- recovery: `{recovery['action']}`")
+        inspect_step = recovery.get("inspect")
+        if isinstance(inspect_step, dict) and isinstance(inspect_step.get("cli_args"), list):
+            lines.append(f"- inspect own conflicting lease: `{shlex.join([loopx_cli_argv()[0], *inspect_step['cli_args']])}`")
+        release_step = recovery.get("release")
+        if isinstance(release_step, dict) and isinstance(release_step.get("cli_args"), list):
+            lines.append(f"- release own conflicting lease: `{shlex.join([loopx_cli_argv()[0], *release_step['cli_args']])}`")
+        if recovery.get("reason"):
+            lines.append(f"- {recovery['reason']}")
     elif isinstance(recovery, dict):
         lines.append(f"- repair: `{shlex.join([loopx_cli_argv()[0], *recovery['cli_args']])}`")
         lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")

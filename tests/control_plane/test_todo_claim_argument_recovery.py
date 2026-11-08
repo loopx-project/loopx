@@ -465,6 +465,13 @@ def test_explicit_one_command_execution_recovery(claim_cli, command):
     assert task["status"] == ("open" if command == "update" else "done")
     if command == "update":
         assert task["note"] == "Recovered without a caller-visible failed command."
+    else:
+        replayed = run(arguments)
+        assert replayed["ok"] is True
+        assert replayed["changed"] is False
+        assert replayed["execution_recovery"]["status"] == "replayed"
+        assert replayed["execution_recovery"]["claim_operation_id"] == recovery["claim_operation_id"]
+        assert snapshot()[0][0] == task
 
 
 def test_one_command_recovery_never_replaces_explicit_stale_proof(claim_cli):

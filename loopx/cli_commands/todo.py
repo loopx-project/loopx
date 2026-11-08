@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import shlex
 from collections.abc import Callable, Sequence
 from functools import partial
@@ -280,6 +281,28 @@ def _todo_path_args(args: argparse.Namespace) -> dict[str, Path | None]:
     }
 
 
+def _recovery_claim_operation_id(
+    args: argparse.Namespace,
+    *,
+    completion_turn_key: str | None = None,
+) -> str | None:
+    command = getattr(args, "todo_command", None)
+    if command == "complete":
+        scope = str(completion_turn_key or "unscoped")
+    elif command == "update" and getattr(args, "update_operation_id", None):
+        scope = str(args.update_operation_id)
+    else:
+        return None
+    digest = hashlib.sha256(
+        (
+            "loopx-todo-execution-recovery-claim-v0\0"
+            f"{command}\0{args.goal_id}\0{args.todo_id}\0"
+            f"{args.agent_id}\0{scope}"
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"todo-claim:recover:{digest[:32]}"
+
+
 def _recover_todo_execution_once(
     args: argparse.Namespace,
     initial_error: LocalCoordinationAuthorityRejection,
@@ -287,6 +310,7 @@ def _recover_todo_execution_once(
     registry_path: Path,
     runtime_root_arg: str | None,
     retry_operation: Callable[[str], dict[str, object]],
+    completion_turn_key: str | None = None,
 ) -> dict[str, object]:
     """Consume only the typed, claim-only lifecycle recovery in one CLI call.
 
@@ -295,6 +319,29 @@ def _recover_todo_execution_once(
     replaces explicit proof.  Recovery that requires reconciliation/inspection
     remains visible to the caller instead of being silently rebased.
     """
+
+    recovery_claim_operation_id = _recovery_claim_operation_id(
+        args,
+        completion_turn_key=completion_turn_key,
+    )
+    if (
+        initial_error.code == "coordination_operation_identity_mismatch"
+        and recovery_claim_operation_id is not None
+    ):
+        try:
+            result = retry_operation(recovery_claim_operation_id)
+        except LocalCoordinationAuthorityRejection:
+            raise initial_error from None
+        result["execution_recovery"] = {
+            "schema_version": "todo_execution_recovery_v0",
+            "status": "replayed" if result.get("idempotent_replay") else "recovered",
+            "initial_error_code": initial_error.code,
+            "claim_operation_id": recovery_claim_operation_id,
+            "claim_status": "replayed",
+            "external_invocations": 1,
+            "external_failed_calls": 0,
+        }
+        return result
 
     recovery = initial_error.payload.get("recovery")
     if not isinstance(recovery, dict):
@@ -321,6 +368,7 @@ def _recover_todo_execution_once(
         claimed_by=args.agent_id,
         agent_id=args.agent_id,
         claim_only=True,
+        claim_operation_id=recovery_claim_operation_id,
         manage_execution=True,
         **_todo_path_args(args),
         dry_run=False,
@@ -860,6 +908,7 @@ def handle_todo_command(
                         retry_operation=lambda reference: complete_operation(
                             claim_operation_id=reference,
                         ),
+                        completion_turn_key=completion_turn_key,
                     )
                 if settlement_identity is not None:
                     payload["settlement_identity"] = settlement_identity.as_dict()

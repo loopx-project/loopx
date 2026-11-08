@@ -110,7 +110,7 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         assert denied["conflicts"][0]["todo_id"] == task_a
         own_denied = acquire(task_c, "agent-a", "own-same-checkout", 0, first, exit_code=1)
         assert own_denied["error_code"] == "write_scope_conflict"
-        assert "conflicts" not in own_denied
+        assert [row["todo_id"] for row in own_denied["conflicts"]] == [task_a]
         assert own_denied["own_conflicting_lease"] == {
             "todo_id": task_a,
             "owner": "agent-a",
@@ -122,6 +122,10 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         assert recovery["execution_authority_granted"] is False
         assert recovery["inspect"]["cli_args"][-1] == task_a
         assert recovery["release"]["cli_args"][-1] == str(current["version"])
+        from loopx.cli_commands.task_lease import render_task_lease_markdown
+        rendered = render_task_lease_markdown(own_denied)
+        assert "inspect_own_conflicting_lease" in rendered
+        assert task_a in rendered and "write_scope_conflict" in rendered
         assert cli("inspect", task_a)["lease"] == current
         independent = acquire(task_b, "agent-b", "separate-checkout", 0, second)
         assert any(row["todo_id"] == task_a for row in independent["integration_overlap_advisories"])
