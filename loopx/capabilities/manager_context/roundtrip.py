@@ -310,7 +310,14 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
-            for item in reply_status(root, route):
+            # A legacy/unmatched row can require the exhaustive route fallback.
+            # Match immutable result keys before reading potentially long reply
+            # bodies and delivery sidecars for off-page results. The existing
+            # result owner still validates every selected status on this read.
+            for item in reply_status(
+                root, route,
+                include_result_key=lambda key: "handoff." + _hash([request_id, key]) in pending_message_ids,
+            ):
                 message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
                     continue
