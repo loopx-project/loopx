@@ -2406,6 +2406,79 @@ D2/D5/D6/D3, context/model/split-install, full-cost/adoption and all freshness,
 identity/revision/WAL/lease/receipt/recovery fences. No main merge or host
 upgrade is included.
 
+### 2026-11-08 — CLI CPU attribution and fresh source-scan path construction
+
+One separate wheel attribution pair compares main `21013c0c1` and proposal
+`24ca29f4e`, retaining the complete101-Todo lifecycle and every prior
+source/package, scope, warm-PID, artifact, original completion-time, four-receipt,
+one-debit, refusal/replay/restart and native-exit oracle. Each arm records22
+Python console processes, three independent Node helpers/probes and two managed
+daemons through actual exit. The helpers are two version probes and one setup
+helper; all their exits precede the associated caller's readback. PATH-resolved
+Node programs keep their exact executable and arguments. Python console CPU
+profiles use `process_time`; no timing qualification is inferred from this
+instrumented pair.
+
+| Diagnostic CPU, seconds, main → proposal | Observation |
+| --- | --- |
+| Python CLI self, sampled before profile dump | 20.447 →20.099 |
+| Python profile exclusive total | 18.230 →17.922 |
+| Import machinery cumulative | 14.505 →14.403 |
+| Compilation exclusive | 7.488 →7.464 |
+| Complete managed-daemon subtree | 1.780 →1.890 |
+| Three independent Node helper/probe subtrees | 0.286 →0.281 |
+
+Import cumulative time includes nested compilation and must not be added to
+the exclusive compilation total or the self sample. Module loading may happen
+inside an operation; this does not separately identify interpreter startup.
+The fixed bytecode-disabled condition makes loading/compilation prominent, while
+the helper contribution is bounded. Python interpreter/wrapper/profiler overhead
+and publication tails prevent treating these figures as an unprofiled cost
+decomposition. They do not explain or reverse the earlier frozen pair's CPU
+increase, establish speedup, or qualify normal-bytecode installed adoption.
+
+The same profiles locate source-scan path handling in the existing filesystem
+adapter. Runtime `a57fd3ef7` computes the POSIX relative-directory prefix once
+per directory instead of constructing an additional relative `Path` for every
+candidate file. Source selection, sorted rows, file metadata, `Path.stat` and its
+platform error policy remain; full-source hashing and every freshness/identity,
+revision/WAL/lease/receipt/recovery fence are unchanged. This bounded companion
+refactor adds no capability, provider, persisted field, vocabulary or authority
+cache. The native TypeScript owners retain their existing rules.
+
+The immutable parent and new scanner produce the exact same404 metadata tuples
+over the same real source tree.64 focused Python cases and kernel mypy/Ruff
+pass. Before/head real `runtime.ping` calls over disposable copied packages
+both rotate fingerprint and PID after an owned JSON file changes. A deliberate
+omitted-JSON-source mutation fails that same independent runtime oracle; all
+owned probe runtimes are stopped. Eight before/head × source/wheel × File/SQLite
+complete CLI lifecycles retain the original artifact, completion time, scopes,
+four receipts, one debit, refusals/replays and both native exits. These qualify
+correctness and the exercised real path, not performance.
+
+The rebuilt monolithic wheel matches1840 packaged tracked sources; only the
+existing `effect_runtime.py` changes among the original24 production files.
+The same five source-only omissions remain. One independent import probe first
+ran in a checkout working directory and loaded source; its failed preparation
+is retained. Corrected qualification uses a non-checkout working directory,
+clears `PYTHONPATH` and requires the module to belong to the isolated installation
+before comparing bytes. The lifecycle harness retains its own independent
+package-root checks. The initial wrong-directory Chat build command also remains
+a preparation failure; the dashboard owner's build then verifies the bundle.
+
+Wider loading changes remain a separate next decision: compare real normal and
+disabled bytecode behavior at the existing quota/context and refresh dispatch
+owners before moving required dependencies. The path-allocation delta is an
+interim local reduction with no whole-path/marginal-cost benefit claim. Current
+PostgreSQL host/wheel, model/attention, continuous peak, physical-device writes,
+installed adoption and full long-horizon qualification remain open. Unchanged
+PostgreSQL store/service owners retain their earlier real qualification; no new
+PostgreSQL run is claimed here. Preserve all frozen failures, the existing peer
+hard-cut validation hold, I3 for at least one minor release, M1/#8011, full
+R0/V10/R1, D2/D5/D6/D3 and context/model/split-install/full-cost/adoption acceptance.
+The original task and independent exact-head review remain open; no main merge
+or installed-host upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
