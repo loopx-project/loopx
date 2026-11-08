@@ -851,20 +851,24 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
   const attemptKey = `${retryKind}_attempt`;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
+  const attempt = previous?.[attemptKey];
+  const reservedClient = Number.isSafeInteger(attempt) && Number(attempt) >= 1 && Number(attempt) <= 3
+    ? `${client}-${retryKind}-${attempt}`
+    : attempt === undefined && steward && previous?.client_turn_id === client ? client : null;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
-      && Number.isSafeInteger(previous[attemptKey]) && Number(previous[attemptKey]) >= 1
-      && Number(previous[attemptKey]) <= 3 && previous.version === version) {
+      && previous.version === version && reservedClient !== null) {
     // A crash after queue admission must adopt that exact canonical Turn,
     // even if it has already executed. This branch never creates model work.
     const admitted = requireJsonObject(recovery.admitted_turn, "admitted recovery Turn");
-    const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${retryKind}-${previous[attemptKey]}`;
-    if (previous.client_turn_id !== client || admitted.client_turn_id !== client
+    const origin = reservedClient === client && row.origin === undefined ? "lark" : row.origin;
+    if (previous.client_turn_id !== reservedClient || admitted.client_turn_id !== reservedClient
         || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
-        || typeof row.message !== "string" || typeof row.origin !== "string"
-        || admitted.message !== row.message || admitted.origin !== row.origin
+        || typeof row.message !== "string" || typeof origin !== "string"
+        || admitted.message !== row.message || admitted.origin !== origin
         || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
     return {operation: "admit_turn", recovery_candidate: true,
-      recovery_eligible: recovery.source_verified === true, client_turn_id: client,
+      recovery_eligible: recovery.source_verified === true, client_turn_id: reservedClient,
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted recovery Turn"),
       session_id: current.session_id, native_thread_ids: []};
   }
@@ -874,7 +878,6 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
   if (routing !== null) return routing;
   if (!steward) return no;
-  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
   if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
       || previous.client_turn_id !== client)) return no;
   const history = current.upstream_context_history ?? [];
