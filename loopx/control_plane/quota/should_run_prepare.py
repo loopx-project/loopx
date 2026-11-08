@@ -98,9 +98,7 @@ from ..todos.todo_semantics import (
     todo_item_task_class as projection_todo_item_task_class,
 )
 from ..todos.quota_summary import (
-    select_planning_inventory_source_items,
-    select_quota_todo_source_items,
-    select_quota_todo_summary,
+    select_quota_todo_contexts,
     select_task_orchestration_authority_items,
 )
 from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
@@ -237,6 +235,7 @@ def _prepare_quota_replan_context(
     project_asset: dict[str, Any],
     user_todo_summary: dict[str, Any] | None,
     agent_todo_summary: dict[str, Any] | None,
+    agent_todo_terminal_source_items: list[dict[str, Any]],
     authoritative_fallback_todo_items: FallbackTodoSource,
     effective_available_capabilities: Any,
     work_lane_contract: dict[str, Any] | None,
@@ -251,11 +250,6 @@ def _prepare_quota_replan_context(
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Project the current frontier and contextualize its receipt-bound review."""
-    replan_todo_items = select_planning_inventory_source_items(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-        include_terminal=True,
-    )
     goal_frontier_context = build_goal_frontier_projection_context_from_status(
         replan_explore_reader=replan_explore_reader,
         goal_id=safe_goal_id,
@@ -265,7 +259,7 @@ def _prepare_quota_replan_context(
         project_asset=project_asset,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
-        agent_todo_source_items=replan_todo_items,
+        agent_todo_source_items=agent_todo_terminal_source_items,
         fallback_todo_source_items=authoritative_fallback_todo_items,
         available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,
@@ -296,7 +290,7 @@ def _prepare_quota_replan_context(
             source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
             explore_reader=replan_explore_reader,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
-            todo_items=replan_todo_items,
+            todo_items=agent_todo_terminal_source_items,
         )
     return goal_frontier_context, replan_obligation
 
@@ -701,40 +695,29 @@ def _prepare_quota_should_run_item(
         item=item, project_asset=project_asset, available=available_capabilities,
     )
     effective_available_capabilities = availability["effective"]
-    user_todo_summary = select_quota_todo_summary(
+    user_todo_summary, agent_todo_summary, agent_todo_display_views, user_todo_source_items = select_quota_todo_contexts(
         item.get("user_todos"),
         project_asset.get("user_todos") if project_asset else None,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=True,
-        available_capabilities=effective_available_capabilities,
-    )
-    agent_todo_summary = select_quota_todo_summary(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
         agent_identity=agent_identity,
         available_capabilities=effective_available_capabilities,
     )
-    user_todo_source_items = select_quota_todo_source_items(
-        item.get("user_todos"),
-        project_asset.get("user_todos") if project_asset else None,
-    )
-    agent_todo_source_items = select_quota_todo_source_items(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-    )
-    agent_todo_planning_source_items = select_planning_inventory_source_items(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-    )
+    # Only this Agent source is consumed as summary, planning and retained
+    # terminal rows below. User-source and general display calls stay single-view.
+    agent_todo_source_items = agent_todo_display_views["summary"]
+    agent_todo_planning_source_items = agent_todo_display_views["planning"]
     task_orchestration_agent_items = select_task_orchestration_authority_items(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
         role="agent",
+        fallback_source_items=agent_todo_source_items,
     )
     task_orchestration_user_blockers = select_task_orchestration_authority_items(
         item.get("user_todos"),
         project_asset.get("user_todos") if project_asset else None,
         role="user",
+        fallback_source_items=user_todo_source_items,
     )
     agent_scoped_user_todo_override = _agent_scoped_user_todo_override(
         state=state,
@@ -986,6 +969,7 @@ def _prepare_quota_should_run_item(
         project_asset=project_asset,
         user_todo_summary=user_todo_summary,
         agent_todo_summary=agent_todo_summary,
+        agent_todo_terminal_source_items=agent_todo_display_views["terminal"],
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
         effective_available_capabilities=effective_available_capabilities,
         work_lane_contract=work_lane_contract,

@@ -11,7 +11,7 @@ import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
 import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
 import {fetchExploreResults} from "../src/data/chat.ts";
-import {ResearchGoalNavigation} from "../src/features/personal-workspace/goal-research-workbench.tsx";
+import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-research-workbench.tsx";
 
 // The persisted directory can organize explicitly linked physical sources.
 // Navigation must not turn organization into shared evidence or execution.
@@ -30,8 +30,9 @@ const goals = [
   {goalId:'child',parentGoalId:'parent',title:'Local case'},
   {goalId:'foreign',parentGoalId:'parent',title:'Foreign case',sourceAccess:{namespace:'other',label:'Other',readOnly:true}},
 ];
-const navigate = goalId => renderToStaticMarkup(createElement(ResearchGoalNavigation, {
-  goalId, goals, zh:false, onSelect: () => {throw Error('read navigated');},
+const navigate = goalId => renderToStaticMarkup(createElement(GoalResearchWorkbench, {
+  goalId, goals, zh: false, active: true, refreshRevision: 0,
+  statusNotice: createElement("p", null, "Loading status"), onSelectGoal: () => {throw Error('read navigated');},
 }));
 assert.ok(navigate('parent').includes('Local case'));
 assert.ok(navigate('parent').includes('Foreign case'));

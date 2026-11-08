@@ -17,8 +17,8 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {CAPACITY_PROFILES, capacityLedger, latency, type CapacityAxis, type CapacityProfileId,
-  type QualificationRow} from "./sqlite-capacity-report.ts";
+import {CAPACITY_PROFILES, capacityLedger, latency, splitShellCommand,
+  type CapacityAxis, type CapacityProfileId, type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
@@ -148,23 +148,54 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   let phase = "setup", managedRuntimeUsed = false;
   const stopRuntime = () => {
     if (!managedRuntimeUsed) return;
+    // Cleanup deletes the runtime's whole temporary namespace, so the stop is
+    // anchored to observed process exit: a shutdown receipt alone let the
+    // runtime's exit-time lock retirement mkdir the axis directory back after
+    // cleanup_verified was already recorded. Reuse the disposable-owner stop
+    // interface and require its result to prove the exit before any delete.
     const child = spawnSync(options.python!, ["-c",
-      "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+      "import json; from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+      + "print(json.dumps(restart_effect_runtime(wait_for_exit=True)))"],
     {cwd: repository, env: environment, encoding: "utf8", timeout: 30000});
     assert.equal(child.status, 0, "isolated Effect runtime shutdown failed");
+    assert.equal((JSON.parse(child.stdout) as Record<string, unknown>).stopped, true,
+      "isolated Effect runtime did not exit before cleanup");
     managedRuntimeUsed = false;
   };
   const cli = (args: string[], samples: number[]) => {
     phase = `cold_cli_${args[0] === "todo" ? "mutation" : args[0]}`;
     const start = performance.now(); managedRuntimeUsed = true;
-    const child = spawnSync(options.python!, ["-m", "loopx.cli", "--registry", registry, "--format", "json", ...args],
+    const run = (file: string, argv: string[]) => spawnSync(file, argv,
       {cwd: repository, env: environment, encoding: "utf8", timeout: 60000, maxBuffer: 4 * 1024 ** 2});
-    const elapsed = performance.now() - start;
+    const child = run(options.python!, ["-m", "loopx.cli", "--registry", registry, "--format", "json", ...args]);
     if (child.status !== 0) process.stderr.write(`${phase}: process exited ${child.status ?? "without an exit code"}\n`);
     assert.equal(child.status, 0, `cold CLI ${args[0]} failed`);
     const result = JSON.parse(child.stdout) as Record<string, unknown>;
     assert.notEqual(result.ok, false, `cold CLI ${args[0]} rejected`);
-    samples.push(elapsed); stopRuntime(); return result;
+    if (result.schema_version === "context_capture_navigation_v1") {
+      // `quota should-run` delivers its payload through a context capture:
+      // follow the returned reader commands page by page until eof, then parse
+      // the reassembled original JSON. The sample keeps the whole navigation
+      // cost, because a cold reader cannot act before the payload arrives.
+      let follow = splitShellCommand(String(result.command ?? result.first_read_command ?? ""));
+      assert.ok(follow.length > 0, `cold CLI ${args[0]} navigation returned no read command`);
+      let payload = "";
+      for (let pages = 0; ; pages++) {
+        assert.ok(pages < 256, `cold CLI ${args[0]} context read exceeded the page guard`);
+        const read = run(follow[0]!, follow.slice(1));
+        if (read.status !== 0) process.stderr.write(`${phase}: context read exited ${read.status ?? "without an exit code"}\n`);
+        assert.equal(read.status, 0, `cold CLI ${args[0]} context read failed`);
+        const page = JSON.parse(read.stdout) as Record<string, unknown>;
+        assert.equal(page.ok, true, `cold CLI ${args[0]} context read rejected`);
+        payload += typeof page.content === "string" ? page.content : "";
+        if (page.eof === true) break;
+        const next = page.next_command;
+        assert.ok(typeof next === "string" && next.length > 0, `cold CLI ${args[0]} context page lacks the next command before eof`);
+        follow = splitShellCommand(next);
+      }
+      samples.push(performance.now() - start); stopRuntime(); return JSON.parse(payload) as Record<string, unknown>;
+    }
+    samples.push(performance.now() - start); stopRuntime(); return result;
   };
   try {
     assert.equal((await selectLocalSqliteAuthority(runtime, goal, true)).ok, true);
@@ -382,12 +413,26 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
     }
     axis.status = "passed";
   } catch (error) {
-    axis.failure = `${phase}: ${error instanceof Error ? error.name : "unknown failure"}`;
+    axis.failure = `${phase}: ${error instanceof Error ? `${error.name}: ${error.message.slice(0, 600)}` : "unknown failure"}`;
   } finally {
-    try { stopRuntime(); } catch { axis.status = "failed"; axis.failure = "isolated_runtime_cleanup_failed"; }
+    // A stop that cannot prove observed process exit fails the axis, but the
+    // first recorded failure (the measurement error) keeps precedence.
+    try { stopRuntime(); }
+    catch { axis.status = "failed"; if (!axis.failure) axis.failure = "isolated_runtime_cleanup_failed"; }
     axis.resource_peak_rss_bytes = process.resourceUsage().maxRSS * 1024;
-    try { rmSync(root, {recursive: true, force: true}); axis.cleanup_verified = !existsSync(root); }
-    catch { axis.status = "failed"; axis.failure = "temporary_database_cleanup_failed"; }
+    // A just-stopped managed runtime can leave a grandchild briefly holding the
+    // temp root (for example its working directory), which makes an immediate
+    // recursive delete raise while a retry a moment later succeeds. Retry a few
+    // times before declaring the disposable database uncleaned.
+    for (let attempt = 0; ; attempt++) {
+      try { rmSync(root, {recursive: true, force: true}); } catch { /* retried below */ }
+      axis.cleanup_verified = !existsSync(root);
+      if (axis.cleanup_verified || attempt >= 4) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    if (!axis.cleanup_verified && axis.status !== "failed") {
+      axis.status = "failed"; axis.failure = "temporary_database_cleanup_failed";
+    }
   }
   return axis;
 }

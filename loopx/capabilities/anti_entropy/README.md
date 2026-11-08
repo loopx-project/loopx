@@ -80,10 +80,9 @@ task is an explicit choice. When enabled, one closed loop per task is:
      that is a task-scoped typed enable, not a Goal-wide switch. A Goal-level
      `available_capabilities` declaration is availability only and does not
      activate unrelated or later-added Todos in the same Goal;
-   - the turn-context hook itself is composed unconditionally in the shared
-     `attach_turn_context` owner and is called by both `turn run-once
-     --execute` and the heartbeat `quota should-run` path; it decides
-     off/applicable per task and injects nothing when the task has not opted in;
+   - both `turn run-once --execute` and heartbeat `quota should-run` use
+     `attach_turn_context`. The Anti-Entropy provider declares a readback slot
+     when the task enables it, and the shared owner dispatches those registrations;
    - the post-change workspace is the Goal repository from the registry
      (`load_goal_from_registry`), never the process working directory.
 

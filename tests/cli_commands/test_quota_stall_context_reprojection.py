@@ -88,7 +88,10 @@ def test_quiet_cli_retains_turn_start_evidence_after_stall_writeback(
     monkeypatch.setattr(command, "spend_quota_slot", spend)
     args = build_parser().parse_args([
         "--format", "json", "quota", "should-run", "--goal-id", goal,
-        "--turn-instance-id", turn, "--context-delivery", "off",
+        "--turn-instance-id", turn,
+        # This case asserts the inline CLI body. Progressive delivery returns
+        # navigation instead and is covered by real captured-reader journeys.
+        "--context-delivery", "off", "--delta-delivery", "off",
     ])
     capture = tmp_path / "capture"
     capture.mkdir()

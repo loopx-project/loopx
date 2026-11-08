@@ -596,7 +596,10 @@ def handle_refresh_state_command(
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
             refinement_result = refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update)
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update,
+                **({"reviewed_work_update": {"todo_id": args.todo_id,
+                    "append_explore_result_node_refs": [explore_result["node_id"]]}}
+                   if explore_result is not None and "review" in outcome_update["refinement"] else {}))
             outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
             if args.dry_run:
                 # Preview the same ordered composition as execution: the typed

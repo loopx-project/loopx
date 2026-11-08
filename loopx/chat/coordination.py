@@ -79,11 +79,26 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     runtime_root = getattr(controller, "coordination_runtime_root", controller.store.root.parent)
     from ..chat_manager_context import collect_manager_turn_context
     observation_only = getattr(adapter, "observation_only", False) is True
-    event_sink("agent.phase", {"phase": "manager_context", "label": "正在读取当前 Goal 的工作与协作" if scope["kind"] == "owner_goal" else "正在读取授权范围内的 Goal 状态"})
+    turn = controller.store.load_turn(session_id, turn_id) or {}
+    interactive_reader = isinstance(adapter, CodexAppServerAdapter) and not observation_only
+    # The bound steward advertises the scoped portfolio tool. Its ordinary
+    # questions can start once the current directory and grant are resolved.
+    status_on_demand = (
+        interactive_reader and scope.get("bound_steward") is True
+        and not (turn.get("loopx_request") or turn.get("loopx_execution")
+                 or turn.get("origin") == "peer" or "collaboration_request" in turn)
+    )
+    label = "正在读取授权范围内的 Goal 状态"
+    if scope["kind"] == "owner_goal":
+        label = "正在读取当前 Goal 的工作与协作"
+    elif status_on_demand:
+        label = "正在读取授权范围内的 Goal 目录"
+    event_sink("agent.phase", {"phase": "manager_context", "label": label})
     context = collect_manager_turn_context(
         controller.registry_path, session, runtime_root, controller.manager_scope_resolver,
         **({"include_details": False} if isinstance(adapter, CodexAppServerAdapter) or observation_only else {}),
         **({"include_stopped": True} if observation_only else {}),
+        **({"read_goal_status": False} if status_on_demand else {}),
         # An interactive endpoint reads the declared sources on
         # demand, but a prompt-only segment can only receive them,
         # so it gets the bounded read inline.
@@ -198,7 +213,7 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
         )
         adapter.session.read_tool_handler = inspection.read
         context["evidence_sources"] = inspection.sources()
-        context = manager_index(context)
+        context = manager_index(context, status_on_demand=status_on_demand)
     from ..capabilities.native_chat.external_conversations import ChatExternalConversations
     recovery = ChatExternalConversations(controller).recovery_context(
         session, controller.store.load_turn(session_id, turn_id) or {}) if scope.get("bound_steward") else None

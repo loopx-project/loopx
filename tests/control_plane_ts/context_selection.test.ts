@@ -146,6 +146,45 @@ function selectedFacts(context: unknown, selections: {path: (string | number)[]}
   return [...facts].sort();
 }
 
+test("only an admitted same-source Yardstick can precede the complete Goal boundary", () => {
+  const source = {kind: "explore_turn_context", capability_id: "explore", content: {
+    ok: true, graph_enabled: true, goal_id: "g", agent_id: "a", todo_id: "current",
+    graph: {
+      work_yardstick_capture: {guidance: "compare the accepted outcome", template: "optional detail"},
+      work_yardsticks: [{todo_id: "other", cue: "unrelated experiment"}, {todo_id: "current", cue: "current experiment"}],
+      work_measurements: [{todo_id: "other", measurement_feedback: ["foreign measurements"]},
+        {todo_id: "current", measurement_feedback: ["linked comparisons without a decision"]}],
+    },
+  }};
+  const context = {
+    goal_id: "g", agent_identity: {agent_id: "a"}, effective_action: "normal_run",
+    normal_delivery_allowed: true, selected_todo: {todo_id: "current"},
+    goal_boundary: {rule: "Use only the authorized scope.", write_scope: ["work/**"]},
+    interaction_contract: {schema_version: "loopx_interaction_contract_v0",
+      agent_channel: {work_context: {sources: [source]}}},
+  };
+  const initial = (capture = context) => (evaluateTurnEnvelope({
+    operation: "context_select", context: capture, initial_read: true,
+  }).selections as {pointer: string; path: (string | number)[]}[]);
+  const rows = initial();
+  const choice = rows.findIndex(row => row.pointer.endsWith("/work_yardsticks/1"));
+  assert.ok(choice > rows.findIndex(row => row.pointer === "/normal_delivery_allowed"));
+  assert.ok(choice < rows.findIndex(row => row.pointer === "/goal_boundary"));
+  const measurements = rows.findIndex(row => row.pointer.endsWith("/work_measurements/1"));
+  assert.ok(measurements > rows.findIndex(row => row.pointer === "/normal_delivery_allowed"));
+  assert.ok(measurements < rows.findIndex(row => row.pointer === "/goal_boundary"));
+  assert.ok(!selectedFacts(context, rows).some(fact => /unrelated experiment|foreign measurements|optional detail/.test(fact)));
+  for (const binding of [{goal_id: "another-goal"}, {agent_id: "another-agent"}, {todo_id: "other"}]) {
+    const capture = structuredClone(context);
+    Object.assign(capture.interaction_contract.agent_channel.work_context.sources[0].content, binding);
+    assert.ok(initial(capture).every(row => !/work_yardstick|work_measurements/.test(row.pointer)));
+  }
+  for (const gate of [{normal_delivery_allowed: false}, {effective_action: "autonomous_replan_required"},
+    {agent_id: "a", agent_identity: {agent_id: "another-agent"}}]) {
+    assert.ok(initial({...context, ...gate}).every(row => !/work_yardstick|work_measurements/.test(row.pointer)));
+  }
+});
+
 test("initial navigation coalesces complete branches without changing selected facts or explicit readers", () => {
   const context = {facts: [{"a/b": "Keep the final stop.", "~": null}, {allowed: false, evidence: []}],
     single: {only: "A single address need not grow a container."}, unread: {history: "optional body"}};

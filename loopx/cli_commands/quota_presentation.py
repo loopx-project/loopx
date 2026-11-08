@@ -5,7 +5,7 @@ import argparse
 from collections.abc import Callable, Mapping
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected
-from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
 
 
 def _quota_renderer(
@@ -84,8 +84,7 @@ def _project_quota_cli_payload(
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
         if args.quota_command == "should-run":
             if captured_decision_path and "vision" not in detail_sections:
-                from ..control_plane.quota.turn_envelope import _turn_envelope_result
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
+                payload = project_captured_replan_cli_view(payload)
             return compact_quota_should_run_cli_payload(
                 payload,
                 include_todo_summary_detail="agent-todos" in detail_sections,

@@ -572,7 +572,8 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
-  const scope = p ? <>{p.episode_count} {zh ? "个研究片段" : "research episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
+  const episodeLabel = result ? (zh ? "个研究片段" : "research episodes") : (zh ? "个输入片段" : "input episodes");
+  const scope = p ? <>{p.episode_count} {episodeLabel} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
   const scopeHelp = p ? <ContextHelp label={zh ? "分析范围" : "Analysis scope"} icon={result?.synthesis ? Sparkles : undefined}>
     {result?.synthesis ? <p><strong>{zh ? "Agent 分析 · 未校准" : "Agent analysis · uncalibrated"}</strong></p> : null}
     <p>{p.selection.exhaustive ? (zh ? "覆盖此固定分析范围；不等于覆盖全部研究。" : "Covers this fixed analysis scope, not necessarily the whole research history.") : (zh ? "定向抽样，仅分析选定研究片段；范围外或未捕获的工作未纳入，不代表全程。" : "Purposive sample of selected episodes; work outside this scope or not captured is excluded. It does not represent the whole run.")}</p>
