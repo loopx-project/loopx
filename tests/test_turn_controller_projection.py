@@ -10,10 +10,10 @@ from tests.test_loopx_turn_managed_step import (
 
 
 @pytest.mark.parametrize("user_action_required", [False, True])
-def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_wire(
+def test_managed_current_source_uses_one_controller_call_and_rejects_modified_content(
     monkeypatch, user_action_required,
 ) -> None:
-    from dataclasses import FrozenInstanceError, replace
+    from copy import deepcopy
 
     from loopx.control_plane.quota import turn_envelope
     from loopx.control_plane.turn_driver import driver, loop_controller
@@ -23,7 +23,8 @@ def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_
         agent_identity={"agent_id": AGENT_ID},
         selected_todo={"todo_id": TODO_ID, "text": "Advance."})
     decision["interaction_contract"]["user_channel"]["action_required"] = user_action_required
-    expected_envelope = turn_envelope.build_turn_envelope(decision)
+    historical = turn_envelope.build_turn_envelope(decision)
+    expected_source = turn_envelope.compose_turn_decision(decision)
     calls = []
     original = turn_envelope._turn_envelope_result
 
@@ -33,28 +34,17 @@ def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", record)
     monkeypatch.setattr(driver, "_turn_envelope_result", record)
-    current = turn_envelope.build_turn_controller_input(decision)
-    assert current.envelope() == expected_envelope
-    assert calls == ["build_controller_input"]
-    assert not hasattr(current, "__dict__")
-    with pytest.raises(FrozenInstanceError):
-        current.route = "ready_for_host"
-    with pytest.raises(TypeError):
-        turn_envelope.TurnControllerInput(current.envelope_json, "ready_for_host")
-    with pytest.raises(TypeError):
-        replace(current, route="ready_for_host")
-    with pytest.raises(TypeError, match="original quota source"):
-        turn_envelope.TurnControllerInput()
+    current = turn_envelope.compose_turn_decision(decision)
+    assert current == expected_source
+    assert calls == ["compose_complete"]
 
-    # A returned object may be edited for another purpose; it cannot edit the
-    # producer's snapshot or attach its route qualification to that copy.
-    changed = current.envelope()
-    changed["action"]["delivery_allowed"] = False
-    changed["action_signature"]["matches"] = False
-    changed["route"] = current.route
-    assert current.envelope() == expected_envelope
+    # Integrity is checked at the real consumer. A mutable transport copy
+    # cannot attach the qualification of the original complete source.
+    changed = deepcopy(current)
+    changed["interaction_contract"]["agent_channel"]["delivery_allowed"] = False
+    assert current == expected_source
     journal = _failed_journal()
-    expected = _decide(journal, envelope=expected_envelope)
+    expected = _decide(journal, envelope=historical)
     assert expected["disposition"] == ("user_action_required" if user_action_required else "wait")
     calls.clear()
     controller_calls = []
@@ -70,7 +60,7 @@ def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_
     assert actual == expected
     assert calls == []
     assert controller_calls == [("turn.controller", "managed")]
-    with pytest.raises(ValueError, match="shared envelope contract"):
+    with pytest.raises(ValueError, match="integrity"):
         _decide(journal, envelope=changed)
     assert calls == []
     assert controller_calls == [("turn.controller", "managed")] * 2
@@ -120,7 +110,8 @@ def test_managed_cli_reuses_fresh_route_and_preserves_failed_turn(
         assert code == 0 and result["disposition"] == "wait", result
         assert result["retry_continuation"]["retry_after_seconds"] == 30
         assert result["retry_continuation"]["max_attempts"] == 3
-        assert calls.count("build_controller_input") == 1
+        assert calls.count("compose_complete") == 1
+        assert "build_controller_input" not in calls and "build" not in calls
         assert "driver_route" not in calls
         assert path.read_bytes() == before
     # The observation discrepancy must still fail without offering a retry.

@@ -57,6 +57,7 @@ class CliOutputModeVariantSpec:
     markdown_anchor: str
     max_chars: dict[OutputFormat, int]
     max_lines: dict[OutputFormat, int]
+    output_contract_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "--include-transaction-detail, turn run-once, TurnEnvelope detail_ref "
             "commands, and full quota should-run decision"
         ),
-        semantic_json_keys=("route", "turn_envelope", "effects", "boundary"),
+        semantic_json_keys=("route", "work_contract", "effects", "boundary"),
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
@@ -523,13 +524,17 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "route",
             "session",
             "transaction",
-            "turn_envelope",
+            "work_contract",
             "effects",
             "boundary",
         ),
         markdown_anchor=None,
-        max_chars={"json": 15_000},
+        # Complete v1 retains the original source, session and transaction;
+        # the matched small fixture is 26,886 chars. Historical v0 keeps its
+        # 15,000 ceiling in its own checkout; default plan stays at 26,000.
+        max_chars={"json": 30_000},
         max_lines={"json": 380},
+        output_contract_version="loopx_turn_plan_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_run_once_preview",
@@ -957,6 +962,8 @@ def assert_cli_output_mode_variant(
     payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
         raise AssertionError(f"{spec.variant_id} did not emit a JSON object")
+    if spec.output_contract_version is not None and payload.get("schema_version") != spec.output_contract_version:
+        raise AssertionError(f"{spec.variant_id} output contract version mismatch")
     missing = [key for key in spec.semantic_json_keys if key not in payload]
     if missing:
         raise AssertionError(

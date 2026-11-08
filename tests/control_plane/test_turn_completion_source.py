@@ -13,9 +13,8 @@ import pytest
 
 from loopx.cli import main
 from loopx.control_plane.turn_driver import executor
-from loopx.cli_commands.turn_todo_writeback import captured_todo_text_sha256
+from loopx.control_plane.turn_driver.driver import captured_todo_text_sha256
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
-from tests.control_plane import canonical_authority_fixture
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
     _turn_journal,
@@ -117,7 +116,7 @@ def test_context_witness_preserves_legacy_requests_and_markdown_obligations() ->
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("accepted_before_upgrade", [False, True])
-def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
+def test_native_pre_witness_turn_recovers_history_but_cannot_complete_without_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
@@ -195,9 +194,13 @@ def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
         return
     assert result["error"] == "Synthetic old-writer response loss", result
     journal = _turn_journal(runtime)
-    assert (
-        "text_source_verified"
-        not in journal["plan"]["turn_envelope"]["action"]["selected_todo"]
+    # A pre-witness source is independent of the private plan wire version.
+    # Today's producer records v1; explicit v0 journal recovery has its own
+    # File/SQLite matrix in test_complete_turn_journal.py.
+    assert journal["plan"]["schema_version"] == "loopx_turn_plan_v1"
+    assert "turn_envelope" not in journal["plan"]
+    assert "selected_todo_text_verified" not in (
+        journal["plan"]["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
     )
     resumed_code, resumed = _cli(
         [], *argv[:-1], "--resume-turn-key", str(journal["turn_key"]), "--execute"
@@ -220,7 +223,23 @@ def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
     assert not any(replay["effects"].values())
     assert len(results) == 1
     assert _turn_journal(runtime) == recovered
+    _assert_recovered_completion(runtime, registry, journal)
     assert _todo(prefix)["todo"]["status"] == "done"
+
+
+def _assert_recovered_completion(runtime: Path, registry: Path, original_journal: dict) -> None:
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    turn_id = original_journal["turn_key"]  # This CLI fixture supplies no explicit Turn id.
+    readback = read_heartbeat_settlement(runtime, registry_path=registry,
+        goal_id="loopx-turn-fixture", agent_id="codex-fixture",
+        todo_id="todo_fixture0001", turn_instance_id=turn_id)
+    assert readback is not None
+    assert readback.completion_event is not None and readback.spend_event is not None
+    recovered = _turn_journal(runtime)
+    assert recovered["turn_key"] == original_journal["turn_key"]
+    assert recovered["host_attempt_count"] == 1
+    assert recovered["writeback"]["completion"]["todo_id"] == "todo_fixture0001"
 
 
 def _cli(prefix: list[str], *args: str) -> tuple[int, dict]:
@@ -277,6 +296,12 @@ def test_native_turn_completion_checks_full_source_and_preserves_unrelated_chang
     change: str,
     no_followup: bool,
 ) -> None:
+    from loopx.control_plane.turn_driver import settlement
+
+    def legacy_selection(*_args, **_kwargs):
+        raise AssertionError("native completion reinterpreted historical selection")
+
+    monkeypatch.setattr(settlement, "selected_turn_todo", legacy_selection)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(
         tmp_path,
@@ -338,9 +363,12 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
     monkeypatch.setattr(executor, "_run_task_validator", change_after_real_validation)
     code, result = _cli([], *argv)
     request = json.loads((project / "request.json").read_text())
-    captured_todo = request["turn_envelope"]["action"]["selected_todo"]
+    assert request["schema_version"] == "loopx_turn_host_request_v1"
+    assert "turn_envelope" not in request
+    captured_todo = request["work_contract"]["selected_todo"]
     assert captured_todo["todo_id"] == "todo_fixture0001"
-    assert captured_todo["text_source_verified"] is True
+    captured_context = request["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+    assert captured_context["selected_todo_text_verified"] is True
     current = _todo(prefix)["todo"]
     if change != "requirements":
         assert code == 0 and result["status"] == "committed", result
@@ -446,10 +474,9 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
             # The public authoring path intentionally forbids replacing a done
             # task. Inject a later synthetic provider head in this disposable
             # store to challenge the recovery adapter, retaining its receipt.
-            module = (
-                Path(canonical_authority_fixture.__file__).resolve().parents[2]
-                / "loopx/control_plane/coordination"
-            )
+            import loopx
+
+            module = Path(loopx.__file__).resolve().parent / "control_plane/coordination"
             script = (
                 f"import {{openLocalAuthorityStore}} from {json.dumps((module / 'local_authority_provider.ts').as_uri())};"
                 f"import {{prepareCoordinationProjectionCommit}} from {json.dumps((module / 'coordination_projection.ts').as_uri())};"
@@ -515,4 +542,70 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
     assert not any(replay["effects"].values())
     assert len(completions) == 1
     assert _turn_journal(runtime) == recovered
+    _assert_recovered_completion(runtime, registry, journal)
     assert _todo(prefix)["todo"]["text"] == "[P0] A later requirement after acceptance."
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("no_followup", [False, True])
+@pytest.mark.parametrize("replacement", ["source", "mixed_adapter"])
+def test_native_completion_refuses_replaced_source_before_effects_then_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    provider: str, no_followup: bool, replacement: str,
+) -> None:
+    from copy import deepcopy
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider,
+        todo_metadata_extra="no_followup=true" if no_followup else "")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    host, validator = _completion_host_and_validation_scripts()
+    host = host.replace("request = json.load(sys.stdin)",
+        'request = json.load(sys.stdin)\ncalls = pathlib.Path("host-calls.txt")\n'
+        'calls.write_text(calls.read_text() + "x" if calls.exists() else "x")')
+    argv = _turn_run_once_completion_argv(project, runtime, registry, host, validator)
+    actual_stage = executor._typed_settlement_stage
+
+    def replace_after_execution(plan, *args, **kwargs):
+        # Challenge the real post-execution boundary, after initial source and
+        # task validation. The durable journal retains its original capture.
+        changed = deepcopy(plan)
+        if replacement == "source":
+            changed["work_contract"]["reason"] = "Replaced after independent validation."
+        else:
+            # The v1 writer has already retired this second carrier. Inject
+            # one deliberately so the actual settlement boundary must refuse
+            # mixed authority, rather than failing inside the fixture.
+            assert plan["schema_version"] == "loopx_turn_plan_v1"
+            assert "turn_envelope" not in plan
+            changed["turn_envelope"] = {"writeback": {"next_cli_actions": ["foreign effect"]}}
+        return actual_stage(changed, *args, **kwargs)
+
+    monkeypatch.setattr(executor, "_typed_settlement_stage", replace_after_execution)
+    code, refused = _cli([], *argv)
+    assert code == 1 and refused["result_kind"] == "writeback_failed", refused
+    assert refused["effects"] == {"host_invoked": True, "state_written": False,
+        "quota_spent": False, "scheduler_acknowledged": False}
+    assert _todo(prefix)["todo"]["status"] == "open"
+    journal = _turn_journal(runtime)
+    identity = journal["plan"]["transaction"]["settlement_plan"]["identity"]
+    original = deepcopy(journal["plan"]["work_contract"])
+    assert (identity["goal_id"], identity["agent_id"], identity["todo_id"]) == (
+        "loopx-turn-fixture", "codex-fixture", "todo_fixture0001")
+    assert (project / "completion-artifact.txt").read_text() == "completed"
+
+    monkeypatch.setattr(executor, "_typed_settlement_stage", actual_stage)
+    retry = [*argv[:-1], "--resume-turn-key", str(journal["turn_key"]),
+        "--retry-failed-turn", "--execute"]
+    code, recovered = _cli([], *retry)
+    assert code == 0 and recovered["status"] == "committed", recovered
+    assert recovered["effects"]["host_invoked"] is False
+    assert recovered["effects"]["quota_spent"] is True
+    assert _todo(prefix)["todo"]["status"] == "done"
+    assert _turn_journal(runtime)["plan"]["work_contract"] == original
+    assert (project / "host-calls.txt").read_text() == "x"
+    code, replay = _cli([], *argv[:-1], "--resume-turn-key", str(journal["turn_key"]), "--execute")
+    assert code == 0 and replay["replayed"] is True, replay
+    assert not any(replay["effects"].values())
+    rows = (runtime / "goals/loopx-turn-fixture/runs/index.jsonl").read_text().splitlines()
+    assert sum(json.loads(row).get("classification") == "quota_slot_spent" for row in rows) == 1

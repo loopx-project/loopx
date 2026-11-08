@@ -131,6 +131,39 @@ class StagedTurnDecisionCapture:
             write_decision_capture(self.path, self.observation)
         return self.plan
 
+    def publish_for_host(
+        self, request: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Install the published original input without changing recovery bindings."""
+        plan = self.publish()
+        from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
+
+        if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+            bound_request = {**request, **turn_plan_host_source(plan)}
+            bound_request.pop("turn_envelope", None)
+            return plan, bound_request
+        bound_request = {**request, "turn_envelope": plan["turn_envelope"]}
+        if "work_contract" in plan:
+            contract = plan["work_contract"]
+            bound_request["work_contract"] = dict(contract) if isinstance(contract, Mapping) else contract
+        else:
+            # Only an original historical absence can clear the current input.
+            bound_request.pop("work_contract", None)
+        from ..quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA, captured_turn_host_input
+
+        if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
+            if "work_contract" in plan:
+                bound_request = captured_turn_host_input(bound_request)
+            else:
+                # The immutable original observation, not a bad current source,
+                # owns restoration of a historical request version.
+                from ..quota.turn_envelope import LOOPX_TURN_HOST_REQUEST_SCHEMA
+
+                bound_request["schema_version"] = LOOPX_TURN_HOST_REQUEST_SCHEMA
+                bound_request.pop("source_decision_hash", None)
+                bound_request.pop("detail_ref", None)
+        return plan, bound_request
+
 
 def stage_turn_decision_capture(
     plan: Mapping[str, Any], *, journal_path: Path,
@@ -142,7 +175,10 @@ def stage_turn_decision_capture(
     observation cannot be reconstructed from today's guard. Already committed
     journals remain readable through ordinary no-effect replay.
     """
-    envelope = plan["turn_envelope"]
+    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
+
+    current = plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+    envelope = turn_plan_host_source(plan) if current else plan["turn_envelope"]
     transaction = plan["transaction"]
     path = journal_path.parent / "decisions" / journal_path.name
     capture = envelope.get("detail_ref", {}).get("captured_decision")
@@ -164,14 +200,24 @@ def stage_turn_decision_capture(
     from ...command_invocation import current_loopx_cli_argv
 
     bound = bind_turn_decision_capture(
-        observation, envelope, captured_decision_path=str(path),
+        observation, None if current else envelope, captured_decision_path=str(path),
         turn_instance_id=str(transaction.get("turn_instance_id") or transaction["turn_key"]),
         turn_key=transaction["turn_key"],
         # New journals have a real immutable source and executable reader.
         # Legacy journals retain their recorded delivery/recovery route.
         reader_argv=current_loopx_cli_argv() if not existing_journal else None,
+        complete_host_request={key: value for key, value in envelope.items() if key != "work_contract"}
+            if current else None,
     )
-    return StagedTurnDecisionCapture({**plan, "turn_envelope": bound}, path, observation, existed)
+    restored = ({**plan, **{key: bound[key] for key in ("source_decision_hash", "detail_ref")}}
+                if current else {**plan, "turn_envelope": bound})
+    if observation.get("schema_version") == "loopx_turn_envelope_v1":
+        restored["work_contract"] = observation
+    else:
+        # Historical observations retain their original input contract. Never
+        # pair an old capture with a freshly observed complete decision.
+        restored.pop("work_contract", None)
+    return StagedTurnDecisionCapture(restored, path, observation, existed)
 
 
 def prepare_turn_decision_capture(
@@ -411,6 +457,8 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
                                read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
                                filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
+    from ...command_invocation import current_loopx_cli_argv
+
     if filename not in ("projection.json", "required-context.json"):
         raise ValueError("unsupported captured context filename")
     projection = directory / filename
@@ -420,7 +468,7 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
         "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
             "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
-        "command": context_capture_read_command(projection, digest),
+        "command": context_capture_read_command(projection, digest, reader_argv=current_loopx_cli_argv()),
     }
 
 
@@ -656,6 +704,7 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     if plan.get("rejected_selection"):
         return plan, None, None
     presentation = initial_read if present_goal_narrative is None else present_goal_narrative
+
     def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
             list_depth=list_depth, present_goal_narrative=present)
