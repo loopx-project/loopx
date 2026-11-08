@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import socket
 import stat
 import subprocess
@@ -29,7 +28,10 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
-    _capture_page,
+    _capture_selection_transport_template,
+    bind_capture_selection_transport as bind_capture_selection_transport,
+    _saved_context_read_page,
+    _context_page_output_enabled,
     _capture_read_reference,
     _native_context_read_bytes,
     _native_context_reference,
@@ -263,74 +265,6 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
     return readable if page_attached or len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
-
-
-def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
-                          page_bytes: int, output_bytes: int, reader_argv: list[str]) -> dict[str, Any] | None:
-    """Try the typed opening and keep the remainder pinned to the same capture."""
-    if "opening" not in plan or "first_read_command" not in navigation:
-        return None
-    try:
-        path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
-        digest = plan["capture"]["sha256"]
-        opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
-        if len(content) > page_bytes or len(content) >= output_bytes:
-            return None
-        remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
-
-        def command(reference: Path) -> str:
-            return context_capture_read_command(path, digest, page_bytes=page_bytes,
-                max_page_output_bytes=output_bytes, reference_file=reference, reader_argv=reader_argv)
-
-        navigation = {**navigation, "first_read_command": command(opening), "remaining_read_command": command(remaining),
-            "instruction": ("This opening covers the decision and read obligations. Before work, read its content, "
-                "then follow remaining_read_command and its cursor through the rest of the initial selection. "
-                + navigation["instruction"])}
-        page = _capture_page(path, content, digest, offset=0, size=len(content), output_limit=None,
-            instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
-        # An opening is useful only as a complete, independently readable
-        # page. Keep the ordinary cursor when even the opening cannot fit.
-        page["read_instruction"] = (
-            "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
-            "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
-            "EOF does not establish retention, authority or freshness.")
-        page["navigation"] = navigation
-        return page if len(_native_output_bytes(page)) <= output_bytes else None
-    except (OSError, ValueError):
-        return None  # The same-capture ordinary reader is already available.
-
-
-def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
-                             initial_reference: str | None, initial_read_plan: dict[str, Any] | None,
-                             output_limit: int | None, reader_argv: list[str]) -> dict[str, Any]:
-    """Use the ordinary verified reader; the first page and navigation share its output budget."""
-    recovery = navigation["recovery"]
-    pinned = initial_reference if args.initial_read else None
-    reference = pinned or recovery.get("reference_file")
-    read_args = argparse.Namespace(**{**vars(args), "quota_command": "context-read",
-        "reference_file": reference, "capture_file": None if reference else recovery["path"],
-        "capture_sha256": None if reference else recovery["sha256"],
-        "max_page_output_bytes": output_limit,
-        "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
-    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
-    if page["ok"]:
-        if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
-                and "previously_delivered_fields" not in page
-                and (opening := _bounded_initial_page(navigation, initial_read_plan,
-                    page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
-                    output_bytes=output_limit, reader_argv=reader_argv)) is not None):
-            return opening
-        # Keep the already-budgeted page and cursor ahead of recovery metadata.
-        page["navigation"] = page.pop("navigation")
-    elif "recovery_command" not in page:
-        page["recovery_command"] = recovery["command"]
-    return page
-
-
-def _context_page_output_enabled(args: argparse.Namespace, activation: dict[str, Any]) -> bool:
-    return activation["enabled"] or (
-        args.quota_command == "context-project" and getattr(args, "initial_read", False)
-        and activation["progressive_enabled"])
 
 
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
@@ -703,72 +637,6 @@ def budgeted_settlement_result(
             "Recover the original operation/receipt; do not repeat admission or assume it did not commit. "
             f"{exc}"
         ) from exc
-
-
-def _capture_selection_transport_template(payload: dict[str, Any], args: argparse.Namespace, *,
-                                          capture_root: Path) -> str | None:
-    """Derive display argv without editing the captured decision."""
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    selection = cli.get("selection_command") if isinstance(cli, dict) else None
-    if not isinstance(selection, dict):
-        return None
-    presentation = {**payload, "interaction_contract": {**interaction,
-        "cli_channel": {**cli, "selection_command": dict(selection)}}}
-    bind_capture_selection_transport(presentation, args, capture_root=capture_root)
-    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
-
-
-def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
-                                     capture_root: Path | None = None) -> None:
-    """Retain caller display/capture options in the existing selection command.
-
-    Only transport argv is composed here; the typed quota owner still selects the
-    action and owns admission. Each selection invocation allocates a new capture.
-    """
-    root = getattr(args, "decision_output_root", None)
-    if root is None and capture_root is None:
-        return
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    selection = cli.get("selection_command") if isinstance(cli, dict) else None
-    if not isinstance(selection, dict):
-        return
-    template = selection.get("command_args_template")
-    if not isinstance(template, str):
-        return
-    words = shlex.split(template)
-    options: dict[str, str] = {}
-    # A saved guard already carries its capture root. Preserve it unless this
-    # caller explicitly selects another; otherwise use the validated cache.
-    if root is not None or "--decision-output-root" not in words:
-        selected_root = root if root is not None else capture_root
-        options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
-    if getattr(args, "decision_handoff_socket", None):
-        options["--decision-handoff-socket"] = args.decision_handoff_socket
-    # Selection is part of the same Turn, including a caller's explicit opt-out.
-    if getattr(args, "context_delivery", None) is not None:
-        options["--context-delivery"] = args.context_delivery
-    if getattr(args, "delta_delivery", None) is not None:
-        options["--delta-delivery"] = args.delta_delivery
-    if getattr(args, "codex_context_dir", None):
-        options["--codex-context-dir"] = args.codex_context_dir
-    if getattr(args, "codex_context_root", None):
-        options["--codex-context-root"] = args.codex_context_root
-    if getattr(args, "max_page_output_bytes", None) is not None:
-        options["--max-page-output-bytes"] = str(args.max_page_output_bytes)
-    replaced = set(options)
-    if replaced & {"--codex-context-dir", "--codex-context-root"}:
-        replaced.update(("--codex-context-dir", "--codex-context-root"))
-    for option in replaced:
-        while option in words:
-            index = words.index(option)
-            del words[index:index + 2]
-    for option, value in options.items():
-        words.extend((option, value))
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
-        words.append("--turn-envelope")
-    selection["command_args_template"] = shlex.join(words)
 
 
 def handoff_decision(directory: Path | None, socket_path: str | None,
