@@ -36,7 +36,9 @@
 .case-section-number { color: var(--pw-muted); font-size: var(--text-body); margin-bottom: 6px; }
 .research-case-study .case-section h3 { font-size: 23px; font-weight: 600; line-height: 1.5; margin: 0 0 18px; }
 .case-section > .personal-md { max-width: 80ch; }
-.case-sources { margin-block-top: 8px; }.case-sources button { display: block; text-align: start; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: none; border: 0; min-height: 44px; padding: 8px 0; cursor: pointer; overflow-wrap: anywhere; }
+.case-sources { margin-block-top: 8px; }
+.case-citation-links { list-style: none; margin: 0; padding: 0; }
+.case-citation-links button { display: block; text-align: start; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: none; border: 0; min-height: 44px; padding: 8px 0; cursor: pointer; overflow-wrap: anywhere; }
 .case-table-scroll { overflow-x: auto; margin-block: 24px; }.case-table-scroll table { border-collapse: collapse; width: 100%; font-size: var(--text-body); line-height: 1.7; }
 .case-table-scroll :is(th,td) { border-bottom: 1px solid var(--pw-line); text-align: start; vertical-align: top; padding: 12px 16px 12px 0; min-width: 85px; }
 .case-table-scroll th { font-weight: 500; }.case-table-scroll thead th { color: var(--pw-muted); }.goal-research-workbench .research-case-reader .research-case-study .case-table-scroll .personal-md { font-size: inherit; }.case-table-scroll .personal-md p { margin: 0; }
