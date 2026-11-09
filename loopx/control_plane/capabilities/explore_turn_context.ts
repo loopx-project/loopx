@@ -7,7 +7,7 @@ import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringA
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
-import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
+import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTurnFeedbackGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectWorkYardstickCue, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
@@ -374,7 +374,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       ...(params.yardstick_enabled === true ? {
         work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
-          guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions.",
+          guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions." + (todoId === null ? "" : " " + exploreInTurnFeedbackGuidance()),
           template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},

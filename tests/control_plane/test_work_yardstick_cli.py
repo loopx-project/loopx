@@ -294,6 +294,7 @@ def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_
                 "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
     assert guard["schema_version"] == "context_capture_navigation_v1"
     opening = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)["content"]
+    assert ("loopx explore finding --result-json FILE" in opening) is enabled
     # The independently readable page carries the decision cue. The complete
     # attachment template stays available on the existing Explore reader.
     cue_path = "/content/graph/work_yardstick_capture/guidance"
