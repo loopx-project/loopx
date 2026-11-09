@@ -632,6 +632,37 @@ are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
 
+Retirement must distinguish reading recorded evidence from resuming execution.
+An old native pre-claim capture without a verified live-guard binding remains
+read-only even while its original lease is active. Recover its original bytes,
+claim receipt and current lease first; an eligible current check cannot make
+that old capture prove a new claim. Repeated hooks, restart and a different
+ambient session do not supply the missing binding. A recorded ready result does
+not renew a released, expired or replaced lease.
+
+| Retained record | Recovery obligation | What the record does not establish |
+| --- | --- | --- |
+| Immutable capture | Read the original version and digest-bound bytes, including its original Turn. | Current execution eligibility, model retention or permission to replace the source. |
+| Managed claim receipt | Read the original operation and its result without deriving another claim identity. | A new claim generation or renewed ownership. |
+| Current lease | Read the actual owner, generation and validity through the existing lease owner. | A verified native capture binding merely because the owner matches. |
+| Already recorded ready context | Keep its original source and recovery reader available. | New dispatch, automatic re-claim or another settlement/debit. |
+
+A source rehearsal uses the real producer `172d80d630f4`, then main
+`5f132dd66585` and candidate `f42dfd592e4f` as readers. Each reader passes 14
+File/SQLite cases covering interruption before readiness, recorded readiness,
+active/released/expired leases, and changed ambient/native sessions. Repeated
+public hooks and restart preserve the original lease generation, claim receipt,
+receipt cursor, capture bytes and rollout log; the current reader can recover
+the original Turn and Todo from that old capture. These are isolated synthetic
+source journeys, not installed Host adoption, model execution or full journal
+recovery qualification.
+
+Qualify this boundary with captures and receipts produced by the supported old
+release, not only old-shaped fixtures created by current code. Reconcile the
+remaining admitted work, actual installed readers and recovery window before
+removing its decoder. Safe read-only recovery alone does not qualify automatic
+upgrade of that execution or retire its last reader.
+
 Code convergence is part of each migration slice, not only the final C9 cleanup.
 Both entrypoints must call the same semantic implementation for composition,
 reference validation, context reconstruction and settlement. Keep genuinely

@@ -461,6 +461,29 @@ C1 已完成退役。
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
 
+退役须区分读取历史证据与恢复执行。缺少已验证 live-guard 绑定的旧原生认领前 capture，
+即使原 lease 仍有效，也保持只读。先恢复原始字节、原 claim 回执和当前 lease；当前
+检查取得资格，不能使旧 capture 变成新 claim 的证明。重复 Hook、重启或不同 ambient
+session 都不能补出缺失绑定。已记录的 ready 结果不能续期已释放、过期或被替换的 lease。
+
+| 保留记录 | 恢复义务 | 该记录不能证明什么 |
+| --- | --- | --- |
+| 不可变 capture | 按原版本和摘要读取原始字节，包括原 Turn。 | 当前执行资格、模型保留或替换来源的权限。 |
+| Managed claim 回执 | 读取原 operation 及其结果，不派生另一个 claim 身份。 | 新 claim 代次或续期后的归属。 |
+| 当前 lease | 通过既有 lease owner 读取实际归属、代次与有效性。 | 仅因 owner 相同就取得已验证的原生 capture 绑定。 |
+| 已记录的 ready 上下文 | 保留原来源及其恢复 reader。 | 新派发、自动重新认领或另一次结算／扣额。 |
+
+一次源码演练使用真实 producer `172d80d630f4`，再分别由 main `5f132dd66585` 和候选
+`f42dfd592e4f` 读取。两种 reader 各通过 14 项 File／SQLite 用例，覆盖就绪前中断、
+已记录就绪、有效／释放／过期 lease，以及 ambient／原生 session 变化。重复公开 Hook
+与重启保持原 lease 代次、claim 回执、回执游标、capture 字节和 rollout log；当前
+reader 可从旧 capture 恢复原 Turn 与 Todo。这是隔离合成源码旅程，不是安装态 Host
+采用、模型执行或完整 journal 恢复资格。
+
+该边界须用受支持旧版本真实生成的 capture 和回执验证，不能只用当前代码构造的旧形状
+fixture。在删除 decoder 前核清剩余已准入工作、实际安装态 reader 和恢复窗口。安全
+只读恢复本身不代表该执行已取得自动升级资格，也不代表最后一个 reader 已退役。
+
 代码收敛属于每个迁移切片，不只留给最终 C9 清理。两个入口须共用 composition、引用
 校验、上下文重建与结算的语义实现。真实的宿主 launch/observation 差异留在薄 adapter；
 不为强行统一不同生命周期而另造通用 runner。各项决策仍由既有 typed owner 负责。
