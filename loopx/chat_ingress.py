@@ -224,6 +224,11 @@ class ChatIngressStore:
             raise OSError("Steering receipt is unreadable")
         return value
 
+    def steering_delivery_lock(self, session_id: str, ingress_id: str):
+        """Serialize one native send and its later readback across controllers."""
+        return exclusive_file_lock(self._ingress_path(session_id, ingress_id).with_suffix(".delivery"),
+            agent_id="loopx-chat", operation="chat_steering_delivery")
+
     def write_queue_steering(self, session_id: str, turn: dict[str, Any], plan: dict[str, Any]):
         """Persist the typed plan while the caller holds both queue fences."""
         from .chat_store import _atomic_write_json, utc_now
@@ -521,7 +526,7 @@ class ChatIngressStore:
             payload = _read_json(path)
             if payload.get("schema_version") != CHAT_INGRESS_SCHEMA_VERSION:
                 raise KeyError("chat ingress receipt was not found")
-            allowed = {"status", "active_turn_id", "error_code"}
+            allowed = {"status", "active_turn_id", "error_code", "native_steering"}
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat ingress fields: {sorted(unknown)}")
