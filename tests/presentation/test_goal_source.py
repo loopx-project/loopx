@@ -12,6 +12,7 @@ import pytest
 
 from loopx.capabilities.explore.result_log import build_explore_node_event, explore_history_rows
 from loopx.control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
+from loopx.registry import inspect_registry
 
 
 def manifest(*, connection=None, environment=None, scope=None):
@@ -132,3 +133,35 @@ def test_real_native_host_lists_goals_and_reads_canonical_history(tmp_path):
     with pytest.raises((SourceScopeError, subprocess.SubprocessError)):
         reader.status("unregistered")
     assert reader.status("first")["run_history"]["goals"][0]["id"] == "first"
+
+
+def test_registry_inspection_rechecks_retargeted_source_paths(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for project in (first, second):
+        project.mkdir()
+        (project / "active.md").write_text("# Research\n")
+    alias = tmp_path / "original"
+    try:
+        alias.symlink_to(first, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Directory symlinks are not available")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [
+        {"id": goal_id, "domain": "source-read", "status": "active",
+         "repo": str(repo), "state_file": "active.md", "adapter": {"kind": "test_v0"}}
+        for goal_id, repo in (("first", first), ("second", alias))
+    ]}))
+    shared = inspect_registry(registry)
+    assert shared["ok"] is False
+    assert any(row["code"] == "registry_state_file_shared" for row in shared["problem_diagnostics"])
+    assert [row["repo_goal_ids"] for row in shared["goals"]] == [["first", "second"]] * 2
+    assert [row["state_file_abs"] for row in shared["goals"]] == [str(first.resolve() / "active.md")] * 2
+
+    alias.unlink()
+    alias.symlink_to(second, target_is_directory=True)
+    separated = inspect_registry(registry)
+    assert separated["ok"] is True
+    assert [row["repo_goal_ids"] for row in separated["goals"]] == [["first"], ["second"]]
+    assert [row["state_file_abs"] for row in separated["goals"]] == [
+        str(first.resolve() / "active.md"), str(second.resolve() / "active.md"),
+    ]
