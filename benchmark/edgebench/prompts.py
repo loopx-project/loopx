@@ -17,7 +17,8 @@ def native_research_guidance() -> str:
     )
 
 
-def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = False) -> str:
+def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = False,
+                                   native_result_comparison: bool = False) -> str:
     """Separate reproducibility data from candidate inputs for every native arm."""
     from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
 
@@ -38,6 +39,13 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
         "to recover source evidence.\n\n"
         if native_probe else ""
     )
+    if native_result_comparison:
+        binding += (
+            "For an existing submission and an applicable recorded finding, the same tool's "
+            "--submission-id, --todo-id and --local-finding-id options return the native "
+            "feedback and verified comparison together. It only reads; a missing comparison "
+            "does not invalidate the native result.\n\n"
+        )
     return (
         "### Research Artifacts\n\n"
         f"Use `{RESEARCH_DIRECTORY}` for reusable research artifacts that are not "

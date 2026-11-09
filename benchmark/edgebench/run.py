@@ -128,6 +128,8 @@ def main(argv=None):
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
                         help="Optional local execution probe for heartbeat workers")
+    parser.add_argument("--native-result-comparison", action="store_true",
+                        help="Opt-in read-only native result comparison for native Explore with local_probe")
     parser.add_argument("--native-child-limit", type=int,
                         help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
@@ -200,6 +202,10 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_result_comparison and (
+            args.worker != "heartbeat-explore" or args.feedback != "native"
+            or args.execution_observation != "local_probe"):
+        parser.error("--native-result-comparison requires native heartbeat-explore with local_probe")
     if args.native_child_limit is not None and (
             args.native_child_limit < 1 or args.feedback != "native"):
         parser.error("--native-child-limit requires a positive limit and native feedback")
@@ -337,6 +343,18 @@ def main(argv=None):
     if managed_binding is not None and task.task_id != args.task:
         parser.error("Managed run task specification differs from the selected task")
     research_sidecar = args.feedback == "native" and not task.game_mode
+    native_result_scope = None
+    sforge_source = None
+    if args.native_result_comparison:
+        sforge_source = active_source_receipt()
+        if not research_sidecar or not sforge_source or task.task_id != args.task:
+            parser.error("--native-result-comparison requires a pinned native archive-scoring task")
+        native_result_scope = {
+            "judge_url": args.judge_url, "run": args.run_id, "task": task.task_id,
+            "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+            "scorer_commit": sforge_source["commit"],
+            "higher_is_better": task.judge.score_direction == "maximize",
+        }
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
         validate_research_scope(task.cwd, task.submit_paths)
@@ -370,6 +388,7 @@ def main(argv=None):
         workspace_instructions += research_artifact_instructions(
             checkpoint=checkpoint_request is not None,
             native_probe=args.execution_observation is not None,
+            native_result_comparison=args.native_result_comparison,
         )
         # All native arms get the same storage policy. Checkpoint coverage is
         # explicit; neither collection nor a sidecar changes native submissions.
@@ -435,6 +454,7 @@ def main(argv=None):
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),
+                         **({"native_result_scope": native_result_scope} if native_result_scope is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          **({"native_readiness_total_seconds": readiness_budget[0],
@@ -511,11 +531,12 @@ def main(argv=None):
         "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
         **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
-        "sforge_source": active_source_receipt(),
+        "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),
+        **({"native_result_comparison": True} if native_result_scope is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),

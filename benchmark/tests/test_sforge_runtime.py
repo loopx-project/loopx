@@ -1474,16 +1474,18 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     assert receipt.get("context_delivery") == (expected_delivery if expected_delivery != "off" else None)
 
 
-@pytest.mark.parametrize(("profile", "selected"), [
-    ("heartbeat-explore", False), ("heartbeat-explore", True), ("native-goal", True),
+@pytest.mark.parametrize(("profile", "selected", "compare"), [
+    ("heartbeat-explore", False, False), ("heartbeat-explore", True, False), ("native-goal", True, False),
+    ("heartbeat-explore", True, True), ("heartbeat-explore", False, True),
 ])
 def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp_path, monkeypatch, capsys,
-                                                                              profile, selected):
+                                                                              profile, selected, compare):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
     from benchmark.edgebench import run
     from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.sforge import SForgeWorker
 
     producer = "local_probe" if selected else None
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -1492,9 +1494,10 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
     (tmp_path / "fixture.json").write_text("{}")
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr(run, "active_source_receipt", lambda *a, **k: {"commit": "b" * 40})
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
-        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        task_id="fixture", cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     backend = SimpleNamespace(image_exists=lambda image: True,
@@ -1508,12 +1511,23 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert self._worker_env(cwd="/task").get("LOOPX_EXECUTION_OBSERVATION") == producer
 
     monkeypatch.setattr(BenchmarkCodex, "install", install_at_transport_boundary)
+    installed = []
+    scopes = []
+
+    async def install_entrypoint(self, environment, name, *_args):
+        installed.append(name)
+
+    monkeypatch.setattr(BenchmarkCodex, "_install_research_entrypoint", install_entrypoint)
+    monkeypatch.setattr(SForgeWorker, "_install_native_result_scope",
+                        lambda self, backend, handle: scopes.append(self.native_result_scope))
     trial = tmp_path / "runs" / "probe" / "fixture"
 
     def stop_before_model(**kwargs):
         worker = kwargs["agent"]
         worker.install_stop_hook(backend, None, trial, None)
-        assert json.loads((trial / "worker-profile.json").read_text()).get("execution_observation") == producer
+        profile_receipt = json.loads((trial / "worker-profile.json").read_text())
+        assert profile_receipt.get("execution_observation") == producer
+        assert profile_receipt.get("native_result_comparison") is (True if compare else None)
         raise RuntimeError("isolated install boundary")
 
     monkeypatch.setattr(run, "run_agent", stop_before_model)
@@ -1522,6 +1536,14 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
     if selected:
         args += ["--execution-observation", producer]
+    if compare:
+        args += ["--native-result-comparison"]
+        if not selected:
+            with pytest.raises(SystemExit, match="2"):
+                run.main(args)
+            assert "--native-result-comparison requires" in capsys.readouterr().err
+            assert not trial.exists()
+            return
     if profile == "native-goal":
         with pytest.raises(SystemExit, match="2"):
             run.main(args)
@@ -1532,3 +1554,10 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         run.main(args)
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
+    assert receipt.get("native_result_comparison") is (True if compare else None)
+    assert installed == (["loopx-bind-native-candidate"] if selected else [])
+    assert bool(scopes) is compare
+    if compare:
+        scope, = scopes
+        assert scope["run"] == "probe" and scope["task"] == "fixture"
+        assert scope["scorer_commit"] == "b" * 40
