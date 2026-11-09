@@ -20,7 +20,7 @@ from ...cli_commands.post_writeback import dispatch_committed_cli_post_writeback
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.todos.mutation_api import update_goal_todo
 from ...control_plane.work_items.task_lease import lease_is_active
-from .turn_context import _policy
+from .turn_context import _policy, project_work_yardstick_sources
 from .result_log import (
     append_explore_result_events,
     build_explore_node_event,
@@ -110,6 +110,7 @@ def _evolution_plan(attachment, projection, *, agent_id):
 
 def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None,
             todo_id=None, turn_instance_id=None, work_binding=None,
+            source_snapshot=None,
             _check_execution_measurements=True):
     previous = existing_node or {}
     update = attachment.get("question_update") or {}
@@ -151,7 +152,8 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         work_yardstick=({"decision": attachment["work_yardstick_decision"], "binding": {
             "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
             "turn_instance_id": turn_instance_id,
-        }} if "work_yardstick_decision" in attachment else None),
+        }, **({"source_snapshot": source_snapshot} if source_snapshot is not None else {})}
+            if "work_yardstick_decision" in attachment else None),
         _check_execution_measurements=_check_execution_measurements,
         recorded_at=recorded_at,
     )
@@ -212,6 +214,8 @@ def prepare_result_attachment(
     _replay_committed_at=None,
     _current_events=None,
     _link_options=None,
+    _prepared_source=None,
+    _committed_source_snapshot=...,
 ):
     """Validate before primary commit; this path never appends graph evidence."""
     result = normalize_result_attachment(attachment)
@@ -249,7 +253,7 @@ def prepare_result_attachment(
         **({"finding_limit": len(current_events)} if "work_yardstick_decision" in result else {}))
     if "work_yardstick_decision" in result:
         from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
-        effect_runtime_result("work_item.yardstick.continuation", {
+        checked = effect_runtime_result("work_item.yardstick.continuation", {
             # Only replay of the original committed attachment may finish after
             # disable; it cannot grant a new capture or change its contents.
             "enabled": _replay_committed_at is not None or work_yardstick_enabled(goal, runtime_root),
@@ -257,7 +261,13 @@ def prepare_result_attachment(
             "decision": result["work_yardstick_decision"], "evidence_refs": result["evidence_refs"],
             "binding": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id},
             "findings": existing["findings"],
+            "source_events": [{"goal_id": row["goal_id"], "event_id": row["event_id"]}
+                              for row in current_events],
+            **({"source_snapshot": _committed_source_snapshot}
+               if _committed_source_snapshot is not ... else {}),
         })
+        if _prepared_source is not None and "source_snapshot" in checked:
+            _prepared_source["source_snapshot"] = checked["source_snapshot"]
     if _evolves_question(result):
         _evolution_plan(result, existing, agent_id=agent_id)
     for node in existing.get("nodes", []):
@@ -291,14 +301,14 @@ def prepare_result_attachment(
 
 def _append_prepared_result(attachment, current_events, *, runtime_root, goal_id, agent_id,
                             todo_id, turn_instance_id, source_id, recorded_at, work_binding=None,
-                            require_current_graph=False):
+                            source_snapshot=None, require_current_graph=False):
     evolves = _evolves_question(attachment)
     plan = (_evolution_plan(attachment, build_explore_result_projection(current_events, goal_id=goal_id),
                             agent_id=agent_id) if evolves else {})
     events = _events(
         attachment, goal_id=goal_id, agent_id=agent_id, source_id=source_id,
         recorded_at=recorded_at, existing_node=plan.get("existing_node"), todo_id=todo_id,
-        turn_instance_id=turn_instance_id, work_binding=work_binding,
+        turn_instance_id=turn_instance_id, work_binding=work_binding, source_snapshot=source_snapshot,
     )
     graph = append_explore_result_events(
         explore_result_log_path(runtime_root, goal_id), events, expected_goal_id=goal_id,
@@ -346,32 +356,46 @@ def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, age
     event_scope = dict(binding, source_id="explore:work-finding:" + digest,
                        recorded_at=recorded_at, work_binding=binding)
     if prior:
+        event_scope["source_snapshot"] = (prior.get("work_yardstick") or {}).get("source_snapshot")
         if _events(attachment, **event_scope)[1] != prior:
             raise ValueError("Explore work finding conflicts with its recorded evidence")
     else:
+        prepared = {}
         attachment = prepare_result_attachment(attachment, **scope, _current_events=current,
-                                               _link_options=link)
+                                               _link_options=link, _prepared_source=prepared)
+        event_scope["source_snapshot"] = prepared.get("source_snapshot")
         _, result["graph"] = _append_prepared_result(
             attachment, current, runtime_root=runtime_root, require_current_graph=True, **event_scope,
         )
     try:
         if not prior or node_id not in (detail.get("explore_result_node_refs") or []):
-            if not update_goal_todo(**link).get("ok"):
+            linked = update_goal_todo(**link)
+            if not linked.get("ok"):
                 raise ValueError("Explore finding persisted; Todo association needs retry")
+            detail = linked.get("todo") or list_goal_todos(
+                registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                goal_id=goal_id, todo_id=todo_id,
+            ).get("todo")
+            if not isinstance(detail, dict):
+                raise ValueError("Explore finding persisted; Todo association readback needs retry")
         events = current if prior else load_explore_result_events_strict(log, goal_id=goal_id)
         prefix = []
         for event in events:
-            if event.get("event_kind") == "finding" and event.get("node_id") == node_id:
-                prefix.append(event)
-                if event.get("result_id") == finding_id:
-                    break
-        findings = build_explore_result_projection(
+            prefix.append(event)
+            if event.get("event_kind") == "finding" and event.get("result_id") == finding_id:
+                break
+        projection = build_explore_result_projection(
             prefix, goal_id=goal_id, finding_limit=len(prefix), mermaid_node_limit=3,
-        )["findings"]
+        )
         from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+        enabled = work_yardstick_enabled(goal, runtime_root)
+        cited_sources = project_work_yardstick_sources(
+            events=prefix, projection=projection, goal_id=goal_id, agent_id=agent_id,
+            work_todos=[detail], enabled=enabled, todo_id=todo_id, result_node=node_id,
+        )
         result.update(effect_runtime_result("explore.finding.receipt", dict(
-            binding, finding_id=finding_id, findings=findings,
-            enabled=work_yardstick_enabled(goal, runtime_root),
+            binding, finding_id=finding_id, findings=projection["findings"],
+            enabled=enabled, cited_sources=cited_sources,
         )))
     except Exception as error:
         result.update(ok=False, retryable=True, error=str(error))
@@ -452,6 +476,7 @@ def deliver_result_attachment(
             recorded_at=committed_at,
             todo_id=todo_id, turn_instance_id=turn_instance_id,
             work_binding=binding if prior is None or "work_binding" in prior else None,
+            source_snapshot=payload.get("explore_result_source_snapshot"),
             # A durable terminal intent can describe an old writer's event.
             # Structural reconstruction is only for exact canonical readback;
             # a missing event still goes through strict preparation below.
@@ -504,6 +529,7 @@ def deliver_result_attachment(
                 turn_instance_id=turn_instance_id,
                 _replay_committed_at=(committed_at if payload.get("idempotent_replay") is True else None),
                 _current_events=current_events,
+                _committed_source_snapshot=payload.get("explore_result_source_snapshot"),
             )
             events, result["graph"] = _append_prepared_result(
                 attachment, current_events, runtime_root=runtime_root,
@@ -511,6 +537,7 @@ def deliver_result_attachment(
                 source_id=intent["idempotency_key"], recorded_at=committed_at,
                 todo_id=todo_id, turn_instance_id=turn_instance_id,
                 work_binding=binding,
+                source_snapshot=payload.get("explore_result_source_snapshot"),
             )
         linked = update_goal_todo(
             **_link_arguments(
