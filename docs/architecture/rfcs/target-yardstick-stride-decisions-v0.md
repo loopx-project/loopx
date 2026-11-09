@@ -193,6 +193,13 @@ findings by the same agent on the linked question. Each profile keeps its own
 input and evaluator revisions, and cross-profile comparison still requires the
 same candidate pair. Findings with their own Yardstick decision retain their
 original work and target scope.
+The primary settlement records a server-owned canonical event-prefix count and
+content-bound event-id digest for these citations. Attachment recovery verifies
+that original prefix; later ingestion order cannot expand its evidence. Old
+captures without this source snapshot remain readable, but plain cited
+measurements stay unknown rather than acquiring the recovery-time graph.
+Readback replays that prefix through the existing Explore projection, so a later
+update to the same finding cannot rewrite its cited measurement.
 
 ### 5.3 Co-discovery: invest in a pair
 
