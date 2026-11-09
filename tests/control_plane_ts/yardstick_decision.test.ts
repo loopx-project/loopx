@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture, projectWorkYardstickPresentation,
-  validateWorkYardstickContinuation, projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
+  projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
+import {validateWorkYardstickContinuation} from "../../loopx/control_plane/work_items/yardstick_source.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 import {projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
@@ -193,7 +194,8 @@ test("the settlement freezes and verifies the original canonical event prefix", 
   const params = {enabled: true, decision, binding, findings: [], source_events: events};
   const first = validateWorkYardstickContinuation(params);
   assert.equal(first.source_snapshot.event_count, 2);
-  assert.match(first.source_snapshot.event_ids_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(first.source_snapshot.event_ids_sha256,
+    "9c39bca70a9d3a82756b561afab02853c5bfdc2f2a2e404d1a9c045093817a0d");
   const appended = {...params, source_events: [...events, {goal_id: binding.goal_id, event_id: "late"}], source_snapshot: first.source_snapshot};
   assert.deepEqual(validateWorkYardstickContinuation(appended), first);
   assert.throws(() => validateWorkYardstickContinuation({...appended,
@@ -204,6 +206,18 @@ test("the settlement freezes and verifies the original canonical event prefix", 
   assert.deepEqual(validateWorkYardstickContinuation({...appended, source_snapshot: null}), {decision});
   assert.throws(() => normalizeWorkYardstickDecision({...decision, source_snapshot: first.source_snapshot}), /unsupported/,
     "The author cannot supply evidence provenance in an attachment");
+});
+
+test("canonical prefix hashing preserves empty and UTF-8 stored digest vectors", () => {
+  const vectors = [
+    {ids: [], digest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
+    {ids: ["事件-🙂", 'quoted"\\id'], digest: "7510a7f2e168cfaff2b09b4c62b3607f15e8811ee9e0f58fd51537820da8507f"},
+  ];
+  for (const {ids, digest} of vectors) {
+    const result = validateWorkYardstickContinuation({enabled: true, decision, binding, findings: [],
+      source_events: ids.map(event_id => ({goal_id: binding.goal_id, event_id}))});
+    assert.deepEqual(result.source_snapshot, {event_count: ids.length, event_ids_sha256: digest});
+  }
 });
 
 test("only strictly older committed replay preserves a stale predecessor as history", () => {
