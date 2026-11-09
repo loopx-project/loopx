@@ -979,6 +979,74 @@ def test_update_preserves_selected_route_through_install_and_readback(tmp_path, 
         assert installer_env["LOOPX_RUNTIME_ROOT"] == str(runtime)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX snapshot rollback")
+@pytest.mark.parametrize("failed_stage", [None, "compatibility", "doctor", "extensions"])
+def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
+    tmp_path, monkeypatch, capsys, failed_stage,
+):
+    from loopx.cli import main
+
+    runtime = tmp_path / "selected runtime"
+    runtime.mkdir()
+    registry = runtime / "registry.global.json"
+    registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(runtime)}))
+    releases = tmp_path / "releases"
+    current, target = releases / "current", releases / "target"
+    for release in (current, target):
+        (release / "scripts").mkdir(parents=True)
+        (release / "scripts/loopx").write_text("#!/bin/sh\nexit 0\n")
+    launcher = tmp_path / "bin/loopx"
+    launcher.parent.mkdir()
+    launcher.symlink_to(current / "scripts/loopx")
+    monkeypatch.setattr("loopx.self_update._user_loopx_bin", lambda *_: launcher)
+    monkeypatch.setattr("loopx.self_update._user_releases_dir", lambda *_: releases)
+    snapshot = doctor_payload()
+    snapshot["package"]["release_root"] = str(current)
+    planning_calls, calls = [], []
+
+    def collect(**kwargs):
+        planning_calls.append(kwargs)
+        return snapshot
+
+    def run(command, **kwargs):
+        stage = ("compatibility" if "authority-archive" in command else
+                 "extensions" if "extension" in command else "doctor")
+        calls.append((stage, command))
+        passed = stage != failed_stage
+        return subprocess.CompletedProcess(
+            command, 0 if passed else 1,
+            json.dumps({"ok": passed, "stage": stage, "error": None if passed else "synthetic refusal"}),
+            "" if passed else "synthetic diagnostic",
+        )
+
+    monkeypatch.setattr("loopx.self_update.collect_doctor", collect)
+    monkeypatch.setattr("loopx.self_update.subprocess.run", run)
+    exit_code = main([
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "update", "--rollback", "target",
+    ])
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == (0 if failed_stage is None else 1)
+    assert result["ok"] is (failed_stage is None)
+    assert planning_calls == [{"registry_path": registry, "runtime_root_override": str(runtime)}]
+    assert [stage for stage, _ in calls] == {
+        None: ["compatibility", "doctor", "extensions"],
+        "compatibility": ["compatibility"],
+        "doctor": ["compatibility", "doctor"],
+        "extensions": ["compatibility", "doctor", "extensions"],
+    }[failed_stage]
+    for _, command in calls:
+        assert command[command.index("--registry") + 1] == str(registry.resolve())
+        assert command[command.index("--runtime-root") + 1] == str(runtime)
+    compatibility = calls[0][1]
+    assert "--require-current" in compatibility and "--execute" not in compatibility
+    assert result["execution"]["compatibility_returncode"] == (1 if failed_stage == "compatibility" else 0)
+    if failed_stage == "compatibility":
+        assert "synthetic refusal" in result["execution"]["compatibility_stdout_tail"]
+    expected_release = current if failed_stage in {"compatibility", "doctor"} else target
+    assert launcher.resolve() == expected_release / "scripts/loopx"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX archive installation ownership")
 @pytest.mark.parametrize("bin_target", [
     None, "", "default_alias", "custom", "custom_launcher_link", "relative_custom",
