@@ -674,12 +674,17 @@ def context_selection_binding(select: list[str], *, list_fields: bool, list_dept
         "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
 
 
+def initial_context_selection_bytes(payload: dict[str, Any],
+                                    selections: list[dict[str, Any]]) -> tuple[bytes, list[str]]:
+    return _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
+        present_goal_narrative=True)
+
+
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
                                         observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
-    raw, presented = _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
-        present_goal_narrative=True)
+    raw, presented = initial_context_selection_bytes(payload, selections)
     reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),

@@ -11,22 +11,34 @@ from .decision_capture import read_context_read_reference, write_initial_context
 
 def observed_first_read_reference(directory: str, target: dict[str, Any], recovery: dict[str, Any],
                                   context: dict[str, Any], plan: dict[str, Any],
-                                  initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                                  initial_read_plan: dict[str, Any] | None = None,
+                                  ) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
     """Pin the reduced view and its ordinary fallback from the same capture."""
     initial = initial_read_plan if initial_read_plan and initial_read_plan.get("initial") is True else {}
-    reference = _pin_observed_selection(directory, target, recovery, context, plan, initial.get("plan"))
-    if reference is not None and "linked_remaining" in plan and "remaining" in initial:
-        # Invalidation restores the ordinary remainder, not a second opening.
-        linked = _pin_observed_selection(directory, target, recovery, context,
-            {**plan["linked_remaining"], "reused": plan["reused"]}, initial["remaining"])
-        if linked is not None:
-            reference["linked_remaining"] = linked["path"]
-    return reference
+    pinned = _pin_observed_selection(directory, target, recovery, context, plan, initial.get("plan"))
+    if pinned is None:
+        return None
+    reference, content = pinned
+    # Keep this preview in the invocation only. A split remainder is pinned
+    # only if the actual output window needs it.
+    opening = ({"path": reference["path"], "content": content,
+                "reused": plan["reused"], "remaining": plan["linked_remaining"]}
+               if "linked_remaining" in plan and "remaining" in initial else None)
+    return reference, opening
+
+
+def observed_remaining_read_reference(directory: str, target: dict[str, Any], recovery: dict[str, Any],
+                                      context: dict[str, Any], opening: dict[str, Any],
+                                      ordinary_remaining: dict[str, Any]) -> Path | None:
+    """Bind the smaller remainder to the original observation and fallback."""
+    pinned = _pin_observed_selection(directory, target, recovery, context,
+        {**opening["remaining"], "reused": opening["reused"]}, ordinary_remaining)
+    return Path(pinned[0]["path"]) if pinned is not None else None
 
 
 def _pin_observed_selection(directory: str, target: dict[str, Any], recovery: dict[str, Any],
                             context: dict[str, Any], plan: dict[str, Any],
-                            ordinary_plan: dict[str, Any] | None) -> dict[str, Any] | None:
+                            ordinary_plan: dict[str, Any] | None) -> tuple[dict[str, Any], bytes] | None:
     try:
         path, digest = Path(recovery["path"]), recovery["sha256"]
         observation = {"directory": directory, "target": target, "fields": plan["reused"]}
@@ -43,9 +55,9 @@ def _pin_observed_selection(directory: str, target: dict[str, Any], recovery: di
                 "selection_sha256": hashlib.sha256(body).hexdigest()}
         if selections is None:
             return None
-        reference, _ = write_initial_context_read_reference(path, digest, context, selections,
+        reference, content = write_initial_context_read_reference(path, digest, context, selections,
             observed_read=observation)
-        return {"path": str(reference), "pointer_bytes": sum(len(key.encode()) + 4 for key in plan["reused"])}
+        return ({"path": str(reference), "pointer_bytes": sum(len(key.encode()) + 4 for key in plan["reused"])}, content)
     except (OSError, ValueError, KeyError, TypeError):
         return None  # The ordinary first read remains available.
 

@@ -17,6 +17,7 @@ from ..control_plane.turn_driver.decision_capture import (
     context_capture_read_command,
     context_selection_binding,
     context_selection_view as _context_selection_view,
+    initial_context_selection_bytes,
     read_context_capture_file as _read_capture,
     read_context_read_reference,
     write_context_read_reference,
@@ -99,6 +100,12 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         words.append("--turn-envelope")
     selection["command_args_template"] = shlex.join(words)
 
+
+
+def _observed_read_presentation(fields: dict[str, Any]) -> dict[str, Any]:
+    return {"previously_delivered_fields": list(fields),
+        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
+            "and the field pointer to recovery.command for its complete current body."}
 
 
 def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int,
@@ -301,9 +308,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                         except OSError:
                             reference_file = None
                 elif offset == 0:
-                    presentation = {**(presentation or {}), "previously_delivered_fields": list(observation["fields"]),
-                        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
-                            "and the field pointer to recovery.command for its complete current body."}
+                    presentation = {**(presentation or {}), **_observed_read_presentation(observation["fields"])}
         if pinned_selection is not None:
             selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
             list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
@@ -584,15 +589,60 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
         offset = page["next_offset"]
 
 
+def _contains_ordinary_opening(content: str, document: dict[str, Any], plan: dict[str, Any]) -> bool:
+    rows = plan.get("ordinary_opening_rows")
+    if not rows:
+        return False
+    prefix, _ = initial_context_selection_bytes(document, plan["plan"]["selections"][:rows])
+    # The ordinary page can end inside a later row. Compare the complete
+    # serialized control rows before the selection document's closing bytes.
+    return content.encode("utf-8").startswith(prefix.removesuffix(b"]}\n"))
+
+
+def budgeted_ready_opening(navigation: dict[str, Any], plan: dict[str, Any],
+                           document: dict[str, Any], content: bytes, *,
+                           page_bytes: int, output_bytes: int, reader_argv: list[str] | None,
+                           context_directory: str | None,
+                           observation: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep the ordinary reader when its actual first page carries the controls."""
+    capture = plan["capture"]
+    path, digest = Path(capture["path"]), capture["sha256"]
+    if observation is not None:
+        content = observation["content"]
+    reference = navigation.get("first_read_reference")
+    if reference and content:
+        try:
+            page = _capture_page(path, content, digest, offset=0, size=page_bytes,
+                output_limit=output_bytes, instruction=False, select=[], reference_file=Path(reference),
+                presentation=_observed_read_presentation(observation["reused"]) if observation else None,
+                reader_argv=reader_argv)
+        except ValueError:
+            pass  # The ordinary reader has no room for its page framing.
+        else:
+            if page["eof"] or _contains_ordinary_opening(page["content"], document, plan):
+                return navigation
+    remaining = None
+    if observation is not None and context_directory is not None:
+        from ..control_plane.turn_driver.native_first_read import observed_remaining_read_reference
+
+        remaining = observed_remaining_read_reference(context_directory, navigation["target"],
+            capture, document, observation, plan["remaining"])
+    return _bounded_initial_read(navigation, plan, page_bytes=page_bytes, output_bytes=output_bytes,
+        reader_argv=reader_argv, attach_page=False, remaining_reference=remaining) or navigation
+
+
 def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
                           page_bytes: int, output_bytes: int, reader_argv: list[str] | None,
-                          attach_page: bool = True, remaining_reference: Path | None = None) -> dict[str, Any] | None:
+                          attach_page: bool = True, remaining_reference: Path | None = None,
+                          ordinary_page: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Try the typed opening and keep the remainder pinned to the same capture."""
     if "opening" not in plan or "first_read_command" not in navigation:
         return None
     try:
         path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
         digest = plan["capture"]["sha256"]
+        if ordinary_page and _contains_ordinary_opening(ordinary_page["content"], document, plan):
+            return None
         opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
         if len(content) > page_bytes or len(content) >= output_bytes:
             return None
@@ -646,7 +696,7 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
                 and "previously_delivered_fields" not in page
                 and (opening := _bounded_initial_read(navigation, initial_read_plan,
                     page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
-                    output_bytes=output_limit, reader_argv=reader_argv)) is not None):
+                    output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page)) is not None):
             return opening
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")
