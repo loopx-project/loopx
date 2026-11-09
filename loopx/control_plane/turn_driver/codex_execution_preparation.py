@@ -2,7 +2,7 @@
 
 The TypeScript control plane remains the decision owner.  This adapter accepts
 only its exact ordinary claim, executes it through the public CLI, and proves
-the same Todo (and Turn when present) is ready before returning a Host receipt.
+the captured Todo and Turn are ready before returning a Host receipt.
 """
 from __future__ import annotations
 
@@ -223,12 +223,12 @@ def execute_codex_execution_preparation(
     *,
     cwd: Path,
     scenario: str,
-    capture_directory: Path | None = None,
-    context_directory: Path | None = None,
+    capture_directory: Path,
+    context_directory: Path,
     timeout: float = 8,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
-    """Execute one projected claim and prove same-identity readiness.
+    """Execute one journal-bound claim and publish its ready capture.
 
     The hook never selects work.  Unknown/malformed requests fail before a
     subprocess.  The ordinary claim remains the authority and rechecks all
@@ -272,15 +272,18 @@ def execute_codex_execution_preparation(
         or workspace.resolve() != workspace
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
-    invoke = runner or _default_runner
-    claim_operation_id = None
-    if context_directory is not None or "source_sha256" in request:
-        if context_directory is None or capture_directory is None or not turn_instance_id:
-            raise ValueError("Native execution preparation requires a bound captured Turn")
-        claim_operation_id = _native_claim_operation_id(request)
-        expected_claim += ["--claim-operation-id", claim_operation_id]
+    source_sha256 = request.get("source_sha256")
+    if (
+        context_directory is None or capture_directory is None or not turn_instance_id
+        or request.get("readback_only") is True
+        or not isinstance(source_sha256, str) or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None
+    ):
+        raise ValueError("Native execution preparation requires a bound captured Turn")
+    claim_operation_id = _native_claim_operation_id(request)
+    expected_claim += ["--claim-operation-id", claim_operation_id]
     if request.get("claim_args") != expected_claim:
         raise ValueError("invalid Codex execution-preparation claim arguments")
+    invoke = runner or _default_runner
     claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
@@ -290,7 +293,7 @@ def execute_codex_execution_preparation(
         runner=invoke,
     )
     claim_reference = claimed.get("claim_operation_id")
-    if claim_operation_id is not None and claim_reference != claim_operation_id:
+    if claim_reference != claim_operation_id:
         raise RuntimeError("Native execution preparation did not recover its original managed claim")
     guard = [
         "quota", "should-run",
@@ -298,12 +301,9 @@ def execute_codex_execution_preparation(
         "--agent-id", agent_id,
         *( ["--codex-app"] if scenario == "codex_app_heartbeat" else
            ["--runtime-profile", "codex_app_ssh_goal"] ),
-        *(["--context-delivery", "on", "--codex-context-dir", str(context_directory),
-           "--defer-context-presentation"] if context_directory is not None else
-          ["--context-delivery", "off"]),
-        "--todo-id", todo_id,
-        *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
-        *(["--decision-output-dir", str(capture_directory), "--prepared-capture-reference"] if capture_directory is not None else []),
+        "--context-delivery", "on", "--codex-context-dir", str(context_directory), "--defer-context-presentation",
+        "--todo-id", todo_id, "--turn-instance-id", turn_instance_id,
+        "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
     ]
     after = _run_json(
         guard,
@@ -316,10 +316,6 @@ def execute_codex_execution_preparation(
     preparation = after.get("execution_preparation")
     selected = after.get("selected_todo")
     receipt = after.get("heartbeat_receipt")
-    same_turn = not turn_instance_id or (
-        isinstance(receipt, Mapping)
-        and receipt.get("turn_instance_id") == turn_instance_id
-    )
     ready = (
         after.get("ok") is True
         and after.get("goal_id") == goal_id
@@ -332,32 +328,29 @@ def execute_codex_execution_preparation(
         and preparation.get("todo_id") == todo_id
         and preparation.get("agent_id") == agent_id
         and preparation.get("delivery_allowed") is True
-        and same_turn
+        and isinstance(receipt, Mapping)
+        and receipt.get("turn_instance_id") == turn_instance_id
     )
     if not ready:
         raise RuntimeError(
             "LoopX Host claim completed without a same-Todo ready postcondition"
         )
-    receipt = {
+    digest = after.get("capture_sha256")
+    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None:
+        raise ValueError("The guard did not return its published capture digest")
+    # The caller presents this same complete decision without admitting again.
+    return {
         "event": "host_execution_prepared",
         "goal_id": goal_id,
         "agent_id": agent_id,
         "todo_id": todo_id,
-        **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
+        "turn_instance_id": turn_instance_id,
         "execution_preparation": dict(preparation),
         "normal_delivery_allowed": True,
+        "capture_sha256": digest,
+        "capture_path": str(capture_directory / "decision.json"),
+        "claim_operation_id": claim_operation_id,
     }
-    if capture_directory is not None:
-        digest = after.get("capture_sha256")
-        if not isinstance(digest, str) or len(digest) != 64:
-            raise ValueError("The guard did not return its published capture digest")
-        receipt["capture_sha256"] = digest
-        receipt["capture_path"] = str(capture_directory / "decision.json")
-    if isinstance(claim_reference, str) and claim_reference:
-        receipt["claim_operation_id"] = claim_reference
-    # The Host already paid for the captured complete decision. Its caller
-    # presents that source through the normal reader instead of admitting again.
-    return receipt
 
 
 def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
