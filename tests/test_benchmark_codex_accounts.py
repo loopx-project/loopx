@@ -1,6 +1,7 @@
 """Independent quota, credential isolation and ambiguous-write boundaries."""
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,7 +44,7 @@ def owner(tmp_path, monkeypatch):
         manager = SimpleNamespace(auth=paths["large"], slot=paths.__getitem__)
         revision = "original"
 
-        def status(self):
+        def status(self, *, adopt_current=True):
             return dict(slots=list(paths), active_slot="large", current_login_matches=True,
                         recovery_required=False, selection_revision=self.revision)
 
@@ -151,3 +152,76 @@ def test_cli_failure_does_not_expose_private_paths_or_provider_details(owner, ca
     output = capsys.readouterr()
     assert json.loads(output.out) == {"ok": False, "code": "continuation_login_unavailable"}
     assert "/private" not in output.out and not output.err
+
+
+@pytest.mark.parametrize("selection", ["selected", "stale", "unselected"])
+@pytest.mark.parametrize("execute", [False, True])
+def test_real_native_preparation_preserves_service_recovery_and_selection(tmp_path, monkeypatch, selection, execute):
+    """A quota preview cannot repair desktop state, even when repair is possible."""
+    package = Path(__file__).resolve().parents[1] / "packages/loopx-codex-provider-routing/src"
+    monkeypatch.syspath_prepend(str(package))
+    from loopx_codex_provider_routing import native_host
+
+    home = tmp_path.resolve()
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    monkeypatch.setenv("CODEX_ELECTRON_USER_DATA_PATH", str(home / "frontend"))
+    which = native_host.shutil.which
+    monkeypatch.setattr(native_host.shutil, "which", lambda name: "/usr/bin/true" if name == "codex" else which(name))
+    discover = native_host.discover
+    host_type = native_host.NativeHost
+    monkeypatch.setattr(native_host, "discover", lambda: discover(user_home=home))
+    monkeypatch.setattr(native_host, "NativeHost",
+        lambda adapter, **kwargs: host_type(adapter, user_home=home, **kwargs))
+    monkeypatch.setattr(native_host.sys, "platform", "darwin")
+    monkeypatch.setattr(native_host.native_app, "app_bundle", lambda *_: home / "Fixture.app")
+    monkeypatch.setattr(native_host.native_app, "executable", lambda _: Path("/usr/bin/true"))
+    monkeypatch.setattr(native_host.native_app, "running", lambda *_: None)
+    resumed = []
+    monkeypatch.setattr(host_type, "resume_chat_agents", lambda _: resumed.append(True))
+    spec = native_host.native_app.route(home, "gpt")
+    accounts = native_host.native_account_store
+    store = accounts.Accounts(home, spec, None, None, None)
+    for slot in ("source", "large"):
+        claims = base64.urlsafe_b64encode(json.dumps({"sub": "fixture-" + slot}).encode()).decode().rstrip("=")
+        raw = json.dumps({"tokens": {"id_token": "fixture." + claims + ".signature",
+            "access_token": "fixture-access", "refresh_token": "fixture-refresh",
+            "account_id": "fixture-" + slot}}).encode()
+        accounts.atomic(store.slot(slot), raw)
+    accounts.atomic(store.auth, accounts.read_private(store.slot("large")))
+    if selection != "unselected":
+        slot = "large" if selection == "selected" else "source"
+        accounts.atomic(store.active, accounts.encoded(dict(slot=slot, binding=store.binding,
+            identity=accounts.identity(accounts.read_private(store.slot(slot))))))
+    accounts.atomic(store.root / "chat-recovery.json", b'{"fixture":true}')
+    monkeypatch.setattr(native_host, "read_usage", lambda raw: {
+        "rateLimitsByLimitId": {"codex": {"primary": {
+            "usedPercent": 100 if raw == accounts.read_private(store.slot("source")) else 10,
+            "resetsAt": 5000}, "credits": {"hasCredits": False}}}})
+
+    destination = home / "isolated"
+
+    def snapshot():
+        return {str(p.relative_to(home)): (p.stat().st_mode, p.read_bytes() if p.is_file() else None)
+                for p in home.rglob("*") if not p.is_relative_to(destination)}
+
+    before = snapshot()
+    args = dict(source_login=store.slot("source"), destination=destination,
+        slots=["source", "large"], operation_id="preview", run_id="fixture-run",
+        deadline_epoch=3000, clock=lambda: 1000, execute=execute)
+    if selection == "selected":
+        result = prepare(**args)
+        assert result["decision"]["target"] == "large"
+        assert result["prepared"] is execute
+        assert destination.exists() is execute
+        if execute:
+            assert accounts.read_private(destination / "auth.json") == accounts.read_private(store.auth)
+    else:
+        with pytest.raises(ValueError, match="ownership is unavailable"):
+            prepare(**args)
+        assert not destination.exists()
+    assert not resumed
+    assert snapshot() == before
+    # Ordinary account-manager status retains its existing adoption behavior.
+    if selection != "selected":
+        assert store.status()["active_slot"] == "large"
+        assert store.state()["slot"] == "large"
