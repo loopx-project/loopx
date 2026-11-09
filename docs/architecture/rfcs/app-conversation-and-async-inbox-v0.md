@@ -2042,14 +2042,19 @@ metadata. Such work remains pending after the recovered prose is delivered;
 answer restoration does not certify the requested business or handoff complete.
 Cancellation failure retains the primary provider error and unconfirmed cleanup.
 
-After the recovered answer is independently delivered, a malformed batch whose
-only actions are string-brief handoffs can reserve one **format review** through
-the original Session queue. Fresh original native input/answer hashes, current
-binding, source readback and an idle queue are required. The review sends no
-business request again: that invocation disables native tools and user hooks,
-requires exact normal text-only completion, and withholds model prose until
-validation. Each normalized brief must retain its original context text and the
-same ordered recipients. Other actions, changed targets, unknown completion,
+After the original answer is independently delivered and its native result is
+matched, a malformed batch containing only handoffs with bounded textual briefs
+can reserve one **format review** through the original Session queue. Fresh
+original native input/answer hashes, current binding, source readback and an
+idle queue are required. Handoff `inputs` identify shared relative files;
+put PR, issue and other web links in `context`. When a brief is otherwise valid
+and every input is a plain HTTPS link without credentials, a query or a fragment,
+the reserved review on the original adapter retains the entire original brief
+verbatim as context with empty file inputs. It does not fetch URLs or send a
+new model request. Other eligible shapes and the configured Codex fallback
+use the existing tools-disabled, text-only native review;
+model prose is withheld until validation. Both paths preserve the original
+text and ordered recipients. Other actions, changed targets, unknown completion,
 new input, steering, stop or revoked authority admit no handoff.
 
 The existing ingress preserves the original source id, so ordinary publication
@@ -2059,7 +2064,7 @@ The original reply worker returns those receipts in a distinct presentation
 phase alongside the immutable failed Turn, failure notice and recovered answer.
 Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
-Other malformed actions and completed Turns without a recovered native result
+Other malformed actions and completed Turns without a verified native result
 remain explicit holds; this path is not a generic action or execution replayer.
 
 ### Completed private project result reviews
