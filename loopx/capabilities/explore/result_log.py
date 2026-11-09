@@ -18,7 +18,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ...file_lock import exclusive_file_lock
 from ...control_plane.runtime.time import chronology_key
@@ -631,6 +631,7 @@ def append_explore_result_events(
     create_only_node_ids: Sequence[str] = (),
     require_ordered_prefix: bool = False,
     expected_event_ids: Sequence[str] | None = None,
+    before_commit: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     """Append a validated batch once by event id under the result-log lock.
 
@@ -655,6 +656,7 @@ def append_explore_result_events(
         create_only_node_ids=create_only_node_ids,
         require_ordered_prefix=require_ordered_prefix,
         expected_event_ids=expected_event_ids,
+        before_commit=before_commit,
     )
 
 
@@ -666,6 +668,7 @@ def _append_validated_explore_result_events(
     create_only_node_ids: Sequence[str] = (),
     require_ordered_prefix: bool = False,
     expected_event_ids: Sequence[str] | None = None,
+    before_commit: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     """Shared file effect after the owning caller qualifies the events.
 
@@ -742,8 +745,13 @@ def _append_validated_explore_result_events(
                 for event in pending:
                     validate_research_append(current_events, event, proposal=proposal)
                     current_events.append(event)
+            payload = "".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n" for event in pending)
+            # The owning caller may require final authority admission after
+            # the lock wait and CAS. The log never decides that authority.
+            if before_commit is not None:
+                before_commit()
             with log_path.open("a", encoding="utf-8") as handle:
-                handle.write("".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n" for event in pending))
+                handle.write(payload)
             appended = len(pending)
     return {
         "ok": True,

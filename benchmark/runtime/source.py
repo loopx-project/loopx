@@ -81,7 +81,8 @@ def require_candidate_content(source: Path, revision: str, *, work_finding: bool
                  {"candidate_snapshot", "candidate_manifest_sha256"}, "candidate_content")]
     if work_finding:
         required.extend([
-            ("loopx/capabilities/explore/result_writeback.py", {"record_work_finding"}, "work finding"),
+            ("loopx/capabilities/explore/result_writeback.py",
+             {"record_work_finding", "_work_finding_commit_guard"}, "work finding commit guard"),
             ("loopx/cli_commands/explore.py", {"_record_work_finding"}, "work finding CLI"),
         ])
     for module, functions, label in required:

@@ -747,6 +747,20 @@ when the confirmed evidence covers the same two candidates on both declared
 profiles. The native adapter verifies the submission and supplies measurement
 facts. Explore and Yardstick own the association, comparison and readback.
 
+A new work-bound finding has no earlier primary commit to authorize its graph
+effect. In the local File/SQLite, legacy source-registry profile, its graph
+append holds the existing canonical writer guard together with source-registry
+and machine-policy locks. The typed admission owner rechecks the original
+claim/lease generation, open Todo, registered actor, Goal Stop and enabled
+evidence policy under those guards. A release or transfer cannot cross that
+commit. Lease admission uses a fresh runtime clock after the log-lock wait and
+graph CAS, so expiry while queued is rejected. Completing that one admitted
+append does not renew execution authority. A later association failure can still be retried without rewriting the
+committed finding. Source-session incarnations and remote-provider fences are
+not qualified for this entrypoint and are refused before append. A local mutex
+does not establish a distributed PostgreSQL fence. Recovery of an attachment
+whose ordinary primary already committed retains its existing delivery contract.
+
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

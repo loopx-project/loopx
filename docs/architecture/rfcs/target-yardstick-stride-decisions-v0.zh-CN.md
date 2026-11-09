@@ -573,6 +573,17 @@ refresh-state 复用同一个 Todo 的规范研究问题。写入回执返回这
 给出排序对比。原生适配器负责核验提交并提供测量事实，Explore 和 Yardstick
 负责关联、对比与读回。
 
+新的工作绑定 finding 没有更早的主提交来授权图写入。在本地 File/SQLite、
+legacy 源 registry profile 中，它在图 append 期间同时持有既有 canonical writer
+guard、源 registry 和设备策略锁。Typed 准入 owner 在这些 guard 内复验原
+claim/lease 代际、开放 Todo、注册 actor、Goal Stop 及证据策略的开启状态。
+Release 或 transfer 不能穿过该提交。Lease 准入使用日志锁等待与图 CAS 完成之后的
+新运行时时钟，排队期间到期会被拒绝；完成这一次已准入的 append 不续授执行权。
+提交之后若关联失败，仍可重试关联而不改写
+已提交的 finding。该入口尚未验证 source-session incarnation 或远程 provider
+fence，因而在 append 前拒绝这些路径；本机互斥锁不能证明 PostgreSQL 的分布式
+fence。普通主提交已经成功的附件恢复，继续遵守原有延迟交付契约。
+
 反证要求在下一个具体选择处重新判断，不构成新的硬门、fidelity 认证、放松正确性约束的
 权限或每轮重规划指令。后续有意义的 capture 可复用 execution observation，把前次
 提议方法连到实际方法、候选和证据，也允许有据采用不同方法。

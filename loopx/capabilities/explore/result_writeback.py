@@ -6,6 +6,7 @@ never acquires a claim or lease, and can replay after partial delivery.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -166,7 +167,8 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
 
 
 def _link_arguments(
-    *, registry_path, runtime_root, goal_id, agent_id, todo_id, node_id, require_active=False
+    *, registry_path, runtime_root, goal_id, agent_id, todo_id, node_id, require_active=False,
+    _authority_basis=None,
 ):
     # Read the active authority. Normal update rechecks ownership/lease on commit.
     snapshot = read_canonical_todos_if_promoted(
@@ -176,6 +178,8 @@ def _link_arguments(
     )
     proof = {}
     if snapshot is not None:
+        if _authority_basis is not None:
+            _authority_basis["provider_revision"] = snapshot["provider_revision"]
         leases = [item for item in snapshot["leases"] if item.get("todo_id") == todo_id]
         if snapshot.get("handoff_mode") == "hard_lease" or leases:
             owned = [
@@ -299,9 +303,56 @@ def prepare_result_attachment(
     return result
 
 
+@contextmanager
+def _work_finding_commit_guard(*, registry_path, runtime_root, goal_id, agent_id, todo_id,
+                               node_id, proof, registry_sha256, provider_revision, yardstick_requested):
+    from ...agent_registry import registered_agent_ids_from_registry
+    from ...file_lock import (exclusive_cross_runtime_file_lock, exclusive_file_lock,
+                              cross_runtime_lock_witness)
+    from ...history import load_registry
+    from ..machine_configuration.store import machine_configuration_store_path
+    from ...control_plane.coordination.shadow_management import shadow_maintenance_lock_target
+    from ...control_plane.goals.activation import goal_activation_state
+    from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+
+    target = shadow_maintenance_lock_target(runtime_root, goal_id)
+    with ExitStack() as locks:
+        # Same marker as canonical claim/lease/lifecycle writers. A registry
+        # writer may already hold R before requesting a source lock: never wait
+        # for R in reverse order, matching the existing team-plan adapter.
+        locks.enter_context(exclusive_cross_runtime_file_lock(target, operation="explore-work-finding"))
+        locks.enter_context(exclusive_cross_runtime_file_lock(
+            registry_path, operation="explore-work-finding", timeout_seconds=0))
+        locks.enter_context(exclusive_file_lock(machine_configuration_store_path(runtime_root),
+                                                operation="explore-work-finding"))
+        goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
+        request = {
+            "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id,
+            "agent_id": agent_id, "todo_id": todo_id, "node_id": node_id,
+            "lock": cross_runtime_lock_witness(target),
+            "registry_source": {"path": str(registry_path.resolve()),
+                                "sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest()},
+            "expected_registry_sha256": registry_sha256,
+            "expected_provider_revision": provider_revision,
+            "profile_id": load_registry(registry_path).get("profile_id"),
+            "goal_authority": {"kind": "present", "goal_id": goal_id,
+                               "registration_status": goal.get("status", "active"),
+                               "activation_state": goal_activation_state(goal).value},
+            "registered_agents": registered_agent_ids_from_registry(registry_path, goal_id),
+            "explore_enabled": bool(graph or gate["enabled"]),
+            "yardstick_requested": yardstick_requested,
+            "yardstick_enabled": work_yardstick_enabled(goal, runtime_root),
+            "proof": {"idempotency_key": proof.get("task_lease_idempotency_key"),
+                      "expected_version": proof.get("task_lease_expected_version")},
+        }
+        # The log invokes this single admission after acquiring its own lock
+        # and checking CAS, immediately before the prepared bytes are written.
+        yield lambda: effect_runtime_result("explore.finding.admit", request)
+
+
 def _append_prepared_result(attachment, current_events, *, runtime_root, goal_id, agent_id,
                             todo_id, turn_instance_id, source_id, recorded_at, work_binding=None,
-                            source_snapshot=None, require_current_graph=False):
+                            source_snapshot=None, require_current_graph=False, commit_authority=None):
     evolves = _evolves_question(attachment)
     plan = (_evolution_plan(attachment, build_explore_result_projection(current_events, goal_id=goal_id),
                             agent_id=agent_id) if evolves else {})
@@ -310,13 +361,20 @@ def _append_prepared_result(attachment, current_events, *, runtime_root, goal_id
         recorded_at=recorded_at, existing_node=plan.get("existing_node"), todo_id=todo_id,
         turn_instance_id=turn_instance_id, work_binding=work_binding, source_snapshot=source_snapshot,
     )
-    graph = append_explore_result_events(
-        explore_result_log_path(runtime_root, goal_id), events, expected_goal_id=goal_id,
-        create_only_node_ids=[] if evolves else [attachment["node_id"]],
-        expected_event_ids=([row["event_id"] for row in current_events]
-                            if evolves or require_current_graph or "work_yardstick_decision" in attachment
-                            else None),
-    )
+    guard = (_work_finding_commit_guard(
+        runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+        node_id=attachment["node_id"], yardstick_requested="work_yardstick_decision" in attachment,
+        **commit_authority,
+    ) if commit_authority is not None else nullcontext())
+    with guard as admit:
+        graph = append_explore_result_events(
+            explore_result_log_path(runtime_root, goal_id), events, expected_goal_id=goal_id,
+            create_only_node_ids=[] if evolves else [attachment["node_id"]],
+            expected_event_ids=([row["event_id"] for row in current_events]
+                                if evolves or require_current_graph or "work_yardstick_decision" in attachment
+                                else None),
+            **({"before_commit": admit} if admit is not None else {}),
+        )
     return events, graph
 
 
@@ -326,6 +384,7 @@ def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, age
     if not (agent_id and todo_id and turn_instance_id):
         raise ValueError("A work finding requires --agent-id, --todo-id and --turn-instance-id")
     require_registered_agent_id(registry_path=registry_path, goal_id=goal_id, agent_id=agent_id)
+    registry_sha256 = hashlib.sha256(registry_path.read_bytes()).hexdigest()
     goal, graph_enabled, gate = _policy(registry_path, goal_id, runtime_root)
     if not (graph_enabled or gate["enabled"]):
         raise ValueError("A work finding requires enabled Explore evidence or planning mode")
@@ -340,9 +399,10 @@ def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, age
         registry_path=registry_path, runtime_root_override=str(runtime_root), **binding,
     ))
     node_id = attachment["node_id"]
+    authority_basis = {}
     link = _link_arguments(registry_path=registry_path, runtime_root=runtime_root,
                            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, node_id=node_id,
-                           require_active=True)
+                           require_active=True, _authority_basis=authority_basis)
     # Exact retries of a normalized observation in this Turn keep one finding.
     digest = hashlib.sha256(json.dumps([binding, attachment], sort_keys=True).encode()).hexdigest()
     finding_id = "finding_" + digest
@@ -365,8 +425,12 @@ def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, age
                                                _link_options=link, _prepared_source=prepared)
         event_scope["source_snapshot"] = prepared.get("source_snapshot")
         _, result["graph"] = _append_prepared_result(
-            attachment, current, runtime_root=runtime_root, require_current_graph=True, **event_scope,
+            attachment, current, runtime_root=runtime_root, require_current_graph=True,
+            commit_authority=dict(registry_path=registry_path, proof=link,
+                                  registry_sha256=registry_sha256,
+                                  provider_revision=authority_basis.get("provider_revision")), **event_scope,
         )
+        result["primary_committed"] = True
     try:
         if not prior or node_id not in (detail.get("explore_result_node_refs") or []):
             linked = update_goal_todo(**link)

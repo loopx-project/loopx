@@ -1622,5 +1622,13 @@ def test_formal_preflight_requires_the_existing_product_writeback_and_cli(tmp_pa
         require_candidate_content(product, direct_only, work_finding=True)
     complete = copy_and_commit(["loopx/cli_commands/explore.py"])
     require_candidate_content(product, complete, work_finding=True)
+    # The earlier API shape alone does not establish guarded commit semantics.
+    old_writer = product / "loopx/capabilities/explore/result_writeback.py"
+    old_writer.write_text("def record_work_finding(): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(old_writer)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "Earlier unguarded product API"], check=True)
+    unguarded = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="Explore work finding commit guard"):
+        require_candidate_content(product, unguarded, work_finding=True)
     # Capture-only remains compatible with the earlier product; source pins are never rewritten.
     require_candidate_content(product, content)
