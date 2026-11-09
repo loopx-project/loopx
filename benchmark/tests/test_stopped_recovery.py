@@ -205,7 +205,7 @@ def test_stopped_recovery_rejects_invalid_archive_timeout(tmp_path, timeout):
 
 
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1", reason="Explicit disposable Docker qualification")
-@pytest.mark.parametrize('returned', [False, True])
+@pytest.mark.parametrize('returned', [False, True, 'idle'])
 def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path, monkeypatch, returned):
     docker = pytest.importorskip("docker")
     client = docker.from_env(timeout=30)
@@ -213,7 +213,11 @@ def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path,
     local = tmp_path / "fixture"
     local.mkdir()
     declaration = _source(local)
-    if returned:
+    if returned == 'idle':
+        from benchmark.tests.test_idle_host_handoff import _idle_return
+
+        _idle_return(declaration)
+    elif returned:
         _returned_budget_stop(declaration)
     declaration = {key: value.replace(str(local), "/fixture") for key, value in declaration.items()}
     try:
@@ -251,7 +255,7 @@ def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path,
 
         allowance = 30
         proof = subject.prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
-            output=tmp_path / "proof.json", timeout=allowance, install=True)
+            output=tmp_path / "proof.json", timeout=allowance, install=True, idle_host_handoff=returned == 'idle')
         assert proof["installed_proof_path"].startswith("/fixture/control/interruption-source-")
         assert len([path for path, _ in archive_requests if path == proof["installed_proof_path"]]) == 2
         remaining = [seconds for _, seconds in archive_requests]

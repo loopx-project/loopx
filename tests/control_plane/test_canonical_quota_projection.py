@@ -25,6 +25,15 @@ def test_provider_projection_uses_complete_source_differences_and_scope_exit(tmp
         reference = canonical_todo_source_reference(source)
         assert reference is not None, "the real native read must supply a validated reference"
         assert reference["changes"] == []
+        # Mapping insertion order is not a caller change. Reordering a complete
+        # native summary must retain its source without hiding scalar changes.
+        reordered = deepcopy(source)
+        entries = list(reordered.items())
+        reordered.clear()
+        reordered.update(reversed(entries))
+        assert canonical_todo_source_reference(reordered) == reference
+        reordered["items"][0]["done"] = 0
+        assert canonical_todo_source_reference(reordered) is None
         copied = deepcopy(source)
         proof = {"agent_id": fixture.AGENT_ID, "state": "waiting", "evidence": {"revision": 9007199254740993, "ratio": -0.0}}
         copied["vision_wait_states"] = [proof]
@@ -150,6 +159,15 @@ def test_refresh_summary_pair_preserves_independent_inputs_and_freshness(tmp_pat
         assert len(requests) == 1 and len(requests[0]["requests"]) == 2
         assert all("source_reference" in row["summary_request"] for row in requests[0]["requests"])
         assert all(not row["summary_request"]["consume_display_views"] for row in requests[0]["requests"])
+        # Each role must match its own freshly read full field, even when both
+        # requests share one provider read. A rejected pair cannot poison reuse.
+        invalid = deepcopy(requests[0])
+        references = [row["summary_request"]["source_reference"] for row in invalid["requests"]]
+        assert references[0]["field_sha256"] != references[1]["field_sha256"]
+        references[1]["field_sha256"] = references[0]["field_sha256"]
+        with pytest.raises(ValueError, match="original complete read"):
+            project_todo_read(invalid)
+        assert select_quota_todo_summaries(user, agent, agent_identity=identity) == expected
         stale = deepcopy(agent)
         stale.expected = {**stale.expected, "cursor": "foreign"}
         with pytest.raises(ValueError, match="canonical source changed"):
