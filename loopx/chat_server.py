@@ -60,7 +60,8 @@ from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
-from .extensions.lark.private_conversations import LarkPrivateConversations, project_private_reply_history
+from .extensions.lark.private_conversations import (LarkPrivateConversations, PrivateUnsupportedMediaHistory,
+    project_private_reply_history)
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
@@ -481,6 +482,7 @@ class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTP
         self.runtime_identity = release_runtime_identity()
         super().__init__(*args, **kwargs)
         self.completed_todo_pages = CompletedTodoPages()
+        self.private_media_history = PrivateUnsupportedMediaHistory()
 
     def server_close(self) -> None:
         background_api.close_chat_background_services(self)
@@ -929,11 +931,19 @@ class ChatRequestHandler(
             if selection["turn_id"] is None:
                 self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
+            session = store.load_session(session_id) or {}
+            media = self.server.private_media_history
+            contexts = getattr(self.server.runtime_controller, "project_contexts", None)
+            bindings = getattr(contexts, "conversation_bindings", None)
+            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
             payload = read_chat_history_selection(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
+                project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
                 project_provider=lambda rows: project_private_reply_history(
-                    store, store.load_session(session_id) or {}, rows))
+                    store, session, rows))
+            if markers and "session" in payload:
+                payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)
@@ -1009,6 +1019,10 @@ class ChatRequestHandler(
                 if bindings is None:
                     raise ValueError("conversation bindings unavailable")
                 snapshot = bindings.local_session_snapshot(query["conversation_binding_id"][0])
+                media = self.server.private_media_history
+                store = self.server.chat_store
+                snapshot["sessions"] = [media.summary(row, media.read(store, bindings,
+                    store.load_session(row["session_id"]) or {})) for row in snapshot["sessions"]]
             except (ValueError, OSError, KeyError):
                 # A failed provider/store read may contain private diagnostics.
                 # Refuse this selector; never fall back to an unfiltered list.
