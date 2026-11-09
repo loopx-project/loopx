@@ -260,11 +260,21 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     page, values = read_selection(navigation["first_read_command"])
     assert page["content"] == original["content"]
     assert values["/selected_todo"]["future_number"] == 10**45 + 17
-    assert len(observed) == 1
     if opaque:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference, write_context_read_reference
+
+        assert observed == []
+        words = shlex.split(navigation["first_read_command"])
+        _, metadata = read_context_read_reference(words[words.index("--reference-file") + 1])
+        legacy = write_context_read_reference(Path(metadata["path"]), metadata["sha256"], selection=metadata["selection"])
+        words[words.index("--reference-file") + 1] = str(legacy)
+        legacy_page, _ = read_selection(shlex.join(words))
+        assert legacy_page["content"] == original["content"]
+        assert len(observed) == 1
         assert b"Historical evidence remains available." not in observed[0]
         assert len(observed[0]) < len(raw) // 2
     else:
+        assert len(observed) == 1
         assert b"Historical evidence remains available." in observed[0]
     assert Path(view["recovery"]["path"]).read_bytes() == raw
 
@@ -998,6 +1008,72 @@ def test_initial_read_pages_pin_the_exact_selection_for_continuation(tmp_path, d
     assert not changed["ok"] and "digest changed" in changed["reason"]
 
 
+def test_pinned_value_pages_replay_the_resolved_paths(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    payload = {"a/~": {"0": "原捕获的精确正文。" * 160}, "array": [{"number": 9007199254740993}]}
+    digest = write_decision_capture(capture, payload)
+    reference = write_context_read_reference(capture, digest)
+    start = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256,
+        select=["/a~1~0/0", "/array/0/number"], max_page_output_bytes=5000))
+    assert start["ok"] and not start["eof"]
+    pinned = start["reference_file"]
+    _, saved = read_context_read_reference(pinned)
+    assert saved["selection_paths"] == [["array", 0, "number"], ["a/~", "0"]]
+
+    legacy = write_context_read_reference(capture, digest, selection=saved["selection"])
+    legacy_page = read_context_capture(Namespace(reference_file=str(legacy), format="json", offset=0, page_bytes=256))
+    assert legacy_page["ok"] and legacy_page["content"] == start["content"]
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("a pinned value page should reuse the writer's resolved paths")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    page, parts = start, [start["content"]]
+    while not page["eof"]:
+        page = read_context_capture(Namespace(reference_file=pinned, format="json", offset=page["next_offset"],
+            page_bytes=256, max_page_output_bytes=5000))
+        assert page["ok"]
+        parts.append(page["content"])
+    assert json.loads("".join(parts))["selections"] == [
+        {"pointer": "/array/0/number", "value": payload["array"][0]["number"]},
+        {"pointer": "/a~1~0/0", "value": payload["a/~"]["0"]},
+    ]
+
+
+@pytest.mark.parametrize("damage", ["different_path", "wrong_key_type", "view_digest", "capture_digest"])
+def test_pinned_value_page_rejects_changed_path_or_bytes(tmp_path, damage):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    digest = write_decision_capture(capture, {"array": ["value"], "alias": ["value"]})
+    original = write_context_read_reference(capture, digest)
+    first = read_context_capture(Namespace(reference_file=str(original), format="json", offset=0, page_bytes=256,
+        select=["/array/0"]))
+    assert first["ok"]
+    _, saved = read_context_read_reference(first["reference_file"])
+    selection, paths = saved["selection"], saved["selection_paths"]
+    if damage == "different_path":
+        paths = [["alias", 0]]  # The value itself is identical.
+    elif damage == "wrong_key_type":
+        paths = [["array", "0"]]
+    elif damage == "view_digest":
+        selection = {**selection, "sha256": "0" * 64}
+    else:
+        capture.write_text('{"array":["changed"],"alias":["value"]}', encoding="utf-8")
+    reference = write_context_read_reference(capture, digest, selection=selection, selection_paths=paths)
+    rejected = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256))
+    assert not rejected["ok"] and "content" not in rejected
+    reason = "digest" if "digest" in damage else "address"
+    assert reason in rejected["reason"]
+
+
 def test_small_initial_pages_progress_without_repeating_the_pointer_vector(tmp_path, decision):
     view = native_context_capture_view(decision, tmp_path, max_page_output_bytes=4500)
     assert "first_read_command" in view
@@ -1371,6 +1447,80 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert fallback_bytes - warm_bytes > 3000
 
 
+@pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
+@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
+def test_native_first_read_reuses_only_observed_writeback_precondition(
+    tmp_path, monkeypatch, decision, version, transition,
+):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    decision.update(agent_id="agent", should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    decision.update(registry=str(tmp_path / "registry.json"), runtime_root=str(tmp_path / "runtime"))
+    contract = decision["interaction_contract"]
+    contract["agent_channel"]["delivery_allowed"] = True
+    source = contract["agent_channel"]["work_context"]["sources"][0]
+    narrative = source["content"]["text"]
+    source.update(source="goal_state", content={
+        "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+        "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+    })
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    cli = contract["cli_channel"]
+    cli["execution_preparation"] = {"state": "ready", "todo_id": "todo_current", "agent_id": "agent"}
+    plan = cli["settlement_plan"]
+    plan["schema_version"] = version
+    text = "After independent validation, write back under the original identity and respect the current stop. " * 38
+    step = {"kind": "durable_writeback", "owner": "agent", "precondition": text}
+    plan["ordered_steps"] = [step]
+    root = "/interaction_contract/cli_channel/settlement_plan"
+    precondition = root + "/ordered_steps/0/precondition"
+    command = root + "/ordered_steps/0/command_template"
+
+    def capture(turn):
+        identity = {"goal_id": "fixture", "agent_id": "agent", "todo_id": "todo_current",
+                    "turn_instance_id": turn, "effect_id": f"fixture:agent:todo_current:{turn}"}
+        decision["heartbeat_receipt"] = {"settlement_identity": identity}
+        plan["identity"] = {**identity, "effect_id": "mismatch"} if turn == "next" and transition == "wrong_binding" else identity
+        step["command_template"] = f"loopx refresh-state --turn-instance-id {turn}"
+        directory = tmp_path / turn
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=turn)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    first = capture("first")
+    page, facts = read_selection(first["first_read_command"])
+    assert facts[precondition] == text and "previously_delivered_fields" not in page
+    deliver(tmp_path, event, [page])
+
+    if transition == "changed":
+        step["precondition"] += " Await the updated external approval."
+    elif transition == "unknown_version":
+        plan["schema_version"] = "unknown"
+    elif transition == "rebound":
+        decision["registry"] = str(tmp_path / "another-registry.json")
+    decision["goal_boundary"]["stop_condition"] = "Stop before publishing."
+    second = capture("next")
+    page, facts = read_selection(second["first_read_command"])
+    assert facts[command] == "loopx refresh-state --turn-instance-id next"
+    assert facts["/goal_boundary"] == decision["goal_boundary"]
+    assert facts[root + "/identity/effect_id"] == plan["identity"]["effect_id"]
+    if transition != "same":
+        assert precondition not in page.get("previously_delivered_fields", [])
+        assert facts[precondition] == step["precondition"]
+        return
+
+    assert set(page["previously_delivered_fields"]) == {goal_text, precondition}
+    assert goal_text not in facts and precondition not in facts
+    _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition)
+    assert recovered[precondition] == text
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    page, facts = read_selection(second["first_read_command"])
+    assert "previously_delivered_fields" not in page and facts[precondition] == text
+    assert facts[goal_text] == narrative
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatch, provider):
     from test_codex_context_lifecycle import deliver, setup
@@ -1498,8 +1648,14 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
         if key != "write_scope":
             assert warm_facts[f"/goal_boundary/{key}"] == value
     assert warm_facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "scope-warm"
-    assert {key: value for key, value in restored_facts.items()
-            if key != "/goal_boundary" and not key.startswith(scope_path)} == warm_facts
+    restored_selection = {key: value for key, value in restored_facts.items()
+        if key != "/goal_boundary" and not key.startswith(scope_path)}
+    observed = warm[0].get("previously_delivered_fields", [])
+    assert restored_selection == {
+        **warm_facts,
+        **{key: value for key, value in restored_selection.items()
+           if any(key == pointer or key.startswith(pointer + "/") for pointer in observed)},
+    }
     assert restored_bytes - warm_bytes > 10_000
 
 
@@ -1636,5 +1792,11 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
                       "warm_pages": len(warm), "recovery_pages": len(recovered)}))
     assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
     assert facts[source_pointer + "/authority_read"] == current_authority
-    assert {key: value for key, value in restored.items() if key != pointer} == facts
+    restored_note = {key: value for key, value in restored.items() if key != pointer}
+    observed = warm[0].get("previously_delivered_fields", [])
+    assert restored_note == {
+        **facts,
+        **{key: value for key, value in restored_note.items()
+           if any(key == address or key.startswith(address + "/") for address in observed)},
+    }
     assert fallback_bytes - warm_bytes > 10_000

@@ -45,11 +45,22 @@ def _pin_observed_selection(directory: str, target: dict[str, Any], recovery: di
         selections = plan.get("selections")
         if ordinary_plan is not None:
             ordinary = ordinary_plan["selections"]
-            if splice := plan.get("selection_splice"):
-                start, end = splice["start"], splice["end"]
-                if type(start) is not int or type(end) is not int or not 0 <= start <= end <= len(ordinary):
+            splices = plan.get("selection_splices")
+            if splices is None and (splice := plan.get("selection_splice")) is not None:
+                splices = [splice]
+            if splices is not None:
+                if not isinstance(splices, list) or not splices:
                     return None
-                selections = [*ordinary[:start], *splice["selections"], *ordinary[end:]]
+                selections, cursor = [], 0
+                for splice in splices:
+                    start, end, replacement = splice["start"], splice["end"], splice["selections"]
+                    if (type(start) is not int or type(end) is not int or not cursor <= start <= end <= len(ordinary)
+                            or not isinstance(replacement, list)):
+                        return None
+                    selections.extend(ordinary[cursor:start])
+                    selections.extend(replacement)
+                    cursor = end
+                selections.extend(ordinary[cursor:])
             fallback, body = write_initial_context_read_reference(path, digest, context, ordinary)
             observation["fallback_reference"] = {"filename": fallback.name,
                 "selection_sha256": hashlib.sha256(body).hexdigest()}
@@ -78,7 +89,7 @@ def observed_first_read_fallback(observation: dict[str, Any], path: Path, digest
                 and "observed_read" not in metadata and isinstance(selection, dict)
                 and isinstance(fallback.get("selection_sha256"), str)
                 and selection.get("sha256") == fallback["selection_sha256"]):
-            return reference, selection
+            return reference, metadata
     except (OSError, ValueError):
         pass
     return None

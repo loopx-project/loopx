@@ -807,6 +807,8 @@ complete native input's actually included sections. Digests remain in the journa
 they are not repeated in model-facing index rows. A list, partial page, EOF without
 earlier coverage, failed/damaged output, subagent hook or unrelated capture cannot
 acknowledge a section. Selected reads never establish a full retained-input baseline.
+The native hook still verifies each page's bytes. It skips computing section
+digests when the terminal range is absent from both the batch and the journal.
 Changed content remains unread; compaction or a different Goal/Agent/scope retires
 the old epoch's observations. Stateless hosts make no such observation claim and
 keep the complete current source available. These observations do not establish
@@ -1127,7 +1129,9 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 私有原生 journal 的 `consumed_pointers` 与 `confirmed_read_sections` 只记录经过字节核对、
 连续完整交付的选读视图，或完整原生输入中实际包含的部分；摘要留在 journal，不反复展示给模型。
 目录、部分页、仅 EOF、失败／篡改输出、子 Agent hook、无关捕获都不构成读取确认；选读不建立全量
-模型保留基线。内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
+模型保留基线。
+原生 hook 仍逐页核对字节；当本批和 journal 都没有末尾范围时，跳过正文字段的摘要计算。
+内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
 无状态宿主不声称观测确认，完整当前来源始终可达；这些记录不证明理解、后续保留、执行权限或计费下降。
 
 受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
@@ -1243,6 +1247,10 @@ profile. Its short filename is only a locator, never a truncated integrity check
 permission or freshness claim. Missing, malformed, public or symlinked reader
 documents and capture/selection digest mismatches fail closed without admission. Selection reads may publish a derived
 private reader document beside the capture; they do not write Goal state.
+For new pinned value selections, the private reference can retain the selector's
+resolved addresses. The reader and native observation reuse those addresses
+against the verified source, then check the rendered selection digest. Older
+references and new discovery requests use the existing selector.
 Compact selected pages use `context_capture_selection_page_v1`, with a reader
 reference and byte cursors instead of repeated hashes or pointer vectors. They
 are never full-input observations. Explicit file/hash readers and full-page
@@ -1257,6 +1265,8 @@ the compact navigation cannot fit; no navigation or source is truncated.
 引用缺失、格式错误、公开可读、为符号链接或摘要不符时拒绝读取，不重新 admission。选读可在
 捕获旁生成派生私有引用，不修改 Goal 状态。精简选读页返回引用及字节游标，使用
 独立 schema，不能作为完整输入证明；原显式文件/摘要接口及完整页证明保持兼容。
+新生成的值选读引用可保存选择器已解析的地址。读页和原生观察使用校验过的原捕获
+按地址取值，再校验渲染后的选读摘要。旧引用和新字段发现继续使用现有选择器。
 导航引用同时保存完整机器元数据；极小输出预算保留原显式摘要引用，不截断正文或导航。
 
 `quota context-read --select /path --select /another/path` reads an explicit

@@ -181,6 +181,92 @@ for elapsed in (1900, 0, 9, 61002):
   }
 }
 
+// An original event is the reading identity even when the finding id is reused.
+export async function readRevisedFinding(browser) {
+  const directory = await mkdtemp(resolve(tmpdir(), "loopx-revised-finding-"));
+  const fixture = resolve(directory, "history.json"), goal = "synthetic-revised-finding";
+  const event = (kind, id, at, fields = {}) => ({schema_version: "loopx_explore_result_event_v0",
+    goal_id: goal, event_kind: kind, event_id: id, result_id: id, title: id,
+    recorded_at: `2026-01-01T${at}:00Z`, ...fields});
+  const finding = (id, at, fields) => event("finding", id, at, {node_id: "question", status: "tentative", ...fields});
+  const events = [event("node", "question", "00:00", {node_kind: "question", status: "open", title: "Same finding, successive judgments"}),
+    event("node", "neighbor", "01:30", {node_kind: "question", status: "open"}),
+    event("node", "last", "18:00", {node_kind: "question", status: "open"}),
+    finding("early-event", "03:00", {}),
+    finding("middle-event", "09:00", {result_id: "shared-finding", title: "Middle tentative judgment", summary: "MIDDLE-ORIGINAL: evidence is still uncertain."}),
+    finding("late-event", "18:00", {result_id: "shared-finding", title: "Late confirmed judgment", status: "confirmed", summary: "LATE-CONFIRMED: later evidence changes the conclusion."}),
+    finding("neighbor-middle", "08:00", {node_id: "neighbor"}), finding("neighbor-late", "17:00", {node_id: "neighbor", status: "confirmed"}),
+    finding("last-finding", "18:00", {node_id: "last", status: "confirmed"})];
+  await writeFile(fixture, JSON.stringify({goal_id: goal, display_name: "Synthetic revision reading", events}));
+  execFileSync(resolveTestPython(), ["-c", `
+import json, sys
+from pathlib import Path
+from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
+path = Path(sys.argv[1]); capture = json.loads(path.read_text())
+rows = []
+for source in capture['events']:
+    row = dict(source)
+    kind, result = row.pop('event_kind'), row.pop('result_id')
+    row.pop('schema_version'); row.pop('event_id')
+    rows.append(build_explore_node_event(node_id=result, **row) if kind == 'node'
+        else build_explore_finding_event(finding_id=result, **row))
+capture['events'] = rows
+path.write_text(json.dumps(capture))
+`, fixture], {cwd: repoRoot});
+  const capture = JSON.parse(await readFile(fixture, "utf8"));
+  const ids = Object.fromEntries(events.map((row, index) => [row.event_id, capture.events[index].event_id]));
+  let owner, page;
+  try {
+    owner = await startHistoryOwner(fixture);
+    page = await browser.newPage({viewport: {width: 1440, height: 900}, timezoneId: "UTC"});
+    await page.addInitScript(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+    const url = `${owner.base}/chat/?goalId=${goal}&view=research&statusUrl=%2Fstatus.json`;
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 900});
+      await page.goto(url, {waitUntil: "domcontentloaded"});
+      const history = page.locator(".research-history"), reader = history.locator(".research-history-detail");
+      await history.getByRole("status").filter({hasText: "9 / 9"}).waitFor();
+      const middle = history.getByRole("button", {name: /^中段 ·/});
+      await middle.click();
+      assert.match(await middle.getAttribute("aria-label"), /来源记为确认 0.*暂定结论 2/);
+      const point = history.locator('.research-timeline [data-research-nodes~="question"]');
+      assert.equal((await point.getAttribute("data-research-nodes")).split(" ").length > 1, width === 390,
+        "Desktop opens a point; narrow screens retain the nearby-point collection");
+      await point.click();
+      if (width === 390) await reader.locator('[data-research-node="question"] > button').click();
+      const body = reader.locator(".research-recorded-finding");
+      await body.waitFor();
+      await page.screenshot({path: resolve(outputDir, `revised-finding-${width}.png`), animations: "disabled"});
+      assert.match(await body.innerText(), /Middle tentative judgment.*暂定.*MIDDLE-ORIGINAL/s);
+      assert.doesNotMatch(await body.innerText(), /LATE-CONFIRMED/);
+      assert.equal(new URL(page.url()).searchParams.get("research_event"), ids["middle-event"]);
+      await page.reload({waitUntil: "domcontentloaded"});
+      await body.getByText("MIDDLE-ORIGINAL: evidence is still uncertain.", {exact: true}).waitFor();
+      assert.match(await body.locator("small").innerText(), /09:00.*暂定/);
+      const picker = reader.getByRole("combobox", {name: "选择问题结论"});
+      assert.equal(await picker.locator("option").count(), 3, "Both versions of one finding remain selectable");
+      await picker.selectOption(ids["late-event"]);
+      await body.getByText("LATE-CONFIRMED: later evidence changes the conclusion.", {exact: true}).waitFor();
+      assert.match(await body.locator("small").innerText(), /18:00.*来源记为确认/);
+      await page.goBack();
+      await body.getByText("MIDDLE-ORIGINAL: evidence is still uncertain.", {exact: true}).waitFor();
+      await page.goForward();
+      await body.getByText("LATE-CONFIRMED: later evidence changes the conclusion.", {exact: true}).waitFor();
+      await page.goBack();
+      await body.getByText("MIDDLE-ORIGINAL: evidence is still uncertain.", {exact: true}).waitFor();
+      const exact = new URL(page.url()); exact.searchParams.set("research_event", "missing-event");
+      await page.goto(exact.href, {waitUntil: "domcontentloaded"});
+      await reader.getByRole("status").filter({hasText: "此记录中找不到所选结论"}).waitFor();
+      assert.equal(await body.count(), 0, "An absent exact version cannot silently borrow a later one");
+      exact.searchParams.delete("research_event");
+      await page.goto(exact.href, {waitUntil: "domcontentloaded"});
+      await body.getByText("LATE-CONFIRMED: later evidence changes the conclusion.", {exact: true}).waitFor();
+      assert.equal(new URL(page.url()).searchParams.get("research_event"), ids["late-event"], "Existing finding-id links still select the current version");
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+  } finally {if (page) await page.close(); if (owner) await owner.close(); await rm(directory, {recursive: true, force: true});}
+}
+
 // Whole-page comparison pressure: repeated conditions must not bury the next
 // decision, while its exact original finding remains one keyboard action away.
 async function readDecisionTrail(browser) {
@@ -223,6 +309,35 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     await page.goto(`${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
     const history = page.locator('.research-history');
     await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+    const readLatePhase = async (locale, size) => {
+      const late = history.getByRole('button', {name: locale === 'zh-CN' ? /^后段 ·/ : /^Late ·/});
+      await late.focus();
+      await late.press('Enter');
+      assert.equal(await late.getAttribute('aria-pressed'), 'true');
+      await page.screenshot({path: resolve(outputDir, 'recorded-phase-' + size + '-' + locale + '.png'), animations: 'disabled'});
+      assert.equal(await history.locator('[data-research-nodes~="question-2"]:not(.is-dimmed)').count(), 1,
+        'A question with a late record stays highlighted at its earlier first record');
+      assert.equal(await history.locator('[data-research-nodes~="question-3"].is-dimmed').count(), 1,
+        'A question with no records in the selected phase stays dimmed');
+      assert.match(await late.getAttribute('aria-label'), locale === 'zh-CN' ? /2 个有记录的研究项/ : /2 research items with records/);
+      await late.press('Enter');
+    };
+    await readLatePhase('zh-CN', 'desktop');
+    const middle = history.getByRole('button', {name: /^中段 ·/});
+    await middle.press('Enter');
+    await history.locator('.research-timeline [data-research-nodes~="question-1"]').click();
+    const phaseDetail = history.locator('.research-history-detail');
+    await phaseDetail.locator('[data-research-node="question-1"] > button').click();
+    const phaseCapture = JSON.parse(await readFile(fixture, "utf8"));
+    const phaseEventId = id => phaseCapture.events.find(event => event.result_id === id).event_id;
+    const phaseFinding = phaseDetail.getByRole('combobox', {name: '选择问题结论'});
+    assert.equal(await phaseFinding.inputValue(), phaseEventId('decision-1-2'), 'Opening a highlighted question starts with the last finding recorded in the selected period');
+    await page.screenshot({path: resolve(outputDir, 'recorded-phase-finding-desktop.png'), animations: 'disabled'});
+    await phaseFinding.selectOption(phaseEventId('decision-1-4'));
+    assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-1-4', 'An explicit finding outside the selected period remains readable');
+    await phaseDetail.press('Escape');
+    await phaseDetail.press('Escape');
+    await middle.press('Enter');
     const trail = history.locator('.research-trail');
     const group = trail.locator('.research-trail-question').first();
     const assertReturn = async control => {
@@ -251,6 +366,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       await page.evaluate(value => localStorage.setItem('loopx-pw-locale', value), locale);
       await page.reload({waitUntil: 'domcontentloaded'});
       await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await readLatePhase(locale, 'phone');
       const row = group.locator('[data-research-decision]').first();
       assert.match(await row.innerText(), locale === 'zh-CN' ? /停止 2.*保留 3/s : /Stopped 2.*Retained 3/s);
       await row.scrollIntoViewIfNeeded();
@@ -357,6 +473,7 @@ export const researchHistoryScenario = {
   async run({browser, collectCoverage, url}) {
     await readElapsedTimePrecision(browser);
     await readDecisionTrail(browser);
+    await readRevisedFinding(browser);
     // The ordinary journey uses the real source verifier and HTTP owner, with
     // no intercepted analysis response and no analysis process or Goal writes.
     const nativeOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-native-readback.json"));
@@ -1279,7 +1396,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         await detail.locator('[data-research-node="hit-6"] button').click();
         assert.equal(await history.locator('.research-history-canvas').evaluate(e=>e.getBoundingClientRect().width),widthBefore,'Reading never squeezes the whole-history graph');
         assert.equal(await detail.locator('.research-recorded-finding').count(),1,'A question reads one complete finding at a time');
-        await detail.getByRole('combobox',{name:'选择问题结论',exact:true}).selectOption('negative');
+        await detail.getByRole('combobox',{name:'选择问题结论',exact:true}).selectOption({index: 0});
         await detail.getByText('实际执行与资源观测', {exact:true}).click();
         assert(await detail.getByText('scheduler → mask-selection', {exact:true}).isVisible());
         assert(await detail.getByText('未测量', {exact:true}).isVisible(), 'Unknown iterations must not become zero');

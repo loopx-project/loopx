@@ -66,8 +66,11 @@ def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: st
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
 
 
-def project_work_yardstick_sources(*, events, projection, goal_id, agent_id, work_todos,
-                                 enabled, todo_id=None, result_node=None):
+def project_work_yardstick_sources(
+    *, events: list[dict[str, Any]], projection: Mapping[str, Any],
+    goal_id: str, agent_id: str, work_todos: list[dict[str, Any]],
+    enabled: bool, todo_id: str | None = None, result_node: str | None = None,
+) -> list[dict[str, Any]]:
     """Replay typed-owner-selected prefixes from one already-read canonical log.
 
     Ordinary reads and immediate finding receipts share this I/O adapter; the

@@ -281,6 +281,60 @@ def deliver(root, event, pages):
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
 
+@pytest.mark.parametrize("order", ["sequential", "terminal_first", "one_batch"])
+def test_selected_read_can_defer_digests_without_losing_coverage(tmp_path, monkeypatch, order):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    body = "Preserve this acceptance condition: 核对原始结果。\n" * 45
+    _, wire = project(tmp_path, payload={"ok": True, "requirements": body})
+    recovery = wire["recovery"]
+    pages = []
+    offset, selection_digest = 0, None
+    while offset is not None:
+        page = read_context_capture(Namespace(format="json", capture_file=recovery["path"],
+            capture_sha256=recovery["sha256"], offset=offset, page_bytes=1024, select=["/requirements"],
+            selection_sha256=selection_digest))
+        assert page["ok"], page
+        pages.append(page)
+        offset = page["next_offset"]
+        selection_digest = page["selection_sha256"]
+    assert len(pages) == 3 and pages[-1]["eof"]
+
+    calls = []
+    run = turn_envelope._turn_envelope_result
+
+    def track(operation, **kwargs):
+        if operation == "context_read_sections":
+            calls.append(operation)
+        return run(operation, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", track)
+    if order == "sequential":
+        deliver(tmp_path, event, pages[:-1])
+        assert calls == []
+        assert not context._state(tmp_path).get("consumed_pointers")
+        deliver(tmp_path, event, pages[-1:])
+        assert len(calls) == 1
+    elif order == "terminal_first":
+        deliver(tmp_path, event, [pages[-1], pages[0]])
+        damaged = {**pages[1], "content": "!" + pages[1]["content"][1:]}
+        deliver(tmp_path, event, [damaged])
+        assert not context._state(tmp_path).get("consumed_pointers")
+        deliver(tmp_path, event, pages[1:2])
+    else:
+        batch = {"content": [{"type": "text", "text": json.dumps(page)} for page in reversed(pages)]}
+        assert context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "selected-pages", "tool_response": batch}) == {}
+    state = context._state(tmp_path)
+    expected = hashlib.sha256(json.dumps(body, ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert state["consumed_pointers"] == {"/requirements": expected}
+    assert not state.get("section_reads")
+    assert "candidate" not in state and "retained" not in state
+
+
 def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
