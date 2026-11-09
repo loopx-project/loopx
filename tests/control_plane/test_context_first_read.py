@@ -1103,8 +1103,11 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     assert facts(recovered)[prefix + "/0"] == outcomes[0]
 
 
-@pytest.mark.parametrize("transition", ["unchanged", "corrected", "different_source", "incomplete"])
-def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition):
+@pytest.mark.parametrize(("transition", "distinct_tool_workdir"), [
+    ("unchanged", False), ("corrected", False), ("different_source", False), ("incomplete", False),
+    pytest.param("unchanged", True, id="unchanged-other-tool-workdir"),
+])
+def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition, distinct_tool_workdir):
     from test_codex_context_lifecycle import deliver, setup
 
     event = setup(tmp_path, monkeypatch)
@@ -1153,8 +1156,19 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     first = capture("first", goal_source("goal.md", narrative, "old generated todo\n"))
     pages, facts, _ = read(first["first_read_command"])
     assert facts[body_pointer] == narrative and "previously_delivered_fields" not in pages[0]
-    deliver(tmp_path, event, pages)
-    assert body_pointer in codex_context._state(tmp_path)["consumed_pointers"]
+    read_event = event
+    if distinct_tool_workdir:
+        tool_workdir = tmp_path / "tool-worktree"
+        tool_workdir.mkdir()
+        read_event = {**event, "cwd": str(tool_workdir)}
+        before = codex_context._state(tmp_path)
+        deliver(tmp_path, {**read_event, "session_id": "foreign-native-session"}, pages)
+        deliver(tmp_path, read_event, [{**pages[0], "content": pages[0]["content"][:-1]}])
+        assert codex_context._state(tmp_path) == before
+    deliver(tmp_path, read_event, pages)
+    observed = codex_context._state(tmp_path)
+    assert body_pointer in observed["consumed_pointers"]
+    assert observed["cwd"] == event["cwd"] and "candidate" not in observed
 
     text = narrative + "Use the revised owner decision.\n" if transition == "corrected" else narrative
     current = goal_source("alternate.md" if transition == "different_source" else "goal.md",
