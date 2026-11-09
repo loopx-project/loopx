@@ -21,14 +21,23 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
-def _checkout(path: Path, *, mutate: bool = False) -> Path:
+def _checkout(
+    path: Path,
+    *,
+    mutate: bool = False,
+    tracked_name: str = "tracked.txt",
+    quote_path: bool = True,
+) -> Path:
     examples = path / "examples/canary"
     examples.mkdir(parents=True)
-    (path / "tracked.txt").write_text("original", encoding="utf-8")
+    (path / tracked_name).write_text("original", encoding="utf-8")
     (examples / "catalog-root-smoke.py").write_text(
         "from pathlib import Path\n"
         "assert Path.cwd() == Path(__file__).resolve().parents[2]\n"
-        + ("Path('tracked.txt').write_text('changed')\n" if mutate else "print(Path.cwd())\n"),
+        + (
+            f"Path({tracked_name!r}).write_text('changed')\n"
+            if mutate else "print(Path.cwd())\n"
+        ),
         encoding="utf-8",
     )
     catalog = path / "docs/concepts/interaction-pattern-catalog.md"
@@ -37,7 +46,9 @@ def _checkout(path: Path, *, mutate: bool = False) -> Path:
     _git(path, "init")
     _git(path, "config", "user.name", "Canary Fixture")
     _git(path, "config", "user.email", "canary@example.invalid")
-    _git(path, "add", "tracked.txt", "examples", "docs")
+    if not quote_path:
+        _git(path, "config", "core.quotePath", "false")
+    _git(path, "add", tracked_name, "examples", "docs")
     _git(path, "commit", "-m", "fixture")
     return path
 
@@ -121,6 +132,28 @@ def test_target_checkout_write_guard_detects_and_restores(tmp_path, jobs):
     assert payload["tracked_side_effect_failure_count"] == 1
     assert payload["side_effect_guard"]["auto_restored"]
     assert (repo / "tracked.txt").read_text() == "original"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="NEL in a pathname is POSIX-only")
+def test_write_guard_restores_a_path_with_a_raw_unicode_separator(tmp_path):
+    tracked_name = "tracked\x85name.txt"
+    repo = _checkout(
+        tmp_path / "repo",
+        mutate=True,
+        tracked_name=tracked_name,
+        quote_path=False,
+    )
+
+    payload = build_canary_smoke_suite_run(repo_root=repo, parallel_jobs=1)
+
+    assert payload["ok"] is False
+    assert payload["tracked_side_effect_failure_count"] == 1
+    assert payload["side_effect_guard"]["auto_restored"] is True
+    failure = next(
+        check for check in payload["selected_checks"] if not check.get("ok")
+    )
+    assert failure["tracked_side_effects"] == [tracked_name]
+    assert (repo / tracked_name).read_text(encoding="utf-8") == "original"
 
 
 def test_concurrent_checkout_roots_do_not_share_process_state(tmp_path):

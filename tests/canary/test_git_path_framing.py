@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from loopx.canary.maintainability_ratchet import tracked_python_paths
+from loopx.canary.runner import _tracked_change_paths
 from loopx.cli_commands.canary import _run_git_name_only
 
 NEL = "\x85"
@@ -63,3 +64,16 @@ def test_run_git_name_only_keeps_one_record_per_path(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert result["changed_files"] == [name]
+
+
+def test_tracked_change_paths_keeps_one_record_per_path(tmp_path: Path) -> None:
+    repo, committed = _repo_with_odd_python_path(tmp_path)
+    (repo / committed).write_text("y = 3\n", encoding="utf-8")
+    staged = f"staged{NEL}name.py"
+    (repo / staged).write_text("z = 4\n", encoding="utf-8")
+    _git(repo, "add", staged)
+
+    ok, paths, detail = _tracked_change_paths(repo)
+
+    assert ok is True, detail
+    assert paths == sorted([committed, staged])

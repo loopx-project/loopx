@@ -178,19 +178,28 @@ def _tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str
     paths: set[str] = set()
     stderr_parts: list[str] = []
     ok = True
-    for args in (["diff", "--name-only"], ["diff", "--name-only", "--cached"]):
+    for args in (
+        ["diff", "--name-only", "-z"],
+        ["diff", "--name-only", "-z", "--cached"],
+    ):
         completed = subprocess.run(
             ["git", "-C", str(repo_root), *args],
             check=False,
-            text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
         if completed.returncode != 0:
             ok = False
-            stderr_parts.append(f"git_diff_failed: {completed.stderr[-400:]}")
+            stderr_parts.append(
+                "git_diff_failed: "
+                + completed.stderr.decode("utf-8", "replace")[-400:]
+            )
             continue
-        paths.update(line.strip() for line in completed.stdout.splitlines() if line.strip())
+        paths.update(
+            record.decode("utf-8", "replace")
+            for record in completed.stdout.split(b"\0")
+            if record
+        )
     return ok, sorted(paths), "\n".join(part for part in stderr_parts if part)
 
 
