@@ -196,6 +196,8 @@ def test_work_finding_receipt_reuses_question_and_compares_before_next_guard(tmp
     assert visible["linked_todos"][0]["todo_id"] == TODO_ID
     assert visible["work_binding"]["turn_instance_id"] == turn and visible["measurements"][0]["value"] == 4
     assert graph.read_bytes() == frozen
+    duplicate = record({**last, "observation": "Review the same official receipt again."})
+    assert duplicate["measurement_feedback"] == [] and "search_comparison" not in duplicate
 
     # A later finding cannot change the historical receipt of an exact retry.
     record(measured(official, "d", 9, "result:later"))
@@ -204,10 +206,12 @@ def test_work_finding_receipt_reuses_question_and_compares_before_next_guard(tmp
     assert replay["idempotent_replay"] and graph.read_bytes() == original
     assert replay["search_comparison"] == comparison
 
+    incumbent = comparison["goal"]["preferred_candidate_ref"]
+    (project / "comparison-base.txt").write_text(incumbent)
     source.write_text(json.dumps({
         "schema_version": authored["schema_version"], "input_revision": authored["input_revision"],
         "status": "confirmed", "observation": "Candidate A outranked B on the official evaluation.",
-        "interpretation": "Continue from A.", "evidence_refs": ["result:official-a", "result:official-b"],
+        "interpretation": f"Continue from {incumbent}.", "evidence_refs": ["result:official-a", "result:official-b"],
     }))
     close = run(project, runtime, path, "refresh-state", *binding(turn),
                 "--classification", "validated_choice", "--delivery-batch-scale", "implementation",

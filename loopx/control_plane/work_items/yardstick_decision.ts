@@ -128,14 +128,22 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
+function recordedBefore(row: JsonObject, sourceOrder: unknown): boolean {
+  const order = row.recorded_order;
+  return typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
+    && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder;
+}
+
 function measuredSearchComparison(
   scopedFindings: readonly JsonObject[],
   decision: WorkYardstickDecision,
   cited: ReadonlySet<string>,
+  sourceOrder: unknown,
 ) {
   const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) => {
     const feedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
-      (row.work_binding !== undefined || row.work_yardstick !== undefined || cited.has(measurement.evidence_ref))
+      (row.work_yardstick !== undefined || (cited.has(measurement.evidence_ref)
+        ? recordedBefore(row, sourceOrder) : row.work_binding !== undefined))
       && (!candidates || candidates.has(measurement.candidate_ref)));
     return measuredPair(feedback.find(row => matchesProfile(row, profile)));
   };
@@ -192,10 +200,8 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     // question without changing their provenance or assigning earlier work.
     if (row.work_yardstick === undefined) {
       if (bound) return true;
-      const order = row.recorded_order;
       // A repeated reference appended later cannot change the decision's evidence.
-      return cited.size > 0 && typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
-        && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder
+      return cited.size > 0 && recordedBefore(row, sourceOrder)
         && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
         && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
     }
@@ -203,7 +209,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
       && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
   });
-  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited);
+  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited, sourceOrder);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
     ...(searchComparison ? {search_comparison: searchComparison} : {}),
