@@ -208,10 +208,23 @@ def test_work_finding_receipt_reuses_question_and_compares_before_next_guard(tmp
 
     incumbent = comparison["goal"]["preferred_candidate_ref"]
     (project / "comparison-base.txt").write_text(incumbent)
+    # A revised acceptance basis cannot silently inherit the prior target's
+    # better numbers, even when work, question and measurement profile match.
+    revised = json.loads(json.dumps(authored))
+    revised["work_yardstick_decision"]["prior_finding_id"] = first["finding_id"]
+    revised["work_yardstick_decision"]["target"]["acceptance_ref"] = "acceptance:updated-target"
+    assert "search_comparison" not in record(revised)
+    assert "search_comparison" not in record(measured(official, "new-c", 3, "result:new-c"))
+    new_target = record(measured(official, "new-d", 1, "result:new-d"))["search_comparison"]
+    assert new_target["goal"]["previous_best"]["value"] == 3
+    assert new_target["goal"]["preferred_candidate_ref"] == "candidate:new-c"
+    assert "proxy" not in new_target
+    incumbent = new_target["goal"]["preferred_candidate_ref"]
+    (project / "comparison-base.txt").write_text(incumbent)
     source.write_text(json.dumps({
         "schema_version": authored["schema_version"], "input_revision": authored["input_revision"],
-        "status": "confirmed", "observation": "Candidate A outranked B on the official evaluation.",
-        "interpretation": f"Continue from {incumbent}.", "evidence_refs": ["result:official-a", "result:official-b"],
+        "status": "confirmed", "observation": "The new target's C candidate outranked D on the outcome measure.",
+        "interpretation": f"Continue from {incumbent}.", "evidence_refs": ["result:new-c", "result:new-d"],
     }))
     close = run(project, runtime, path, "refresh-state", *binding(turn),
                 "--classification", "validated_choice", "--delivery-batch-scale", "implementation",
