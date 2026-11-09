@@ -128,3 +128,33 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
   }
   return normalized;
 }
+
+/** Project one Host's optional contributions against its one governing source. */
+export function projectTurnContext(input: JsonObject): JsonObject {
+  if (!Array.isArray(input.contributions)) throw new Error("context contributions must be an array");
+  const readback = requireJsonObject(input.readback, "current context readback");
+  const context: JsonObject = {}, resultFields: JsonObject = {};
+  const instructions: string[] = [];
+  for (const value of input.contributions) {
+    try {
+      const contribution = requireJsonObject(value, "context contribution");
+      const slots = requireStringArray(contribution.readback_slots, "context readback slots");
+      const projected = projectTurnContextContribution({contribution, source: input.source,
+        readback: Object.fromEntries(slots.map(key => [key, readback[key] ?? null]))});
+      const fields = requireJsonObject(projected.context_fields, "context fields");
+      const results = requireJsonObject(projected.result_fields, "capability result fields");
+      const advice = requireStringArray(projected.instructions, "context instructions");
+      if (Object.keys(fields).some(key => Object.hasOwn(context, key)) ||
+          Object.keys(results).some(key => Object.hasOwn(resultFields, key))) continue;
+      Object.assign(context, fields);
+      instructions.push(...advice);
+      Object.assign(resultFields, results);
+    } catch {
+      // A stale, malformed or conflicting contribution cannot suppress another
+      // provider's valid advice, or be repaired from cached/private context.
+    }
+  }
+  if (!Object.keys(context).length && !instructions.length && !Object.keys(resultFields).length) return {};
+  return {...context, capability_context_fields: Object.keys(context),
+    capability_instructions: instructions, capability_result_fields: resultFields};
+}

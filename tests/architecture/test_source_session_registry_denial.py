@@ -45,6 +45,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/turn_driver/codex_sessions.py",
     "loopx/kunluncode_goal_mode/cli.py",
     "loopx/state_migration.py",
+    "loopx/hosts/managed_service_runtime.py",
 }
 
 
@@ -55,6 +56,7 @@ METADATA_READER_FUNCTIONS = {
     "loopx/capabilities/native_chat/project_context.py": {"coordination_runtime_root"},
     "loopx/control_plane/goals/source_session_recreation.py": {"_canonical_runtime_root"},
     "loopx/capabilities/issue_fix/correction_settlement.py": {"_require_origin_registry"},
+    "loopx/hosts/managed_service_runtime.py": {"_chat_account_root"},
 }
 
 

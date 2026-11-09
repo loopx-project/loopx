@@ -754,10 +754,22 @@ def test_requested_model_is_not_reported_as_observed_without_native_readback(tmp
         session.close()
 
 
+def _native_control_clock(monkeypatch):
+    # Native replies are synchronous; advance the clock when the control loop waits.
+    clock = SimpleNamespace(now=0.0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(chat_agent, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    return clock
+
+
 def _stop_server(tmp_path, monkeypatch, *, failure=None):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="stop-thread", work_dir=tmp_path,
         response_timeout_sec=.3)
+    _native_control_clock(monkeypatch)
     state = {"status": "inProgress", "calls": [], "terminals": [
         {"itemId": "old-command", "processId": "old-pty"},
         {"itemId": "current-command", "processId": "current-pty"},
@@ -805,11 +817,13 @@ def _stop_server(tmp_path, monkeypatch, *, failure=None):
     "mcpToolCall", "webSearch", "collabAgentToolCall", "futureItem", "delivery", "correction",
     "wrong-turn", "missing-data", "cursor-cycle", "new-turn", "late-tool", "changed-error",
     "native-error-before-terminal", "pending-terminal", "interrupted", "completed",
+    "terminal-deadline", "inventory-deadline", "recheck-deadline",
 ])
 def test_transient_recovery_requires_complete_native_terminal_and_effect_readback(tmp_path, monkeypatch, fault, info):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="recovery-thread", work_dir=tmp_path,
         response_timeout_sec=.2)
+    clock = _native_control_clock(monkeypatch)
     calls = []
     reads = 0
 
@@ -856,6 +870,10 @@ def test_transient_recovery_requires_complete_native_terminal_and_effect_readbac
                 "nextCursor": "second" if not params.get("cursor") or fault == "cursor-cycle" else None}
             if fault == "missing-data":
                 result.pop("data")
+        if ((fault == "terminal-deadline" and method == "thread/turns/list" and reads == 1)
+                or (fault == "inventory-deadline" and method == "thread/items/list")
+                or (fault == "recheck-deadline" and method == "thread/turns/list" and reads == 2)):
+            clock.now = session.response_timeout_sec
         session.messages.put({"id": packet["id"], "result": result})
 
     monkeypatch.setattr(session, "_write", write)
@@ -867,6 +885,8 @@ def test_transient_recovery_requires_complete_native_terminal_and_effect_readbac
         assert "private fixture" not in json.dumps(proof)
     else:
         assert proof is None
+    if fault in {"terminal-deadline", "inventory-deadline", "recheck-deadline"}:
+        assert clock.now == session.response_timeout_sec
     assert all(method in {"thread/turns/list", "thread/items/list"} for method, _ in calls)
 
 
@@ -1178,7 +1198,9 @@ def test_stop_uses_scoped_wire_items_when_native_history_omits_aborted_commands(
 
 
 def test_control_deadline_still_expires_when_event_dispatch_is_contended(tmp_path, monkeypatch):
-    session, _ = _stop_server(tmp_path, monkeypatch)
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="stop-thread", work_dir=tmp_path,
+        response_timeout_sec=.3)
     monkeypatch.setattr(session, "_write", lambda _: None)
     session._message_dispatch_lock.acquire()
     try:

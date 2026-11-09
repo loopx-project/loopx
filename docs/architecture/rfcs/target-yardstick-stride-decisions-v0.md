@@ -2,11 +2,11 @@
 
 - **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** M1 implementation proposal; M2/M3 unqualified
+- **Delivery maturity:** M1 source implementation; budgeted planning proposed; M2/M3 unqualified
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-11-05
-- **Last normative revision:** 2026-11-07
-- **Implementation baseline:** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
+- **Last normative revision:** 2026-11-09
+- **Implementation baseline:** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
 - **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
 
@@ -25,6 +25,8 @@ no long-horizon effectiveness gain or default promotion is established.
 
 Extend the existing Stride decision owner to consider **which target to pursue,
 how to measure it, and how much work to do before another useful observation**.
+Compare bounded multi-step continuations by their expected accepted outcome at
+the remaining resource horizon, including setup, information and confirmation.
 Use one decision model through two entry points: a small ordinary-Turn projection
 and the existing full replan review. Do not make every Turn a replan.
 
@@ -91,7 +93,7 @@ ordinary-Turn context, replan composition, decision followthrough, failure/repla
 semantics and a qualification program. This refines Stride §§7.5–7.7 and the
 roadmap's S3/S6/S11 work; it is not a parallel research roadmap.
 
-Out of scope: a new scheduler, new global goal authority, a learned controller,
+Out of scope: a new scheduler, new global goal authority, implementing a learned controller,
 a generic plugin registry, automatic model fleets, changing frozen evaluations,
 or implementing numerical fidelity in the kernel. Non-numerical work can use
 Stride without inventing a score or proxy. This first design serves the existing
@@ -111,12 +113,23 @@ The named `main` baseline has these relevant seams:
 | [`replan_context.ts`](../../../loopx/control_plane/work_items/replan_context.ts), `decisionFollowthrough` | Projects the previous accepted decision and subsequent progress; actual execution/goal gain remain to be established. | Extend this feedback path; do not create a second decision journal. |
 | [`Explore result writeback`](../../../loopx/capabilities/explore/result_writeback.py) and [`turn context`](../../../loopx/capabilities/explore/turn_context.py) | Existing ordinary work can attach findings; primary commit survives a retryable attachment failure. Bounded views retain access to omitted evidence. | Reuse attachment/replay and source-bound evidence, without treating bounded delivery as bounded total source work. |
 
-There is no shipped Yardstick capability in this audited source. Numerical
-fidelity below is a proposed profile, not a renamed existing feature. The
+The baseline now includes the optional
+[`yardstick_decision.ts`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+M1 owner: outcome/proxy profiles, cited counterevidence, same-candidate ordering
+comparison, `proxy_order_reversed`, next method/reason/cost bound and prior finding.
+`next_action.cost_bound` is bounded text, not a computed numerical action value.
+The source explicitly leaves proxy fidelity unqualified. It does not implement
+a calibrated transition model, automatic rank-correlation qualification, a global
+proxy blacklist or a budget-optimal planner. Section 11 retains the M1 boundary.
+
+Related work on [cited measurements (#8382)](https://github.com/loopx-project/loopx/pull/8382),
+[Stride feedback projection (#8385)](https://github.com/loopx-project/loopx/pull/8385)
+and [Controller/Worker composition (#8378)](https://github.com/loopx-project/loopx/pull/8378)
+must be checked and revision-pinned before a trial; a PR proposal is not shipped
+behavior or proof of benefit. The budgeted-policy pilot can use existing detail
+reads and the single-agent path without waiting for those changes. The
 [integration guide](../long-running-execution-exploration-and-correction.md)
-separates source delivery, actual use and outcome benefit. Open controller
-composition work such as [#7430](https://github.com/loopx-project/loopx/pull/7430)
-is related transport work, not an implementation dependency or proof of this RFC.
+separates source delivery, actual use and outcome benefit.
 
 ## 5. Proposed architecture
 
@@ -188,6 +201,21 @@ an obligation to satisfy Stride v2. Replans retain their existing v2 contract.
 An absent attachment preserves the current decision; an explicit `proxy: null`
 chooses direct evaluation while historical profiles remain readable.
 
+A current decision can reuse explicitly cited measurements from earlier
+findings by the same agent on the linked question. Each profile keeps its own
+input and evaluator revisions, and cross-profile comparison still requires the
+same candidate pair. Findings with their own Yardstick decision retain their
+original work and target scope.
+The primary settlement records a server-owned canonical event-prefix count and
+content-bound event-id digest for these citations. Attachment recovery verifies
+that original prefix; later ingestion order cannot expand its evidence. Old
+captures without this source snapshot remain readable, but plain cited
+measurements stay unknown rather than acquiring the recovery-time graph.
+Readback replays that prefix through the existing Explore projection, so a later
+update to the same finding cannot rewrite its cited measurement.
+The server-only source snapshot stays out of presentation capture payloads;
+independently installed readers retain the existing decision/binding wire shape.
+
 ### 5.3 Co-discovery: invest in a pair
 
 The model compares the incumbent pair, direct evaluation and a small relevant
@@ -199,9 +227,11 @@ set of alternatives, expanding source-bound detail only when needed. It asks:
   results? Does the remaining horizon justify that investment?
 - Would changing target, measurement method, or both resolve the bottleneck?
 
-Use complete marginal cost: construction + search + repair/calibration + true
-confirmation + model/control + switching/opportunity cost. Cheap evaluation time
-alone is insufficient. For speed optimization, a measured cost share `w` can
+Account for construction, search, repair/calibration, true confirmation,
+model/control and actual switching in their resource units. Under §5.8's fixed
+budget, compare the opportunities foregone rather than adding a second synthetic
+opportunity-cost debit. Cheap evaluation time alone is insufficient. For speed
+optimization, a measured cost share `w` can
 bound ideal whole-program speedup by `1/(1-w)`; this is an upper bound under its
 assumptions, not attainable headroom or a universal objective for other domains.
 Prefer defensible comparisons/ranges over a fabricated universal utility score.
@@ -377,13 +407,158 @@ A–D study must establish that the cue helps without narrowing model capability
 Reuse available artifact/measurement evidence for this review; do not require
 new per-tool tracing or reread the entire trajectory on each Turn.
 
+<a id="budgeted-planning"></a>
+
+### 5.8 Budgeted multi-step research planning
+
+This extends the existing pair/Stride decision, not the work-graph or scheduler
+owner. The near-term caller is the EdgeBench policy experiment in
+[Research program §8.7](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning).
+A plan is a revisable continuation through useful evidence boundaries, not a
+promise to execute every step or a new mandatory record per tool call.
+
+#### Objective and remaining resources
+
+For a fixed starting research state `s0`, let `Y_B` be the accepted native outcome
+under the frozen selection rule at resource horizon `B`, expressed in the declared
+better-is-higher direction (for example, negate lower-is-better step counts).
+This changes notation, not native acceptance or cross-task aggregation. Compare
+policies by:
+
+$$
+J_\pi(B\mid s_0)=\mathbb E[Y_B^\pi\mid s_0],\qquad
+\Delta J(B\mid s_0)=\mathbb E[Y_B^\pi-Y_B^{\pi_0}\mid s_0].
+$$
+
+Within-run gain over the starting candidate is not the incremental benefit over
+an improving baseline. A common starting value cancels without requiring a
+precise absolute estimate, but equal scores do not imply equal research states.
+Respect whether the contract selects the best valid evaluated submission, a final
+artifact, or another outcome; an untested best candidate is not a realized result.
+
+`B` may constrain wall time, tokens and evaluator resources separately. Read
+remaining amounts and availability from their existing owners, retaining coverage
+and unknowns. Same wall time is not same token use. Charge planning, source reads,
+failed work, proxy construction/repair and confirmation to their real resources;
+account for parallel work and waiting without summing overlapping wall intervals.
+Under a fixed-resource terminal-outcome objective, opportunity cost is the work
+foregone. Do not subtract tokens from a score or debit that opportunity a second
+time. A monetary penalty needs an explicit utility conversion and objective.
+
+A simplified planning model with known positive resource use `k(a)` is:
+
+$$
+V^*(s,b)=\max\left\{G(s),\ \max_{a:\,k(a)\le b}
+\mathbb E[V^*(S',b-k(a))\mid s,a]\right\}.
+$$
+
+`G` is the value of ending research under the accepted selection rule. State
+includes incumbent/frontier evidence, unresolved prerequisites, yardstick scope,
+pending results and remaining resources. Real durations may be uncertain and
+availability constrained; the model explains the objective, not a kernel solver.
+Stopping a branch reallocates resources. Ending the entire run has no automatic
+saving benefit if unused budget has no other value; preserve existing honest
+success, exhaustion, authority and resource stop conditions rather than inventing
+an endless-work obligation or a fixed-cost Bernoulli stopping threshold.
+
+#### Compare continuations, execute a bounded first slice
+
+Use the current route as a comparator and expand only decision-relevant
+alternatives. Their value depends on competing routes and the remaining horizon,
+not a fixed index of each candidate alone. Immediate gain/cost is a screening
+heuristic: prerequisite work, complementary evidence and delayed improvements can
+make it rank plans incorrectly. A zero-gain first probe does not refute a useful
+multi-step plan; a past late breakthrough does not justify arbitrary persistence.
+
+The decision should make these meanings recoverable from existing work/evidence:
+
+| Meaning | Minimum useful content |
+| --- | --- |
+| Comparison | Current accepted objective, incumbent/frontier and the continuation being compared; same-state/budget scope. |
+| Continuation | Necessary dependencies and a short conditional route to an informative or accepted result; what survives a failed branch. |
+| Prediction | Possible outcomes, goal-relevant gain or range, resource/time range, evidence basis and material unknowns. |
+| Next boundary | A feasible first slice, distinguishing observation, condition to continue/revise/stop, and time/resources needed for confirmation. |
+
+These are planning semantics, not four new wire fields or a form to repeat.
+Use Stride's existing plan/reason axes and `next_probe`, the ordinary Yardstick
+`next_action`, and cited Explore findings for supporting reasoning. Keep the
+current cue short (§5.7); do not squeeze a full plan into bounded `cost_bound`
+text or add unsupported keys to v0. A real new deliverable/dependency uses Todo's
+existing owner. A plan step within the same deliverable does not create a Todo.
+Execute the first coherent slice and reconsider at useful evidence boundaries;
+retain normal settlement and due reviews without forcing a method switch.
+
+For example, compare continuing a supported implementation with establishing a
+necessary correctness check and then trying another mechanism. If the check
+fails, revise that prerequisite; if it passes, continue while useful budget
+remains; if confirmation will miss the deadline, compare the feasible validated
+routes. This is a conditional research plan, not a generic enforced tool order.
+
+Estimates come from mechanism/headroom evidence, comparable earlier experiments
+and bounded probes. Allow unknowns, intervals and decision thresholds rather
+than invented precise probabilities. Log predictions before seeing results and
+calibrate them against realized outcomes. A model's confidence or observed
+`grow`/`verify`/`switch` success frequency is not an action's causal value: those
+choices occur in different states. Bellman notation does not supply a transition
+model, and a post-hoc peak must never become a decision-time feature.
+
+#### Progress evidence and measurement choice
+
+Milestones are dependent state predicates with evidence, applicability and
+possible reversals; alternative branches need not satisfy the same milestones.
+Do not model heterogeneous steps as iid Bernoulli trials or add one reward per
+completed step. Keep accepted goal gain, newly satisfied prerequisites and
+information/adoption separate. Flat incumbent score does not by itself prove
+useful learning or regression prevention. For an unchanged scalar outcome rule,
+score differences telescope to final improvement; process reward for a future
+learner must preserve that objective rather than reward activity or repeatedly
+repairing the same defect.
+
+Local evidence has both noise and possible systematic bias. More local samples
+cannot by themselves fix workload mismatch or missed hard correctness/tail-time
+constraints. Qualify a yardstick where choices happen: same-parent candidates,
+exact evaluator/input scope, nearby alternatives and native counterexamples.
+Across-time rank agreement may merely reflect common search progress. Include a
+bounded audit of uncertain/proxy-rejected candidates when it can expose missed
+opportunities; do not let the proxy alone veto informative authorized evaluation.
+A conflict revisits the scoped method, not a global blacklist of its whole type.
+
+Evaluator cooldown, queue availability and pending feedback are planning inputs,
+not permission to change the benchmark. Reuse immutable candidate/result links
+when feedback arrives late. A pending result can support independent work while
+it runs; it is not a measured gain. Confirmation must fit the frozen terminal
+protocol, and adaptively used native feedback is development evidence, not an
+untouched holdout.
+
+### 5.9 Policy evolution through the same owner
+
+| Stage | Useful next result | Retained boundary |
+| --- | --- | --- |
+| Current-model pilot | A revision-pinned bounded planning treatment changes actual work and improves the §8.7 comparison. | Existing Stride/Yardstick/Explore owners and ordinary responses; no second controller session or numerical fidelity engine prerequisite. |
+| Calibrated estimates | Pre-action predictions linked to actual method, duration, next state and terminal result improve forecast/calibration on held-out episodes. | The domain provider owns measurement meaning; supporting estimates are not acceptance, permission or fabricated counterfactual labels. |
+| Learned allocation | A learned policy beats the qualified current-model policy under matched full budgets and transfer tests. | Replace the policy implementation behind the same work decision boundary; Core retains admission, budget, identity and settlement. |
+
+Record state and evidence as they were available at decision time, action and
+actual method, resource use, next observation/state, and later outcomes through
+existing provenance/followthrough. Selected-action logs can train forecasts;
+they do not reveal unchosen outcomes. Use prospective matched continuations or
+explicitly justified off-policy assumptions for policy-value claims. Preserve
+failed, cancelled and unknown results. Raw task data stays within the research
+boundary and cannot become a production memory or training corpus by default.
+
+No new policy registry, plan database, scheduler or universal scalar rank is
+needed for the first caller. Before any later schema change, demonstrate the
+missing producer/consumer fact, extend the existing versioned owner, and qualify
+readback/recovery/off behavior. Controller–Worker composition can later consume
+the same decision; it neither grants additional authority nor proves benefit.
+
 ## 6. Alternatives and design choices
 
 | Alternative | Decision / trade-off |
 | --- | --- |
 | Separate Stride and Yardstick planners | Reject for the first slice: duplicate reviews can disagree about which target is worth measuring. Keep specialized fidelity computation, share the research decision. |
 | Full replan every Turn | Reject: creates fake obligations, broad context and unnecessary work-graph churn. |
-| One scalar action or utility score | Reject: conflates target value, measurement reliability and work shape; hides uncertainty and unlike cost units. |
+| Universal precomputed action score | Reject: conflates target value, measurement reliability and work shape; hides uncertainty and unlike cost units. A defined terminal objective (§5.8) still permits context-dependent comparisons. |
 | Calibrate a fixed target only | Insufficient: may spend the horizon repairing a yardstick for an uneconomical target. |
 | Always use the true evaluator | Retain as comparator/fallback, especially for cheap evaluation or a short remaining horizon. Proxy construction has no guaranteed benefit. |
 | Mandatory form in every writeback | Reject: unchanged work should not need repeated explanation. Shared semantics do not require maximal payloads. |
@@ -449,6 +624,9 @@ These are implementation acceptance requirements, not tests already passed.
 | C11 | Stale/foreign refs, partial context, concurrent writer, mixed schema | Reject unsupported identity/effect; recover source-bound detail without pretending omitted evidence was read. |
 | C12 | Treatment off, old configuration, disable/re-enable | Existing behavior/history retained; no new default, prompt, required field or schedule effect. |
 | C13 | Cue raises ranking uncertainty; actor ignores it, finds a better method, or receives contrary user direction | Actual artifacts distinguish delivery from addressing the question; allow improved alternatives and justified revision. Compare concise cue versus no cue for useful action and overhead; never require a scripted tool sequence. |
+| C14 | Same evidence, different remaining horizons | Compare feasible terminal outcomes, including confirmation; do not require the same route or use a fixed per-candidate score. |
+| C15 | A prerequisite has no immediate gain but enables a plausible later improvement | Consider the conditional sequence and a bounded discriminating first slice; count dependent milestones once as state evidence, not independent rewards. |
+| C16 | Confirmation is pending or cannot finish under the terminal protocol | Retain immutable result attribution and honest unknowns; consider independent work or a feasible validated route without resetting cooldown or inventing gain. |
 
 Replay typed scenarios with synthetic evidence against real File/SQLite owners
 where persistence is touched. Use actual host/CLI settlement and packaged
@@ -488,6 +666,12 @@ seeing a favorable case. Promotion requires conformance, no authority/protocol
 regression, and repeated evidence of better accepted outcomes at comparable
 cost or lower complete cost for comparable outcomes. Keep inconclusive/negative
 results. Paper gains and a successful synthetic replay do not qualify LoopX.
+
+The focused [EdgeBench budgeted-planning pilot](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning)
+tests §5.8 on the existing M1 path before a broad A–D matrix. It does not require
+a general fidelity engine or dual-session runtime, and does not close all M2/M3
+acceptance. Its frozen treatment, paired episodes and whole-run promotion rules
+are owned by the research program rather than copied into Core defaults.
 
 ## 10. Operational contract
 
@@ -577,12 +761,17 @@ followthrough do not close C13 or M2/M3.
 | E1 | [DuoDiscover v1](https://arxiv.org/html/2610.17184v1), §§2.2–2.4; Appendices A.1, E.1, F.1–F.5 | Joint search, rank fidelity, per-target ablation and failure behavior. Author-reported results; not independently reproduced here. |
 | E2 | Baseline source links in §4; [Stride §7.6](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control) | Current replan identity, axis and followthrough seams. A source audit, not installed/new-feature validation. |
 | E3 | [Research measurement model](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model) | Shared outcome/cost/adoption comparison owner; this RFC adds a bounded treatment matrix. |
-| E4 | Scenarios C1–C13 | Proposed falsifiable acceptance cases; unexecuted until implementation. |
+| E4 | Scenarios C1–C16 | Acceptance requirements; §11 records M1 source coverage. Budgeted-planning cases remain proposed, not executed. |
+| E5 | [Selecting Computations](https://aima.cs.berkeley.edu/~russell/papers/uai12-meta.pdf), §§2–6 | Belief-state decisions, complementary information, context-dependent priorities and fixed-budget sampling. Fixed-arm guarantees do not certify candidate-generating research. |
+| E6 | [Multi-fidelity Bayesian Optimisation](https://proceedings.mlr.press/v70/kandasamy17a.html), §§1–3 | Distinguishes cheap approximations from the target outcome; GP/fidelity assumptions require qualification for program search. |
+| E7 | [Policy invariance under reward transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf), §3 | Potential-based shaping preserves the objective under its assumptions; arbitrary milestone bonuses do not. |
+| E8 | [EdgeBench adapter contract](../../../benchmark/edgebench/README.md), [feedback and memory analysis](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/), and §4 source owners | Native protocol, starting-state/continuation distinctions and current M1 seams; motivates the pilot, not a new measured gain. |
 
 The paper's favorable fallback observations do not prove a no-regret guarantee:
 failed yardstick construction has already consumed budget. Per-target versus
 task-wide validation rates use different units. Candidate selection and
 repeated fidelity tests limit statistical interpretation. These caveats motivate
 complete-cost accounting and authoritative confirmation, not rejection of
-co-discovery. There is no implementation decision log yet; recommendations in
-this proposal are not maintainer approval.
+co-discovery. The M1 decision/followthrough implementation does not establish
+budgeted-planning benefit; recommendations in this proposal are not maintainer
+approval of a new runtime policy.

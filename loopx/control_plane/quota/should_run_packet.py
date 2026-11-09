@@ -4,7 +4,7 @@ from typing import Any, cast
 import json
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
-from .effect_program import ReceiptBoundReplayPhase
+from .effect_program import ReceiptBoundReplayPhase, reuse_cli_settlement_plans
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -1671,6 +1671,7 @@ def _build_active_quota_payload(
     return payload
 
 
+@reuse_cli_settlement_plans()
 def _build_quota_should_run_payload(
     prepared: _QuotaDecisionPreparation,
     route: _QuotaDecisionRoute,

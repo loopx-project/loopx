@@ -147,6 +147,19 @@ test("short record span collapses thirds into one whole-history reading group", 
   assert.ok(MIN_THIRDS_SPAN_MS > 0);
 });
 
+test("elapsed ticks retain both ends of a same-day capture and reserve space for the final label", async () => {
+  const {exploreTimelineTickOffsets} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const hour = 3_600_000;
+  const elapsed = 20 * hour + 58 * 60_000 + 6_000;
+  assert.deepEqual(exploreTimelineTickOffsets(elapsed, 960), [0, 3 * hour, 6 * hour, 9 * hour, 12 * hour, 15 * hour, 18 * hour, elapsed]);
+  assert.deepEqual(exploreTimelineTickOffsets(elapsed, 300), [0, elapsed]);
+  assert.deepEqual(exploreTimelineTickOffsets(0, 960), [0], "Coincident records have one tick");
+  assert.deepEqual(exploreTimelineTickOffsets(9, 960), [0, 9], "Subsecond endpoints stay distinct");
+  const long = exploreTimelineTickOffsets(24 * hour * 365, 960);
+  assert(long.length <= 9, "Multi-month history still has a bounded number of ticks");
+  assert.equal(long.at(-1), 24 * hour * 365);
+});
+
 test("phase reading retains successive decisions for one question, including a late backfill", async () => {
   const {buildExploreTimeline, exploreTimelinePhaseAt, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
   const finding = (id: string, at: string, outcome: string) => event({event_id: id, event_kind: "finding", result_id: id, node_id: "route", recorded_at: at, status: "tentative",
