@@ -21,6 +21,11 @@ belongs in the existing RFC ledger convention, with explicit normative revisions
 when a decision changes. Section 11 records the bounded M1 implementation boundary;
 no long-horizon effectiveness gain or default promotion is established.
 
+For the objective, theoretical assumptions, worked feedback loop and rationale
+behind these choices, read [Budgeted research planning](../../research/budgeted-research-planning.md).
+It connects the design to the first EdgeBench experiment without adding another
+policy owner or treating the explanatory Bellman model as an implemented solver.
+
 ## 1. Decision summary
 
 Extend the existing Stride decision owner to consider **which target to pursue,
@@ -122,12 +127,18 @@ The source explicitly leaves proxy fidelity unqualified. It does not implement
 a calibrated transition model, automatic rank-correlation qualification, a global
 proxy blacklist or a budget-optimal planner. Section 11 retains the M1 boundary.
 
-Related work on [cited measurements (#8382)](https://github.com/loopx-project/loopx/pull/8382),
-[Stride feedback projection (#8385)](https://github.com/loopx-project/loopx/pull/8385)
-and [Controller/Worker composition (#8378)](https://github.com/loopx-project/loopx/pull/8378)
-must be checked and revision-pinned before a trial; a PR proposal is not shipped
-behavior or proof of benefit. The budgeted-policy pilot can use existing detail
-reads and the single-agent path without waiting for those changes. The
+Source follow-up at
+[`bd2af5e`](https://github.com/loopx-project/loopx/tree/bd2af5e0ec5acc9eafb0b0eb6b3d4661206a2eef)
+(2026-11-10): [cited measurements (#8382)](https://github.com/loopx-project/loopx/pull/8382)
+and [Stride feedback projection (#8385)](https://github.com/loopx-project/loopx/pull/8385)
+are merged. The latter carries bounded measurement comparisons and work-yardstick
+cues from the existing Explore view into Stride's basis, retaining omitted-source
+read paths. These source changes establish evidence availability, not model
+adoption, numerical fidelity or planning benefit. The
+[Controller/Worker proposal (#8378)](https://github.com/loopx-project/loopx/pull/8378)
+remains separate and is not required by the single-agent pilot. Pin the actual
+source and projection before a trial; this dated follow-up does not rewrite the
+original implementation-baseline audit. The
 [integration guide](../long-running-execution-exploration-and-correction.md)
 separates source delivery, actual use and outcome benefit.
 
@@ -416,6 +427,9 @@ owner. The near-term caller is the EdgeBench policy experiment in
 [Research program §8.7](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning).
 A plan is a revisable continuation through useful evidence boundaries, not a
 promise to execute every step or a new mandatory record per tool call.
+The [design rationale](../../research/budgeted-research-planning.md#planning-model)
+explains why candidate creation, information acquisition and yardstick investment
+belong in one budgeted comparison, and why immediate gain/cost is only a heuristic.
 
 #### Objective and remaining resources
 

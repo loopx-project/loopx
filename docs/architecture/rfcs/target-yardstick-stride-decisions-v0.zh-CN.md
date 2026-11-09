@@ -18,6 +18,10 @@
 双语版本保持语义一致。后续执行证据沿用 RFC ledger 约定；改变设计时显式修订规范。
 第 11 节记录有界 M1 实现边界；尚未证明长程效果收益，也不提升默认配置。
 
+目标、理论假设、完整反馈案例与设计理由见[预算内研究规划](../../research/budgeted-research-planning.zh-CN.md)。
+该说明把设计连接到首个 EdgeBench 实验，不新增策略 owner，也不把解释性的 Bellman 模型当成
+已经实现的求解器。
+
 ## 1. 决策摘要
 
 扩展现有 Stride 决策归属，让它共同考虑：**研究哪个方向、如何测量、
@@ -100,11 +104,15 @@ M1 owner：成果/代理 profile、引用反证、同候选排序比较、`proxy
 尚未实现已校准的状态转移模型、自动秩相关资格判断、全局代理黑名单或预算最优规划器。
 第 11 节保留 M1 的实际交付边界。
 
-[引用测量（#8382）](https://github.com/loopx-project/loopx/pull/8382)、
-[Stride 反馈投影（#8385）](https://github.com/loopx-project/loopx/pull/8385) 和
-[Controller/Worker 组合（#8378）](https://github.com/loopx-project/loopx/pull/8378)
-等相关工作需在试验前核对并固定版本；PR 提案不等于已交付行为或收益证据。
-预算策略试验可沿既有详情读取和单 Agent 路径开始，不必等待这些改动。
+2026-11-10 源码接续核对：在
+[`bd2af5e`](https://github.com/loopx-project/loopx/tree/bd2af5e0ec5acc9eafb0b0eb6b3d4661206a2eef)
+中，[引用测量（#8382）](https://github.com/loopx-project/loopx/pull/8382) 与
+[Stride 反馈投影（#8385）](https://github.com/loopx-project/loopx/pull/8385) 已合并。
+后者把既有 Explore 的有界测量比较与工作尺子提示带入 Stride basis，并保留省略来源的读取路径。
+这些源码变化证明证据可达，不证明模型采用、数值 fidelity 或规划收益。
+[Controller/Worker 提案（#8378）](https://github.com/loopx-project/loopx/pull/8378)
+仍独立于此，不是单 Agent pilot 的前置。试验前固定实际源码与投影；此日期明确的接续核对
+不改写原 implementation baseline 的审计。
 [整合说明](../long-running-execution-exploration-and-correction.zh-CN.md)
 区分来源交付、实际使用与结果收益。
 
@@ -312,6 +320,9 @@ C13 和 A–D 实验需要证明短提示有帮助，同时不压缩模型能力
 <a id="budgeted-planning"></a>
 
 ### 5.8 预算内的多步研究规划
+
+[设计依据](../../research/budgeted-research-planning.zh-CN.md#planning-model)解释为什么创造候选、
+获取信息与投资尺子应纳入同一预算比较，以及为什么即时增益／成本只是启发式。
 
 这是既有组合/Stride 决策的扩展，不另建工作图或 scheduler owner。近期调用方是
 [研究计划 §8.7](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)
