@@ -315,3 +315,47 @@ test("different proxy workloads retain their revisions and compare the same decl
   assert.equal(projectExploreMeasurementFeedback([unpaired]).length, 2);
   assert.equal(projectWorkYardstickCue({...binding, enabled: false, findings: [measured]}), null);
 });
+
+
+test("late graph delivery cannot turn an old primary into a new decision's uncited evidence", () => {
+  const snapshot = {event_count: 2, event_ids_sha256: "a".repeat(64)};
+  const current = {...finding, recorded_order: 3, status: "confirmed",
+    work_yardstick: {binding, decision: {...decision, counterevidence_refs: []}, source_snapshot: snapshot},
+    measurements: [
+      {...authoritative, value: 7, candidate_ref: "candidate:a", evidence_ref: "result:a"},
+      {...authoritative, value: 4, candidate_ref: "candidate:b", evidence_ref: "result:b"},
+    ]};
+  const plain = {finding_id: "late-primary", node_id: "question", status: "confirmed", recorded_order: 4,
+    work_binding: {...binding, turn_instance_id: "old-turn"}, last_updated_at: "2026-01-01T00:00:00.999999Z",
+    evidence_refs: ["result:late"], measurements: [
+      {...authoritative, value: 100, candidate_ref: "candidate:late", evidence_ref: "result:late"},
+    ]};
+  const project = (row = plain, source = current, cited_sources: unknown[] = []) => projectWorkYardstickCue({
+    ...binding, enabled: true, findings: [source, row], cited_sources,
+    measurement_feedback: projectExploreMeasurementFeedback([source, row]),
+  })!.search_comparison;
+  const expected = project().goal;
+  assert.equal(expected.preferred_candidate_ref, "candidate:a");
+  for (const timestamp of ["2026-01-01T00:00:00Z", finding.last_updated_at, "invalid", ""]) {
+    assert.deepEqual(project({...plain, last_updated_at: timestamp}).goal, expected);
+  }
+  assert.equal(project({...plain, last_updated_at: "2026-01-01T00:00:01.000001Z"}).goal.preferred_candidate_ref,
+    "candidate:late", "A genuinely later committed ordinary observation still qualifies");
+  assert.deepEqual(project({...plain, recorded_order: 1,
+    last_updated_at: "2026-01-01T00:00:01.000001Z"}).goal, expected,
+    "Original visible-prefix eligibility is also required");
+  assert.deepEqual(project(plain, {...current, last_updated_at: ""}).goal, expected);
+
+  const historical = {...plain, recorded_order: 1};
+  const explicitlyCited = {...current, evidence_refs: [...current.evidence_refs, "result:late"],
+    work_yardstick: {...current.work_yardstick,
+    decision: {...current.work_yardstick.decision, counterevidence_refs: ["result:late"]}}};
+  const cited = project(historical, explicitlyCited, [{source_finding_id: current.finding_id,
+    source_snapshot: snapshot, findings: [historical]}]);
+  assert.equal(cited.goal.preferred_candidate_ref, "candidate:late",
+    "An explicitly cited historical 100 remains applicable to the newer a/b comparison");
+  assert.equal(cited.goal.previous_best.candidate_ref, "candidate:late",
+    "Verified cited history is retained even though it predates the current decision");
+  assert.equal(projectExploreMeasurementFeedback([current, plain])[0]!.latest.measurement.candidate_ref,
+    "candidate:late", "The raw result and profile-wide history are retained");
+});

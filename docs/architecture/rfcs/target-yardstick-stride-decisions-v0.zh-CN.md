@@ -423,6 +423,8 @@ Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策
 内容证明保留自身较窄的覆盖范围，不重标既有 measurement。各 outcome/proxy
 profile 保留真实 workload revision 与 evaluator。既有 typed 比较 owner 只配对
 适用的声明 subject；producer 所在位置及路径/字节内容相等不证明执行等价。
+普通 current-work 证据还保留原提交时间与 canonical prefix 边界；旧记录延迟写入
+不能变成新 decision 的未引用证据，已显式引用并验证的历史仍可使用。
 
 ## 6. 替代方案与设计选择
 

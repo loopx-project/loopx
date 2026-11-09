@@ -146,18 +146,29 @@ function recordedBefore(row: JsonObject, sourceOrder: unknown): boolean {
     && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder;
 }
 
+function committedInWorkWindow(row: JsonObject, startOrder: number, decisionTime: bigint | null): boolean {
+  const order = row.recorded_order;
+  const committed = parseTodoTimestampMicros(String(row.last_updated_at ?? ""));
+  // Append order says when a result became visible, not when its primary
+  // committed. A delayed old delivery cannot become a new decision's evidence.
+  // Tied or unknown original times do not prove a newer uncited observation.
+  return Number.isSafeInteger(order) && Number(order) >= startOrder
+    && committed !== null && decisionTime !== null && committed > decisionTime;
+}
+
 function measuredSearchComparison(
   scopedFindings: readonly JsonObject[],
   decision: WorkYardstickDecision,
   cited: ReadonlySet<string>,
   sourceOrder: unknown,
   workObservationStart: number,
+  decisionTime: bigint | null,
 ) {
   const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) => {
     const feedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
       (row.work_yardstick !== undefined || (cited.has(measurement.evidence_ref)
         ? recordedBefore(row, sourceOrder) : row.work_binding !== undefined
-          && Number(row.recorded_order) >= workObservationStart))
+          && committedInWorkWindow(row, workObservationStart, decisionTime)))
       && (!candidates || candidates.has(measurement.candidate_ref)));
     return measuredPair(feedback.find(row => matchesProfile(row, profile)));
   };
@@ -209,6 +220,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   // New observations belong to this current decision's work window. Earlier
   // ordinary measurements require the original explicitly cited snapshot.
   const workObservationStart = sourceOrder ?? Number(source.recorded_order) + 1;
+  const decisionTime = parseTodoTimestampMicros(String(source.last_updated_at ?? ""));
   const priorSource = Array.isArray(params.cited_sources) ? (params.cited_sources as JsonObject[]).find(row =>
     row.source_finding_id === source.finding_id
       && capture.source_snapshot !== undefined
@@ -216,7 +228,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
       && (row.source_snapshot as JsonObject | undefined)?.event_ids_sha256 === capture.source_snapshot.event_ids_sha256) : undefined;
   const plainFindings = Array.isArray(priorSource?.findings) ? priorSource.findings as JsonObject[] : [];
   const scopedFindings = [...findings.filter(row => row.work_yardstick !== undefined
-      || row.work_binding !== undefined && Number(row.recorded_order) >= workObservationStart),
+      || row.work_binding !== undefined && committedInWorkWindow(row, workObservationStart, decisionTime)),
     ...plainFindings.filter(row => row.work_yardstick === undefined)].filter(row => {
     if (row.node_id !== source.node_id) return false;
     const bound = jsonObject(row.work_binding) !== null;
@@ -234,7 +246,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
       && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
   });
-  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited, sourceOrder, workObservationStart);
+  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited, sourceOrder, workObservationStart, decisionTime);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     ...(capture.source_snapshot ? {source_snapshot: capture.source_snapshot} : {}),
     measurement_feedback: feedback,

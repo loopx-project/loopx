@@ -559,6 +559,9 @@ its narrower coverage and does not relabel a prior measurement. Each outcome
 or proxy profile preserves its actual workload revision and evaluator. The
 existing typed comparison owner pairs only applicable declared subjects; producer
 location and equal path/byte content do not establish execution equivalence.
+Ordinary current-work evidence also keeps its original commit chronology and
+canonical-prefix boundary; a late old delivery cannot become a newer decision's
+uncited evidence. Explicitly cited verified history remains available.
 
 ## 6. Alternatives and design choices
 

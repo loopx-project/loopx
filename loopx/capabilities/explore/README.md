@@ -170,6 +170,11 @@ separate comparison cue. The detail read retains the complete work decision.
 The comparison uses findings from the current work, target, and acceptance
 reference. A different target or acceptance reference needs its own eligible
 pair, even when the measured metric, evaluator and inputs stay the same.
+Uncited ordinary observations enter the current work window only when their
+original server commit is provably later than that decision and their canonical
+log position follows its original prefix. A delayed old delivery, tied time or
+unknown time does not become new work evidence. Original results and explicitly
+cited, verified prefix history remain available.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

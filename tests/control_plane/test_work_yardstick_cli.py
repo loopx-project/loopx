@@ -1076,3 +1076,62 @@ def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
         assert rc == 1 and "source snapshot changed" in json.dumps(rejected)
         assert log.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("decision_entry", ["finding", "refresh"])
+def test_delayed_committed_measurement_keeps_its_original_work_window(
+        tmp_path, monkeypatch, capsys, provider, decision_entry):
+    from loopx.cli import main
+    import loopx.capabilities.explore.result_writeback as writer
+
+    project, runtime, registry = setup(tmp_path, active=True, provider=provider)
+    previous = attachment()
+    profile = previous.pop("work_yardstick_decision")["authoritative"]
+    previous.update(observation="Earlier target result committed before the new decision",
+        evidence_refs=["result:old"], measurements=[dict(profile, value=100,
+            candidate_ref="candidate:old", evidence_ref="result:old")])
+    saved = tmp_path / "old-committed.json"
+    saved.write_text(json.dumps(previous))
+    turn = "earlier-primary"
+    run(project, runtime, registry, "quota", "should-run", "--codex-app", *binding(turn))
+    command = ["refresh-state", *binding(turn), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--explore-result-json", str(saved),
+        "--no-global-sync", "--suppress-external-sinks"]
+    def interrupted(*args, **kwargs):
+        raise OSError("One-shot graph delivery interruption after primary commit")
+    with monkeypatch.context() as patch:
+        patch.chdir(project)
+        patch.setattr(writer, "append_explore_result_events", interrupted)
+        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command])
+        partial = json.loads(capsys.readouterr().out)
+    assert code == 1 and partial["appended"] and partial["explore_result_delivery"]["primary_committed"]
+    run(project, runtime, registry, "quota", "spend-slot", *binding(turn), "--slots", "1",
+        "--source", "heartbeat", "--execute")
+    current = attachment()
+    current["work_yardstick_decision"].update(proxy=None, counterevidence_refs=[])
+    current["work_yardstick_decision"]["target"]["summary"] = "New target after the earlier primary"
+    current.update(evidence_refs=["result:a", "result:b"], measurements=[
+        dict(profile, candidate_ref="candidate:" + candidate, evidence_ref="result:" + candidate, value=value)
+        for candidate, value in [("a", 7), ("b", 4)]])
+    source = tmp_path / "new-decision.json"
+    source.write_text(json.dumps(current))
+    run(project, runtime, registry, "quota", "should-run", "--codex-app", *binding("new-decision"))
+    if decision_entry == "finding":
+        run(project, runtime, registry, "explore", "finding", *binding("new-decision"), "--result-json", str(source))
+    else:
+        run(project, runtime, registry, "refresh-state", *binding("new-decision"),
+            "--classification", "validated_change", "--delivery-batch-scale", "implementation",
+            "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+            "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks")
+    before = context(runtime, registry)["graph"]["work_yardsticks"][0]
+    assert before["search_comparison"]["goal"]["preferred_candidate_ref"] == "candidate:a"
+    replay = run(project, runtime, registry, *command)
+    assert replay["idempotent_replay"] and replay["explore_result_delivery"]["ok"]
+    after = context(runtime, registry)["graph"]["work_yardsticks"][0]
+    assert after["source_finding_id"] == before["source_finding_id"]
+    assert after["search_comparison"] == before["search_comparison"]
+    events = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+    historical = next(event for event in events if event.get("measurements", [{}])[0].get("evidence_ref") == "result:old")
+    assert historical["measurements"][0]["value"] == 100
