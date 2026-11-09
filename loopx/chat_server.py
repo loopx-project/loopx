@@ -107,7 +107,7 @@ from .extensions.runtime import (
 from .chat.completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
-from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
+from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GOAL_SOURCE_STRATEGIES_PATH, GoalSourceRequestMixin
 from .chat.todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
@@ -1707,6 +1707,7 @@ class ChatRequestHandler(
             background_api.BACKGROUND_SERVICES_PATH: self._background_services_read,
             "/api/chat/request-inventory": self._request_inventory_read,
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
+            GOAL_SOURCE_STRATEGIES_PATH: self._goal_source_strategies,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/explore-results": self._explore_results,
