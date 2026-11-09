@@ -16,6 +16,45 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("fault, expected", [
+    ("done", True), ("error", True), ("canceled", True), ("cleared", True),
+    ("running", False), ("generating", False), ("waiting", False),
+    ("missing-status", False), ("visible-error", False),
+    ("mixed-execution", False), ("final-error", False), ("missing-stop", False),
+])
+def test_capacity_readback_uses_the_completed_native_turn_boundary(language_server, fault, expected):
+    """Handled tool failures do not hide quota; unknown/active work stays held."""
+    meta = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "completed-execution"}
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta},
+        {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_" + fault.upper(), "metadata": meta},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
+         "plannerResponse": {"response": "Completed after the tool attempt.", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+    ]
+    if fault == "missing-status":
+        steps[1].pop("status")
+    elif fault == "visible-error":
+        steps[1].update(type="CORTEX_STEP_TYPE_ERROR_MESSAGE", status="CORTEX_STEP_STATUS_DONE",
+                        errorMessage={"shouldShowUser": True})
+    elif fault == "mixed-execution":
+        steps[1].update(status="CORTEX_STEP_STATUS_DONE", metadata={**meta, "executionId": "another-execution"})
+    elif fault == "final-error":
+        steps[1]["status"] = steps[2]["status"] = "CORTEX_STEP_STATUS_ERROR"
+    elif fault == "missing-stop":
+        steps[1]["status"] = "CORTEX_STEP_STATUS_DONE"
+        steps[2]["plannerResponse"].pop("stopReason")
+    language_server.update(active=True, frames=[], frame={"at": 1, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"})
+    capacity = native.AntigravityAdapter.metadata_review_capacity(cascade_id="synthetic-cascade", model_id="gemini-4-argon-high")
+    if expected:
+        assert capacity and capacity["normal_completion"] is True and capacity["remaining_fraction"] == 1
+        assert capacity["quota_exhausted"] is False
+    else:
+        assert capacity is None
+    assert {method for method, _ in language_server["calls"]} <= {
+        "GetCascadeModelConfigData", "GetCascadeTrajectory", "GetCascadeTrajectorySteps", "GetUserStatus"}
+    assert language_server["sent_count"] == 0 and not language_server["cancelled"].is_set()
+
+
 @pytest.mark.parametrize("prior_status, error_status, cancellation_needed", [
     ("CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_DONE", False),
     ("CORTEX_STEP_STATUS_ERROR", "CORTEX_STEP_STATUS_DONE", False),
