@@ -21,6 +21,26 @@ standalone observations keep the complete observation form. [Execution evidence 
 An ordinary result attachment can include `measurements`, saved on its existing
 node-linked finding. The graph and research-history detail retain the values;
 `explore turn-context` supplies bounded `measurement_feedback` to the next turn.
+To use a new result during the current Turn, save the same ordinary attachment
+as `result.json` and record it with the open claimed Todo:
+
+```sh
+loopx --format json explore finding --goal-id GOAL --agent-id AGENT \
+  --todo-id TODO --turn-instance-id TURN --result-json result.json
+```
+
+Supply the question and applicability for a new scoped question. For one
+existing linked question, omit both; when there are several, name its
+`node_id`. The same attachment works with `refresh-state --explore-result-json`.
+The receipt returns `measurement_feedback` for confirmed measurements in this
+write, including the earlier best, latest value and improvement under the
+same profile. For an enabled Yardstick with declared outcome and proxy
+profiles, it also returns `search_comparison` when this write contributes a
+qualified comparison. A reversal requires two distinct candidates measured on
+both profiles with different preferences. This uses the current Todo's
+recorded evidence and doesn't settle the Turn. Exact retries within the same
+Turn return the comparison at the original write.
+
 Manual capture uses `explore finding --node <id> --evidence-ref result:a
 --measurements-json measurements.json`. The file contains one to eight items:
 

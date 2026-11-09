@@ -353,6 +353,7 @@ def build_explore_finding_event(
     execution_observation: Mapping[str, Any] | None = None,
     measurements: Sequence[Mapping[str, Any]] | None = None,
     work_yardstick: Mapping[str, Any] | None = None,
+    work_binding: Mapping[str, Any] | None = None,
     _check_execution_measurements: bool = True,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
@@ -409,6 +410,22 @@ def build_explore_finding_event(
             work_yardstick, goal_id=safe_goal_id, agent_id=str(agent_id or ""),
             evidence_refs=event.get("evidence_refs", []),
         )
+    if work_binding is not None:
+        if (not isinstance(work_binding, Mapping)
+                or set(work_binding) != {"goal_id", "agent_id", "todo_id", "turn_instance_id"}
+                or work_binding["goal_id"] != safe_goal_id
+                or work_binding["agent_id"] != event.get("agent_id")
+                or not work_binding["agent_id"] or not node_id):
+            raise ValueError("Explore work binding must match the finding's Goal, Agent and question")
+        binding = {
+            key: validate_explore_public_ref(value, field=f"work_binding.{key}")
+            for key, value in work_binding.items()
+        }
+        if (binding != work_binding
+                or not _safe_result_id(binding["todo_id"], field="work_binding.todo_id").startswith("todo_")
+                or ("work_yardstick" in event and event["work_yardstick"]["binding"] != binding)):
+            raise ValueError("Explore finding requires a canonical work binding")
+        event["work_binding"] = binding
     event["event_id"] = _event_id(event)
     return event
 
@@ -532,6 +549,7 @@ def validate_explore_result_event(
             execution_observation=payload.get("execution_observation"),
             measurements=payload.get("measurements"),
             work_yardstick=payload.get("work_yardstick"),
+            work_binding=payload.get("work_binding"),
             # Canonical history predates the stricter new-write rule. Keep
             # original bytes/identities auditable; current views qualify the
             # folded result separately, and append rechecks new writes below.
@@ -583,8 +601,8 @@ def rebase_explore_knowledge_events(
     The caller owns source verification and current destination authorization.
     Keep stable knowledge identities, full scope, attribution and timestamps;
     bind each new event to its source event in the existing opaque run reference.
-    Operational research observations stay in the source archive: rebasing their
-    Todo/commit lineage would manufacture current research execution evidence.
+    Operational research observations and work bindings stay in the source
+    archive. Rebasing them would manufacture destination execution evidence.
     """
     source, destination = _safe_goal_id(source_goal_id), _safe_goal_id(destination_goal_id)
     if source == destination:
@@ -594,6 +612,8 @@ def rebase_explore_knowledge_events(
         event = validate_explore_result_event(raw, expected_goal_id=source)
         event = {**event, "goal_id": destination, "run_id": source_ref + ":" + event["event_id"]}
         event.pop("research_observation", None)
+        event.pop("work_binding", None)
+        event.pop("work_yardstick", None)
         if event["event_kind"] == EVENT_KIND_EDGE:
             event["result_id"] = _derived_result_id("edge", destination, event["from_node"],
                                                     event["edge_type"], event["to_node"])
@@ -802,7 +822,7 @@ def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | 
         "schema_version", "event_id", "goal_id", "event_kind", "result_id",
         "recorded_at", "title", "summary", "status", "node_kind",
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements", "work_yardstick",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements", "work_yardstick", "work_binding",
     )
     from ...control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
 
@@ -917,6 +937,7 @@ def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
         else:
             measured.update(measurements=event["measurements"], recorded_order=event["_recorded_order"])
     return {
+        **({"work_binding": event["work_binding"]} if "work_binding" in event else {}),
         **({"work_yardstick": event["work_yardstick"], "recorded_order": event["_recorded_order"]} if "work_yardstick" in event else {}),
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
         **measured,

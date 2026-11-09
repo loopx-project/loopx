@@ -989,6 +989,10 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
     action_portfolio: payload.action_portfolio ?? null,
     ...(context.explore_basis ? {capabilities: {explore: retain({
       availability: explore.availability, revision: explore.revision,
+      ...(Array.isArray(explore.measurement_feedback) && explore.measurement_feedback.length
+        ? {measurement_count: explore.measurement_feedback.length} : {}),
+      ...(Array.isArray(explore.work_yardsticks) && explore.work_yardsticks.length
+        ? {yardstick_count: explore.work_yardsticks.length} : {}),
       read_action: reads?.explore ?? null,
     }, explore, ["availability", "revision"])}} : {}),
     evidence: (Array.isArray(context.evidence) ? context.evidence : []).map(value => {

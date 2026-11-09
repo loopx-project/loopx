@@ -17,7 +17,8 @@ def native_research_guidance() -> str:
     )
 
 
-def research_artifact_instructions(*, checkpoint: bool) -> str:
+def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = False,
+                                   native_result_comparison: bool = False) -> str:
     """Separate reproducibility data from candidate inputs for every native arm."""
     from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
 
@@ -28,6 +29,33 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         "Terminal artifact collection retains this directory for analysis; "
         "that alone does not provide a resumable checkpoint. "
     )
+    binding = (
+        "When a decision depends on comparing a local probe with a native result, "
+        "and sforge-submit --help lists --retain-archive and --json, retain the exact archive "
+        "with the planned submission. Use loopx-bind-native-candidate --help with the sealed "
+        "file manifest, original probe and native result. Record the native measurement with its verified "
+        "submitted_file_set_ref. Reuse an existing local measurement as the same candidate only when the "
+        "existing measurement's candidate reference already equals that complete file-set reference, "
+        "including generated outputs. Keep candidate_ref for the exact archive and probe_candidate_ref "
+        "for the probe's selected files; a subset or extra fixtures do not prove the same submitted file set. "
+        "Do not rewrite earlier measurements to force a match. "
+        "Keep each measurement's original evaluation and input revision. "
+        "If source evidence is unavailable, keep the measurements separate. Do not resubmit "
+        "to recover source evidence.\n\n"
+        if native_probe else ""
+    )
+    if native_result_comparison:
+        binding += (
+            "For an existing submission, use the same tool with --submission-id to read feedback and its "
+            "verified native_measurement. Use task:<task_sha256> from /etc/loopx-benchmark/native-result-scope.json "
+            "as the probe and snapshot input revision; use its evaluation_ref for the native Yardstick. "
+            "Record the measurement on the current Todo with "
+            "loopx explore finding --result-json FILE, using the current Goal, Agent, Todo and Turn. "
+            "Reuse the same question for local and native findings. Pair them as the same candidate only "
+            "when their recorded complete file-set references already match; otherwise preserve both "
+            "original references and keep the measurements separate. "
+            "Use the receipt's comparison to decide the next probe while its conditions still apply.\n\n"
+        )
     return (
         "### Research Artifacts\n\n"
         f"Use `{RESEARCH_DIRECTORY}` for reusable research artifacts that are not "
@@ -42,6 +70,7 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         "explicit until they have been copied and their references updated and checked. "
         "Older checkpoints preserve their original workspace files; this policy does "
         "not relocate or discard historical evidence.\n\n"
+        f"{binding}"
         "This storage guidance does not change submitted files, task acceptance, "
         "feedback access or execution authority. Capture and receiver verification "
         "still determine which artifacts are actually available.\n\n"

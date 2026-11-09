@@ -6,6 +6,11 @@ never acquires a claim or lease, and can replay after partial delivery.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
+
+from ...agent_registry import require_registered_agent_id
 from ...control_plane.capability_hooks import PostWritebackHookRegistration
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.coordination.local_authority import (
@@ -14,7 +19,8 @@ from ...control_plane.coordination.local_authority import (
 from ...cli_commands.post_writeback import dispatch_committed_cli_post_writeback_hooks
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.todos.mutation_api import update_goal_todo
-from .turn_context import _policy
+from ...control_plane.work_items.task_lease import lease_is_active
+from .turn_context import _policy, project_work_yardstick_sources
 from .result_log import (
     append_explore_result_events,
     build_explore_node_event,
@@ -34,12 +40,14 @@ def normalize_result_attachment(
         params["vision_packet"] = vision_packet
     if other_attachment is not ...:
         params["other_attachment"] = other_attachment
-    # Only explicit path-delta references with omitted scope need a state read.
+    # Only attachments with omitted scope need a state read.
     # TypeScript owns scope eligibility and normalization; this transports the
     # canonical Todo links and question records, never infers facts or authority.
     referenced = [row for row in (attachment, other_attachment) if (
         isinstance(row, dict)
-        and row.get("schema_version") == "explore_result_from_path_delta_v0"
+        and row.get("schema_version") in {
+            "explore_result_attachment_v0", "explore_result_from_path_delta_v0",
+        }
         and "question" not in row and "applicability" not in row
     )]
     if scope_context is not None and referenced:
@@ -82,9 +90,11 @@ def _linked_scope_context(
             explore_result_log_path(source_runtime, goal_id), goal_id=goal_id
         ), goal_id=goal_id,
     )
-    return {"requested_node_refs": todo.get("explore_result_node_refs", []),
+    refs = todo.get("explore_result_node_refs") or []
+    return {"requested_node_refs": refs,
             "nodes": [node for node in projection.get("nodes", [])
-                      if node.get("node_id") in node_ids]}
+                      if node.get("node_id") in refs
+                      and (None in node_ids or node.get("node_id") in node_ids)]}
 
 
 def _evolves_question(attachment):
@@ -99,7 +109,7 @@ def _evolution_plan(attachment, projection, *, agent_id):
 
 
 def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None,
-            todo_id=None, turn_instance_id=None,
+            todo_id=None, turn_instance_id=None, work_binding=None,
             source_snapshot=None,
             _check_execution_measurements=True):
     previous = existing_node or {}
@@ -138,6 +148,7 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         tags=["writeback-result"],
         execution_observation=attachment.get("execution_observation"),
         measurements=attachment.get("measurements"),
+        work_binding=work_binding,
         work_yardstick=({"decision": attachment["work_yardstick_decision"], "binding": {
             "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
             "turn_instance_id": turn_instance_id,
@@ -155,7 +166,7 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
 
 
 def _link_arguments(
-    *, registry_path, runtime_root, goal_id, agent_id, todo_id, node_id
+    *, registry_path, runtime_root, goal_id, agent_id, todo_id, node_id, require_active=False
 ):
     # Read the active authority. Normal update rechecks ownership/lease on commit.
     snapshot = read_canonical_todos_if_promoted(
@@ -170,7 +181,7 @@ def _link_arguments(
             owned = [
                 item
                 for item in leases
-                if item.get("owner") == agent_id
+                if item.get("owner") == agent_id and (not require_active or lease_is_active(item))
             ]
             if len(owned) != 1:
                 raise ValueError(
@@ -202,6 +213,7 @@ def prepare_result_attachment(
     turn_instance_id,
     _replay_committed_at=None,
     _current_events=None,
+    _link_options=None,
     _prepared_source=None,
     _committed_source_snapshot=...,
 ):
@@ -211,7 +223,7 @@ def prepare_result_attachment(
         raise ValueError(
             "Explore result attachment requires agent, Todo and Turn identity"
         )
-    goal, graph, gate = _policy(registry_path, goal_id)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not (graph or gate["enabled"]):
         raise ValueError(
             "Explore result attachment requires enabled Explore evidence or planning mode"
@@ -272,18 +284,121 @@ def prepare_result_attachment(
                 "An area node cannot be reused as a question; do not rewrite its scope."
             )
     readback = update_goal_todo(
-        **_link_arguments(
+        **(_link_options or _link_arguments(
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
             agent_id=agent_id,
             todo_id=todo_id,
             node_id=result["node_id"],
-        ),
+        )),
         dry_run=True,
     )
     if not readback.get("ok"):
         raise ValueError("Explore Todo link was not admitted")
+    return result
+
+
+def _append_prepared_result(attachment, current_events, *, runtime_root, goal_id, agent_id,
+                            todo_id, turn_instance_id, source_id, recorded_at, work_binding=None,
+                            source_snapshot=None, require_current_graph=False):
+    evolves = _evolves_question(attachment)
+    plan = (_evolution_plan(attachment, build_explore_result_projection(current_events, goal_id=goal_id),
+                            agent_id=agent_id) if evolves else {})
+    events = _events(
+        attachment, goal_id=goal_id, agent_id=agent_id, source_id=source_id,
+        recorded_at=recorded_at, existing_node=plan.get("existing_node"), todo_id=todo_id,
+        turn_instance_id=turn_instance_id, work_binding=work_binding, source_snapshot=source_snapshot,
+    )
+    graph = append_explore_result_events(
+        explore_result_log_path(runtime_root, goal_id), events, expected_goal_id=goal_id,
+        create_only_node_ids=[] if evolves else [attachment["node_id"]],
+        expected_event_ids=([row["event_id"] for row in current_events]
+                            if evolves or require_current_graph or "work_yardstick_decision" in attachment
+                            else None),
+    )
+    return events, graph
+
+
+def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, agent_id,
+                        todo_id, turn_instance_id):
+    """Record a finding on an open owned Todo without committing a Turn."""
+    if not (agent_id and todo_id and turn_instance_id):
+        raise ValueError("A work finding requires --agent-id, --todo-id and --turn-instance-id")
+    require_registered_agent_id(registry_path=registry_path, goal_id=goal_id, agent_id=agent_id)
+    goal, graph_enabled, gate = _policy(registry_path, goal_id, runtime_root)
+    if not (graph_enabled or gate["enabled"]):
+        raise ValueError("A work finding requires enabled Explore evidence or planning mode")
+    detail = list_goal_todos(registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                            goal_id=goal_id, todo_id=todo_id).get("todo")
+    if not detail or detail.get("status") != "open" or detail.get("claimed_by") != agent_id:
+        raise ValueError("A work finding requires the caller's open claimed Todo")
+    binding = dict(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+                   turn_instance_id=turn_instance_id)
+    scope = dict(registry_path=registry_path, runtime_root=runtime_root, **binding)
+    attachment = normalize_result_attachment(attachment, scope_context=dict(
+        registry_path=registry_path, runtime_root_override=str(runtime_root), **binding,
+    ))
+    node_id = attachment["node_id"]
+    link = _link_arguments(registry_path=registry_path, runtime_root=runtime_root,
+                           goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, node_id=node_id,
+                           require_active=True)
+    # Exact retries of a normalized observation in this Turn keep one finding.
+    digest = hashlib.sha256(json.dumps([binding, attachment], sort_keys=True).encode()).hexdigest()
+    finding_id = "finding_" + digest
+    log = explore_result_log_path(runtime_root, goal_id)
+    current = load_explore_result_events_strict(log, goal_id=goal_id)
+    prior = next((row for row in current if row.get("event_kind") == "finding"
+                  and row.get("result_id") == finding_id), None)
+    result = dict(ok=True, goal_id=goal_id, todo_id=todo_id, node_id=node_id,
+                  finding_id=finding_id, idempotent_replay=prior is not None)
+    recorded_at = prior["recorded_at"] if prior else datetime.now(timezone.utc).isoformat()
+    event_scope = dict(binding, source_id="explore:work-finding:" + digest,
+                       recorded_at=recorded_at, work_binding=binding)
+    if prior:
+        event_scope["source_snapshot"] = (prior.get("work_yardstick") or {}).get("source_snapshot")
+        if _events(attachment, **event_scope)[1] != prior:
+            raise ValueError("Explore work finding conflicts with its recorded evidence")
+    else:
+        prepared = {}
+        attachment = prepare_result_attachment(attachment, **scope, _current_events=current,
+                                               _link_options=link, _prepared_source=prepared)
+        event_scope["source_snapshot"] = prepared.get("source_snapshot")
+        _, result["graph"] = _append_prepared_result(
+            attachment, current, runtime_root=runtime_root, require_current_graph=True, **event_scope,
+        )
+    try:
+        if not prior or node_id not in (detail.get("explore_result_node_refs") or []):
+            linked = update_goal_todo(**link)
+            if not linked.get("ok"):
+                raise ValueError("Explore finding persisted; Todo association needs retry")
+            detail = linked.get("todo") or list_goal_todos(
+                registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                goal_id=goal_id, todo_id=todo_id,
+            ).get("todo")
+            if not isinstance(detail, dict):
+                raise ValueError("Explore finding persisted; Todo association readback needs retry")
+        events = current if prior else load_explore_result_events_strict(log, goal_id=goal_id)
+        prefix = []
+        for event in events:
+            prefix.append(event)
+            if event.get("event_kind") == "finding" and event.get("result_id") == finding_id:
+                break
+        projection = build_explore_result_projection(
+            prefix, goal_id=goal_id, finding_limit=len(prefix), mermaid_node_limit=3,
+        )
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+        enabled = work_yardstick_enabled(goal, runtime_root)
+        cited_sources = project_work_yardstick_sources(
+            events=prefix, projection=projection, goal_id=goal_id, agent_id=agent_id,
+            work_todos=[detail], enabled=enabled, todo_id=todo_id, result_node=node_id,
+        )
+        result.update(effect_runtime_result("explore.finding.receipt", dict(
+            binding, finding_id=finding_id, findings=projection["findings"],
+            enabled=enabled, cited_sources=cited_sources,
+        )))
+    except Exception as error:
+        result.update(ok=False, retryable=True, error=str(error))
     return result
 
 
@@ -348,6 +463,11 @@ def deliver_result_attachment(
         existing_events = load_explore_result_events_strict(
             explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
         )
+        finding_id = "finding_" + intent["idempotency_key"].rsplit(":", 1)[-1]
+        prior = next((row for row in existing_events if row.get("event_kind") == "finding"
+                      and row.get("result_id") == finding_id), None)
+        binding = dict(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+                       turn_instance_id=turn_instance_id)
         expected = _events(
             intent["payload"]["attachment"],
             goal_id=goal_id,
@@ -355,6 +475,7 @@ def deliver_result_attachment(
             source_id=intent["idempotency_key"],
             recorded_at=committed_at,
             todo_id=todo_id, turn_instance_id=turn_instance_id,
+            work_binding=binding if prior is None or "work_binding" in prior else None,
             source_snapshot=payload.get("explore_result_source_snapshot"),
             # A durable terminal intent can describe an old writer's event.
             # Structural reconstruction is only for exact canonical readback;
@@ -363,6 +484,8 @@ def deliver_result_attachment(
                 "explore.result_writeback" not in dispatch.get("replayed_hooks", [])
             ),
         )
+        if prior is not None and expected[1] != prior:
+            raise ValueError("Explore writeback conflicts with its recorded finding")
         detail = list_goal_todos(
             registry_path=registry_path,
             runtime_root_arg=str(runtime_root),
@@ -408,24 +531,13 @@ def deliver_result_attachment(
                 _current_events=current_events,
                 _committed_source_snapshot=payload.get("explore_result_source_snapshot"),
             )
-            evolves = _evolves_question(attachment)
-            plan = (_evolution_plan(attachment,
-                                   build_explore_result_projection(current_events, goal_id=goal_id),
-                                   agent_id=agent_id)
-                    if evolves else {})
-            events = _events(
-                attachment, goal_id=goal_id, agent_id=agent_id,
+            events, result["graph"] = _append_prepared_result(
+                attachment, current_events, runtime_root=runtime_root,
+                goal_id=goal_id, agent_id=agent_id,
                 source_id=intent["idempotency_key"], recorded_at=committed_at,
-                existing_node=plan.get("existing_node"),
                 todo_id=todo_id, turn_instance_id=turn_instance_id,
+                work_binding=binding,
                 source_snapshot=payload.get("explore_result_source_snapshot"),
-            )
-            result["graph"] = append_explore_result_events(
-                explore_result_log_path(runtime_root, goal_id), events,
-                expected_goal_id=goal_id,
-                create_only_node_ids=[] if evolves else [attachment["node_id"]],
-                expected_event_ids=([row["event_id"] for row in current_events]
-                                    if evolves or "work_yardstick_decision" in attachment else None),
             )
         linked = update_goal_todo(
             **_link_arguments(

@@ -44,7 +44,8 @@ def attachment():
         evidence_refs=["result:reversal"], work_yardstick_decision=decision())
 
 
-def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scope=None, read_only=False):
+def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scope=None, read_only=False,
+          handoff_mode="soft_claim"):
     project, runtime, path = _write_fixture(tmp_path)
     if read_only:
         _configure_read_only_todo(project)
@@ -59,7 +60,7 @@ def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scop
     if write_scope is not None:
         config["goals"][0]["coordination"]["write_scope"] = write_scope
     path.write_text(json.dumps(config))
-    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     return project, runtime, path
 
 
@@ -114,6 +115,189 @@ def wide_write_scope():
     ]
 
 
+def test_work_finding_receipt_reuses_question_and_compares_before_next_guard(tmp_path):
+    from threading import Thread
+    from urllib.request import urlopen
+
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    project, runtime, path = setup(tmp_path, active=True)
+    turn = "compare-in-this-turn"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
+    guards = _heartbeat_receipt_count(runtime, turn)
+    spends = _spend_run_count(runtime)
+    authored = attachment()
+    authored["work_yardstick_decision"]["counterevidence_refs"] = []
+    authored["evidence_refs"] = ["result:method"]
+    source = tmp_path / "finding.json"
+
+    def record(payload):
+        source.write_text(json.dumps(payload))
+        return run(project, runtime, path, "explore", "finding", *binding(turn),
+                   "--result-json", str(source))
+
+    first = record(authored)
+    assert first["node_id"].startswith("question_")
+    graph = explore_result_log_path(runtime, GOAL_ID)
+
+    def measured(profile, candidate, value, ref, **changes):
+        return {
+            "schema_version": authored["schema_version"], "input_revision": authored["input_revision"],
+            "observation": f"Candidate {candidate} was measured.", "interpretation": "Keep the source bound.",
+            "status": "confirmed", "evidence_refs": [ref], "measurements": [
+                dict(profile, value=value, candidate_ref=f"candidate:{candidate}", evidence_ref=ref),
+            ], **changes,
+        }
+
+    chosen = authored["work_yardstick_decision"]
+    proxy, official = chosen["proxy"], chosen["authoritative"]
+    assert record(measured(proxy, "a", 12, "result:screen-a"))["node_id"] == first["node_id"]
+    screen_b = record(measured(proxy, "b", 15, "result:screen-b"))
+    assert screen_b["measurement_feedback"][0]["improvement"] == 3
+    assert "search_comparison" not in screen_b
+    assert "search_comparison" not in record(measured(official, "a", 8, "result:official-a"))
+
+    # An unbound note on the very same question must not set this Todo's best.
+    unbound = tmp_path / "unbound.json"
+    unbound.write_text(json.dumps(measured(official, "other", 100, "result:unbound")["measurements"]))
+    run(project, runtime, path, "explore", "finding", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--title", "Unbound measurement", "--node", first["node_id"], "--status", "confirmed",
+        "--evidence-ref", "result:unbound", "--measurements-json", str(unbound))
+    different = dict(official, evaluation_ref="evaluator:another-revision")
+    assert "search_comparison" not in record(measured(different, "b", 100, "result:another-revision"))
+    assert "search_comparison" not in record(measured(official, "c", 100, "result:tentative", status="tentative"))
+
+    last = measured(official, "b", 4, "result:official-b")
+    receipt = record(last)
+    delta, = receipt["measurement_feedback"]
+    assert delta["previous_best"]["value"] == 8 and delta["latest"]["measurement"]["value"] == 4
+    assert delta["improvement"] == -4
+    comparison = receipt["search_comparison"]
+    assert comparison["proxy_order_reversed"] is True
+    assert comparison["goal"]["preferred_candidate_ref"] == "candidate:a"
+    assert comparison["proxy"]["preferred_candidate_ref"] == "candidate:b"
+    assert _heartbeat_receipt_count(runtime, turn) == guards and _spend_run_count(runtime) == spends
+    frozen = graph.read_bytes()
+    with ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler) as server:
+        server.registry_path = path
+        server.runtime_root_override = None
+        server.runtime_root = runtime
+        server.verbose = False
+        reader = Thread(target=server.serve_forever)
+        reader.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
+            with urlopen(url, timeout=5) as response:
+                result = json.load(response)
+        finally:
+            server.shutdown()
+            reader.join(timeout=5)
+    visible = next(item for item in result["items"] if item["finding_id"] == receipt["finding_id"])
+    assert visible["linked_todos"][0]["todo_id"] == TODO_ID
+    assert visible["work_binding"]["turn_instance_id"] == turn and visible["measurements"][0]["value"] == 4
+    assert graph.read_bytes() == frozen
+    duplicate = record({**last, "observation": "Review the same official receipt again."})
+    assert duplicate["measurement_feedback"] == [] and "search_comparison" not in duplicate
+
+    # A later finding cannot change the historical receipt of an exact retry.
+    record(measured(official, "d", 9, "result:later"))
+    original = graph.read_bytes()
+    replay = record(last)
+    assert replay["idempotent_replay"] and graph.read_bytes() == original
+    assert replay["search_comparison"] == comparison
+
+    incumbent = comparison["goal"]["preferred_candidate_ref"]
+    (project / "comparison-base.txt").write_text(incumbent)
+    # A revised acceptance basis cannot silently inherit the prior target's
+    # better numbers, even when work, question and measurement profile match.
+    revised = json.loads(json.dumps(authored))
+    revised["work_yardstick_decision"]["prior_finding_id"] = first["finding_id"]
+    revised["work_yardstick_decision"]["target"]["acceptance_ref"] = "acceptance:updated-target"
+    assert "search_comparison" not in record(revised)
+    assert "search_comparison" not in record(measured(official, "new-c", 3, "result:new-c"))
+    new_target = record(measured(official, "new-d", 1, "result:new-d"))["search_comparison"]
+    assert new_target["goal"]["previous_best"]["value"] == 3
+    assert new_target["goal"]["preferred_candidate_ref"] == "candidate:new-c"
+    assert "proxy" not in new_target
+    incumbent = new_target["goal"]["preferred_candidate_ref"]
+    (project / "comparison-base.txt").write_text(incumbent)
+    source.write_text(json.dumps({
+        "schema_version": authored["schema_version"], "input_revision": authored["input_revision"],
+        "status": "confirmed", "observation": "The new target's C candidate outranked D on the outcome measure.",
+        "interpretation": f"Continue from {incumbent}.", "evidence_refs": ["result:new-c", "result:new-d"],
+    }))
+    close = run(project, runtime, path, "refresh-state", *binding(turn),
+                "--classification", "validated_choice", "--delivery-batch-scale", "implementation",
+                "--delivery-outcome", "outcome_progress", "--explore-result-json", str(source),
+                "--no-global-sync", "--suppress-external-sinks")
+    assert close["explore_result_delivery"]["node_id"] == first["node_id"]
+    summary = run(project, runtime, path, "explore", "summary", "--goal-id", GOAL_ID)
+    assert [node["node_id"] for node in summary["nodes"]] == [first["node_id"]]
+    assert receipt["finding_id"] in {finding["finding_id"] for finding in summary["findings"]}
+
+
+def test_work_finding_respects_disabled_yardstick_and_unowned_todo(tmp_path):
+    project, runtime, path = setup(tmp_path, enabled=False, active=True)
+    authored = attachment()
+    source = tmp_path / "finding.json"
+    source.write_text(json.dumps(authored))
+    command = ["explore", "finding", *binding("disabled"), "--result-json", str(source)]
+    code, refusal = _run_cli(path, runtime, *command, cwd=project)
+    assert code == 1 and "yardstick_enabled" in refusal["error"]
+    graph = explore_result_log_path(runtime, GOAL_ID)
+    assert not graph.exists()
+    del authored["work_yardstick_decision"]
+    source.write_text(json.dumps(authored))
+    unowned = [("todo_missing" if value == TODO_ID else value) for value in command]
+    code, refusal = _run_cli(path, runtime, *unowned, cwd=project)
+    assert code == 1 and "open claimed Todo" in refusal["error"]
+    assert not graph.exists()
+    assert "search_comparison" not in run(project, runtime, path, *command)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_work_finding_requires_live_lease_and_recovers_partial_link(tmp_path, provider, monkeypatch, capsys):
+    from loopx.capabilities.explore import result_writeback
+    from loopx.cli import main
+    from loopx.control_plane.work_items.task_lease import acquire_task_lease, release_task_lease
+
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, handoff_mode="hard_lease")
+    source = tmp_path / "finding.json"
+    source.write_text(json.dumps(attachment()))
+    command = ["explore", "finding", *binding("active-work"), "--result-json", str(source)]
+    code, refusal = _run_cli(path, runtime, *command, cwd=project)
+    assert code == 1 and "current Todo lease" in refusal["error"]
+    graph = explore_result_log_path(runtime, GOAL_ID)
+    assert not graph.exists()
+    lease_args = dict(registry_path=path, runtime_root=runtime, goal_id=GOAL_ID, todo_id=TODO_ID,
+                      owner=AGENT_ID, idempotency_key="explore-live-work")
+    lease = acquire_task_lease(**lease_args)["lease"]
+    update = result_writeback.update_goal_todo
+
+    def interrupt_link(**kwargs):
+        if not kwargs.get("dry_run"):
+            raise OSError("interrupted between graph and Todo")
+        return update(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.chdir(project)
+        patch.setattr(result_writeback, "update_goal_todo", interrupt_link)
+        assert main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *command]) == 1
+        partial = json.loads(capsys.readouterr().out)
+    assert partial["retryable"] and partial["graph"]["appended_event_count"] == 2
+    frozen = graph.read_bytes()
+    recovered = run(project, runtime, path, *command)
+    assert recovered["idempotent_replay"] and recovered["finding_id"] == partial["finding_id"]
+    assert graph.read_bytes() == frozen
+    todo = run(project, runtime, path, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["todo"]
+    assert todo["explore_result_node_refs"] == [recovered["node_id"]]
+    assert release_task_lease(**lease_args, expected_version=lease["version"])["ok"]
+    source.write_text(json.dumps({**attachment(), "observation": "Unowned further evidence."}))
+    code, refusal = _run_cli(path, runtime, *command, cwd=project)
+    assert code == 1 and "current Todo lease" in refusal["error"]
+    assert graph.read_bytes() == frozen
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled, monkeypatch):
     project, runtime, path = setup(tmp_path, enabled, active=True)
@@ -123,6 +307,7 @@ def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_
                 "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
     assert guard["schema_version"] == "context_capture_navigation_v1"
     opening = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)["content"]
+    assert ("loopx explore finding --result-json FILE" in opening) is enabled
     # The independently readable page carries the decision cue. The complete
     # attachment template stays available on the existing Explore reader.
     cue_path = "/content/graph/work_yardstick_capture/guidance"
@@ -493,6 +678,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     compact = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                   "--todo-id", TODO_ID)["graph"]["work_yardsticks"][0]
     assert compact["comparison_candidate_ref"] == "candidate:dictionary"
+    assert compact["proxy_order_reversed"] is True
     assert compact["cue"] == choice["next_action"]["reason"]
     assert "different mechanism or a compatible combination" in compact["comparison_cue"]
     assert "full implementation and validation cost" in compact["comparison_cue"]

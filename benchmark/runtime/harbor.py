@@ -247,6 +247,27 @@ class BenchmarkCodex(CodexOffline):
                 ), timeout_sec=180)
         return head
 
+    async def _install_research_entrypoint(self, environment, name: str, module: str,
+                                           help_flag: str, failure: str) -> None:
+        # Keep the task cwd without importing executable code or dependencies
+        # from the task workspace or user site.
+        entrypoint = f"{_SRC}/benchmark/runtime/{module}"
+        bootstrap = (
+            "import runpy\nimport sys\n"
+            f"sys.path.insert(0, {_SRC!r})\n"
+            f"runpy.run_path({entrypoint!r}, run_name='__main__')\n"
+        )
+        launcher = shlex.join([f"{_PYTHON}/bin/python3", "-I", "-c", bootstrap])
+        wrapper = f"#!/bin/sh\nexec {launcher} \"$@\"\n"
+        executable = shlex.quote(f"{_PROFILE}/bin/{name}")
+        installed = await self.exec_as_agent(
+            environment, env=self._profile_env(), timeout_sec=30,
+            command=f"test ! -L {executable} && printf %s {shlex.quote(wrapper)} > {executable} && "
+                    f"chmod 0755 {executable} && {executable} --help",
+        )
+        if installed.return_code or help_flag not in (installed.stdout or ""):
+            raise RuntimeError(failure)
+
     def _profile_env(self) -> dict[str, str]:
         return {
             "HOME": _PROFILE_HOME,
@@ -370,22 +391,10 @@ class BenchmarkCodex(CodexOffline):
             if doctor_payload.get("ok") is not True:
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
             if self.execution_observation is not None:
-                entrypoint = f"{_SRC}/benchmark/runtime/research_probe.py"
-                # Keep the task cwd for candidate paths without importing the
-                # probe or its dependencies from that cwd or user site.
-                bootstrap = (
-                    "import runpy\nimport sys\n"
-                    f"sys.path.insert(0, {_SRC!r})\n"
-                    f"runpy.run_path({entrypoint!r}, run_name='__main__')\n"
+                await self._install_research_entrypoint(
+                    environment, "loopx-research-probe", "research_probe.py", "--candidate-file",
+                    "Local execution probe is unavailable to the benchmark worker",
                 )
-                launcher = shlex.join([f"{_PYTHON}/bin/python3", "-I", "-c", bootstrap])
-                wrapper = f"#!/bin/sh\nexec {launcher} \"$@\"\n"
-                probe = shlex.quote(f"{_PROFILE}/bin/loopx-research-probe")
-                installed = await self.exec_as_agent(environment, env=self._profile_env(), timeout_sec=30,
-                    command=f"test ! -L {probe} && printf %s {shlex.quote(wrapper)} > {probe} && "
-                            f"chmod 0755 {probe} && {probe} --help")
-                if installed.return_code or "--candidate-file" not in (installed.stdout or ""):
-                    raise RuntimeError("Local execution probe is unavailable to the benchmark worker")
 
         receipt = {
             "loopx_commit": actual_commit,

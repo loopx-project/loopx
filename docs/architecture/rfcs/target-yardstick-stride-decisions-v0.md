@@ -728,6 +728,14 @@ immutable attribution of execution to that Todo. Recording the first decision
 remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
+
+During an open Turn, an explicit Explore finding can use the ordinary result
+attachment and the same canonical Todo question as refresh-state. Its write
+receipt includes the changed measurement groups and an advisory comparison
+when the confirmed evidence covers the same two candidates on both declared
+profiles. The native adapter verifies the submission and supplies measurement
+facts. Explore and Yardstick own the association, comparison and readback.
+
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

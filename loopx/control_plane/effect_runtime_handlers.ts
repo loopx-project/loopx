@@ -560,7 +560,7 @@ export function createEffectRuntimeHandlers(
     ["capability_hook.turn_context.validate", lazyHandler(() => import("./turn_driver/capability_context.ts"),
       ({validateTurnContextContribution}) => validateTurnContextContribution)],
     ["capability_hook.turn_context.project", lazyHandler(() => import("./turn_driver/capability_context.ts"),
-      ({projectTurnContext}) => projectTurnContext)],
+      ({projectTurnContextContribution}) => projectTurnContextContribution)],
     [
       "capability_hook.turn_start.validate",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookInvocation}) => (params) => validateTurnStartHookInvocation({
@@ -805,6 +805,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.yardstick.presentation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectWorkYardstickPresentations}) => projectWorkYardstickPresentations)],
     ["work_item.yardstick.sources", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({projectWorkYardstickSourceRequests}) => projectWorkYardstickSourceRequests)],
     ["work_item.yardstick.continuation", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({validateWorkYardstickContinuation}) => validateWorkYardstickContinuation)],
+    ["explore.finding.receipt", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectExploreFindingReceipt}) => projectExploreFindingReceipt)],
     ["explore.configuration.resolve", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreConfiguration}) => resolveExploreConfiguration)],
     ["explore.configuration.goal", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreGoalConfiguration}) => resolveExploreGoalConfiguration)],
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],
