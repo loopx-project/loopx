@@ -109,6 +109,37 @@ def build_turn_error_payload(
     }
 
 
+def _turn_plan_readback_lines(payload: Mapping[str, object]) -> list[str]:
+    """Render the existing inspection source; never recompute admission here."""
+    source = payload.get("work_contract")
+    if payload.get("schema_version") != "loopx_turn_plan_v1" or not isinstance(source, Mapping):
+        return []
+    lines = [
+        "Inspection only; this plan does not authorize execution.",
+        f"- should_run: {source.get('should_run')}",
+        f"- effective_action: {source.get('effective_action')}",
+    ]
+    reason = source.get("reason")
+    if isinstance(reason, str) and reason:
+        lines.append(f"- reason: {reason}")
+    selected = source.get("selected_todo")
+    if isinstance(selected, Mapping) and selected.get("todo_id"):
+        lines.extend([
+            "", "## Selected work (summary)",
+            f"- todo_id: {selected['todo_id']}",
+        ])
+        text = selected.get("text")
+        if isinstance(text, str) and text:
+            lines.append(text)
+    detail = payload.get("detail_ref")
+    if isinstance(detail, Mapping) and isinstance(detail.get("command"), str) and detail["command"]:
+        lines.extend(["", "## Read full context", str(detail["command"])])
+        instruction = detail.get("instruction")
+        if isinstance(instruction, str) and instruction:
+            lines.append(instruction)
+    return [*lines, ""]
+
+
 def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     if not payload.get("ok"):
         error = payload.get("error") or "invalid TurnEnvelope contract"
@@ -122,6 +153,7 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     return "\n".join(
         [
             "# LoopX Turn Plan",
+            *_turn_plan_readback_lines(payload),
             f"- host: {host.get('kind')}",
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",

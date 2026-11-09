@@ -94,6 +94,16 @@ and an independent validator:
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
+The current plan's Markdown view shows `should_run`, the effective action and
+reason, and the selected work summary when present. **Read full context** retains
+the digest-bound reader command from that same plan; use it for requirements or
+evidence beyond the summary. Inspection and reading do not authorize execution.
+JSON remains available with `--format json`; recorded v0 plan rendering is unchanged.
+
+当前计划的 Markdown 视图显示是否应运行、有效动作、原因及已选工作的摘要（如有）。
+**Read full context** 保留同一计划绑定摘要的补读命令，可读取摘要之外的要求与证据。
+检查与补读不授予执行权限；`--format json` 仍可读取 JSON，历史 v0 计划呈现保持原样。
+
 The example uses the repository's TraeX adapter and an integration-supplied
 validator. The two programs separate the executor's completion claim from
 validation of its artifact.
