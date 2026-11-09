@@ -1243,6 +1243,10 @@ profile. Its short filename is only a locator, never a truncated integrity check
 permission or freshness claim. Missing, malformed, public or symlinked reader
 documents and capture/selection digest mismatches fail closed without admission. Selection reads may publish a derived
 private reader document beside the capture; they do not write Goal state.
+For new pinned value selections, the private reference can retain the selector's
+resolved addresses. The reader and native observation reuse those addresses
+against the verified source, then check the rendered selection digest. Older
+references and new discovery requests use the existing selector.
 Compact selected pages use `context_capture_selection_page_v1`, with a reader
 reference and byte cursors instead of repeated hashes or pointer vectors. They
 are never full-input observations. Explicit file/hash readers and full-page
@@ -1257,6 +1261,8 @@ the compact navigation cannot fit; no navigation or source is truncated.
 引用缺失、格式错误、公开可读、为符号链接或摘要不符时拒绝读取，不重新 admission。选读可在
 捕获旁生成派生私有引用，不修改 Goal 状态。精简选读页返回引用及字节游标，使用
 独立 schema，不能作为完整输入证明；原显式文件/摘要接口及完整页证明保持兼容。
+新生成的值选读引用可保存选择器已解析的地址。读页和原生观察使用校验过的原捕获
+按地址取值，再校验渲染后的选读摘要。旧引用和新字段发现继续使用现有选择器。
 导航引用同时保存完整机器元数据；极小输出预算保留原显式摘要引用，不截断正文或导航。
 
 `quota context-read --select /path --select /another/path` reads an explicit

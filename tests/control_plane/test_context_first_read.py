@@ -260,11 +260,21 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     page, values = read_selection(navigation["first_read_command"])
     assert page["content"] == original["content"]
     assert values["/selected_todo"]["future_number"] == 10**45 + 17
-    assert len(observed) == 1
     if opaque:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference, write_context_read_reference
+
+        assert observed == []
+        words = shlex.split(navigation["first_read_command"])
+        _, metadata = read_context_read_reference(words[words.index("--reference-file") + 1])
+        legacy = write_context_read_reference(Path(metadata["path"]), metadata["sha256"], selection=metadata["selection"])
+        words[words.index("--reference-file") + 1] = str(legacy)
+        legacy_page, _ = read_selection(shlex.join(words))
+        assert legacy_page["content"] == original["content"]
+        assert len(observed) == 1
         assert b"Historical evidence remains available." not in observed[0]
         assert len(observed[0]) < len(raw) // 2
     else:
+        assert len(observed) == 1
         assert b"Historical evidence remains available." in observed[0]
     assert Path(view["recovery"]["path"]).read_bytes() == raw
 
@@ -996,6 +1006,72 @@ def test_initial_read_pages_pin_the_exact_selection_for_continuation(tmp_path, d
     args.selection_sha256 = "0" * 64
     changed = read_context_capture(args)
     assert not changed["ok"] and "digest changed" in changed["reason"]
+
+
+def test_pinned_value_pages_replay_the_resolved_paths(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    payload = {"a/~": {"0": "原捕获的精确正文。" * 160}, "array": [{"number": 9007199254740993}]}
+    digest = write_decision_capture(capture, payload)
+    reference = write_context_read_reference(capture, digest)
+    start = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256,
+        select=["/a~1~0/0", "/array/0/number"], max_page_output_bytes=5000))
+    assert start["ok"] and not start["eof"]
+    pinned = start["reference_file"]
+    _, saved = read_context_read_reference(pinned)
+    assert saved["selection_paths"] == [["array", 0, "number"], ["a/~", "0"]]
+
+    legacy = write_context_read_reference(capture, digest, selection=saved["selection"])
+    legacy_page = read_context_capture(Namespace(reference_file=str(legacy), format="json", offset=0, page_bytes=256))
+    assert legacy_page["ok"] and legacy_page["content"] == start["content"]
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("a pinned value page should reuse the writer's resolved paths")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    page, parts = start, [start["content"]]
+    while not page["eof"]:
+        page = read_context_capture(Namespace(reference_file=pinned, format="json", offset=page["next_offset"],
+            page_bytes=256, max_page_output_bytes=5000))
+        assert page["ok"]
+        parts.append(page["content"])
+    assert json.loads("".join(parts))["selections"] == [
+        {"pointer": "/array/0/number", "value": payload["array"][0]["number"]},
+        {"pointer": "/a~1~0/0", "value": payload["a/~"]["0"]},
+    ]
+
+
+@pytest.mark.parametrize("damage", ["different_path", "wrong_key_type", "view_digest", "capture_digest"])
+def test_pinned_value_page_rejects_changed_path_or_bytes(tmp_path, damage):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    digest = write_decision_capture(capture, {"array": ["value"], "alias": ["value"]})
+    original = write_context_read_reference(capture, digest)
+    first = read_context_capture(Namespace(reference_file=str(original), format="json", offset=0, page_bytes=256,
+        select=["/array/0"]))
+    assert first["ok"]
+    _, saved = read_context_read_reference(first["reference_file"])
+    selection, paths = saved["selection"], saved["selection_paths"]
+    if damage == "different_path":
+        paths = [["alias", 0]]  # The value itself is identical.
+    elif damage == "wrong_key_type":
+        paths = [["array", "0"]]
+    elif damage == "view_digest":
+        selection = {**selection, "sha256": "0" * 64}
+    else:
+        capture.write_text('{"array":["changed"],"alias":["value"]}', encoding="utf-8")
+    reference = write_context_read_reference(capture, digest, selection=selection, selection_paths=paths)
+    rejected = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256))
+    assert not rejected["ok"] and "content" not in rejected
+    reason = "digest" if "digest" in damage else "address"
+    assert reason in rejected["reason"]
 
 
 def test_small_initial_pages_progress_without_repeating_the_pointer_vector(tmp_path, decision):
