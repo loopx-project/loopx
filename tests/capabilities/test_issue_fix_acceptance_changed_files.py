@@ -169,3 +169,52 @@ def test_the_packet_counts_lf_cr_and_crlf_names_separately(tmp_path: Path) -> No
     branch = packet["caller_repo_branch"]
     assert branch["changed_file_count"] == 3
     assert sorted(branch["changed_files"]) == sorted(names)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="control characters in names are POSIX-only")
+def test_packet_keeps_every_line_ending_variant_from_four_sources(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    names: list[str] = []
+
+    committed = [f"committed-{kind}.txt" for kind in ("lf\n", "cr\r", "crlf\r\n")]
+    for name in committed:
+        (repo / name).write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", *committed], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "committed"], check=True)
+    names.extend(committed)
+
+    unstaged = [f"unstaged-{kind}.txt" for kind in ("lf\n", "cr\r", "crlf\r\n")]
+    for name in unstaged:
+        (repo / name).write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", *unstaged], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "tracked"], check=True)
+    for name in unstaged:
+        (repo / name).write_text("after\n", encoding="utf-8")
+    names.extend(unstaged)
+
+    staged = [f"staged-{kind}.txt" for kind in ("lf\n", "cr\r", "crlf\r\n")]
+    for name in staged:
+        (repo / name).write_text("staged\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", *staged], check=True)
+    names.extend(staged)
+
+    untracked = [f"untracked-{kind}.txt" for kind in ("lf\n", "cr\r", "crlf\r\n")]
+    for name in untracked:
+        (repo / name).write_text("untracked\n", encoding="utf-8")
+    names.extend(untracked)
+
+    packet = build_issue_fix_caller_repo_branch_packet(
+        repo_path=str(repo),
+        base_branch="main",
+        issue_branch="issue",
+        validation_command=shlex.join([sys.executable, "-c", "print(1)"]),
+        execute=True,
+    )
+
+    branch = packet["caller_repo_branch"]
+    assert branch["branch_ready"] is True
+    assert branch["changed_file_count"] == 12
+    assert branch["changed_files_truncated"] is False
+    assert sorted(branch["changed_files"]) == sorted(names)
