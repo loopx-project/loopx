@@ -281,13 +281,29 @@ export const researchRealBenchmarkScenario = {
       const owner = await startHistoryOwner(path);
       let page;
       try {
-        page = await browser.newPage({viewport: {width: 1440, height: 900}});
+        page = await browser.newPage({viewport: {width: 1440, height: 900}, timezoneId: "Asia/Shanghai"});
         if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
         await page.addInitScript(() => localStorage.setItem("loopx-pw-locale", "en"));
         await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
         const history = page.locator(".research-history");
         await page.waitForFunction(() => document.querySelector(".research-history")?.getAttribute("aria-busy") === "false");
         assert.match(await history.locator(".research-history-coverage").innerText(), new RegExp(`${capture.events.length} / ${capture.events.length}`));
+        if (arm === "grid-on") {
+          const axis = history.getByRole("group", {name: "Since first record", exact: true});
+          const ticks = axis.locator("time");
+          await page.waitForFunction(() => document.querySelectorAll(".research-axis time").length > 2);
+          assert.equal(await ticks.first().innerText(), "0s");
+          assert.equal(await ticks.last().innerText(), "9h 4m 9s", "Same-day history has a visible elapsed end");
+          assert.equal(await ticks.last().getAttribute("datetime"), "PT32649S");
+          await page.setViewportSize({width: 390, height: 844});
+          await page.waitForFunction(() => document.querySelectorAll(".research-axis time").length === 2);
+          assert.equal(await axis.evaluate(element => {
+            const bounds = element.getBoundingClientRect();
+            const [start, end] = [...element.querySelectorAll("time")].map(tick => tick.getBoundingClientRect());
+            return start.left >= bounds.left - 1 && end.right <= bounds.right + 1 && start.right < end.left;
+          }), true, "Both endpoint labels fit the 390px first screen");
+          await page.setViewportSize({width: 1440, height: 900});
+        }
         assert.equal(await history.locator(".research-history-edges > g > path").count(), 0, "No relation is inferred from matching questions or adjacent times");
         const absentDecisions = history.locator(".research-trail-empty");
         assert.equal(await absentDecisions.evaluate(element => element.open), false, "The real source's missing structured decisions use an on-demand disclosure");

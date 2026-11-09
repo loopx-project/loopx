@@ -78,7 +78,7 @@ def observed_first_read_fallback(observation: dict[str, Any], path: Path, digest
                 and "observed_read" not in metadata and isinstance(selection, dict)
                 and isinstance(fallback.get("selection_sha256"), str)
                 and selection.get("sha256") == fallback["selection_sha256"]):
-            return reference, selection
+            return reference, metadata
     except (OSError, ValueError):
         pass
     return None

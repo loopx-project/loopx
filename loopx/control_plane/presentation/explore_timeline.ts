@@ -60,6 +60,27 @@ export type ExploreTimeline = {
   findings: TimelineFinding[]; decisions: TimelineFinding[]; structuredCount: number;
 };
 
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const ELAPSED_STEPS = [
+  1_000, 5_000, 10_000, 30_000, MINUTE, 5 * MINUTE, 15 * MINUTE, 30 * MINUTE,
+  HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY,
+];
+
+/** Use elapsed record time so sub-day captures and clock changes have a scale.
+ * Always reserve room for the exact end, including on narrow screens. */
+export function exploreTimelineTickOffsets(elapsed: number, width: number): number[] {
+  if (elapsed <= 0) return [0];
+  const intervals = Math.max(1, Math.min(8, Math.floor(width / 120)));
+  const separation = elapsed / intervals;
+  const step = ELAPSED_STEPS.find(value => value >= separation) ?? Math.ceil(separation / DAY) * DAY;
+  const offsets = [0];
+  for (let offset = step; offset <= elapsed - separation; offset += step) offsets.push(offset);
+  offsets.push(elapsed);
+  return offsets;
+}
+
 /** Combine colliding touch targets, never source records or relationships.
  * At the supplied plot width every displayed centre is at least 44px apart.
  * A group opens all members with their original timestamps and evidence. Its

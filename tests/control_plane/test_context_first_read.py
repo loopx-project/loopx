@@ -264,12 +264,22 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     page, values = read_selection(navigation["first_read_command"])
     assert page["content"] == original["content"]
     assert values["/selected_todo"]["future_number"] == 10**45 + 17
-    assert len(observed) == 1
     if opaque:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference, write_context_read_reference
+
+        assert observed == []
+        words = shlex.split(navigation["first_read_command"])
+        _, metadata = read_context_read_reference(words[words.index("--reference-file") + 1])
+        legacy = write_context_read_reference(Path(metadata["path"]), metadata["sha256"], selection=metadata["selection"])
+        words[words.index("--reference-file") + 1] = str(legacy)
+        legacy_page, _ = read_selection(shlex.join(words))
+        assert legacy_page["content"] == original["content"]
+        assert len(observed) == 1
         assert b"Historical evidence remains available." not in observed[0]
         assert b"unread_branch_" not in observed[0], "Explicit replay needs only the selected address structure"
         assert len(observed[0]) < len(raw) // 2
     else:
+        assert len(observed) == 1
         assert b"Historical evidence remains available." in observed[0]
     assert Path(view["recovery"]["path"]).read_bytes() == raw
 
@@ -810,6 +820,52 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
     assert detail["ok"] and "FULL-REQUEST-DETAIL-ON-DEMAND" in detail["content"]
 
 
+@pytest.mark.parametrize("route", [
+    "matching", "different", "missing", "incomplete", "omitted", "unknown", "bad_counts", "small", "held",
+])
+def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
+    agenda = {"count_unit": "request", "incoming_count": 3 if route == "bad_counts" else 2, "outgoing_count": 1,
+        "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
+        "omitted_count": int(route == "omitted"), "scan_complete": route != "incomplete",
+        "unavailable_count": int(route == "incomplete"), "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    if route == "unknown":
+        agenda["future_gate"] = "Check the retained restriction."
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=route != "held", must_attempt=True)
+    channel["work_context"]["sources"].append({**read, "content": {
+        "ok": True, "read_complete": False, "unfinished_delegations": agenda,
+    }})
+    if route != "missing":
+        required = {**read, "command": command + " --agent-id other"} if route == "different" else read
+        channel["required_reads"].append(required)
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
+    assert values[prefix + "/read_complete"] is False
+    agenda_path = prefix + "/unfinished_delegations"
+    if route == "matching":
+        assert agenda_path not in values and agenda_path + "/items" not in values
+        for field in ("incoming_count", "outgoing_count", "scan_complete"):
+            assert values[f"{agenda_path}/{field}"] == agenda[field]
+        assert agenda_path + "/instruction" not in values
+        assert read in values["/interaction_contract/agent_channel/required_reads"]
+    else:
+        assert values[agenda_path] == agenda
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[agenda_path],
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert detail["ok"] and detail["eof"]
+    assert json.loads(detail["content"])["selections"][0]["value"] == agenda
+
+
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     plan = {"schema_version": "future", "new_stop": "Stop before every new effect."}
     decision["interaction_contract"]["cli_channel"]["settlement_plan"] = plan
@@ -974,6 +1030,72 @@ def test_initial_read_pages_pin_the_exact_selection_for_continuation(tmp_path, d
     args.selection_sha256 = "0" * 64
     changed = read_context_capture(args)
     assert not changed["ok"] and "digest changed" in changed["reason"]
+
+
+def test_pinned_value_pages_replay_the_resolved_paths(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    payload = {"a/~": {"0": "原捕获的精确正文。" * 160}, "array": [{"number": 9007199254740993}]}
+    digest = write_decision_capture(capture, payload)
+    reference = write_context_read_reference(capture, digest)
+    start = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256,
+        select=["/a~1~0/0", "/array/0/number"], max_page_output_bytes=5000))
+    assert start["ok"] and not start["eof"]
+    pinned = start["reference_file"]
+    _, saved = read_context_read_reference(pinned)
+    assert saved["selection_paths"] == [["array", 0, "number"], ["a/~", "0"]]
+
+    legacy = write_context_read_reference(capture, digest, selection=saved["selection"])
+    legacy_page = read_context_capture(Namespace(reference_file=str(legacy), format="json", offset=0, page_bytes=256))
+    assert legacy_page["ok"] and legacy_page["content"] == start["content"]
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("a pinned value page should reuse the writer's resolved paths")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    page, parts = start, [start["content"]]
+    while not page["eof"]:
+        page = read_context_capture(Namespace(reference_file=pinned, format="json", offset=page["next_offset"],
+            page_bytes=256, max_page_output_bytes=5000))
+        assert page["ok"]
+        parts.append(page["content"])
+    assert json.loads("".join(parts))["selections"] == [
+        {"pointer": "/array/0/number", "value": payload["array"][0]["number"]},
+        {"pointer": "/a~1~0/0", "value": payload["a/~"]["0"]},
+    ]
+
+
+@pytest.mark.parametrize("damage", ["different_path", "wrong_key_type", "view_digest", "capture_digest"])
+def test_pinned_value_page_rejects_changed_path_or_bytes(tmp_path, damage):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    digest = write_decision_capture(capture, {"array": ["value"], "alias": ["value"]})
+    original = write_context_read_reference(capture, digest)
+    first = read_context_capture(Namespace(reference_file=str(original), format="json", offset=0, page_bytes=256,
+        select=["/array/0"]))
+    assert first["ok"]
+    _, saved = read_context_read_reference(first["reference_file"])
+    selection, paths = saved["selection"], saved["selection_paths"]
+    if damage == "different_path":
+        paths = [["alias", 0]]  # The value itself is identical.
+    elif damage == "wrong_key_type":
+        paths = [["array", "0"]]
+    elif damage == "view_digest":
+        selection = {**selection, "sha256": "0" * 64}
+    else:
+        capture.write_text('{"array":["changed"],"alias":["value"]}', encoding="utf-8")
+    reference = write_context_read_reference(capture, digest, selection=selection, selection_paths=paths)
+    rejected = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256))
+    assert not rejected["ok"] and "content" not in rejected
+    reason = "digest" if "digest" in damage else "address"
+    assert reason in rejected["reason"]
 
 
 def test_small_initial_pages_progress_without_repeating_the_pointer_vector(tmp_path, decision):

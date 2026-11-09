@@ -290,7 +290,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     fallback = observed_first_read_fallback(observation, path, digest)
                     if fallback is not None:
                         try:
-                            _validate_pinned_selection(fallback[1])
+                            _validate_pinned_selection(fallback[1]["selection"])
                         except ValueError:
                             fallback = None
                     if offset:
@@ -300,7 +300,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                                 page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
                     # Restart in the ordinary complete view of this same capture.
                     if fallback is not None:
-                        reference_file, pinned_selection = fallback
+                        reference_file, reference = fallback
+                        pinned_selection = reference["selection"]
                     else:
                         pinned_selection, initial_read = None, True
                         try:
@@ -333,7 +334,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
                 expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
                 present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
-                    if pinned_selection is not None else None))
+                    if pinned_selection is not None else None),
+                selection_paths=reference.get("selection_paths") if pinned_selection is not None else None)
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -361,7 +363,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     # bytes after a navigation change, with both digests checked.
                     reference_file = write_context_read_reference(path, digest, selection=context_selection_binding(
                         selectors, list_fields=list_fields, list_depth=list_depth, sha256=expected,
-                        presented=bool(plan.get("presentation_pointers"))))
+                        presented=bool(plan.get("presentation_pointers"))),
+                        selection_paths=[item["path"] for item in plan["selections"]] if not list_fields else None)
                 except OSError:
                     # A verified read must not require a writable capture root.
                     # Legacy cursors pin the same capture, selection and digest.

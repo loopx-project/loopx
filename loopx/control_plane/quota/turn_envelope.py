@@ -84,7 +84,8 @@ def _turn_envelope_result(
     payload = params.get("payload")
     complete = isinstance(payload, Mapping) and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
     staged_replan = (
-        operation in {"build", "quota_signature", "replan_cli_view", "bind_capture", "capability_automation_source"}
+        operation in {"build", "quota_signature", "replan_cli_view", "bind_capture",
+                      "capability_automation_source"}
         and isinstance(payload, Mapping)
         and ((operation == "replan_cli_view" and params.get("source_edits") is True)
              or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv"))))

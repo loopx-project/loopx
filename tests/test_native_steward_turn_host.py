@@ -167,32 +167,32 @@ def test_managed_identity_rejections_do_not_create_or_resume_a_host(steward, tmp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("explicit_selection", [False, True])
-def test_local_managed_session_reuses_native_turn_and_declared_validation(steward, tmp_path, monkeypatch, provider, explicit_selection):
+@pytest.mark.parametrize("explicit_selection", [False, True], ids=["claim", "ready"])
+def test_local_managed_session_reuses_native_turn_and_declared_validation(
+    steward, tmp_path, monkeypatch, provider, explicit_selection,
+):
     service, session, actor, todo_id, observation, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
     import loopx.cli_commands.turn as turn_owner
     from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.control_plane.quota import turn_envelope
 
     original_plan = turn_owner.build_loopx_turn_plan
     original_validation = ManagedSessionTurn.prepare_validation
+    evaluate = turn_envelope._turn_envelope_result
     prepared_sources = []
     validation_sources = []
-    validation_turns = []
+    legacy_builds = []
+
+    def observe_projection(operation, **kwargs):
+        if operation == "build":
+            legacy_builds.append(operation)
+        return evaluate(operation, **kwargs)
 
     def checked_validation(self, request, native_request, **kwargs):
-        # Preparation and actual dispatch consume the same complete-source
-        # owner. A preparation-only historical adapter would lose selection.
-        assert "turn_envelope" not in native_request
-        source = native_request["work_contract"]
-        assert source["schema_version"] == "loopx_turn_envelope_v1"
-        assert source["selected_todo"]["todo_id"] == todo_id
-        assert source["agent_identity"]["agent_id"] == actor["agent_id"]
-        validation_sources.append(source)
-        validation_turns.append(request["turn_instance_id"])
-        if "detail_ref" in native_request:
-            assert native_request["detail_ref"]["captured_decision"]["turn_instance_id"] == request["turn_instance_id"]
+        validation_sources.append((request["turn_instance_id"], native_request))
         return original_validation(self, request, native_request, **kwargs)
 
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe_projection)
     monkeypatch.setattr(ManagedSessionTurn, "prepare_validation", checked_validation)
 
     def checked_plan(source, *args, **kwargs):
@@ -220,10 +220,19 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(stewar
     assert result["effects"]["host_invoked"] and result["effects"]["quota_spent"]
     assert result["validation"]["status"] == "passed"
     assert prepared_sources == ["loopx_turn_envelope_v1"]
-    assert len(validation_sources) == (1 if explicit_selection else 2)
-    assert validation_sources[0]["execution_preparation"]["state"] == ("ready" if explicit_selection else "claim_required")
-    assert validation_sources[-1]["execution_preparation"]["state"] == "ready"
-    assert validation_turns == [accepted["loopx_request"]["turn_instance_id"]] * len(validation_sources)
+    assert legacy_builds == []
+    expected_states = ["ready"] if explicit_selection else ["claim_required", "ready"]
+    assert len(validation_sources) == len(expected_states)
+    for (turn_id, native_request), state in zip(validation_sources, expected_states, strict=True):
+        assert turn_id == accepted["loopx_request"]["turn_instance_id"]
+        assert "turn_envelope" not in native_request
+        source = native_request["work_contract"]
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        assert source["selected_todo"]["todo_id"] == todo_id
+        assert source["agent_identity"]["agent_id"] == actor["agent_id"]
+        assert source["execution_preparation"]["state"] == state
+        if "detail_ref" in native_request:
+            assert native_request["detail_ref"]["captured_decision"]["turn_instance_id"] == turn_id
     assert observation.read_text() == "ready"
     assert store.load_session(sid)["upstream_thread_id"] == thread
     assert {row["session_id"] for row in store.list_sessions()} == {row["session_id"] for row in before_sessions}

@@ -13,18 +13,18 @@ from .decision_capture import (read_context_capture_file, read_context_read_refe
     context_selection_view)
 
 
-def _has_selected_tail(state: dict[str, Any], digest: str, total: int) -> bool:
-    """A nonfinal page can close coverage only after a verified tail."""
+def _terminal_range_seen(state: dict[str, Any], digest: str, total: int) -> bool:
     reads = state.get("section_reads")
-    previous = reads.get(digest) if isinstance(reads, dict) else None
-    ranges = previous.get("ranges") if isinstance(previous, dict) else None
+    view = reads.get(digest) if isinstance(reads, dict) else None
+    ranges = view.get("ranges") if isinstance(view, dict) else None
     return isinstance(ranges, list) and any(
-        isinstance(row, list) and len(row) == 2 and row[1] == total for row in ranges
+        isinstance(span, list) and len(span) == 2 and span[1] == total for span in ranges
     )
 
 
-def verified_context_selection(state: dict[str, Any], page: dict[str, Any], *,
-                               defer_incomplete_sections: bool = False) -> dict[str, Any] | None:
+def verified_context_selection(
+    state: dict[str, Any], page: dict[str, Any], *, defer_section_digests: bool = False,
+) -> dict[str, Any] | None:
     from ..quota.turn_envelope import _turn_envelope_result
 
     current = state.get("source_recovery")
@@ -35,10 +35,12 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any], *,
     reference_file = page.get("reference_file")
     selected = None
     observation = None
+    selection_paths = None
     if isinstance(reference_file, str):
         _, metadata = read_context_read_reference(reference_file)
         selected = metadata.get("selection")
         observation = metadata.get("observed_read")
+        selection_paths = metadata.get("selection_paths")
         if not isinstance(selected, dict) or selected.get("list_fields") is not False:
             return None
         path, source_digest = metadata["path"], metadata["sha256"]
@@ -76,7 +78,8 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any], *,
             initial_read=initial_read, list_fields=False,
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
-            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True))
+            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True),
+            selection_paths=selection_paths)
         if selected_raw is None:
             return None
         raw = selected_raw
@@ -89,23 +92,23 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any], *,
             or (page.get("eof") is False and (end >= total or page.get("next_offset") != end))
             or type(page.get("eof")) is not bool):
         return None
-    observed = {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
-        "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": {}}
-    # A single verified prefix still reaches the typed range reducer, but
-    # cannot yet cause it to publish section digests.
-    if defer_incomplete_sections and not page["eof"] and not _has_selected_tail(state, actual_digest, total):
-        return observed
-    inherited = {}
-    if isinstance(observation, dict):
-        from .native_first_read import observation_current
+    # The reducer only publishes digests after complete coverage. A nonterminal
+    # batch without a previously observed terminal range cannot complete it.
+    # The empty map still marks this as a selected page for range tracking.
+    sections = {}
+    if not defer_section_digests or _terminal_range_seen(state, view_digest, total):
+        # A display edit is not an observation of its literal source text.
+        literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
+        if literal_pointers:
+            inherited = {}
+            if isinstance(observation, dict):
+                from .native_first_read import observation_current
 
-        # The hook already matched its event session/workspace to this journal.
-        # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
-        if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
-            inherited = observation["fields"]
-    # A display edit is not an observation of its literal source text.
-    literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
-    if literal_pointers:
-        observed["read_sections"] = _turn_envelope_result("context_read_sections", context=source,
-            select=literal_pointers, consumed_pointers=inherited)["sections"]
-    return observed
+                # The hook already matched its event session/workspace to this journal.
+                # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
+                if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
+                    inherited = observation["fields"]
+            sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
+                consumed_pointers=inherited)["sections"]
+    return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
+        "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}
