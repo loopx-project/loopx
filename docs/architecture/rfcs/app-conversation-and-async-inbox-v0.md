@@ -1995,6 +1995,13 @@ card cannot substitute for final-message readback.
 
 ### Recovering a native result after Core failure
 
+A native terminal error remains a failure. When the complete current invocation
+is idle, every observed step is settled and its final error is done, the adapter
+retires that invocation's cancellation target before returning the structured
+error. Active or unknown steps retain existing bounded cancellation and permission
+handling. Avoiding a second cancellation neither proves effect-free execution
+nor grants replay, recovery, result adoption or business-completion authority.
+
 A quota-failure notice remains pending work. For Antigravity, the original worker
 may reserve one new quota-continuation Turn only after two independent reads of
 the same idle native trajectory prove its latest invocation contains exactly the

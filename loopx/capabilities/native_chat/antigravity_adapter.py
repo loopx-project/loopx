@@ -1186,7 +1186,9 @@ class AntigravityAdapter:
                          or (step.get("plannerResponse") or {}).get("response"),
                          (step.get("plannerResponse") or {}).get("thinking"),
                          (step.get("runCommand") or {}).get("combinedOutput"),
-                         (step.get("runCommand") or {}).get("exitCode")) for index, step in current_steps]
+                         (step.get("runCommand") or {}).get("exitCode"))
+                        for index, step in current_steps
+                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"]
             now = time.monotonic()
             if progress and progress != previous_progress:
                 previous_progress = progress
@@ -1204,6 +1206,11 @@ class AntigravityAdapter:
                     error = CodexChatAgentError(summary or "Antigravity cascade step error",
                                                 gate=None, error_code="antigravity_step_error")
                     error.native_error_info = detail
+                    if (final.get("status") == "CORTEX_STEP_STATUS_DONE"
+                            and all(step.get("status") in _SETTLED_STEP_STATUSES for _, step in current_steps)):
+                        # Retire only this settled cancellation target. The
+                        # original failure and possible effects remain unknown.
+                        self._active_turn_id = None
                     raise error
                 planner = final.get("plannerResponse") or {}
                 if (final.get("status") == "CORTEX_STEP_STATUS_CANCELED"
