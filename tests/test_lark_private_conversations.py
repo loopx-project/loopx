@@ -1375,7 +1375,7 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
 @pytest.mark.parametrize("fault", [None, "codex-fallback", "quota-restore", "quota-unchanged", "quota-unknown",
     "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
     "cleared-before-proof", "retention-io", "link-inputs", "link-inputs-new-input", "link-inputs-bad-reference",
-    "link-inputs-ungranted"])
+    "link-inputs-ungranted", "link-inputs-codex-fallback", "link-inputs-oversized-description"])
 def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):  # noqa: F811 - imported pytest fixture
     """An already delivered, historical answer must not be sent/executed twice."""
     from copy import deepcopy
@@ -1398,14 +1398,17 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         original_brief = {"schema_version": "collaboration_brief_v0", "Hypotheses": ["Assess this hypothesis"],
             "Evidence": ["Original authorized evidence"], "Constraints": ["Return here; do not change frozen work"]}
         link_inputs = str(fault).startswith("link-inputs")
+        codex_fallback = fault in {"codex-fallback", "link-inputs-codex-fallback"}
         if link_inputs:
             ref = "https://example.test/project/changes/123"
             if fault == "link-inputs-bad-reference":
                 ref += "?opaque=synthetic"
+            description = ("x" * 1001 if fault == "link-inputs-oversized-description"
+                else "Review the identified change at its recorded revision.")
             original_brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original hypothesis",
                 "context": "Review the recorded change and return its verified disposition.",
                 "constraints": ["Do not change frozen work"],
-                "inputs": [{"ref": ref, "description": "Review the identified change at its recorded revision."}],
+                "inputs": [{"ref": ref, "description": description}],
                 "acceptance": ["Return the assessment"], "return_requirement": "Return to the original conversation"}
         handoff = {"schema_version": "context_handoff_v0", "goal_id": "work", "agent_id": "worker", "brief": original_brief}
         if fault == "unknown-outer":
@@ -1441,7 +1444,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         # Another native input is historical context, not authority to replay it.
         language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
         language_server["sent_count"] += 1
-        if fault in {"quota-restore", "quota-unchanged", "codex-fallback"}:
+        if fault in {"quota-restore", "quota-unchanged"} or codex_fallback:
             language_server.update(quota_error_indices=[1], quota_fraction=0.006)
         elif fault == "quota-unknown":
             language_server["quota_unknown"] = True
@@ -1492,7 +1495,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
                 return result
             monkeypatch.setattr(AntigravityAdapter, "completed_result_observation", staticmethod(changed))
         codex_sends = []
-        if fault == "codex-fallback":
+        if codex_fallback:
             from types import SimpleNamespace
             from test_chat_manager_model_adoption import configure
             from loopx.chat_manager import manager_executor_allocation
@@ -1568,7 +1571,8 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
         transport.reconcile_request(path)
         entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
-        if fault in {None, "quota-restore", "codex-fallback", "link-inputs", "link-inputs-bad-reference"}:
+        if codex_fallback or fault in {None, "quota-restore", "link-inputs", "link-inputs-bad-reference",
+                                     "link-inputs-oversized-description"}:
             assert reviewed["status"] == "completed", reviewed
             assert len(entries) == 1 and entries[0]["source_id"] == ref
             assert entries[0]["brief"]["context"] == context
@@ -1590,8 +1594,9 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             for item in provider.messages.values()) == 1
         assert not any("Unverified model delivery claim" in write[1] for write in provider.writes)
         sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
-        if fault == "codex-fallback":
+        if codex_fallback:
             assert len(sends) == 1 and len(codex_sends) == 1
+            assert "Put PR, issue and other URLs and their exact revisions in context" in codex_sends[0]
             actual = store.load_session(session["session_id"])
             assert actual["agent_id"] == "codex" and actual["agent_model_id"] == "gpt-6.1-sol"
             assert actual["steward_context"] == session["steward_context"]
@@ -1609,7 +1614,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         before = (len(sends), len(provider.writes))
         transport.reconcile_request(path)
         assert (len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]), len(provider.writes)) == before
-        if fault == "codex-fallback":
+        if codex_fallback:
             # The next original-source input/status must reuse this canonical
             # Session even though the binding's preferred endpoint is Argon.
             monkeypatch.setattr(runtime, "enqueue_turn", lambda **kw: store.create_queued_turn(

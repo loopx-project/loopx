@@ -1174,7 +1174,10 @@ class ChatExternalConversations:
                 raise ValueError("metadata fallback requires a tools-disabled native Codex review")
         elif not isinstance(adapter, AntigravityAdapter):
             raise ValueError("metadata review requires its original native adapter")
-        response = result_review_evidence.format_link_metadata_review(continuation["metadata_handoffs"])
+        # A configured Codex fallback has already changed the native route.
+        # Keep its original text-only completion and history checks.
+        response = (None if codex_format else
+                    result_review_evidence.format_link_metadata_review(continuation["metadata_handoffs"]))
         if response is None:
             # Other shapes keep the original tools-disabled review.
             response = adapter.start_turn(review_input,

@@ -2042,9 +2042,10 @@ original native input/answer hashes, current binding, source readback and an
 idle queue are required. Handoff `inputs` identify shared relative files;
 put PR, issue and other web links in `context`. When a brief is otherwise valid
 and every input is a plain HTTPS link without credentials, a query or a fragment,
-the reserved review retains the entire original brief verbatim as context with
-empty file inputs. It does not fetch URLs or send a new model request. Other
-eligible shapes use the existing tools-disabled, text-only native review;
+the reserved review on the original adapter retains the entire original brief
+verbatim as context with empty file inputs. It does not fetch URLs or send a
+new model request. Other eligible shapes and the configured Codex fallback
+use the existing tools-disabled, text-only native review;
 model prose is withheld until validation. Both paths preserve the original
 text and ordered recipients. Other actions, changed targets, unknown completion,
 new input, steering, stop or revoked authority admit no handoff.
