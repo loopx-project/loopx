@@ -5,7 +5,8 @@ import {readFile} from "node:fs/promises";
 import {openWorkspacePage} from "./scenario-context.mjs";
 import {deliveryReadFixture, installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId} from "./showcase-workspace.mjs";
 
-// Local rendering qualification, not a transport SLO or a historical pass.
+// Local rendering qualification: bounded isolated overages of either origin
+// are allowed. This is not attribution, a transport SLO or a historical pass.
 export function loadedLensBudget(samplesMs) {
   assert.equal(samplesMs.length, 5, 'Measure every original loaded transition');
   for (const samples of samplesMs) {
@@ -212,6 +213,19 @@ export const goalWorkspaceM2Scenario = {
       assert.equal(await now.locator('.personal-task-card[data-work-class="open"]').count(),99);
       const switchMs = [];
       const switchSamplesMs = Array.from({length:5}, () => []);
+      const longTaskSupported = await page.evaluate(() => {
+        const supported = typeof PerformanceObserver !== 'undefined'
+          && PerformanceObserver.supportedEntryTypes?.includes('longtask');
+        if (!supported) return false;
+        const state = {entries:[],observer:null};
+        state.observer = new PerformanceObserver(list => {
+          for (const entry of list.getEntries()) state.entries.push({startTime:entry.startTime,duration:entry.duration});
+        });
+        state.observer.observe({type:'longtask'});
+        window.__loopxM2LongTasks = state;
+        return true;
+      });
+      const switchLongTasks = [];
       for (let repeat = 0; repeat < 3; repeat++) {
         // Start each repeat on Board, so all five directed transitions match.
         if (repeat > 0) {
@@ -219,6 +233,7 @@ export const goalWorkspaceM2Scenario = {
           await now.locator('.personal-task-board').waitFor();
         }
         for (const [index,name] of ['按负责人','看板','关系图','按负责人','关系图'].entries()) {
+          const browserStart = longTaskSupported ? await page.evaluate(() => performance.now()) : null;
           const start = performance.now();
           await now.getByRole('button',{name,exact:true}).click();
           await now.locator(name === '按负责人' ? '.goal-owner-group' : name === '看板' ? '.personal-task-board' : '.work-map').first().waitFor();
@@ -227,10 +242,21 @@ export const goalWorkspaceM2Scenario = {
           switchSamplesMs[index].push(elapsedMs);
           const items = name === '按负责人' ? '.goal-owner-group [data-todo-id]' : name === '看板' ? '.personal-task-card[data-work-class]' : '.work-map-node';
           assert.equal(await now.locator(items).count(),200,'Each loaded lens retains all 200 items');
+          switchLongTasks.push(longTaskSupported ? await page.evaluate(startTime => {
+            const state = window.__loopxM2LongTasks;
+            for (const entry of state.observer.takeRecords()) state.entries.push({startTime:entry.startTime,duration:entry.duration});
+            const endTime = performance.now();
+            return {browserStart:startTime,browserEnd:endTime,
+              entries:state.entries.filter(entry => entry.startTime < endTime && entry.startTime + entry.duration > startTime)};
+          },browserStart) : null);
         }
       }
       const lensBudget = loadedLensBudget(switchSamplesMs);
-      console.log(JSON.stringify({m2RenderBudget:{initialMs,expandMs,switchMs,switchSamplesMs,...lensBudget,nodeCount:200}}));
+      if (longTaskSupported) await page.evaluate(() => {
+        window.__loopxM2LongTasks.observer.disconnect(); delete window.__loopxM2LongTasks;
+      });
+      console.log(JSON.stringify({m2RenderBudget:{initialMs,expandMs,switchMs,switchSamplesMs,...lensBudget,
+        longTaskSupported,switchLongTasks,nodeCount:200}}));
       assert.equal(writes.length,0,`Rendering created effects: ${writes}`);
       assert.equal(session.errors.length,0,session.errors.join('\n'));
       assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded repeated 1s target or 2s ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);

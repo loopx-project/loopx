@@ -688,6 +688,12 @@ repeated slowdown. Report all 15 click-to-visible samples, the five medians,
 maximum and count above the 1-second target before asserting the budget.
 Playwright action waiting and browser scheduling are included; this is local
 rendering qualification, not pure backend latency or a kernel regression verdict.
+The bounded isolated-overage allowance applies to both a real page delay and
+host scheduling overhead; a median cannot identify their cause. Browser long-task
+entries are reported alongside each measured window when supported, with an
+explicit unavailable signal otherwise. They are diagnostic evidence, not proof
+that an unexplained Linux overrun was host noise. A single real page stall below
+2 seconds may pass this prospective rule; the above-target sample remains visible.
 Every lens retains all 200 items, and classification, selection, no-effect and
 error checks remain independent of timing. Initial rendering and expansion retain
 their existing 2-second checks. Historical failures are not reclassified by this
