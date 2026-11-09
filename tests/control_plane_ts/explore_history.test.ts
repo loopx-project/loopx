@@ -148,7 +148,7 @@ test("short record span collapses thirds into one whole-history reading group", 
 });
 
 test("phase reading retains successive decisions for one question, including a late backfill", async () => {
-  const {buildExploreTimeline, exploreTimelinePhaseAt, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const {buildExploreTimeline, exploreTimelinePhaseAt, latestExploreFindingInPhase, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
   const finding = (id: string, at: string, outcome: string) => event({event_id: id, event_kind: "finding", result_id: id, node_id: "route", recorded_at: at, status: "tentative",
     summary: `Input revision: v1 Applicability: this input Observation: measured Interpretation: Outcome: ${outcome} changed: - ${id}`});
   const rows = [event(), finding("early", "2026-01-01T01:00:00Z", "continue"),
@@ -157,10 +157,17 @@ test("phase reading retains successive decisions for one question, including a l
   const view = projectExploreHistory(rows, goal), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
   assert.deepEqual(selectExploreTimelineDecisions(timeline, 0).map(item => item.event.event_id), ["early-stop", "backfill", "early"]);
   assert.deepEqual(selectExploreTimelineDecisions(timeline, null).map(item => item.sections!.decision!.outcome), ["wait", "stop", "no_change", "continue"]);
+  assert.deepEqual(timeline.phases.map(phase => phase.nodes), [1, 0, 1], "A late finding keeps the original question active without adding a new one");
+  const original = timeline.nodes.get("route")!;
+  assert.deepEqual([...original.recordedPhases], [0, 2]);
+  assert.equal(original.first, timeline.start, "Later activity does not move the question on the axis");
   assert.equal(timeline.phases[0]!.lastDecision!.event.event_id, "early-stop");
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.phases[1]!.start), 1, "a boundary belongs to one reading group");
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.end), 2);
   assert.equal(exploreTimelinePhaseAt(timeline.phases, null), null, "missing record time remains unknown");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 0)?.event_id, "early-stop", "The default is the last recorded finding in this period, not the last append");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 1), undefined, "Do not infer a finding for an empty period");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 2)?.event_id, "late", "The last endpoint remains included");
   assert.equal(view.nodes[0]!.latest.status, "open", "display-time sorting cannot rewrite canonical node state");
 });
 

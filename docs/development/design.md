@@ -221,6 +221,9 @@ with their outcome, change and recorded status; retain stopped/retained evidence
 and expose earlier records in place. Counts and date spans describe the selected
 time range. Keep negative and tentative record counts visible when older rows
 are folded, and open each row's exact finding in the existing reader.
+When opening a question from a selected timeline period, prefer its last
+readable finding recorded in that period. An explicitly chosen finding, the
+other findings and revisions in source history stay readable.
 
 In the loaded-record list, a node and its unambiguously linked finding share an
 entry after a complete read. Show the finding status beside the node's lifecycle
