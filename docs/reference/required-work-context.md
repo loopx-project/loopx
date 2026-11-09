@@ -810,6 +810,17 @@ epoch, and a matching digest of the current visible field. A revised field
 appears in full. Losing the observation restores the ordinary initial read.
 A saved delta on its own provides no evidence of model retention.
 
+A ready native Turn can use the same observation for an unchanged
+`vision_authoring` body already delivered in this task and epoch. The initial
+read marks its exact current address and still delivers this Turn's
+precondition, command and settlement identity. If the full instructions are
+unavailable, select the current complete body before composing the Vision.
+Explicit selection and stateless readers keep the literal body.
+
+中文：同一任务、同一原生上下文周期内，首读可以标记已完整交付且未变化的
+`vision_authoring`。本轮前提、命令和结算身份仍读取当前值。如果无法使用完整
+说明，在编写 Vision 前从本次捕获取回该字段。显式选择和无会话读取保留原文。
+
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current
 `unread_context_index` preserves unobserved or changed supporting pointers and
