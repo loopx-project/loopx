@@ -442,14 +442,20 @@ Reward Memory 在原生 quota 与完整 Host 路径注册召回与反思时，�
 恢复。共享能力命名空间保护将 `work_contract` 与 `source_decision_hash` 保留给核心，
 覆盖注册、上下文及可选结果字段；贡献被拒绝后，原 Host 来源仍可用。
 
-可选 Host 投影提案也把有序合并、冲突拒绝和逐贡献隔离收敛到该 TypeScript owner。
+可选 Host 投影现已把有序合并、冲突拒绝和逐贡献隔离收敛到该 TypeScript owner。
 Python 只提取一次当前来源并发送一个批次，provider 结果及历史 capture／journal reader
-保留记录版本。[独立 main 切片](https://github.com/loopx-project/loopx/pull/8451)
+保留记录版本。[已合入的 main 切片](https://github.com/loopx-project/loopx/pull/8451)
 按 File／SQLite 对照零／一／两个 provider、当前／历史来源及接近大小上限的输入，
 投影建议保持一致。在这一有界步骤中，两个 provider 的完整来源 RPC 从四次降为两次。
 大批次复用现有私有快照运输，增加临时 IO，且实测在接近上限时变慢；仅扩展运输可接受
 范围，不提高 provider 预算。这不构成模型 token、整任务成本或已验收成果收益结论。
 原生 quota 签名退役、installed 采用和相对原 quota 的资格验证仍未完成。
+
+[仅状态回读的 main 后续修复](https://github.com/loopx-project/loopx/pull/8455)
+也复用既有的无来源回读校验，不再先提取随后会被丢弃的可执行来源；注册、命名空间、槽位
+和大小检查保留。File／SQLite 案例在来源无效时保留状态观察，同时拒绝建议和 Host 构造；
+有效建议仍绑定原来源，并保留 C1 组合结算。删除这次 RPC 不减少模型可见正文，也不证明
+整任务成本收益。
 
 失败会话重试也是活跃 reader。本提案中的
 `session_recovery.py::assess_failed_turn_retry_request` 为 v1 请求向绑定回调交付

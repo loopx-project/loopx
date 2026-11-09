@@ -603,11 +603,11 @@ shared capability namespace guard reserves `work_contract` and
 `source_decision_hash` across registration, context and optional result fields;
 rejected contributions leave the original Host source usable.
 
-The optional Host projection proposal also moves ordered merge, collision
-rejection and per-contribution isolation into that existing TypeScript owner.
+The optional Host projection now uses that existing TypeScript owner for ordered
+merge, collision rejection and per-contribution isolation.
 Python extracts the governing source once and sends one batch; provider results
 and historical capture/journal readers keep their recorded format. The
-[independent main slice](https://github.com/loopx-project/loopx/pull/8451) compares
+[merged main slice](https://github.com/loopx-project/loopx/pull/8451) compares
 File/SQLite empty, one/two-provider, current/historical and near-limit cases with
 unchanged projected advice. Two-provider complete-source RPC falls from four to
 two in that bounded stage. Large batches reuse the existing private snapshot
@@ -615,6 +615,14 @@ transport, adding temporary IO and a measured near-limit latency penalty;
 transport acceptance is extended without raising provider budgets. This is no
 model-token, whole-task cost or accepted-outcome claim. Native quota signature
 retirement, installed adoption and original-quota qualification remain open.
+
+The [status-only main follow-up](https://github.com/loopx-project/loopx/pull/8455)
+also reuses the existing source-free readback validator without first extracting
+an executable source that would be discarded. Registration, namespace, slot and
+budget checks remain. File/SQLite cases retain status observations under an invalid
+source while rejecting advice and Host construction; valid advice keeps its binding
+and C1 composed settlement. Removing this RPC does not reduce model-visible text
+or qualify complete-task cost.
 
 Failed-session retry is also a live reader. In this proposal,
 `session_recovery.py::assess_failed_turn_retry_request` gives the binding callback
