@@ -115,6 +115,94 @@ def wide_write_scope():
     ]
 
 
+def test_refresh_receipt_returns_committed_comparison_and_replays_original_prefix(tmp_path):
+    project, runtime, path = setup(tmp_path, active=True)
+    source = tmp_path / "finding.json"
+    authored = attachment()
+    authored["evidence_refs"] = ["result:reversal", "result:goal-a", "result:goal-b", "result:screen-a", "result:screen-b"]
+    profiles = authored["work_yardstick_decision"]
+    authored["measurements"] = [dict(profiles[profile], value=value,
+        candidate_ref=f"candidate:{candidate}", evidence_ref=f"result:{label}-{candidate}")
+        for profile, label, values in [("authoritative", "goal", [("a", 8), ("b", 4)]),
+                                       ("proxy", "screen", [("a", 12), ("b", 15)])]
+        for candidate, value in values]
+    source.write_text(json.dumps(authored))
+    receipt = refresh(project, runtime, path, "write-comparison", source,
+                      "--delivery-boundary", "in_flight_continuation")
+    delivery = receipt["explore_result_delivery"]
+    assert delivery["ok"] and delivery["primary_committed"]
+    metrics = {row["metric"]: row for row in delivery["measurement_feedback"]}
+    assert metrics["quality"]["previous_best"]["value"] == 8
+    assert metrics["quality"]["latest"]["measurement"]["value"] == 4
+    assert metrics["quality"]["improvement"] == -4
+    assert delivery["search_comparison"]["proxy_order_reversed"] is True
+    assert delivery["search_comparison"]["goal"]["preferred_candidate_ref"] == "candidate:a"
+    assert delivery["search_comparison"]["proxy"]["preferred_candidate_ref"] == "candidate:b"
+    assert _heartbeat_receipt_count(runtime, "write-comparison") == 1
+    assert _spend_run_count(runtime) == 0
+    run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"],
+        turn_instance_id="write-comparison"))
+    later = dict(schema_version=authored["schema_version"], node_id=delivery["node_id"],
+        input_revision="inputs-v1", status="confirmed", observation="A later candidate changes the recorded best.",
+        interpretation="This later evidence cannot rewrite the original receipt.", evidence_refs=["result:goal-c"],
+        measurements=[dict(profiles["authoritative"], value=9, candidate_ref="candidate:c", evidence_ref="result:goal-c")])
+    later_source = tmp_path / "later.json"
+    later_source.write_text(json.dumps(later))
+    refresh(project, runtime, path, "later-comparison", later_source,
+            "--delivery-boundary", "in_flight_continuation")
+    before = explore_result_log_path(runtime, GOAL_ID).read_bytes()
+    replay = run(project, runtime, path, "refresh-state", *binding("write-comparison"),
+        "--classification", "validated_change", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--explore-result-json", str(source),
+        "--no-global-sync", "--suppress-external-sinks", "--delivery-boundary", "in_flight_continuation")
+    assert replay["explore_result_delivery"]["idempotent_replay"] is True
+    assert replay["explore_result_delivery"]["measurement_feedback"] == delivery["measurement_feedback"]
+    assert replay["explore_result_delivery"]["search_comparison"] == delivery["search_comparison"]
+    assert explore_result_log_path(runtime, GOAL_ID).read_bytes() == before
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("entry", ["refresh", "finding"])
+def test_quantitative_write_returns_existing_work_facts_without_requiring_a_decision(tmp_path, enabled, entry):
+    project, runtime, path = setup(tmp_path, active=True, enabled=enabled)
+    source = tmp_path / "plain.json"
+    authored = attachment()
+    del authored["work_yardstick_decision"]
+    authored["evidence_refs"] = ["result:a", "result:b"]
+    authored["measurements"] = [dict(decision()["authoritative"], value=value,
+        candidate_ref=f"candidate:{candidate}", evidence_ref=f"result:{candidate}")
+        for candidate, value in [("a", 8), ("b", 4)]]
+    source.write_text(json.dumps(authored))
+    if entry == "refresh":
+        receipt = refresh(project, runtime, path, "plain-write", source,
+                          "--delivery-boundary", "in_flight_continuation")
+        delivery = receipt["explore_result_delivery"]
+    else:
+        run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("plain-write"))
+        delivery = run(project, runtime, path, "explore", "finding", *binding("plain-write"), "--result-json", str(source))
+    if enabled or entry == "finding":
+        assert delivery["measurement_feedback"][0]["improvement"] == -4
+    assert "search_comparison" not in delivery
+    if enabled:
+        assert delivery["measurement_feedback"][0]["improvement"] == -4
+        facts, = delivery["work_measurements"]
+        assert facts["todo_id"] == TODO_ID
+        assert delivery["measurement_feedback"][0]["best"]["candidate_ref"] == "candidate:a"
+        assert facts["measurement_feedback"] == []
+        assert "measurement_feedback is returned separately" in facts["guidance"]
+        assert "No outcome/proxy profile has been selected" in facts["guidance"]
+        assert "no extra review, measurement or decision payload" in facts["guidance"]
+        assert "authoritative" not in facts and "proxy" not in facts and "search_comparison" not in facts
+        assert facts["details_command"][1:5] == ["--registry", str(path), "--runtime-root", str(runtime)]
+    else:
+        if entry == "refresh":
+            assert "measurement_feedback" not in delivery
+        assert "work_measurements" not in delivery
+    assert len([event for event in load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+                if event.get("event_kind") == "finding"]) == 1
+    assert _heartbeat_receipt_count(runtime, "plain-write") == 1 and _spend_run_count(runtime) == 0
+
+
 def test_work_finding_receipt_reuses_question_and_compares_before_next_guard(tmp_path):
     from threading import Thread
     from urllib.request import urlopen

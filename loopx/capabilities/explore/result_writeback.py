@@ -378,6 +378,47 @@ def _append_prepared_result(attachment, current_events, *, runtime_root, goal_id
     return events, graph
 
 
+def _committed_finding_feedback(*, registry_path, runtime_root, goal_id, agent_id,
+                                todo_id, turn_instance_id, finding_id, events,
+                                detail, goal=None, preserve_disabled_wire=False):
+    """Read one original canonical prefix for both ordinary write entrypoints."""
+    from .turn_context import explore_read_route
+    from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+
+    if goal is None:
+        goal, _, _ = _policy(registry_path, goal_id, runtime_root)
+    enabled = work_yardstick_enabled(goal, runtime_root)
+    # Refresh's existing default-off wire is retained. Ordinary finding keeps
+    # its pre-existing quantitative feedback when Yardstick is disabled.
+    if preserve_disabled_wire and not enabled:
+        return {}
+    prefix = []
+    for event in events:
+        prefix.append(event)
+        if event.get("event_kind") == "finding" and event.get("result_id") == finding_id:
+            break
+    else:
+        raise ValueError("Explore feedback requires its committed finding")
+    written = prefix[-1]
+    # A retained legacy event has no claimed-work assertion to compare. Keep
+    # its old readback rather than manufacture a new binding on replay.
+    if "work_binding" not in written and "work_yardstick" not in written:
+        return {}
+    projection = build_explore_result_projection(
+        prefix, goal_id=goal_id, finding_limit=len(prefix), mermaid_node_limit=3,
+    )
+    cited_sources = project_work_yardstick_sources(
+        events=prefix, projection=projection, goal_id=goal_id, agent_id=agent_id,
+        work_todos=[detail], enabled=enabled, todo_id=todo_id, result_node=written["node_id"],
+    )
+    return effect_runtime_result("explore.finding.receipt", dict(
+        goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, turn_instance_id=turn_instance_id,
+        finding_id=finding_id, findings=projection["findings"], enabled=enabled,
+        cited_sources=cited_sources,
+        route=explore_read_route(registry_path=registry_path, runtime_root=runtime_root),
+    ))
+
+
 def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, agent_id,
                         todo_id, turn_instance_id):
     """Record a finding on an open owned Todo without committing a Turn."""
@@ -443,24 +484,8 @@ def record_work_finding(attachment, *, registry_path, runtime_root, goal_id, age
             if not isinstance(detail, dict):
                 raise ValueError("Explore finding persisted; Todo association readback needs retry")
         events = current if prior else load_explore_result_events_strict(log, goal_id=goal_id)
-        prefix = []
-        for event in events:
-            prefix.append(event)
-            if event.get("event_kind") == "finding" and event.get("result_id") == finding_id:
-                break
-        projection = build_explore_result_projection(
-            prefix, goal_id=goal_id, finding_limit=len(prefix), mermaid_node_limit=3,
-        )
-        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
-        enabled = work_yardstick_enabled(goal, runtime_root)
-        cited_sources = project_work_yardstick_sources(
-            events=prefix, projection=projection, goal_id=goal_id, agent_id=agent_id,
-            work_todos=[detail], enabled=enabled, todo_id=todo_id, result_node=node_id,
-        )
-        result.update(effect_runtime_result("explore.finding.receipt", dict(
-            binding, finding_id=finding_id, findings=projection["findings"],
-            enabled=enabled, cited_sources=cited_sources,
-        )))
+        result.update(_committed_finding_feedback(**scope, finding_id=finding_id,
+            events=events, detail=detail, goal=goal))
     except Exception as error:
         result.update(ok=False, retryable=True, error=str(error))
     return result
@@ -561,6 +586,9 @@ def deliver_result_attachment(
             and isinstance(detail, dict)
             and attachment["node_id"] in (detail.get("explore_result_node_refs") or [])
         ):
+            feedback = (_committed_finding_feedback(registry_path=registry_path, runtime_root=runtime_root,
+                **binding, finding_id=finding_id, events=existing_events, detail=detail, preserve_disabled_wire=True)
+                if attachment.get("measurements") or attachment.get("work_yardstick_decision") else {})
             return {
                 **result,
                 "ok": True,
@@ -569,6 +597,7 @@ def deliver_result_attachment(
                 "node_id": attachment["node_id"],
                 "finding_id": expected[1]["result_id"],
                 "todo_id": todo_id,
+                **feedback,
             }
         if expected[1] in existing_events:
             # The graph batch committed atomically; only its Todo link is missing.
@@ -615,12 +644,23 @@ def deliver_result_attachment(
         )
         if not linked.get("ok"):
             raise ValueError("Explore graph persisted; Todo association needs retry")
+        feedback = {}
+        if attachment.get("measurements") or attachment.get("work_yardstick_decision"):
+            detail = linked.get("todo") or list_goal_todos(registry_path=registry_path,
+                runtime_root_arg=str(runtime_root), goal_id=goal_id, todo_id=todo_id).get("todo")
+            if not isinstance(detail, dict):
+                raise ValueError("Explore feedback needs its Todo association readback")
+            feedback = _committed_finding_feedback(registry_path=registry_path, runtime_root=runtime_root,
+                **binding, finding_id=events[1]["result_id"],
+                events=load_explore_result_events_strict(explore_result_log_path(runtime_root, goal_id), goal_id=goal_id),
+                detail=detail, preserve_disabled_wire=True)
         result.update(
             ok=True,
             retryable=False,
             node_id=attachment["node_id"],
             finding_id=events[1]["result_id"],
             todo_id=todo_id,
+            **feedback,
         )
     except Exception as error:
         # Preserve primary truth. Replaying its exact refresh retries delivery;

@@ -9,7 +9,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTurnFeedbackGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
-import {projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
+import {projectWorkMeasurementFacts, projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
@@ -352,17 +352,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     if (todo.status !== "open" || currentWorkCues.some(cue => (cue.binding as JsonObject).todo_id === todo.todo_id)) return [];
     const linked = new Set(requireStringArray(todo.explore_result_node_refs ?? [], "Explore task question refs"));
     const available = measurementFeedback.filter(row => linked.has(row.node_id));
-    if (!available.length) return [];
-    // Give distinct linked questions a place before filling the remaining
-    // budget with further metrics. No metric is inferred to be the outcome.
-    const first = new Map<string, typeof available[number]>();
-    for (const row of available) if (!first.has(row.node_id)) first.set(row.node_id, row);
-    const representatives = new Set(first.values());
-    const visible = [...representatives, ...available.filter(row => !representatives.has(row))].slice(0, 3);
-    return [{todo_id: todo.todo_id, measurement_feedback: visible,
-      omitted_measurement_feedback: available.length - visible.length,
-      details_command: command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"),
-      guidance: "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."}];
+    const facts = projectWorkMeasurementFacts(String(todo.todo_id), available,
+      command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"));
+    return facts ? [facts] : [];
   });
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,

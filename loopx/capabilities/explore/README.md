@@ -41,6 +41,23 @@ both profiles with different preferences. This uses the current Todo's
 recorded evidence and doesn't settle the Turn. Exact retries within the same
 Turn return the comparison at the original write.
 
+With Yardstick enabled, a quantitative or decision attachment on ordinary
+`refresh-state` returns the same feedback in `explore_result_delivery` after
+the graph and Todo association commit. A successful replay reads the original
+committed prefix, including after later results arrive. Partial delivery still
+retries through the existing owner; feedback creates no claim, spend or evaluation.
+Disabled Yardstick and unmeasured refresh attachments retain their earlier wire.
+
+When no outcome/proxy decision has been selected, a quantitative receipt can
+also return bounded `work_measurements` from this Todo's committed evidence.
+These are the same scoped facts available in ordinary task context. The receipt
+does not duplicate its current feedback: it supplements it with at most two
+other groups, prioritizing this question and recent evidence, with a source-bound
+`details_command` and an explicit omitted count for the remaining groups.
+No metric is assigned an outcome or proxy role. The Agent can use the facts
+without another declaration or probe; if its method changes, the existing
+optional decision field fits the same normal result attachment.
+
 Manual capture uses `explore finding --node <id> --evidence-ref result:a
 --measurements-json measurements.json`. The file contains one to eight items:
 

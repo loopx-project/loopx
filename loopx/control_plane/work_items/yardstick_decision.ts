@@ -4,7 +4,7 @@
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {jsonObject, requireJsonObject, type JsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireStringArray, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "../capabilities/explore_evidence_ref.ts";
 import {projectExploreMeasurementFeedback, type ExploreMeasurementFeedback,
   type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
@@ -140,6 +140,24 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
+/** Existing work facts, without guessing an outcome/proxy role or adding a gate. */
+export function projectWorkMeasurementFacts(todoId: string, available: ExploreMeasurementFeedback[],
+  detailsCommand?: string[], supplementaryReceipt = false): JsonObject | null {
+  if (!available.length && !supplementaryReceipt) return null;
+  const first = new Map<string, ExploreMeasurementFeedback>();
+  for (const row of available) if (!first.has(row.node_id)) first.set(row.node_id, row);
+  const representatives = new Set(first.values());
+  // A receipt already carries its current feedback. Keep at most two other
+  // groups here; the task context retains its existing three-group budget.
+  const visible = [...representatives, ...available.filter(row => !representatives.has(row))].slice(0, supplementaryReceipt ? 2 : 3);
+  return {todo_id: todoId, measurement_feedback: visible,
+    omitted_measurement_feedback: available.length - visible.length,
+    ...(detailsCommand ? {details_command: detailsCommand} : {}),
+    guidance: (supplementaryReceipt ? "This write's measurement_feedback is returned separately; these groups supplement it. This cue requires no extra review, measurement or decision payload. " : "") +
+      "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. " +
+      "No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."};
+}
+
 function recordedBefore(row: JsonObject, sourceOrder: unknown): boolean {
   const order = row.recorded_order;
   return typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
@@ -271,9 +289,23 @@ export function projectExploreFindingReceipt(params: JsonObject): JsonObject {
   const comparison = cue?.search_comparison as ReturnType<typeof measuredSearchComparison> | undefined;
   const participates = comparison && [comparison.goal, comparison.proxy].some(pair =>
     pair?.latest.finding_id === written.finding_id || pair?.previous_best.finding_id === written.finding_id);
+  const route = params.route === undefined ? undefined : requireStringArray(params.route, "Explore read route");
+  let workFacts: JsonObject | null = null;
+  if (params.enabled === true && Array.isArray(written.measurements)
+      && !currentWorkYardstickFinding(findings, params)) {
+    const order = new Map(findings.map(row => [row.finding_id, Number(row.recorded_order ?? 0)]));
+    const workFeedback = projectExploreMeasurementFeedback(findings.filter(row => row.status === "confirmed" && belongsToWork(row, params)))
+      .filter(row => row.latest.finding_id !== written.finding_id)
+      .sort((a, b) => Number(b.node_id === written.node_id) - Number(a.node_id === written.node_id)
+        || (order.get(b.latest.finding_id) ?? 0) - (order.get(a.latest.finding_id) ?? 0));
+    workFacts = projectWorkMeasurementFacts(String(params.todo_id), workFeedback,
+      route ? [...route, "explore", "turn-context", "--agent-id", String(params.agent_id),
+        "--todo-id", String(params.todo_id), "--result-limit", "20", "--goal-id", String(params.goal_id)] : undefined, true);
+  }
   return {
     measurement_feedback: latest,
     ...(comparison && (participates || cue?.source_finding_id === written.finding_id)
       ? {search_comparison: comparison} : {}),
+    ...(workFacts ? {work_measurements: [workFacts]} : {}),
   };
 }
