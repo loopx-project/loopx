@@ -1274,6 +1274,40 @@ test("the App steward is an explicit source preference, never a new grant or pee
     app_steward_entry: true, observation, available_projects: [project], sessions: []}), /selected original steward/);
 });
 
+test("a legacy Steward recovery adopts its exact admitted Turn after the session advances", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24), message = "Original synthetic request";
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "codex",
+    upstream_mode: "chat", status: "ready", upstream_thread_id: "updated-native", active_turn_id: null,
+    manager_context_version: 22, steward_context: context,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`};
+  const failed = {session_id: "original", turn_id: "failed", status: "failed", delta_count: 0,
+    response: null, error_code: "context_window_exceeded", upstream_turn_id: "native-failed"};
+  const reservation = {version: 22, failed_turn_id: "failed", client_turn_id: `external-${ref}-recovery-22`};
+  const admitted = {session_id: "original", turn_id: "continued", status: "completed",
+    client_turn_id: reservation.client_turn_id, origin: "lark", message, attachments: []};
+  const packet = {binding: selected, current_session: session, request: {request_ref: ref, command: null,
+    status: "accepted", delivery_verified: true, binding_id: row.binding_id, session_id: "original",
+    turn_id: "failed", source, message, origin: "lark", context_recovery: reservation},
+  context_recovery: {version: 22, failed_turn: failed, steering_observed: false, source_verified: true,
+    native_observation: null, admitted_turn: admitted}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.admitted_turn_id, "continued");
+  assert.deepEqual(plan.native_thread_ids, []);
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {
+    ...packet.context_recovery, source_verified: false}}).recovery_eligible, false);
+  for (const change of [{session_id: "foreign"}, {client_turn_id: "foreign"}, {turn_id: failed.turn_id},
+    {message: "Changed request"}, {origin: "external"}, {attachments: [{type: "image"}]}]) {
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {
+      ...packet.context_recovery, admitted_turn: {...admitted, ...change}}}).recovery_eligible, false);
+  }
+});
+
 for (const kind of ["project", "steward"]) for (const retryKind of ["routing", "quota"]) {
   test(`${kind} ${retryKind} recovery is bounded, source-bound and independent of context migrations`, () => {
     const selected = kind === "steward" ? {...row, context_kind: kind, grant: "portfolio_read", goal_ids: []} : row;
