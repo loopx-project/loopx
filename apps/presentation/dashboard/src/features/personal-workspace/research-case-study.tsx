@@ -51,10 +51,11 @@ export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
   onCitation: (c: AssessmentCitation, origin?: HTMLButtonElement) => void;
 }) {
   const id = useId().replace(/:/g, '');
-  const sources = (citations: AssessmentCitation[]) => <details className="case-sources"><summary>{zh ? '依据与原文' : 'Evidence and originals'}</summary>
-    {citations.map((c, i) => <button key={i} type="button" onClick={e => onCitation(c, e.currentTarget)}>
-      {c.source_id} · {c.first_line}–{c.last_line} ↗</button>)}
-  </details>;
+  const citationLinks = (citations: AssessmentCitation[]) => <ul className="case-citation-links" role="list">
+    {citations.map((c, i) => <li key={i}><button type="button" onClick={e => onCitation(c, e.currentTarget)}>
+      {c.source_id} · {zh ? '行' : 'lines'} {c.first_line}–{c.last_line} <span aria-hidden="true">↗</span>
+    </button></li>)}
+  </ul>;
   return <article className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
     <header className="case-opening">
       <p className="case-eyebrow">{scope.case_id} <span>· {zh ? 'Case 深度解读' : 'Case study'}</span></p>
@@ -62,10 +63,10 @@ export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
       <div className="case-lead"><MarkdownText text={study.summary}/></div>
       {historical ? <p className="case-read-warning" role="status">{zh ? '来源已变化或暂不可读。下文保留注册时的解读与证据快照，不能视作当前结果。' : 'The source changed or is unavailable. This reading and its evidence snapshot describe the registered version, not current results.'}</p> : null}
       {study.language !== (zh ? 'zh' : 'en') ? <p className="case-original-language">{zh ? '显示已保存的英文原文。' : 'Showing the saved Chinese original.'}</p> : null}
-      <details className="case-provenance"><summary>{zh ? '范围与来源' : 'Scope and provenance'}</summary>
+      <details className="case-provenance"><summary>{zh ? '结论依据与范围' : 'Conclusion evidence and scope'}</summary>
+        {citationLinks(study.citations)}
         <p>{zh ? '已保存的作者分析；来源绑定不代表结论已独立验证。' : 'Saved author analysis; source binding does not independently verify the conclusions.'}</p>
         <dl><dt>{zh ? '观察窗口' : 'Window'}</dt><dd>{scope.window}</dd><dt>{zh ? '运行' : 'Run'}</dt><dd>{scope.run_id}</dd><dt>{zh ? '版本' : 'Revision'}</dt><dd>{scope.revision}</dd></dl>
-        {sources(study.citations)}
       </details>
     </header>
     <div className="case-reading-layout">
@@ -79,7 +80,9 @@ export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
         {s.table ? <div className="case-table-scroll" tabIndex={0} role="region" aria-label={s.title}><table><thead><tr>{s.table.columns.map((c, i) => <th key={i} scope="col">{c}</th>)}</tr></thead>
           <tbody>{s.table.rows.map((row, i) => <tr key={i}>{row.map((cell, j) => j === 0 ? <th key={j} scope="row">{cell}</th> : <td key={j}><MarkdownText text={cell}/></td>)}</tr>)}</tbody></table></div> : null}
         {s.timeline ? <ol className="case-timeline">{s.timeline.map((event, i) => <li key={i}><span className="case-event-label">{event.label}</span><div><h4>{event.title}</h4><MarkdownText text={event.text}/></div></li>)}</ol> : null}
-        {sources(s.citations)}
+        <details className="case-sources"><summary>{zh ? '依据与原文' : 'Evidence and originals'}</summary>
+          {citationLinks(s.citations)}
+        </details>
       </section>)}
         {study.limitations.length ? <section className="case-section case-limitations"><h3>{zh ? '这份解读还缺什么' : 'What this reading cannot resolve'}</h3><ul>{study.limitations.map((text, i) => <li key={i}>{text}</li>)}</ul></section> : null}
       </div>
