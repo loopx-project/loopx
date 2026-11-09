@@ -65,6 +65,8 @@ def _enable_calendar(registry):
 
 
 def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, capsys, monkeypatch):
+    from copy import deepcopy
+
     from loopx.cli import main
     from loopx.control_plane.turn_driver.loop_controller import decide_loop_disposition
 
@@ -114,13 +116,22 @@ def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, 
         assert turn["capability_action"]["intent"]["command"] == command
         assert turn["capability_action"]["command_argv"][:5] == ["loopx", "--registry", str(registry), "--runtime-root", str(runtime)]
         assert turn["capability_action"]["executed"] is False
+        # Current plans expose one complete source; the controller consumes it
+        # directly instead of requiring the historical executor adapter.
+        assert "turn_envelope" not in turn
         work = turn["work_contract"]
         assert work["effective_action"] == "governed_capability_intent"
         assert work["interaction_contract"]["cli_channel"]["next_cli_actions"] == [command]
         assert not any(turn["effects"].values())
+        # The source may retain competing replan advice; capability precedence
+        # must still keep the host idle and the owned consumer next.
         disposition = decide_loop_disposition(turn_receipt=None, quota_decision=work)
         assert disposition["disposition"] == "capability_action_required"
         assert not disposition["launches_host"]
+        changed = deepcopy(work)
+        changed["pending_capability_intent"]["command"] = "loopx turn run-once --execute"
+        with pytest.raises(ValueError):
+            decide_loop_disposition(turn_receipt=None, quota_decision=changed)
     assert not list((runtime / "goals" / GOAL_ID / "periodic_reports").glob("*/editorial_request.json"))
 
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import re
 
+from tests.test_explore_mermaid_identity import mermaid_node_id
+
 from loopx.presentation.explore_views import (
     PRESENTATION_MODE_CANONICAL_ONLY,
     PRESENTATION_MODE_DUAL_VIEW,
@@ -118,12 +120,13 @@ class TestCanonicalView:
         mermaid = canonical["mermaid"]
         assert mermaid.startswith("flowchart TB")
         assert canonical["filter"]["layout"]["strategy"] == "vertical_evidence_timeline"
+        titles = {node["node_id"]: node["title"] for node in proj["nodes"]}
         # Non-subtopic_of edges appear
         for edge in proj["edges"]:
             if edge["edge_type"] == "subtopic_of":
                 continue
-            src = str(edge["from_node"]).replace("-", "_")
-            dst = str(edge["to_node"]).replace("-", "_")
+            src = mermaid_node_id(mermaid, titles[edge["from_node"]])
+            dst = mermaid_node_id(mermaid, titles[edge["to_node"]])
             assert f"{src} -->|{edge['edge_type']}| {dst}" in mermaid
         assert _public_safe(canonical)
 
@@ -143,8 +146,10 @@ class TestExecutiveView:
         exec_view = bundle["executive"]
         assert exec_view["graph_counts"]["edge_count"] == 1
         assert exec_view["graph_counts"]["suppressed_edge_count"] == 6
-        assert "active_0 -->|leads_to| active_1" in exec_view["mermaid"]
-        assert "hub -->|subtopic_of|" not in exec_view["mermaid"]
+        source = mermaid_node_id(exec_view["mermaid"], "Option 0")
+        target = mermaid_node_id(exec_view["mermaid"], "Option 1")
+        assert f"{source} -->|leads_to| {target}" in exec_view["mermaid"]
+        assert "-->|subtopic_of|" not in exec_view["mermaid"]
 
 
 class TestSemanticLanes:
@@ -167,7 +172,9 @@ class TestSemanticLanes:
         stage = bundle["canonical"]["stage_views"][0]
         assert stage["lane_count"] == 2
         assert stage["cross_lane_edge_count"] == 1
-        assert "fix -->|supports| dur" in stage["mermaid"]
+        source = mermaid_node_id(stage["mermaid"], "Fix PR")
+        target = mermaid_node_id(stage["mermaid"], "Durable capability")
+        assert f"{source} -->|supports| {target}" in stage["mermaid"]
         assert _public_safe(stage)
 
     def test_single_lane_does_not_invent_second(self):

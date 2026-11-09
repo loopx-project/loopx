@@ -99,7 +99,7 @@ async function readOriginalNativeSnapshot(page, history, capture, language) {
   }
   await missing.getByRole("button", {name: /native-report-1/}).first().click();
   const source = history.locator(".analysis-source");
-  await source.locator(".analysis-error").waitFor();
+  await source.getByRole("alert").waitFor();
   assert.equal(await source.locator("pre").count(), 0, "An uncaptured source is not borrowed from a different snapshot");
   await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
   await progress.locator('[data-native-point="best_valid"] button').click();
@@ -215,9 +215,13 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
       for (const summary of await missingEpisode.locator(".analysis-judgments > details:not([open]) > summary").all()) await summary.click();
       await missingEpisode.getByRole("button", {name: /native-report-1/}).first().click();
       const unavailable = history.locator(".analysis-source");
-      await unavailable.locator(".analysis-error").waitFor();
-      assert.match(await unavailable.locator(".analysis-error").innerText(), /not captured/);
+      const sourceFailure = unavailable.getByRole("alert");
+      await sourceFailure.waitFor();
+      assert.match(await sourceFailure.innerText(), /not captured/);
       assert.equal(await unavailable.locator("pre").count(), 0, "Uncaptured citations do not substitute unrelated evidence");
+      await unavailable.getByRole("button", {
+        name: language === "zh" ? "重试读取原文" : "Retry reading source", exact: true,
+      }).waitFor();
       await unavailable.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
       const citation = capture.analysis_citations[0].response;
       const cited = saved.result.assessments.find(row => row.citations.some(c => c.source_id === citation.source_id

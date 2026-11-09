@@ -65,7 +65,8 @@ from .extensions.lark.private_conversations import (LarkPrivateConversations, Pr
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
-    project_chat_session_snapshot,
+    parse_chat_history_selection,
+    read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
 from .control_plane.effect_runtime import effect_runtime_request_scope
@@ -925,36 +926,24 @@ class ChatRequestHandler(
     @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"message_limit", "message_cursor", "turn_id"}
-                    or any(len(values) != 1 or not values[0] for values in query.values())
-                    or (any(key in query for key in ("message_cursor", "turn_id")) and "message_limit" not in query)):
-                raise ValueError("invalid history page arguments")
-            message_limit = int(query["message_limit"][0]) if "message_limit" in query else None
-            if message_limit is not None and not 1 <= message_limit <= 200:
-                raise ValueError("message_limit must be between 1 and 200")
-            # Reading one historical Turn must not recover an unrelated active
-            # execution. Ordinary Chat refresh keeps its existing recovery path.
-            if "turn_id" not in query:
+            selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
+            # A historical Turn read must not recover an unrelated execution.
+            if selection["turn_id"] is None:
                 self.server.runtime_controller.recover_exited_turn(session_id)
             store = self.server.chat_store
             session = store.load_session(session_id) or {}
             media = self.server.private_media_history
             contexts = getattr(self.server.runtime_controller, "project_contexts", None)
             bindings = getattr(contexts, "conversation_bindings", None)
-            markers = [] if "turn_id" in query else media.read(store, bindings, session)
-            snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
-            payload = snapshot(
-                self.server.runtime_controller.coordination_runtime_root,
-                self.server.chat_store, session_id,
-                registry=self.server.registry_path, message_limit=message_limit,
-                message_cursor=query.get("message_cursor", [None])[0],
-                turn_id=query.get("turn_id", [None])[0],
-                project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None)
-            if markers:
+            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
+            payload = read_chat_history_selection(
+                self.server.runtime_controller.coordination_runtime_root, store, session_id,
+                registry=self.server.registry_path, selection=selection,
+                project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
+                project_provider=lambda rows: project_private_reply_history(
+                    store, session, rows))
+            if markers and "session" in payload:
                 payload["session"] = media.summary(payload["session"], markers)
-            # Reply context is a view of rows already selected by the page.
-            payload["messages"] = project_private_reply_history(store, session, payload["messages"])
             self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)

@@ -106,7 +106,7 @@ function comparisonKey(node: string, metric: ExploreMeasurement): string {
  */
 export function projectExploreMeasurementFeedback(
   findings: readonly JsonObject[],
-  candidateRefs?: ReadonlySet<string>,
+  includeMeasurement?: (finding: JsonObject, measurement: ExploreMeasurement) => boolean,
 ): ExploreMeasurementFeedback[] {
   const groups = new Map<string, ExploreMeasurementFeedback>();
   const ordered = findings.filter(finding => finding.measurements !== undefined);
@@ -127,7 +127,7 @@ export function projectExploreMeasurementFeedback(
     // source when its declared execution contradicts its measurements.
     if (executionMeasurementError(measurements, finding.execution_observation) !== null) continue;
     for (const measurement of measurements) {
-      if (candidateRefs && !candidateRefs.has(measurement.candidate_ref)) continue;
+      if (includeMeasurement && !includeMeasurement(finding, measurement)) continue;
       const key = comparisonKey(node, measurement), prior = groups.get(key);
       const previous = prior?.best ?? null;
       const point = measurement.value === null ? null : {finding_id: id,

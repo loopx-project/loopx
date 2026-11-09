@@ -347,7 +347,8 @@ def test_warm_cli_checks_sealed_native_child_limit_before_activation(point, tmp_
         work=SimpleNamespace(agent_query="Synthetic task"),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     monkeypatch.setattr(checkpoint_supervisor, "CheckpointSupervisor", lambda *args, **kwargs: object())
-    monkeypatch.setattr(entry, "RecordingDockerBackend", lambda **kwargs: SimpleNamespace(image_exists=lambda _: True))
+    monkeypatch.setattr(entry, "RecordingDockerBackend", lambda **kwargs: SimpleNamespace(
+        observe_local_images=lambda **keys: {}, registration_options=lambda provider: {}))
 
     class ReachedNativeActivation(Exception):
         pass
