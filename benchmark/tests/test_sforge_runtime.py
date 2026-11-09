@@ -1511,13 +1511,16 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert self.execution_observation == producer
         assert self._worker_env(cwd="/task").get("LOOPX_EXECUTION_OBSERVATION") == producer
 
+    installed_tools = []
+
+    async def install_entrypoint(self, environment, name, module, help_flag, failure):
+        assert environment.default_user == "agent"
+        installed_tools.append((name, module, help_flag))
+        installed.append(name)
+
     monkeypatch.setattr(BenchmarkCodex, "install", install_at_transport_boundary)
     installed = []
     scopes = []
-
-    async def install_entrypoint(self, environment, name, *_args):
-        installed.append(name)
-
     monkeypatch.setattr(BenchmarkCodex, "_install_research_entrypoint", install_entrypoint)
     monkeypatch.setattr(SForgeWorker, "_install_native_result_scope",
                         lambda self, backend, handle: scopes.append(self.native_result_scope))
@@ -1529,6 +1532,11 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         profile_receipt = json.loads((trial / "worker-profile.json").read_text())
         assert profile_receipt.get("execution_observation") == producer
         assert profile_receipt.get("native_result_comparison") is (True if compare else None)
+        assert installed_tools == ([
+            ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
+        ] if selected else [])
+        assert ("existing measurement's candidate reference already equals" in worker.feedback_prompt) is selected
+        assert ("submitted_file_set_ref" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
 
     monkeypatch.setattr(run, "run_agent", stop_before_model)
