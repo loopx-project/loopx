@@ -1186,7 +1186,9 @@ class AntigravityAdapter:
                          or (step.get("plannerResponse") or {}).get("response"),
                          (step.get("plannerResponse") or {}).get("thinking"),
                          (step.get("runCommand") or {}).get("combinedOutput"),
-                         (step.get("runCommand") or {}).get("exitCode")) for index, step in current_steps]
+                         (step.get("runCommand") or {}).get("exitCode"))
+                        for index, step in current_steps
+                        if step.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"]
             now = time.monotonic()
             if progress and progress != previous_progress:
                 previous_progress = progress
@@ -1198,6 +1200,7 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+                    self._active_turn_id = None
                     detail = (final.get("errorMessage") or {}).get("error") or {}
                     summary = (detail.get("userErrorMessage") or detail.get("shortError")
                                if isinstance(detail, dict) else str(detail))
