@@ -197,12 +197,13 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("Explore result attachment contains unknown fields");
   }
   requireStringLiteral(row.schema_version, [EXPLORE_RESULT_ATTACHMENT_SCHEMA], "attachment schema");
-  const question = text(row.question, "question", QUESTION_LIMIT);
-  const applicability = text(row.applicability, "applicability", APPLICABILITY_LIMIT);
+  const resolved = {...row, ...questionScope(row, linkedScope)};
+  const question = text(resolved.question, "question", QUESTION_LIMIT);
+  const applicability = text(resolved.applicability, "applicability", APPLICABILITY_LIMIT);
   // Identity is mechanical, never inferred evidence. Exact scoped text, not
   // revision/status/observation, binds successive results to the same question.
-  const node = Object.hasOwn(row, "node_id")
-    ? explicitNodeId(row.node_id)
+  const node = Object.hasOwn(resolved, "node_id")
+    ? explicitNodeId(resolved.node_id)
     : "question_" + createHash("sha256").update(JSON.stringify([question, applicability])).digest("hex");
   if (!Array.isArray(row.evidence_refs) || !row.evidence_refs.length || row.evidence_refs.length > 8) {
     throw new EffectRuntimeRequestError("evidence_refs requires one to eight opaque evidence identifiers");
@@ -270,7 +271,7 @@ function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedS
   return normalizeAttachment({...row, ...questionScope(row, linkedScope), schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
     observation: delta.observed_reality, interpretation: decision, evidence_refs: refs});
 }
-/** Only an explicit reference to the claimed Todo's stored question can reuse scope. */
+/** Reuse only an unambiguous question linked by the claimed Todo. */
 function questionScope(row: JsonObject, value: unknown): JsonObject {
   const question = Object.hasOwn(row, "question"), applicability = Object.hasOwn(row, "applicability");
   if (question && applicability) return {};
@@ -278,14 +279,15 @@ function questionScope(row: JsonObject, value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("Supply both question and applicability, or omit both for a linked question");
   }
   const scope = requireJsonObject(value, "Explore capture requires a canonical linked question scope");
-  const nodeId = explicitNodeId(row.node_id);
+  const nodeId = Object.hasOwn(row, "node_id") ? explicitNodeId(row.node_id) : null;
   const refs = requireStringArray(scope.requested_node_refs, "linked question refs");
   const nodes = Array.isArray(scope.nodes) ? scope.nodes.map(node => requireJsonObject(node, "linked question")) : [];
-  const matches = nodes.filter(node => node.node_id === nodeId && node.node_kind === "question");
-  if (!refs.includes(nodeId) || matches.length !== 1) {
-    throw new EffectRuntimeRequestError("Explore capture requires an existing question linked to this Todo");
+  const matches = nodes.filter(node => typeof node.node_id === "string" && refs.includes(node.node_id)
+    && node.node_kind === "question" && (nodeId === null || node.node_id === nodeId));
+  if (matches.length !== 1) {
+    throw new EffectRuntimeRequestError("Explore capture requires one existing question linked to this Todo; use its node_id when ambiguous");
   }
-  return {question: text(matches[0].title, "question", QUESTION_LIMIT),
+  return {node_id: explicitNodeId(matches[0].node_id), question: text(matches[0].title, "question", QUESTION_LIMIT),
     applicability: text(matches[0].summary, "applicability", APPLICABILITY_LIMIT)};
 }
 export function normalizeExploreResultAttachment(params: JsonObject): JsonObject {

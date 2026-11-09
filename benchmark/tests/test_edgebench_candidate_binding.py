@@ -174,8 +174,7 @@ def test_scoped_read_falls_back_on_truncated_http(case, monkeypatch, capsys):
         thread.start()
         try:
             exit_code = sforge_candidate_binding.main([
-                "--submission-id", "submission-2", "--todo-id", "todo",
-                "--local-finding-id", "finding", "--observation", str(observation),
+                "--submission-id", "submission-2", "--observation", str(observation),
                 "--snapshot", str(snapshot), "--archive", str(archive),
             ])
         finally:
@@ -184,6 +183,59 @@ def test_scoped_read_falls_back_on_truncated_http(case, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 1 and captured.out == ""
     assert "use sforge-submit --result ID --json" in captured.err
+
+
+@pytest.mark.parametrize("matching_revision", [True, False])
+def test_native_read_emits_verified_facts_without_requiring_explore_state(case, matching_revision):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from benchmark.runtime.sforge_native_result import NativeResultScope, read_candidate_measurement
+
+    observation, snapshot, output, _, archive, _ = case
+    task_digest = "a" * 64
+    if matching_revision:
+        for document in (observation, snapshot):
+            _write(document, {**json.loads(document.read_text()), "input_revision": "task:" + task_digest})
+    native = _native_response(archive)
+    native["report"] = {"submission_id": native["submission_id"], "task_id": "task",
+                        "score": -2, "valid": True, "timed_out": False}
+    requests = []
+
+    class ResultRelay(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(native).encode())
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), ResultRelay) as server:
+        scope = NativeResultScope(
+            relay=f"http://127.0.0.1:{server.server_port}/api/v1/feedback/test",
+            run="run", task="task", goal="goal", agent="agent",
+            task_sha256=task_digest, scorer_commit="b" * 40, higher_is_better=True,
+        )
+        thread = Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            result = read_candidate_measurement(
+                scope, native["submission_id"], observation=observation, snapshot=snapshot,
+                archive=archive, generated_files=[("result.json", output)],
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+    assert requests == ["/api/v1/feedback/test/result/submission-2?include_receipt=true"]
+    assert result["native"] == native
+    if matching_revision:
+        measurement = result["native_measurement"]
+        assert measurement["input_revision"] == "task:" + task_digest
+        assert measurement["value"] == -2
+        assert measurement["candidate_ref"] == result["candidate_binding"]["submitted_file_set_ref"]
+        assert result["candidate_binding"]["candidate_ref"] == "archive:" + _digest(archive.read_bytes())
+    else:
+        assert result["native_measurement"] is None
+        assert result["native_measurement_unavailable"] is True
 
 
 @pytest.mark.parametrize(("defect", "diagnostic"), [

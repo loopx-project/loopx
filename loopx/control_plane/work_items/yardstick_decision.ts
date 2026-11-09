@@ -3,7 +3,7 @@
  * Stride's replan-only v2 contract remains unchanged. */
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "../capabilities/explore_evidence_ref.ts";
 import {projectExploreMeasurementFeedback, type ExploreMeasurementFeedback,
   type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
@@ -81,13 +81,13 @@ export function normalizeWorkYardstickCapture(params: JsonObject): WorkYardstick
 }
 function belongsToWork(row: JsonObject, binding: JsonObject): boolean {
   const capture = row.work_yardstick as WorkYardstickCapture | undefined;
-  const source = capture?.binding;
+  const source = jsonObject(row.work_binding) ?? capture?.binding;
   return !!source && source.goal_id === binding.goal_id && source.agent_id === binding.agent_id
     && source.todo_id === binding.todo_id;
 }
 
 function currentFinding(findings: JsonObject[], binding: JsonObject): JsonObject | undefined {
-  return findings.filter(row => belongsToWork(row, binding)).sort((a, b) => {
+  return findings.filter(row => row.work_yardstick !== undefined && belongsToWork(row, binding)).sort((a, b) => {
     // Late delivery reuses the original committed time, not append order.
     const left = parseTodoTimestampMicros(String(a.last_updated_at ?? ""));
     const right = parseTodoTimestampMicros(String(b.last_updated_at ?? ""));
@@ -177,10 +177,13 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   // An earlier target can share the same evaluator profile and work identity.
   // Filter source findings before ranking so its best cannot displace a legal pair.
   const scopedFindings = findings.filter(row => {
+    if (row.node_id !== source.node_id || !belongsToWork(row, params)) return false;
     const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
-    return row.node_id === source.node_id && belongsToWork(row, params) && target !== undefined
-      && target.summary === decision.target.summary && target.scope === decision.target.scope
-      && target.acceptance_ref === decision.target.acceptance_ref;
+    const recordedWork = jsonObject(row.work_binding);
+    if (target === undefined) return recordedWork !== null && row.status === "confirmed";
+    return target.summary === decision.target.summary && target.scope === decision.target.scope
+      && target.acceptance_ref === decision.target.acceptance_ref
+      && (recordedWork === null || row.status === "confirmed");
   });
   const searchComparison = measuredSearchComparison(scopedFindings, decision);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
@@ -191,4 +194,23 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
       ? "Counterevidence is recorded for this scoped proxy. Reassess its use at the next concrete choice; a local screening heuristic cannot veto an informative authoritative check by itself. Preserve accepted correctness, authorization and budget constraints."
       : "Use this current target and scoped yardstick when choosing the next useful action. Proxy fidelity remains unqualified here; preserve accepted constraints and bound confirmation cost.",
     authority: "Recorded method and source references are Agent declarations, not independently verified acceptance or permission. Omission preserves this decision; revise it only when work or evidence changes. No extra Turn, replan or mandatory capture is required."};
+}
+
+/** Project the receipt from the committed evidence prefix, before another Turn. */
+export function projectExploreFindingReceipt(params: JsonObject): JsonObject {
+  const findings = (params.findings ?? []) as JsonObject[];
+  const written = findings.find(row => row.finding_id === params.finding_id && belongsToWork(row, params));
+  if (!written) throw new EffectRuntimeRequestError("Explore receipt requires its committed work finding");
+  const scoped = findings.filter(row => row.node_id === written.node_id && belongsToWork(row, params));
+  const feedback = projectExploreMeasurementFeedback(scoped.filter(row => row.status === "confirmed"));
+  const latest = feedback.filter(group => group.latest.finding_id === written.finding_id);
+  const cue = projectWorkYardstickCue({...params, findings: scoped, measurement_feedback: feedback});
+  const comparison = cue?.search_comparison as ReturnType<typeof measuredSearchComparison> | undefined;
+  const participates = comparison && [comparison.goal, comparison.proxy].some(pair =>
+    pair?.latest.finding_id === written.finding_id || pair?.previous_best.finding_id === written.finding_id);
+  return {
+    measurement_feedback: latest,
+    ...(comparison && (participates || cue?.source_finding_id === written.finding_id)
+      ? {search_comparison: comparison} : {}),
+  };
 }

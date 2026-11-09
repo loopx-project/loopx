@@ -1,4 +1,4 @@
-"""Read one solver-visible native result and bind it to current research evidence.
+"""Read one solver-visible native result and verify its submitted candidate.
 
 This benchmark adapter owns no scoring, admission, Goal mutation, or decision.
 The installed run scope comes from the native runner before the solver starts.
@@ -19,8 +19,6 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 import zlib
-
-from benchmark.runtime.layout import _LOOPX_RUNTIME, _REGISTRY
 
 _SCOPE_FILE = Path("/etc/loopx-benchmark/native-result-scope.json")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
@@ -118,14 +116,8 @@ def read_public_result(scope: NativeResultScope, submission_id: str) -> tuple[in
     return status, value
 
 
-def _measurement(scope, native, submission_id, *, observation, snapshot, archive, generated_files,
-                 todo_id, local_finding_id, registry_path, runtime_root):
+def _measurement(scope, native, submission_id, *, observation, snapshot, archive, generated_files):
     from benchmark.runtime.sforge_candidate_binding import verify_binding
-    from loopx.agent_registry import require_registered_agent_id
-    from loopx.capabilities.explore.result_log import (
-        build_explore_result_projection, explore_result_log_path, load_explore_result_events_strict,
-    )
-    from loopx.control_plane.todos.list_readback import list_goal_todos
 
     receipt, report = native.get("receipt"), native.get("report")
     if not isinstance(receipt, dict) or not isinstance(report, dict):
@@ -137,73 +129,41 @@ def _measurement(scope, native, submission_id, *, observation, snapshot, archive
             or report.get("timed_out") is not False or type(score) not in (int, float)
             or not math.isfinite(score)):
         raise ValueError("The native result is not a valid outcome for this task")
-    require_registered_agent_id(registry_path=registry_path, goal_id=scope.goal, agent_id=scope.agent)
-    read = list_goal_todos(registry_path=registry_path, runtime_root_arg=str(runtime_root),
-                           goal_id=scope.goal, agent_id=scope.agent, role="agent", status="open", todo_id=todo_id)
-    task = read.get("todo")
-    if (read.get("ok") is not True or not isinstance(task, dict) or task.get("todo_id") != todo_id
-            or task.get("status") != "open" or task.get("claimed_by") != scope.agent):
-        raise ValueError("The selected Todo is not available to this worker")
-    events = load_explore_result_events_strict(explore_result_log_path(runtime_root, scope.goal),
-                                              goal_id=scope.goal)
-    history = [row for row in events
-               if row.get("event_kind") == "finding" and row.get("result_id") == local_finding_id]
-    view = build_explore_result_projection(history, goal_id=scope.goal, finding_limit=1)
-    findings = [item for item in view["findings"] if item["status"] == "confirmed"
-                and item["node_id"] in task.get("explore_result_node_refs", [])]
-    if len(findings) != 1:
-        raise ValueError("The local finding is not linked to the selected Todo")
     binding = verify_binding(observation, snapshot, native, archive, generated_files)
-    submitted = binding["submitted_file_set_ref"]
-    uploaded = binding["candidate_ref"]
-    matches = {submitted: [], uploaded: []}
-    for measurement in findings[0].get("measurements", []):
-        candidate_ref = measurement["candidate_ref"]
-        if (candidate_ref in matches and measurement["input_revision"] == binding["input_revision"]
-                and measurement["value"] is not None):
-            matches[candidate_ref].append(measurement)
-    candidate = submitted if matches[submitted] else uploaded
-    local_measurements = matches[candidate]
-    if not local_measurements:
-        raise ValueError("The finding does not measure the submitted candidate")
+    input_revision = "task:" + scope.task_sha256
+    if binding["input_revision"] != input_revision:
+        raise ValueError("The candidate measurement uses a different task revision")
     digest = hashlib.sha256(json.dumps([scope.run, scope.task, submission_id, native],
                                        sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     group = hashlib.sha256(json.dumps([scope.run, scope.task], separators=(",", ":")).encode()).hexdigest()
     return {
-        "todo_id": todo_id,
-        "node_id": findings[0]["node_id"],
-        "local_finding_id": local_finding_id,
-        "binding": binding,
-        "local_measurements": local_measurements,
+        "candidate_binding": binding,
         "native_measurement": {
             "metric": "native_score",
             "unit": "score",
             "value": score,
             "higher_is_better": scope.higher_is_better,
             "comparison_scope": "native:" + group,
-            "input_revision": "task:" + scope.task_sha256,
+            "input_revision": input_revision,
             "evaluation_ref": "sforge:" + scope.scorer_commit,
-            "candidate_ref": candidate,
+            "candidate_ref": binding["submitted_file_set_ref"],
             "evidence_ref": "result:" + digest,
         },
     }
 
 
-def read_candidate_comparison(scope, submission_id, *, observation, snapshot, archive, generated_files,
-                              todo_id, local_finding_id, registry_path=None, runtime_root=None) -> dict:
+def read_candidate_measurement(scope, submission_id, *, observation, snapshot, archive, generated_files) -> dict:
     status, native = read_public_result(scope, submission_id)
-    result = {"native": native, "native_http_status": status, "comparison": None}
+    result = {"native": native, "native_http_status": status, "native_measurement": None}
     if status != 200 or native.get("status") != "completed":
         return result
     try:
-        result["comparison"] = _measurement(
+        result.update(_measurement(
             scope, native, submission_id, observation=observation, snapshot=snapshot, archive=archive,
-            generated_files=generated_files, todo_id=todo_id, local_finding_id=local_finding_id,
-            registry_path=registry_path or Path(_REGISTRY), runtime_root=runtime_root or Path(_LOOPX_RUNTIME),
-        )
+            generated_files=generated_files,
+        ))
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, EOFError, OverflowError,
             tarfile.TarError, zlib.error):
-        # Native feedback remains available even when optional pairing is
-        # unavailable. Do not copy exception paths or evaluator details here.
-        result["comparison_unavailable"] = True
+        # Native feedback remains available when optional attribution fails.
+        result["native_measurement_unavailable"] = True
     return result
