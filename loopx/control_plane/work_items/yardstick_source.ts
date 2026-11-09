@@ -60,4 +60,3 @@ export function validateWorkYardstickContinuation(params: JsonObject): JsonObjec
   const snapshot = committedSourceSnapshot(params, binding);
   return {decision, ...(snapshot === undefined ? {} : {source_snapshot: snapshot})};
 }
-
