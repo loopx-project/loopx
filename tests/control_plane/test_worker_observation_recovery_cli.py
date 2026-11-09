@@ -78,6 +78,15 @@ def _read_capture_fields(reader, *pointers):
     return [entry["value"] for entry in selections]
 
 
+def _read_progressive_poll_fields(runtime, registry, agent, *pointers, record=False):
+    # Keep the emitted navigation: _poll's default is the decoded source.
+    emitted = _poll(runtime, registry, agent, record=record, wire=True)
+    if emitted["schema_version"] == "context_capture_selection_page_v1":
+        emitted = emitted["navigation"]
+    assert emitted["schema_version"] == "context_capture_navigation_v1"
+    return _read_capture_fields(shlex.split(emitted["recovery"]["command"]), *pointers)
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("wire", ["quota", "envelope", "native"])
 @pytest.mark.parametrize("observation", ["recorded", "unreadable", "off"])
@@ -207,9 +216,8 @@ def test_failed_capture_discloses_the_already_recorded_poll(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_canonical_quota_identity_survives_worker_main_and_alias_restart(tmp_path, monkeypatch, provider):
     runtime, registry, count, host = _worker_fixture(tmp_path, monkeypatch, provider)
-    admitted = _poll(runtime, registry, AGENT.upper())
-    identity, action = _read_capture_fields(shlex.split(admitted["recovery"]["command"]),
-        "/agent_identity", "/effective_action")
+    identity, action = _read_progressive_poll_fields(
+        runtime, registry, AGENT.upper(), "/agent_identity", "/effective_action")
     assert identity["agent_id"] == AGENT
     assert action == "autonomous_replan_required"
     first = _run_worker(runtime, registry, count, host, AGENT.upper())
@@ -242,9 +250,8 @@ def test_actual_liveness_poll_keeps_corrupt_receipt_and_original_unknown(tmp_pat
     receipt = receipt_path_for_goal(goal, state)
     for damaged in (b"{broken", b"\xff", b'{"schema_version":"unrecognized"}'):
         receipt.write_bytes(damaged)
-        polled = _poll(runtime, registry, AGENT, record=True)
-        observation_receipt, = _read_capture_fields(
-            shlex.split(polled["recovery"]["command"]), "/host_poll_receipt")
+        observation_receipt, = _read_progressive_poll_fields(
+            runtime, registry, AGENT, "/host_poll_receipt", record=True)
         assert observation_receipt["recorded"] is False
         assert "unreadable" in observation_receipt["error"]
         observation = read_host_worker_observations(goal, state, registry_goal_digest="unavailable", runtime_root=runtime)
