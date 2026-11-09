@@ -197,23 +197,20 @@ def _split_git_paths(output: bytes) -> list[bytes]:
 _GIT_BYTE_PATH_PREFIX = "git-bytes:"
 
 
-def _display_git_path(path: bytes) -> str:
-    """Render a Git pathname without losing its byte identity.
+def _display_git_path(path: bytes) -> tuple[str, bool]:
+    """Return a display string and whether the bytes are not valid UTF-8.
 
-    Valid UTF-8 keeps its normal spelling. A pathname that begins with the
-    reserved prefix is escaped into a disjoint namespace so it cannot be
-    confused with an encoded byte pathname. Invalid UTF-8 is represented by
-    ``repr(bytes)``, which preserves every byte and distinguishes names such as
-    ``lossy-\\xfe.txt`` from the valid UTF-8 name ``lossy-\ufffd.txt``.
+    Valid UTF-8 is returned literally, including names that happen to begin
+    with ``git-bytes:``. Invalid UTF-8 is represented by ``repr(bytes)`` for
+    diagnostics, but the packet must remain not ready because that marker is
+    not a repo-relative pathname consumers can open. The marker preserves
+    distinct names such as ``lossy-\\xfe.txt`` and ``lossy-\xff.txt``.
     """
 
     try:
-        text = path.decode("utf-8")
+        return path.decode("utf-8"), False
     except UnicodeDecodeError:
-        return f"{_GIT_BYTE_PATH_PREFIX}{path!r}"
-    if text.startswith(_GIT_BYTE_PATH_PREFIX):
-        return f"{_GIT_BYTE_PATH_PREFIX}utf8:{text}"
-    return text
+        return f"{_GIT_BYTE_PATH_PREFIX}{path!r}", True
 
 
 def _git_untracked_paths(workspace: Path) -> list[bytes]:
@@ -298,7 +295,9 @@ def _base_snapshot(workspace: Path, base_branch: str) -> dict[str, Any]:
     }
 
 
-def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], bool]:
+def _changed_files(
+    workspace: Path, *, base_branch: str
+) -> tuple[list[str], bool, int]:
     files: list[bytes] = []
     truncated = False
 
@@ -328,7 +327,13 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
             raise RuntimeError(f"git {' '.join(args)} failed")
         add_paths(_split_git_paths(result.stdout))
     add_paths(_git_untracked_paths(workspace))
-    return [_display_git_path(path) for path in files[:20]], truncated
+    displayed: list[str] = []
+    unrepresentable_count = 0
+    for path in files[:20]:
+        display, unrepresentable = _display_git_path(path)
+        displayed.append(display)
+        unrepresentable_count += int(unrepresentable)
+    return displayed, truncated, unrepresentable_count
 
 
 # Caller-validation execution (_run_caller_validation / _require_passed) is
@@ -735,6 +740,7 @@ def build_issue_fix_caller_repo_branch_packet(
     }
     changed_files: list[str] = []
     changed_files_truncated = False
+    changed_files_unrepresentable_count = 0
 
     if execute:
         if not workspace.exists() or not workspace.is_dir():
@@ -790,12 +796,17 @@ def build_issue_fix_caller_repo_branch_packet(
             timeout_seconds=timeout_seconds,
         )
         validation_command_result["executed"] = True
-        changed_files, changed_files_truncated = _changed_files(workspace, base_branch=base)
+        (
+            changed_files,
+            changed_files_truncated,
+            changed_files_unrepresentable_count,
+        ) = _changed_files(workspace, base_branch=base)
 
     review_ready = bool(
         execute
         and validation_command_result.get("passed") is True
         and len(changed_files) > 0
+        and changed_files_unrepresentable_count == 0
     )
     artifact = {
         "schema_version": ISSUE_FIX_CALLER_REPO_BRANCH_ARTIFACT_SCHEMA_VERSION,
@@ -812,6 +823,7 @@ def build_issue_fix_caller_repo_branch_packet(
         "validation": validation_command_result,
         "changed_files": changed_files,
         "changed_files_truncated": changed_files_truncated,
+        "changed_files_unrepresentable_count": changed_files_unrepresentable_count,
         "changed_file_count": len(changed_files),
     }
     packet: dict[str, Any] = {
@@ -842,6 +854,7 @@ def build_issue_fix_caller_repo_branch_packet(
             ),
             "files_changed": changed_files,
             "files_changed_truncated": changed_files_truncated,
+            "files_changed_unrepresentable_count": changed_files_unrepresentable_count,
             "validation_commands": [validation_label],
             "external_issue_comment_performed": False,
             "external_pr_created": False,
@@ -1023,6 +1036,14 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
                 errors.append("changed files must be repo-relative public-safe paths")
     else:
         errors.append("changed_files must be a list")
+    unrepresentable_count = artifact.get("changed_files_unrepresentable_count", 0)
+    if (
+        not isinstance(unrepresentable_count, int)
+        or isinstance(unrepresentable_count, bool)
+        or unrepresentable_count < 0
+        or (isinstance(files, list) and unrepresentable_count > len(files))
+    ):
+        errors.append("changed_files_unrepresentable_count must be a bounded count")
     review = (
         packet.get("review_packet")
         if isinstance(packet.get("review_packet"), Mapping)
@@ -1031,6 +1052,17 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
     for key in ("external_issue_comment_performed", "external_pr_created", "merge_performed"):
         if review.get(key) is not False:
             errors.append(f"review packet {key} must be false")
+    review_unrepresentable_count = review.get(
+        "files_changed_unrepresentable_count", 0
+    )
+    if (
+        not isinstance(review_unrepresentable_count, int)
+        or isinstance(review_unrepresentable_count, bool)
+        or review_unrepresentable_count < 0
+    ):
+        errors.append("files_changed_unrepresentable_count must be a non-negative count")
+    if unrepresentable_count and review.get("ready") is True:
+        errors.append("review packet is not ready while changed paths are unrepresentable")
     return {
         "schema_version": "issue_fix_caller_repo_branch_validation_v0",
         "ok": not errors,

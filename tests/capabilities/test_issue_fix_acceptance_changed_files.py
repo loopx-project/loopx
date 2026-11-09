@@ -46,7 +46,7 @@ def test_untracked_names_keep_the_bytes_git_reported(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted(names)
@@ -66,7 +66,7 @@ def test_committed_staged_and_untracked_sources_agree(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "add", staged], check=True)
     (repo / untracked).write_text("untracked\n", encoding="utf-8")
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted([committed, staged, untracked])
@@ -78,7 +78,7 @@ def test_a_rename_reports_only_the_new_name(tmp_path: Path) -> None:
         ["git", "-C", str(repo), "mv", "tracked.txt", "renamed.txt"], check=True
     )
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert files == ["renamed.txt"], "the rename source leaked into the change list"
@@ -90,7 +90,7 @@ def test_more_than_twenty_changes_stop_at_the_limit(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is True
     assert len(files) == 20
@@ -128,7 +128,7 @@ def test_a_carriage_return_is_not_folded_into_a_newline(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted(names)
@@ -146,7 +146,7 @@ def test_committed_and_staged_carriage_return_names_survive(tmp_path: Path) -> N
     (repo / staged).write_text("staged\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", staged], check=True)
 
-    files, truncated = _changed_files(repo, base_branch="main")
+    files, truncated, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted([committed, staged])
@@ -222,13 +222,17 @@ def test_packet_keeps_every_line_ending_variant_from_four_sources(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only")
-def test_packet_distinguishes_byte_paths_from_a_real_replacement_character(
+def test_packet_keeps_literal_prefix_and_refuses_byte_paths(
     tmp_path: Path,
 ) -> None:
     repo = _repository(tmp_path)
+    literal_prefix = "git-bytes:report.txt"
     replacement = "lossy-\ufffd.txt"
-    (repo / replacement).write_text("valid replacement\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", replacement], check=True)
+    for name in (literal_prefix, replacement):
+        (repo / name).write_text("valid UTF-8\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", literal_prefix, replacement], check=True
+    )
 
     fe_blob = subprocess.run(
         ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
@@ -258,18 +262,25 @@ def test_packet_distinguishes_byte_paths_from_a_real_replacement_character(
         validation_command=shlex.join([sys.executable, "-c", "print(1)"]),
         execute=True,
     )
+    branch = packet["caller_repo_branch"]
+    review = packet["review_packet"]
     expected = [
+        literal_prefix,
         replacement,
         "git-bytes:" + repr(b"lossy-\xfe.txt"),
         "git-bytes:" + repr(b"lossy-\xff.txt"),
     ]
 
-    assert len([record for record in raw.split(b"\0") if record]) == 3
-    assert packet["caller_repo_branch"]["changed_file_count"] == 3
-    assert len(set(packet["caller_repo_branch"]["changed_files"])) == 3
-    assert set(packet["caller_repo_branch"]["changed_files"]) == set(expected)
-    assert set(packet["review_packet"]["files_changed"]) == set(expected)
-    assert packet["review_packet"]["ready"] is True
+    assert len([record for record in raw.split(b"\0") if record]) == 4
+    assert branch["changed_file_count"] == 4
+    assert branch["changed_files_unrepresentable_count"] == 2
+    assert len(set(branch["changed_files"])) == 4
+    assert set(branch["changed_files"]) == set(expected)
+    assert literal_prefix in branch["changed_files"]
+    assert f"git-bytes:utf8:{literal_prefix}" not in branch["changed_files"]
+    assert set(review["files_changed"]) == set(expected)
+    assert review["files_changed_unrepresentable_count"] == 2
+    assert review["ready"] is False
 
 
 @pytest.mark.skipif(os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only")
@@ -289,8 +300,12 @@ def test_untracked_byte_paths_keep_three_distinct_records(
 
     monkeypatch.setattr(acceptance_loop, "_run_git_paths", fake_run_git_paths)
     paths = acceptance_loop._git_untracked_paths(repo)
-    files, truncated = _changed_files(repo, base_branch="main")
-    displayed = [acceptance_loop._display_git_path(path) for path in paths]
+    files, truncated, unrepresentable_count = _changed_files(
+        repo, base_branch="main"
+    )
+    displayed = [
+        acceptance_loop._display_git_path(path)[0] for path in paths
+    ]
 
     assert paths == [
         b"lossy-\xef\xbf\xbd.txt",
@@ -298,6 +313,7 @@ def test_untracked_byte_paths_keep_three_distinct_records(
         b"lossy-\xff.txt",
     ]
     assert truncated is False
+    assert unrepresentable_count == 2
     assert files == displayed
     assert displayed[0] == "lossy-\ufffd.txt"
     assert len(set(displayed)) == 3

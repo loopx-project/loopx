@@ -56,6 +56,12 @@ branch is no longer present. The command never refreshes remote refs
 implicitly; callers that need new remote evidence must fetch and reconcile it
 explicitly. It does not expose the local repo path, validation stdout or stderr,
 raw issue body/comment content, external remotes, or raw git output.
+Git pathnames that are valid UTF-8 are preserved literally. A pathname
+with invalid UTF-8 is shown only as a `git-bytes:<repr(bytes)>` diagnostic;
+the artifact records `changed_files_unrepresentable_count`, and
+`review_packet.ready` stays false because that diagnostic is not an
+openable repo-relative UTF-8 pathname. Reviewers must inspect the local
+checkout before proceeding.
 Without `--execute`, the command is a dry-run plan and does not inspect or
 modify the local repository.
 
