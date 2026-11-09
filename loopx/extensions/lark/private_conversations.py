@@ -78,9 +78,19 @@ class PrivateUnsupportedMediaHistory:
         self._location_cache: tuple[Path, tuple[int, ...], dict[str, list[Path]]] | None = None
 
     def _locations(self, root: Path, sid: str) -> list[Path]:
+        complete = True
+
+        def read_receipt(path: Path) -> dict[str, Any]:
+            try:
+                return _read_json(path)
+            except UnicodeDecodeError:
+                return {}
+
         def locate(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
-            # An unreadable journal must not seed an unchanged-file observation.
+            nonlocal complete
+            # Keep valid locators, but retry unreadable receipts on the next scan.
             if row.get("schema_version") != "lark_private_chat_delivery_v0":
+                complete = False
                 return None
             return {"media_session": row.get("session_id") if _unsupported_media_label(row) else None}
 
@@ -94,14 +104,14 @@ class PrivateUnsupportedMediaHistory:
                 return cached[2].get(sid, [])
             paths = (path for path in root.glob("*.json") if re.fullmatch(r"[a-f0-9]{24}", path.stem))
             locations: dict[str, list[Path]] = {}
-            for path, view in self._discovery.rows(root, paths, read=_read_json, project=locate):
+            for path, view in self._discovery.rows(root, paths, read=read_receipt, project=locate):
                 session_id = view.get("media_session")
                 if isinstance(session_id, str):
                     locations.setdefault(session_id, []).append(path)
             # All production journal publications are atomic replacements.
             # Cache only the locator list, never a selected receipt or grant.
             try:
-                if stamp is not None and file_change_fingerprint(root) == stamp:
+                if complete and stamp is not None and file_change_fingerprint(root) == stamp:
                     self._location_cache = (root, stamp, locations)
             except OSError:
                 pass

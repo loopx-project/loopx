@@ -5061,6 +5061,61 @@ def test_bound_app_history_keeps_original_unsupported_media_without_a_turn(ordin
         runtime.close()
 
 
+def test_bound_app_history_isolates_unreadable_media_receipts_and_recovers(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    request = ordinary[3]
+    histories = {}
+    try:
+        for profile, kind in (("steward-app", "audio"), ("notes-app", "file")):
+            event = provider.event(profile, f"{profile}-message", f"Original {profile} text")
+            assert transport.admit(profile, event)["status"] == "durably_accepted"
+            original = next(row for row in transport.core.pending() if row.get("message") == event["content"])
+            sid = original["session_id"]
+            runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+            media = provider.event(profile, f"{profile}-unsupported", "", kind=kind)
+            assert transport.admit(profile, media)["status"] == "command_recorded"
+            record = next(row for row in transport.core.pending()
+                          if row.get("session_id") == sid and row.get("command") == "unsupported")
+            histories[profile] = (sid, record["binding_id"], record["request_ref"])
+
+        def view(profile):
+            sid, binding, _ = histories[profile]
+            snapshot_status, snapshot = request(f"/api/chat/sessions/{sid}?message_limit=10")
+            index_status, index = request(f"/api/chat/sessions?conversation_binding_id={binding}")
+            assert (snapshot_status, index_status) == (200, 200)
+            assert snapshot["session"]["transcript_revision"] == index["sessions"][0]["transcript_revision"]
+            return snapshot["messages"], snapshot["session"]["transcript_revision"]
+
+        good = view("steward-app")
+        foreign = view("notes-app")
+        assert sum("飞书音频" in row["text"] for row in good[0]) == 1
+        assert sum("飞书文件" in row["text"] for row in foreign[0]) == 1
+        assert not any("飞书文件" in row["text"] for row in good[0])
+        bad_path = transport.root / f"{histories['notes-app'][2]}.json"
+        original_bytes = bad_path.read_bytes()
+        temporary = bad_path.with_suffix(".corrupt")
+        temporary.write_bytes(bytes([0xff, 0xfe]))
+        temporary.replace(bad_path)
+
+        # A broken optional row must neither poison another binding nor erase
+        # the affected binding's canonical text. Its own notice stays absent.
+        assert view("steward-app") == good
+        damaged, damaged_revision = view("notes-app")
+        assert damaged == store.messages(histories["notes-app"][0])
+        assert damaged_revision != foreign[1]
+        assert bad_path.read_bytes() == bytes([0xff, 0xfe])
+
+        # Recover even without a directory generation change after the bad
+        # read. An incomplete scan cannot be retained as complete.
+        bad_path.write_bytes(original_bytes)
+        assert view("notes-app") == foreign
+        assert view("steward-app") == good
+        assert not provider.writes
+        assert sum(json.loads(line)["method"] == "turn/start" for line in ordinary[-3].read_text().splitlines()) == 2
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:
