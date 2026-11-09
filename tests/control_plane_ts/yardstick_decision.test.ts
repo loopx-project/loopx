@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture,
+import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture, projectWorkYardstickPresentation,
   validateWorkYardstickContinuation, projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
@@ -257,4 +257,10 @@ test("history readback preserves scoped declarations and rejects foreign source 
   assert.throws(() => parseExploreHistoryPage({...page, items: [{...row, evidence_refs: []}]}, "research"), /counterevidence/);
   assert.deepEqual(normalizeWorkYardstickDecision(decision, [...finding.evidence_refs, ...Array.from({length: 12}, (_, i) => `result:extra-${i}`)]), decision,
     "The bounded counterevidence list does not shrink Explore's finding evidence allowance");
+  const internal = {...finding.work_yardstick,
+    source_snapshot: {event_count: 3, event_ids_sha256: "a".repeat(64)}};
+  assert.deepEqual(normalizeWorkYardstickCapture({capture: internal}).source_snapshot, internal.source_snapshot);
+  assert.deepEqual(projectWorkYardstickPresentation({capture: internal}), finding.work_yardstick,
+    "Independently installed presentation readers retain the original v0 capture fields");
+  assert.throws(() => projectWorkYardstickPresentation({capture: internal, goal_id: "foreign"}), /cross Goal/);
 });

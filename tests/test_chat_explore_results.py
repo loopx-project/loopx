@@ -247,3 +247,42 @@ def test_saved_findings_survive_unavailable_task_associations(tmp_path, monkeypa
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provider):
+    from tests.control_plane.test_work_yardstick_cli import (
+        setup, attachment, refresh, GOAL_ID, AGENT_ID, TODO_ID,
+    )
+    project, runtime, registry = setup(tmp_path, active=True, provider=provider)
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(attachment()))
+    receipt = refresh(project, runtime, registry, "presentation-source", source)
+    assert receipt["explore_result_delivery"]["ok"]
+    log = explore_result_log_path(runtime, GOAL_ID)
+    original = log.read_bytes()
+    records = [json.loads(line) for line in original.splitlines()]
+    capture = next(row["work_yardstick"] for row in records if "work_yardstick" in row)
+    assert "source_snapshot" in capture
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.runtime_root = registry, str(runtime), runtime
+    server.verbose = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
+    try:
+        for suffix in ("", "&view=history"):
+            with urlopen(base + suffix) as response:
+                page = json.load(response)
+            public = next(row for row in page["items"] if "work_yardstick" in row)
+            # Installed readers decode precisely these two capture fields.
+            assert set(public["work_yardstick"]) == {"decision", "binding"}
+            assert public["work_yardstick"] == {key: capture[key] for key in ("decision", "binding")}
+            assert public["work_yardstick"]["binding"]["todo_id"] == TODO_ID
+            assert public["work_yardstick"]["binding"]["agent_id"] == AGENT_ID
+            assert public["evidence_refs"] == attachment()["evidence_refs"]
+        assert log.read_bytes() == original
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
