@@ -3,9 +3,58 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
+
+
+def attach_quota_settlement_guidance(
+    payload: dict[str, object], *, registry_path: Path, runtime_root: Path | None,
+) -> None:
+    # Attach only to the plan chosen by recovery, before model capture/rendering.
+    contract = payload.get("interaction_contract")
+    cli = contract.get("cli_channel") if isinstance(contract, Mapping) else None
+    if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
+        from ..capabilities.explore.turn_context import project_settlement_attachment
+
+        cli["settlement_plan"] = project_settlement_attachment(
+            cli["settlement_plan"], registry_path=registry_path, runtime_root=runtime_root,
+        )
+
+
+def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, object]:
+    """Select existing scheduling and recovery facts; do not decide a wake here."""
+    def select(source: object, *keys: str) -> dict[str, object]:
+        return {key: source[key] for key in keys if key in source} if isinstance(source, Mapping) else {}
+
+    view = select(
+        payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
+        "error", "error_code", "reason", "status", "recommended_action", "effective_action",
+    )
+    if payload.get("ok") is not True:
+        return view
+    contract = select(payload.get("interaction_contract"), "agent_channel")
+    view["interaction_contract"] = {"agent_channel": select(contract.get("agent_channel"), "must_attempt")}
+    hint = select(payload.get("scheduler_hint"), "action", "cadence_class", "reason")
+    if isinstance(source := payload.get("scheduler_hint"), Mapping):
+        for key, field in (
+            ("unchanged_poll", "local_scheduler"),
+            ("reset_policy", "reset_token"),
+            ("cold_path_detail", "local_scheduler"),
+        ):
+            if key in source:
+                hint[key] = select(source[key], field)
+    view["scheduler_hint"] = hint
+    for key, fields in (
+        ("selected_todo", ("todo_id",)),
+        ("agent_identity", ("agent_id",)),
+        ("autonomous_replan_obligation", ("required", "obligation_id", "agent_id", "resolution_mode")),
+        ("heartbeat_receipt", ("settlement_identity",)),
+    ):
+        if key in payload:
+            view[key] = select(payload[key], *fields)
+    return view
 
 
 def _quota_renderer(
