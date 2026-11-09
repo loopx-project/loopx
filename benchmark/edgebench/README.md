@@ -426,10 +426,21 @@ command checks the uploaded archive hash and compares the complete set of
 file paths and bytes without unpacking files onto disk. It supports up to 32
 submitted files in an ordinary gzip tar, with compressed and expanded limits
 of 64 MiB each. An absent receipt, unsupported archive or disagreement gives
-a nonzero exit without a candidate reference. When both scopes are proven,
-attach the returned `candidate_ref` to the local and native measurements
-and retain their separate input revisions, evaluator references and evidence.
-The command performs no network request or evaluation.
+a nonzero exit without a candidate reference. The command performs no
+network request or evaluation.
+
+When a pre-submit measurement already used the fingerprint of the exact
+submitted file set, match it to `submitted_file_set_ref` and use that reference
+on the native measurement. It uses the same ordered path-and-SHA-256 digest as
+the probe pins, over every submitted file, including generated outputs. A probe
+that pins exactly those files can use its `candidate_sha256` with the
+`candidate:` prefix before the upload exists. A probe-only fingerprint
+covering extra fixtures or omitting generated output is not interchangeable
+with the submitted fingerprint. This reference covers file paths and contents;
+keep packaging or runtime conditions separate if they affect the result. For
+new pairs based on retained upload bytes,
+`candidate_ref` still names the exact archive. Keep each measurement's own
+input revision, evaluator and evidence; earlier measurements stay as recorded.
 
 For offline diagnosis with the same retained artifacts, use
 `python -m benchmark.runtime.sforge_candidate_binding` from the pinned runner.

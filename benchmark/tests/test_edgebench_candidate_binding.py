@@ -104,6 +104,42 @@ def test_matches_probe_pins_and_generated_bytes_to_the_exact_native_request(case
     assert proof["submission_id"] == "submission-2"
 
 
+def test_full_file_set_matches_preupload_pins_across_distinct_uploads(case, tmp_path):
+    _, snapshot, output, files, archive, result = case
+    prepared = tmp_path / "prepared"
+    prepared.mkdir()
+    for name, data in files:
+        (prepared / name).write_bytes(data)
+    before_upload, _ = candidate_snapshot(
+        [prepared / name for name, _ in files], prepared
+    )
+
+    def bind_upload():
+        _write(result, _native_response(archive))
+        response = _bind(case)
+        assert response.returncode == 0, response.stderr
+        return json.loads(response.stdout)
+
+    first = bind_upload()
+    assert first["submitted_file_set_ref"] == "candidate:" + before_upload
+    assert first["submitted_file_set_ref"] != first["probe_candidate_ref"]
+
+    _tar(archive, list(reversed(files)))
+    reordered = bind_upload()
+    assert reordered["candidate_ref"] != first["candidate_ref"]
+    assert reordered["submitted_file_set_ref"] == first["submitted_file_set_ref"]
+
+    output.write_bytes(b'{"answer":3}')
+    (prepared / "result.json").write_bytes(output.read_bytes())
+    changed, pins = candidate_snapshot([prepared / name for name, _ in files], prepared)
+    _write(snapshot, {**json.loads(snapshot.read_text()), "files": pins})
+    _tar(archive, [files[0], ("result.json", output.read_bytes())])
+    updated = bind_upload()
+    assert updated["probe_candidate_ref"] == first["probe_candidate_ref"]
+    assert updated["submitted_file_set_ref"] == "candidate:" + changed
+    assert updated["submitted_file_set_ref"] != first["submitted_file_set_ref"]
+
+
 @pytest.mark.parametrize(("defect", "diagnostic"), [
     ("archive_swapped", "native source receipt"),
     ("archive_content", "differ from the sealed snapshot"),
