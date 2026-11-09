@@ -2,7 +2,7 @@ import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_prep
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, successorReplanReadSelection, type ReusableExactBody} from "./progressive_context.ts";
-import {withComposedCliSettlement} from "./settlement_plan.ts";
+import {admittedCliSettlementChannel} from "./settlement_plan.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
@@ -45,6 +45,20 @@ export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3"
 // Single owner for the should-run artifact path a child brief points at, so the
 // legacy field token stays inside this module's retirement budget.
 export const QUOTA_GOAL_BOUNDARY_ARTIFACT = "quota_should_run.goal_boundary";
+
+/** Complete quota composition and capability binding share one settlement projection. */
+export function withComposedCliSettlement(source: JsonObject): JsonObject {
+  if (source.ok !== true || source.effective_action !== EffectiveAction.NORMAL_RUN
+      || source.normal_delivery_allowed !== true || jsonObject(source.replan_action_packet)?.obligation_id) return source;
+  const interaction = jsonObject(source.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel);
+  if (!interaction || !cli) return source;
+  const composed = admittedCliSettlementChannel(
+    cli, jsonObject(source.heartbeat_receipt), jsonObject(source.selected_todo)?.todo_id,
+    jsonObject(source.goal_boundary)?.handoff_mode === "soft_claim",
+  );
+  return composed === cli ? source : {...source, interaction_contract: {...interaction, cli_channel: composed}};
+}
 
 export const SCHEDULER_QUOTA_IDENTITY_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
 

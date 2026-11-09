@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import copy
+from pathlib import Path
 import shlex
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, REPO_ROOT, _initialize_fixture_authority,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, REPO_ROOT, _heartbeat_receipt_count, _initialize_fixture_authority,
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
 
@@ -207,6 +208,139 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
     from loopx.rollout_event_log import rollout_event_log_path
     events = [json.loads(line) for line in rollout_event_log_path(runtime, GOAL_ID).read_text().splitlines()]
     assert sum(row.get("event_kind") == "quota_should_run" for row in events) == 1
+
+
+def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, progressive, *, claim_after_guard):
+    from test_codex_context_lifecycle import setup
+
+    journal = tmp_path / "journal"
+    journal.mkdir(mode=0o700)
+    setup(journal, monkeypatch)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+
+    def guard(directory):
+        rc, nav = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+            "--turn-instance-id", TURN_ID, "--context-delivery", progressive, "--decision-output-dir", str(directory),
+            "--codex-context-dir", str(journal), cwd=project)
+        assert rc == 0 and nav["ok"], nav
+        return nav, json.loads((directory / "decision.json").read_bytes())
+
+    if claim_after_guard:
+        _, before = guard(tmp_path / "before-claim")
+        cli = before["interaction_contract"]["cli_channel"]
+        assert cli["execution_preparation"]["state"] == "claim_required"
+        assert not before["normal_delivery_allowed"]
+        assert (cli.get("settlement_plan") or {}).get("schema_version") != "quota_settlement_plan_v2"
+        assert before["heartbeat_receipt"]["turn_instance_id"] == TURN_ID
+
+    rc, claimed = _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)
+    assert rc == 0, claimed
+    nav, original = guard(tmp_path / "capture")
+    if claim_after_guard:
+        receipt = original["heartbeat_receipt"]
+        assert receipt["status"] == "upgraded" and receipt["closeout_required"]
+        assert receipt["turn_instance_id"] == TURN_ID and receipt.get("settlement_binding_owed") is not True
+    return nav, original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("case", ["combined", "after_claim", "after_claim_off", "interrupted"])
+def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monkeypatch, provider, case):
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    off = case == "after_claim_off"
+    guard, original = _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry,
+        "off" if off else "on", claim_after_guard=case.startswith("after_claim"))
+    cli = original["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
+    identity = original["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"] == identity
+    assert cli["execution_preparation"]["state"] == "ready"
+    validate, writeback, spend, terminal = plan["ordered_steps"]
+    assert validate["command_condition"] == "todo_deliverable_complete"
+    assert terminal["conditional"] is True and terminal["owner"] == "agent"
+    if not off:
+        assert plan["schema_version"] == "quota_settlement_plan_v2"
+        assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
+        assert spend["owner"] == "runtime" and "command_template" not in spend
+        assert cli["next_cli_actions"] == [writeback["command_template"]]
+        _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
+        projected = json.loads(Path(recovery["path"]).read_bytes())
+        assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+        if case in {"combined", "after_claim"}:
+            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+            command, pages = guard["first_read_command"], []
+            while command:
+                words = shlex.split(command)
+                rc, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+                assert rc == 0 and page["ok"] and page["offset"] == sum(len(body.encode()) for body in pages)
+                pages.append(page["content"])
+                command = page.get("next_command")
+            values = selected_context_values("".join(pages))
+            cli_path = "/interaction_contract/cli_channel"
+            assert cli_path + "/next_cli_actions" not in values
+            assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
+    else:
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
+        assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
+        assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
+        assert spend["owner"] == "agent"
+
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verified an intermediate result. The original work remains open."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The scoped result needed verification.",
+                       "observed_reality": "The independently checked result advances the current route.",
+                       "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
+    }))
+    command = writeback["semantic_closeout_command_template"]
+    for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
+        command = command.replace(key, value)
+    command += " --no-global-sync --suppress-external-sinks"
+    if case == "interrupted":
+        from contextlib import chdir, redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from loopx.cli import main
+        from loopx.cli_commands import refresh_settlement
+
+        def fail_child(argv, **kwargs):
+            assert "spend-slot" in argv and identity["turn_instance_id"] in argv
+            raise OSError("fixture child unavailable before debit")
+
+        stdout = StringIO()
+        with monkeypatch.context() as fault, chdir(project), redirect_stdout(stdout):
+            fault.setattr(refresh_settlement, "subprocess", SimpleNamespace(
+                run=fail_child, TimeoutExpired=subprocess.TimeoutExpired))
+            assert main(shlex.split(command)[1:]) != 0
+        failed = json.loads(stdout.getvalue())
+        assert failed["appended"] and failed["settlement_identity"] == identity, failed
+        assert failed["settlement_progress"]["state"] == "spend_required" and _spend_run_count(runtime) == 0
+        owed = failed["settlement_owed"]
+        assert owed["effect_id"] == identity["effect_id"] and owed["kind"] == "quota_spend"
+        rc, result = _run_generated_cli(owed["command"], registry_path=registry, cwd=project)
+    else:
+        rc, result = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and result["ok"] and result["settlement_identity"] == identity, result
+    if off:
+        assert result["settlement_owed"]["kind"] == "quota_spend" and _spend_run_count(runtime) == 0
+        rc, result = _run_generated_cli(spend["command_template"], registry_path=registry, cwd=project)
+        assert rc == 0 and result["ok"], result
+    assert result["settlement_progress"]["state"] == "settled"
+    assert result["settlement_identity"] == identity
+    # Claim re-entry appends the readiness upgrade under the original Turn.
+    expected_admission_events = 2 if case.startswith("after_claim") else 1
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == expected_admission_events
+    assert _spend_run_count(runtime) == 1
+    rc, replay = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replay["settlement_progress"]["state"] == "settled", replay
+    assert replay["idempotent_replay"] and _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -2,8 +2,9 @@
  * This is a projection, not a validation, lease or receipt authorization. */
 import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
-  type SettlementPlan, type SettlementStep,
+  SETTLEMENT_PLAN_SCHEMA_VERSION, type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
+import {isDeepStrictEqual} from "node:util";
 import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
 import {jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
@@ -11,55 +12,71 @@ import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {contextProjectionChanges} from "./diagnostic_projection.ts";
 
 export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
 
-/** Current complete-contract caller of the shipped refresh/spend adapter.
- * Historical/manual plans keep v1. This changes presentation and command
- * ownership, never admission, validation, accounting or recovery authority. */
-export function composedCliSettlementPlan(plan: JsonObject): JsonObject | null {
-  if (plan.schema_version !== "quota_settlement_plan_v1" || !Array.isArray(plan.ordered_steps)
-      || !plan.ordered_steps.every(step => step !== null && typeof step === "object" && !Array.isArray(step))) return null;
-  const steps = plan.ordered_steps as JsonObject[];
-  const writeback = steps.find(step => step.kind === "durable_writeback");
-  const spend = steps.find(step => step.kind === "quota_spend");
-  if (!writeback || !spend || writeback.owner !== "agent" || spend.owner !== "agent"
-      || typeof writeback.command_template !== "string" || typeof spend.command_template !== "string") return null;
+/** A transport projection over the existing plan, never a new settlement identity. */
+export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
+  const plan = jsonObject(cli.settlement_plan), actions = cli.next_cli_actions;
+  if (plan?.schema_version !== SETTLEMENT_PLAN_SCHEMA_VERSION || !Array.isArray(plan.ordered_steps)
+      || !Array.isArray(actions)) return cli;
+  const steps = plan.ordered_steps.map(jsonObject);
+  if (steps.some(step => !step)) return cli;
+  const writebacks = steps.filter(step => step?.kind === "durable_writeback");
+  const spends = steps.filter(step => step?.kind === "quota_spend");
+  const [writeback] = writebacks, [spend] = spends;
+  if (writebacks.length !== 1 || spends.length !== 1 || !writeback || !spend
+      || steps.indexOf(writeback) >= steps.indexOf(spend)
+      || writeback.owner !== "agent" || spend.owner !== "agent"
+      || typeof writeback.command_template !== "string" || typeof spend.command_template !== "string"
+      || typeof writeback.precondition !== "string" || typeof spend.precondition !== "string") return cli;
+  const writebackCommand = writeback.command_template, spendCommand = spend.command_template;
+  if (actions.filter(command => command === writebackCommand).length !== 1
+      || actions.filter(command => command === spendCommand).length !== 1
+      || actions.indexOf(writebackCommand) >= actions.indexOf(spendCommand)) return cli;
   const composed = (command: string) => command + " --settle-turn --settlement-receipt";
-  return {...plan, schema_version: COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION, ordered_steps: steps.map(step => {
-    if (step === writeback) return {...step, command_template: composed(step.command_template as string),
-      ...(typeof step.semantic_closeout_command_template === "string"
-        ? {semantic_closeout_command_template: composed(step.semantic_closeout_command_template)} : {}),
-      precondition: step.precondition + " The command executes the canonical owed quota step and reads back its exact receipts. " +
-        "After settled success do not run another spend; after a partial failure follow only the returned settlement_owed for this original identity."};
-    if (step === spend) {
-      const {command_template: _manualCommand, ...receiptStep} = step;
-      return {...receiptStep, owner: "runtime", precondition: step.precondition +
-        "; executed by refresh-state --settle-turn. On failure use only its canonical settlement_owed command; never infer a debit from transport success."};
-    }
-    return step;
-  })};
+  const newWriteback = {...writeback, command_template: composed(writebackCommand),
+    ...(typeof writeback.semantic_closeout_command_template === "string"
+      ? {semantic_closeout_command_template: composed(writeback.semantic_closeout_command_template)} : {})};
+  const {command_template: _manualCommand, ...receiptStep} = spend;
+  const newSpend = {...receiptStep, owner: "runtime", precondition: spend.precondition +
+    ". The writeback command runs this step and returns its exact receipt. " +
+    "After a partial failure follow only settlement_owed for this Turn. After settlement do not run another spend."};
+  return {...cli, settlement_plan: {...plan, schema_version: COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION,
+    ordered_steps: steps.map(step => step === writeback ? newWriteback : step === spend ? newSpend : step)},
+  next_cli_actions: actions.filter(command => command !== spendCommand)
+    .map(command => command === writebackCommand ? newWriteback.command_template : command)};
 }
 
-/** Project the same ordinary CLI settlement for both capability binding and capture. */
-export function withComposedCliSettlement(source: JsonObject): JsonObject {
-  if (jsonObject(source.replan_action_packet)?.obligation_id) return source;
-  const interaction = jsonObject(source.interaction_contract);
-  const cli = jsonObject(interaction?.cli_channel);
-  const plan = jsonObject(cli?.settlement_plan);
-  if (!interaction || !cli || !plan) return source;
-  const composed = composedCliSettlementPlan(plan);
-  if (composed === null) return source;
-  const steps = plan.ordered_steps as JsonObject[];
-  const originalWriteback = steps.find(step => step.kind === "durable_writeback");
-  const originalSpend = steps.find(step => step.kind === "quota_spend");
-  const composedWriteback = (composed.ordered_steps as JsonObject[]).find(step => step.kind === "durable_writeback");
-  return {...source, interaction_contract: {...interaction, cli_channel: {...cli,
-    settlement_plan: composed,
-    next_cli_actions: Array.isArray(cli.next_cli_actions) ? cli.next_cli_actions
-      .filter(command => command !== originalSpend?.command_template)
-      .map(command => command === originalWriteback?.command_template ? composedWriteback!.command_template : command)
-      : cli.next_cli_actions}}};
+export function admittedCliSettlementChannel(
+  cli: JsonObject, receipt: JsonObject | null, todoId: unknown, softClaim = false,
+): JsonObject {
+  const preparation = jsonObject(cli.execution_preparation);
+  const identity = jsonObject(jsonObject(cli.settlement_plan)?.identity);
+  const ready = preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION
+    && preparation.state === "ready" && preparation.delivery_allowed === true
+    && preparation.todo_id === identity?.todo_id && preparation.agent_id === identity?.agent_id;
+  // The soft-claim producer has no lease preparation packet. An explicitly
+  // supplied but invalid packet cannot qualify as this older mode.
+  const prepared = ready || (softClaim && !Object.hasOwn(cli, "execution_preparation"));
+  if (cli.selection_required === true || cli.spend_after_validation !== true
+      || !prepared || receipt?.closeout_required !== true || receipt.settlement_binding_owed === true
+      // Claiming within the original Turn can requalify its receipt.
+      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
+      || !identity || typeof todoId !== "string" || !todoId || todoId !== identity.todo_id
+      || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
+      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return cli;
+  return composedCliSettlementChannel(cli);
+}
+
+/** The heartbeat publisher uses only its current admitted Todo and exact receipt. */
+export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
+  const cli = jsonObject(params.cli);
+  if (!cli) return {};
+  const composed = admittedCliSettlementChannel(cli, jsonObject(params.receipt), params.todo_id);
+  return composed === cli ? {} : contextProjectionChanges(cli, composed);
 }
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {

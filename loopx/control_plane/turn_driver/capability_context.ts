@@ -2,8 +2,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
-import {withComposedCliSettlement} from "../quota/settlement_plan.ts";
-import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
+import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument, withComposedCliSettlement} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
