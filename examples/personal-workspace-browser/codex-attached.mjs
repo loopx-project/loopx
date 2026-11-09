@@ -276,10 +276,11 @@ async function runConversation(browser, uncertain) {
       await page.unroute('**/api/chat/codex-attached?*',delayedSession);
       assert.equal(await panel.getByText('Original result',{exact:true}).count(),0);
       assert.equal(await composer.inputValue(),'第二条会话草稿');
+      let omitAllSessions = false;
       const missingSelection = async route => {
         if (new URL(route.request().url()).searchParams.has('agent_id')) return route.continue();
         const response = await route.fetch(), value = await response.json();
-        await route.fulfill({response,json:{...value,agents:value.agents.filter(row => row.binding_ref !== choices[1])}});
+        await route.fulfill({response,json:{...value,agents:omitAllSessions ? [] : value.agents.filter(row => row.binding_ref !== choices[1])}});
       };
       await page.route('**/api/chat/codex-attached?*',missingSelection);
       await page.reload();
@@ -287,8 +288,17 @@ async function runConversation(browser, uncertain) {
       assert.equal(await sessions.inputValue(),'');
       assert.match(await sessions.locator('option:checked').innerText(),/原会话绑定已变更/);
       assert.equal(await composer.count(),0,'A stale saved choice never falls back to the sole other Session');
+      const missingRetry = panel.getByRole('button',{name:'重新连接',exact:true});
+      await missingRetry.waitFor();
+      omitAllSessions = true;
+      await missingRetry.click();
+      await sessions.waitFor({state:'hidden'});
+      await panel.getByText('正在连接原会话…',{exact:true}).waitFor({state:'hidden'});
+      assert.equal(await missingRetry.count(),1,'Recovery remains available even with no alternative Sessions');
+      assert.equal(await composer.count(),0);
+      assert.equal(new URL(page.url()).searchParams.get('workSession'),choices[1]);
       await page.unroute('**/api/chat/codex-attached?*',missingSelection);
-      await page.reload();
+      await missingRetry.click();
       await panel.getByText('Result: Separate investigation',{exact:true}).waitFor();
       assert.equal(await composer.inputValue(),'第二条会话草稿');
       await sessions.selectOption(choices[0]);
@@ -828,9 +838,33 @@ async function runConversation(browser, uncertain) {
       return null;
     });
     assert.equal(automaticRead,null,'A rejected binding does not poll the original owner again');
-    await page.request.post(new URL('/fixture/restore-binding',url).href);
+    // Rechecking before the owner restores the binding must not remove the
+    // only recovery action when the child reader is unmounted. Keep the exact
+    // selection, withhold its old records and wait for another explicit retry.
+    const originalUrl = page.url();
     await panel.getByRole('button',{name:'重新连接',exact:true}).click();
+    await recoveryDraft.waitFor({state:'hidden'});
+    await panel.getByText('正在连接原会话…',{exact:true}).waitFor({state:'hidden'});
+    await page.setViewportSize({width:1200,height:900});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-first-retry-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-first-retry-narrow.png'),animations:'disabled'});
+    const retry = panel.getByRole('button',{name:'重新连接',exact:true});
+    assert.equal(await retry.count(),1,'An unsuccessful recheck keeps one retry for the selected original Session');
+    assert.equal(page.url(),originalUrl,'An unavailable selection never substitutes another Session');
+    assert.equal(await transcriptRecords.count(),0);
+    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).count(),0);
+    const backgroundRead = await page.waitForRequest(request => request.method() === 'GET'
+      && new URL(request.url()).pathname === attachedPath, {timeout:2100}).catch(error => {
+      if (error.name !== 'TimeoutError') throw error;
+      return null;
+    });
+    assert.equal(backgroundRead,null,'An absent selected binding waits for an explicit retry');
+    await page.request.post(new URL('/fixture/restore-binding',url).href);
+    await retry.focus();
+    await page.keyboard.press('Enter');
     await longDialogue.waitFor();
+    assert.equal(page.url(),originalUrl,'Recovery reopens the same original Session without reloading');
     assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
     assert.equal(await inputCount(),inputsBeforeLanguage,'Rechecking the original binding does not submit the retained draft');
   } finally {
