@@ -221,6 +221,16 @@ class SyntheticPrivateSource:
                         server.chat_store.append_message(sid, role="agent",
                             text="Original full body. " * 1000 if index == 201 else f"Paged bound row {index}")
                     result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command == "history-extra":
+                    server.chat_store.append_message(sid, role="agent", text="A full new original result. " * 150)
+                    result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command == "history-rewrite":
+                    journal = server.chat_store.sessions_root / sid / "messages.jsonl"
+                    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+                    target = next(row for row in rows if row["text"] == "Paged bound row 10")
+                    target["text"] = "Changed earlier original row 10"
+                    journal.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+                    result = {"history_rows": len(rows)}
                 elif command == "inspect":
                     saved = server.chat_store.load_session(sid)
                     result = {"sessions": len(server.chat_store.list_sessions()), "original_thread": saved["upstream_thread_id"],

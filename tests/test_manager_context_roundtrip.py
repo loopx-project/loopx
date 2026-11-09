@@ -1249,6 +1249,67 @@ def test_paged_history_filters_result_io_and_rereads_late_state(frozen_private_r
     assert failed["return_delivery"]["error"] == "delivery_state_unreadable"
 
 
+def _read_history_with_visible_proof(read):
+    rows, digests, cursor = [], [], None
+    while True:
+        payload = read(message_limit=200, **({"message_cursor": cursor} if cursor else {}))
+        page = payload["message_page"]
+        rows.extend(payload["messages"])
+        digests.append(page["visible_page_sha256"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return rows, f"{len(rows)}:{''.join(digests)}"
+
+
+def test_verified_history_suffix_reuses_short_last_page_and_stays_in_order(frozen_private_reply, private_snapshot):
+    store, session, _, _, _, _, source_text, parent = frozen_private_reply
+    sid = session["session_id"]
+    for index in range(204):
+        store.append_message(sid, role="agent", message_id=f"original-{index}", text="A full original body. " * 20)
+    earlier, basis = _read_history_with_visible_proof(private_snapshot)
+    assert earlier[0]["reply_context"]["source_text"] == source_text
+    assert earlier[0]["reply_context"]["parent"]["content"] == parent
+
+    for batch in (7, 3):
+        for index in range(batch):
+            store.append_message(sid, role="agent", text=f"Natural reply {index}. " * 180)
+        suffix = private_snapshot(message_limit=200, known_history=basis)
+        full, expected_basis = _read_history_with_visible_proof(private_snapshot)
+        assert suffix["session"]["session_id"] == sid
+        assert len(suffix["messages"]) == batch
+        assert earlier + suffix["messages"] == full
+        assert suffix["history_resume"]["base"] == basis
+        assert suffix["history_resume"]["next"] == expected_basis
+        earlier, basis = full, expected_basis
+    empty = private_snapshot(message_limit=200, known_history=basis)
+    assert empty["messages"] == []
+    assert empty["history_resume"]["next"] == basis
+
+
+def test_late_delivery_state_invalidates_visible_history_proof(frozen_private_reply, private_snapshot):
+    store, session, turn, *_ = frozen_private_reply
+    sid, rid = session["session_id"], "3" * 64
+    root = _root(store.root.parent)
+    reply = root / "replies" / rid / "conclusion.json"
+    state = reply.with_name("conclusion.delivery.json")
+    _write(root / "roundtrips" / f"{rid}.json", {"request_id": rid, "session_id": sid})
+    _write(reply, {"created_at": "2026-09-14T00:00:00+00:00", "text": "Actual receiver result"})
+    _write(state, {"status": "delivered"})
+    store.append_message(sid, role="agent", origin="manager_followup",
+        message_id="handoff." + _hash([rid, "conclusion"]), turn_id=turn["turn_id"], text="Actual receiver result")
+    rows, basis = _read_history_with_visible_proof(private_snapshot)
+    assert rows[-1]["return_delivery"]["status"] == "delivered"
+    journal = store.sessions_root / sid / "messages.jsonl"
+    before = journal.read_bytes()
+    _write(state, {"status": "verification_required", "error": "provider_delivery_unverified"})
+    assert private_snapshot(message_limit=200, known_history=basis) == {
+        "ok": True, "schema_version": "loopx_chat_history_resume_v1", "status": "restart",
+    }
+    fresh, new_basis = _read_history_with_visible_proof(private_snapshot)
+    assert new_basis != basis and fresh[-1]["return_delivery"]["status"] == "verification_required"
+    assert journal.read_bytes() == before
+
+
 def test_provider_verification_outage_retries_read_only_without_resend(flow):
     root, registry, store, create = flow
     _, _, receipt = create(True)
