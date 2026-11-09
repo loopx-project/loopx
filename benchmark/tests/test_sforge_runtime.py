@@ -934,7 +934,8 @@ def test_edgebench_native_goal_preserves_task_with_resolved_entry_and_treatment(
         work=SimpleNamespace(agent_query="fixture task"),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
-    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(
+        image_exists=lambda image: True, registration_options=lambda provider: {}))
     def stop_before_solver(**kwargs):
         # Exercise the real adapter at the CLI handoff, including both context
         # modes. SForge must not resume an exited LoopX scheduler.
@@ -1394,7 +1395,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
     def backend(**kwargs):
         assert kwargs['oauth_proxy'] is custom
         assert kwargs.get('docker_host_bridge', False) is bridge
-        return SimpleNamespace(image_exists=lambda image: True)
+        return SimpleNamespace(image_exists=lambda image: True, registration_options=lambda provider: {})
     monkeypatch.setattr(run, 'RecordingDockerBackend', backend)
     def stop_before_solver(**kwargs):
         config = kwargs['config']
@@ -1440,7 +1441,8 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
-    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(
+        image_exists=lambda image: True, registration_options=lambda provider: {}))
     expected_delivery = "on" if context_delivery is None else context_delivery
     def before_solver(**kwargs):
         worker = kwargs["agent"]
@@ -1499,6 +1501,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     backend = SimpleNamespace(image_exists=lambda image: True,
+                              registration_options=lambda provider: {},
                               exec_run=lambda *a, **k: SimpleNamespace(exit_code=0))
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: backend)
 
