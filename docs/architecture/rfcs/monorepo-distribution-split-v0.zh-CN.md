@@ -2544,3 +2544,24 @@ PostgreSQL host/wheel、installed-host、完整成本和 adoption 缺口及全�
 过期而拒绝；由现有 owner 重建后，新 wheel 构建通过。这些是正确性检查，不进行
 成本对照或重跑冻结实验。全部既有验收缺口与负向证据继续开放；新 head 仍需新鲜
 review、CI 与 merge readiness。
+
+
+### 2026-11-09 — 接入前瞻 M2 资格的内核集成
+
+原 #8372 分支接入目标 main `6787fc8d5`，包含 #8433 的前瞻 Dashboard 资格规则。
+内核 runtime `17d85c971` 通过源码和隔离 wheel 各 53 项 Python、十二项 focused
+TypeScript 与类型检查；1,921 个直接对应已跟踪 wheel 条目字节一致。相同六条
+101-Todo 基线／候选源码和候选 wheel × File/SQLite 完整 CLI lifecycle 保留原
+夹具、sum45、原完成时间、完整 scopes、四类收据、一次扣额、重启／拒绝／重放
+及每项两次正常 native exit。真实隔离 PostgreSQL16.15 store391/service11
+零跳过通过；相同的当前 PostgreSQL 来源保护 harness 在 base/head 通过，移除
+primitive 保护的 mutation 则在预期拒绝 oracle 失败。标准 premerge 通过六项
+直接检查和十九项选中检查。本地 runtime 使用 CPython3.13.5；CLI 和 mutation
+资格使用 Node22.22.3，focused 源码及完整 PostgreSQL 套件使用 Node26.0.0。
+初次打包、fixture import 和 mutation snapshot 的准备失败分别保留。
+
+本次验证内核集成正确性，不重跑冻结成本、attribution 或 normal-bytecode
+campaign，不证明 Linux browser 恢复、installed-host、PostgreSQL host/wheel、
+完整边际成本或 model/team adoption。全部历史失败与原验收继续开放；前瞻 M2
+规则不会把历史冻结失败改记为通过。未变 head 的 review、必需验证与新鲜 merge
+readiness 继续分别约束交付。

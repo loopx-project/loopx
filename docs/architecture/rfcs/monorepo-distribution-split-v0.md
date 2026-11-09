@@ -3269,3 +3269,28 @@ frontend bundle refused packaging; rebuilding through its existing owner makes
 the new wheel build pass. These are correctness checks, with no cost comparison
 or rerun of frozen campaigns. All earlier acceptance gaps and negative evidence
 remain open; the changed head needs fresh review, CI and merge readiness.
+
+
+### 2026-11-09 — Kernel integration with the prospective M2 qualification
+
+The original #8372 branch integrates target main `6787fc8d5`, including the
+prospective Dashboard qualification in #8433. Kernel runtime `17d85c971` passes
+53 source and 53 isolated-wheel Python cases, twelve focused TypeScript cases
+and typing. All 1,921 directly corresponding tracked wheel entries match. The
+same six complete 101-Todo base/candidate source and candidate-wheel File/SQLite
+CLI lifecycles retain the fixture, sum45, original completion time, complete
+scopes, four receipts, one debit, restart/refusal/replay and two normal native
+exits per case. Real isolated PostgreSQL16.15 store391/service11 pass without
+skips. The same current PostgreSQL source-protection harness passes base/head;
+a primitive-protection mutation fails its expected-rejection oracle. Standard
+premerge passes six direct and nineteen selected checks. Local runtime checks
+use CPython3.13.5; CLI and mutation qualification use Node22.22.3, while the
+focused source and full PostgreSQL suites use Node26.0.0. Initial packaging,
+fixture-import and mutation-snapshot preparation failures remain distinct.
+
+This qualifies kernel integration correctness. It neither repeats frozen cost,
+attribution or normal-bytecode campaigns nor qualifies Linux browser recovery,
+installed-host, PostgreSQL host/wheel, full marginal-cost or model/team adoption.
+Keep every historical failure and original acceptance open. The prospective M2
+rule does not turn a historical frozen failure into a pass; unchanged-head
+review, required validation and fresh merge readiness still govern delivery.
