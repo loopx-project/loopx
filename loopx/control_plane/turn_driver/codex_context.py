@@ -646,7 +646,7 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
             from .native_context_selection import verified_context_selection
 
             try:
-                observed = verified_context_selection(state, page)
+                observed = verified_context_selection(state, page, defer_incomplete_sections=len(pages) == 1)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 observed = None
             if observed is not None:
