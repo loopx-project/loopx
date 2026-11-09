@@ -2984,3 +2984,38 @@ cost and adoption remain unqualified. Preserve I3 for at least one minor
 release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 PostgreSQL host/wheel and every frozen failure. The original task remains open;
 this checkpoint does not authorize merge or declare the minimal kernel complete.
+
+### 2026-11-09 — Release qualification partition proposal
+
+Two unchanged-head Release Artifacts runs passed the complete 86-scenario
+packaged browser catalog and original companion flows after approximately
+28 minutes, then cancelled during snapshot qualification at the existing
+30-minute job limit. A constructed snapshot is not a qualified snapshot;
+these cancellations and all earlier frozen latency failures remain failures.
+
+The S12 distribution qualification proposal separates package/sdist/installed
+frontend/DSH and snapshot checks from three isolated browser partitions, using
+the existing catalog, partition selector and packaged catalog/team/craft
+commands. Every original scenario and companion remains required; the craft
+command also includes its existing command-palette check. This changes release
+browser concurrency and repeats dependency setup/static checks. It does not
+change job limits, scenario deadlines, M2 thresholds or the six shared Python
+validation lanes. Reduced critical-path time and complete CI cost still require
+measurement on the proposed workflow.
+
+Workers install the same candidate wheel and adopt only the producer's exact
+selected fixture commit/paths. Package, checksum, snapshot and source digests,
+plus the candidate artifact id, bind the final `build` gate to successful
+partition receipts. The gate imports the actual catalog without starting a
+browser and rejects missing/failed/unknown/duplicate/mispartitioned scenarios,
+wrong provenance and incomplete companions before attestation or the existing
+validated-bundle upload. Publication-only recovery retains its successful
+original-build and immutable-asset checks. Local negative-case qualification
+is separate from a complete GitHub runner qualification.
+
+This is a release-pipeline prerequisite for the original kernel proposal;
+no kernel code or performance attribution changes here. Exact-head review,
+required validation and fresh ready=true still govern merge. The original task
+and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, full-cost and adoption gaps
+remain open.

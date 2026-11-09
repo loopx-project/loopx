@@ -2317,3 +2317,31 @@ tracked 条目逐字节匹配源码，十七项源码专用、文档和媒体遗
 保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、PostgreSQL host/wheel 以及每项冻结失败。
 原任务保持开放；本检查点不授权合入，也不宣告最小化内核完成。
+
+### 2026-11-09 — 发行资格分片提案
+
+两次 head 未变的 Release Artifacts 运行在约 28 分钟后通过完整的 86 场景
+packaged 浏览器目录和原 companion 流程，随后在既有 30 分钟 job 总限下于
+snapshot 资格阶段取消。构建出 snapshot 不等于取得资格；这两次取消和此前
+全部冻结延迟失败仍保留为失败。
+
+S12 发行资格提案将 package/sdist/已安装 frontend/DSH 与 snapshot 检查和
+三个隔离浏览器分片分开，复用已有 catalog、分片 selector 和 packaged
+catalog/team/craft 命令。每个原场景和 companion 仍为必需；craft 命令还包含
+它已有的 command-palette 检查。这改变发行浏览器并发，并重复依赖安装和
+静态检查；job 总限、场景期限、M2 阈值和六条共享 Python 验证通道不变。
+关键路径缩短及完整 CI 成本仍需在拟议 workflow 上实测。
+
+Worker 安装同一个 candidate wheel，只采用 producer 精确选定的 fixture
+commit/path。Package、checksum、snapshot 和 source digest 加 candidate
+artifact id 将最终 `build` 门绑定到成功的分片回执。门禁导入真实 catalog
+而不启动浏览器，在 attestation 或既有 validated-bundle 上传前拒绝缺失、
+失败、未知、重复、分片错误场景、错误来源和不完整 companion。仅发布恢复保留
+原成功 build 与 immutable asset 检查。本地负例资格和完整 GitHub runner
+资格分别记录。
+
+这是原 kernel 提案的发行流水线前置修复，本提案不改 kernel 代码或性能归因。
+合入仍需精确 head 评审、必需验证和 fresh ready=true。原任务以及
+I3/minor-release、M1/#8011、R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel、完整成本和 adoption
+缺口继续开放。
