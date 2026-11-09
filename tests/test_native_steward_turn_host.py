@@ -503,6 +503,87 @@ def test_native_identity_io_leaves_input_and_binding_publication_available(stewa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("phase", ["initial", "after_report_quota"])
+def test_native_submission_history_read_allows_input_and_rejects_changed_binding(steward, tmp_path, monkeypatch, provider, phase):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    sid, actor, _ = prepare(steward, provider, tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, capture, workspace = steward
+    host = StewardTurnHost(runtime)
+    binding_id = binding["binding_id"]
+    operation = "slow-inspection"
+    report = phase == "after_report_quota"
+    entered, release, quota_checked = Event(), Event(), Event()
+    params = {}
+    if report:
+        window = {"window_id": "fixture-window", "subscription_revision": 1}
+        operation = "report." + window["window_id"]
+        params = {"work_kind": "report", "report_window": window}
+    else:
+        quota_checked.set()
+    client = native_steward_client_id(actor, operation)
+    if report:
+        original = store.accept_managed_turn(sid, client_turn_id=client, message="Retain the original report",
+            origin="native_loopx", loopx_execution=True, loopx_request={
+                "operation": "native_turn", "host": "codex-app-server", "actor": actor,
+                "turn_instance_id": operation, "todo_id": None, "work_kind": "report", "validation_command": None,
+                "report_window_id": window["window_id"], "report_subscription_revision": window["subscription_revision"],
+            }).turn
+        store.update_turn(sid, original["turn_id"], status="failed", error_code="fixture_failure")
+        store.update_session(sid, status="ready", active_turn_id=None)
+        observe_quota = host.report_quota_request
+
+        def checked_quota(turn):
+            result = observe_quota(turn)
+            quota_checked.set()
+            return result
+
+        monkeypatch.setattr(host, "report_quota_request", checked_quota)
+    lookup = store.turn_for_client
+
+    def slow_history(session_id, client_turn_id):
+        if session_id == sid and client_turn_id == client and quota_checked.is_set() and not entered.is_set():
+            entered.set()
+            assert release.wait(15), "test did not release history read"
+        return lookup(session_id, client_turn_id)
+
+    def exercise_same_session():
+        queued, created = runtime.enqueue_turn(session_id=sid, client_turn_id="human-during-inspection",
+            message="Keep ordinary input available", work_dir=workspace, objective="Ordinary input", origin="web")
+        assert created
+        if report:
+            transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+        return queued
+
+    workers = []
+    before = capture.read_bytes()
+    monkeypatch.setattr(store, "turn_for_client", slow_history)
+    monkeypatch.setattr(runtime, "_drain_session_queue", lambda **_: None)
+    monkeypatch.setattr(runtime, "_start_accepted_turn_worker", lambda **call: workers.append(call))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        submission = pool.submit(host.submit, binding_id, turn_instance_id=operation, **params)
+        try:
+            assert entered.wait(8)
+            queued = pool.submit(exercise_same_session).result(timeout=5)
+            assert queued["status"] == "queued"
+        finally:
+            release.set()
+        if report:
+            with pytest.raises(ValueError, match="authorization changed during submission inspection"):
+                submission.result(timeout=8)
+            assert store.load_turn(sid, original["turn_id"])["status"] == "failed"
+        else:
+            with pytest.raises(ValueError, match="retaining its current work"):
+                submission.result(timeout=8)
+            assert lookup(sid, client) is None
+    assert not workers and capture.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True])
 def test_native_turn_uses_original_app_server_and_kernel_without_a_new_session(steward, tmp_path, monkeypatch, provider, material):
     sid, actor, added = prepare(steward, provider, tmp_path, monkeypatch)
