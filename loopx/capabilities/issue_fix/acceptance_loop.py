@@ -153,8 +153,44 @@ def _git_current_branch(workspace: Path) -> str:
 
 
 def _git_status_lines(workspace: Path) -> list[str]:
+    """Report whether the worktree has changes; the names are not consumed."""
+
     result = _run_git_capture(workspace, ["status", "--porcelain"])
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _split_git_paths(output: str) -> list[str]:
+    """Return one path per NUL-framed record, byte for byte.
+
+    Every caller passes ``-z``: the default framing quotes a non-ASCII name
+    (``"\\344\\270\\255..."``) and ends records on LF, so one legal file name
+    carrying a newline or leading/trailing spaces would arrive as a fragment
+    that no later step could match back to the file it names.
+    """
+
+    return [item for item in output.split("\0") if item]
+
+
+def _git_untracked_paths(workspace: Path) -> list[str]:
+    """Return the untracked paths exactly as Git recorded them."""
+
+    result = _run_git_capture(workspace, ["status", "--porcelain", "-z"])
+    entries = result.stdout.split("\0")
+    paths: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry or len(entry) < 4:
+            continue
+        status = entry[:2]
+        if status[0] in {"R", "C"} or status[1] in {"R", "C"}:
+            # The next record names the rename or copy source.
+            index += 1
+            continue
+        if status == "??":
+            paths.append(entry[3:])
+    return paths
 
 
 def _git_ref_oid(workspace: Path, ref: str) -> str:
@@ -219,10 +255,9 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
     files: list[str] = []
     truncated = False
 
-    def add_lines(lines: list[str]) -> None:
+    def add_paths(paths: list[str]) -> None:
         nonlocal truncated
-        for raw in lines:
-            path = raw.strip()
+        for path in paths:
             if not path or path.startswith("/"):
                 continue
             if path not in files:
@@ -233,7 +268,7 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
 
     if _git_branch_exists(workspace, base_branch):
         result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base_branch}...HEAD"],
+            ["git", "diff", "--name-only", "-z", f"{base_branch}...HEAD"],
             cwd=workspace,
             text=True, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE,
@@ -241,13 +276,14 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
             timeout=10,
         )
         if result.returncode == 0:
-            add_lines(result.stdout.splitlines())
-    for args in (["diff", "--name-only"], ["diff", "--cached", "--name-only"]):
+            add_paths(_split_git_paths(result.stdout))
+    for args in (
+        ["diff", "--name-only", "-z"],
+        ["diff", "--cached", "--name-only", "-z"],
+    ):
         result = _run_git_capture(workspace, args)
-        add_lines(result.stdout.splitlines())
-    for line in _git_status_lines(workspace):
-        if len(line) >= 4 and line[:2] == "??":
-            add_lines([line[3:]])
+        add_paths(_split_git_paths(result.stdout))
+    add_paths(_git_untracked_paths(workspace))
     return files[:20], truncated
 
 
