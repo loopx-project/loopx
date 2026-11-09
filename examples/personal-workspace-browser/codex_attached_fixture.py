@@ -16,7 +16,7 @@ from unittest.mock import patch
 from loopx.chat_server import ChatRequestHandler, default_chat_assets_dir
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codex_attached_peer import add_conversation, append_message, fixture, provider
+from codex_attached_peer import THREAD, add_conversation, append_message, fixture, provider
 
 stop = threading.Event()
 signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -275,11 +275,13 @@ with (
                             + "\n"
                         )
                     self._send_json({"ok": True})
-                elif self.path == "/fixture/rebind":
+                elif self.path in {"/fixture/rebind", "/fixture/restore-binding"}:
                     value = json.loads(registry.read_text())
-                    value["goals"][0]["coordination"]["thread_agent_bindings"][0][
-                        "thread_id"
-                    ] = "22222222-2222-4222-8222-222222222222"
+                    binding = value["goals"][0]["coordination"]["thread_agent_bindings"][0]
+                    binding["thread_id"] = (
+                        THREAD if self.path == "/fixture/restore-binding"
+                        else "22222222-2222-4222-8222-222222222222"
+                    )
                     registry.write_text(json.dumps(value))
                     self._send_json({"ok": True})
                 elif self.path in {

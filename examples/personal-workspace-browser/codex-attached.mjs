@@ -759,14 +759,43 @@ async function runConversation(browser, uncertain) {
     assert.equal(await inputCount(),inputsBeforeLanguage,'Changing language and reading help cannot submit native input');
     await page.evaluate(() => localStorage.setItem('loopx-pw-locale','zh-CN'));
     await page.reload();
-    await panel.getByRole('textbox',{name:'回复 worker',exact:true}).waitFor();
-    await page.setViewportSize({width:1512,height:982});
+    const recoveryDraft = panel.getByRole('textbox',{name:'回复 worker',exact:true});
+    await recoveryDraft.waitFor();
+    await recoveryDraft.fill('Keep this draft with the original Session.');
+    await longDialogue.waitFor();
+    await page.setViewportSize({width:1200,height:900});
+    const rejectedRead = page.waitForResponse(response => {
+      const source = new URL(response.url());
+      return response.status() === 409 && source.pathname === '/api/chat/codex-attached'
+        && source.searchParams.get('agent_id') === 'worker' && !source.searchParams.has('operation_id');
+    });
     await page.request.post(new URL('/fixture/rebind',url).href);
+    await rejectedRead;
     await panel.getByRole('alert').waitFor();
+    await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-narrow.png'),animations:'disabled'});
+    const transcriptRecords = panel.locator('.attached-conversation-messages article');
+    assert.equal(await transcriptRecords.count(),0,'An explicitly rejected binding must withdraw the old transcript');
+    assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
+    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).isDisabled(),true);
     await openOriginal.click();
     await panel.getByRole('alert').filter({hasText:'binding is invalid or changed'}).waitFor();
     assert.equal((await (await page.request.get(new URL('/fixture/opened',url).href)).json()).count,1);
-    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).isDisabled(),true);
+    const automaticRead = await page.waitForRequest(request => {
+      const source = new URL(request.url());
+      return request.method() === 'GET' && source.pathname === '/api/chat/codex-attached'
+        && source.searchParams.get('agent_id') === 'worker';
+    }, {timeout: 2100}).catch(error => {
+      if (error.name !== 'TimeoutError') throw error;
+      return null;
+    });
+    assert.equal(automaticRead,null,'A rejected binding does not poll the original owner again');
+    await page.request.post(new URL('/fixture/restore-binding',url).href);
+    await panel.getByRole('button',{name:'重新连接',exact:true}).click();
+    await longDialogue.waitFor();
+    assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
+    assert.equal(await inputCount(),inputsBeforeLanguage,'Rechecking the original binding does not submit the retained draft');
   } finally {
     clearTimeout(timer); lines.close();
     if (context) await context.close();
