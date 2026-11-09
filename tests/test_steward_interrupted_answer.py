@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_antigravity_steward_adapter import language_server  # noqa: F401
+from test_antigravity_steward_adapter import language_server as language_server
 from test_native_steward_private import steward  # noqa: F401
 
 from loopx.capabilities.native_chat import antigravity_adapter as native
