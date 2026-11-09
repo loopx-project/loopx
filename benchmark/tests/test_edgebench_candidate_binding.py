@@ -11,7 +11,7 @@ import tarfile
 
 import pytest
 
-from benchmark.runtime.research_probe import candidate_snapshot
+from benchmark.runtime.research_probe import candidate_snapshot, run_probe
 
 
 def _digest(content):
@@ -292,6 +292,71 @@ def test_unknown_service_conditions_cannot_be_promoted_by_worker(response):
         NativeResultScope(relay="http://127.0.0.1/api/v1/feedback/test", run="run", task="task",
                           goal="goal", agent="agent", task_sha256="a" * 64, benchmark_sha256="b" * 64,
                           higher_is_better=True, evaluation_context=response)
+
+
+def test_real_preupload_probe_preserves_full_set_identity_and_subset_boundaries(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    solver = tmp_path / "solver.py"
+    solver.write_text("print('local execution completed')\n")
+    output = tmp_path / "result.json"
+    output.write_bytes(b'{"answer":2}')
+    fixture = tmp_path / "fixture.json"
+    fixture.write_bytes(b'{"input":7}')
+
+    def probe(name, paths):
+        observation = tmp_path / name
+        result = run_probe(command=[sys.executable, str(solver)], candidate_files=paths,
+            output=observation, input_revision="dataset:public-v1", planned_method_id="method:local",
+            executed_method_id="method:local", evidence_ref="artifact:local-execution", limit_seconds=5)
+        assert result["exit_code"] == 0 and result["stop_reason"] == "process_exit:0"
+        return observation, result
+
+    # The measurement exists before either upload, and pins every submitted file.
+    full_observation, full_probe = probe("full-probe.json", [solver, output])
+    original_observation = full_observation.read_bytes()
+    full_ref = "candidate:" + full_probe["candidate_sha256"]
+    _, pins = candidate_snapshot([solver, output], tmp_path)
+    snapshot = _write(tmp_path / "manifest.json", {
+        "execution_observation": full_observation.name,
+        "input_revision": "dataset:public-v1", "files": pins,
+    })
+    archive, result = tmp_path / "submission.tar.gz", tmp_path / "native.json"
+    files = [("solver.py", solver.read_bytes()), ("result.json", output.read_bytes())]
+
+    def bind(observation, members, generated=False):
+        _tar(archive, members)
+        _write(result, _native_response(archive))
+        response = _bind((observation, snapshot, output, members, archive, result),
+                         pass_output=generated)
+        assert response.returncode == 0, response.stderr
+        return json.loads(response.stdout)
+
+    first = bind(full_observation, files)
+    reordered = bind(full_observation, list(reversed(files)))
+    assert first["submitted_file_set_ref"] == reordered["submitted_file_set_ref"] == full_ref
+    assert first["candidate_ref"] != reordered["candidate_ref"]
+    assert first["probe_candidate_ref"] == full_ref
+
+    # A real probe over a different file set cannot relabel its existing measurement.
+    subset_observation, subset_probe = probe("subset-probe.json", [solver, fixture])
+    _write(snapshot, {**json.loads(snapshot.read_text()),
+                      "execution_observation": subset_observation.name})
+    subset = bind(subset_observation, files, generated=True)
+    assert subset["probe_candidate_ref"] == "candidate:" + subset_probe["candidate_sha256"]
+    assert subset["probe_candidate_ref"] != subset["submitted_file_set_ref"] == full_ref
+
+    output.write_bytes(b'{"answer":3}')
+    changed_files = [files[0], ("result.json", output.read_bytes())]
+    changed_digest, changed_pins = candidate_snapshot([solver, output], tmp_path)
+    _write(snapshot, {**json.loads(snapshot.read_text()), "files": changed_pins})
+    changed = bind(subset_observation, changed_files, generated=True)
+    assert changed["probe_candidate_ref"] == subset["probe_candidate_ref"]
+    assert changed["submitted_file_set_ref"] == "candidate:" + changed_digest != full_ref
+    unproven = _bind((subset_observation, snapshot, output, changed_files, archive, result),
+                     pass_output=False)
+    assert unproven.returncode == 1 and not unproven.stdout
+    assert "explicit generated output" in unproven.stderr
+    assert full_observation.read_bytes() == original_observation
 
 
 @pytest.mark.parametrize(("defect", "diagnostic"), [
