@@ -2984,3 +2984,32 @@ cost and adoption remain unqualified. Preserve I3 for at least one minor
 release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 PostgreSQL host/wheel and every frozen failure. The original task remains open;
 this checkpoint does not authorize merge or declare the minimal kernel complete.
+
+### 2026-11-09 — Reuse validated complete source-basis bytes
+
+The existing Python Todo compatibility transport now retains its validated
+canonical field bytes as the complete source basis. It previously encoded each
+field twice, once for the basis and once for digest validation. The basis is
+only decoded as JSON; mapping insertion order is not a source difference. Full
+digest mismatch fallback, scalar-fact protection, request-scope provenance and
+source/revision/lease/refusal/replay guards remain. No decoder, cache, provider,
+configuration, protocol or competing decision owner is added.
+
+On the same real isolated SQLite field observation, the immutable original
+encodes two fields four times and the candidate twice; both retain complete
+values and empty source differences. The original passes two mapping-order and
+scalar-protection characterization cases; the candidate passes all nine canonical
+source cases across File/SQLite. Final `summary_item.py` SHA-256 `a8ca890eee547929060ac326fc8b85ca9c14a8fd5ec850deb2fe3e6586628513`
+matches the isolated wheel. Four complete 101-Todo source/wheel × File/SQLite
+CLI lifecycles preserve sum45, original completion time, four receipts, one debit,
+restart and refusal/replay, with two normal native exits per lifecycle.
+Validation uses macOS arm64, CPython3.13.5 and Node22.22.3.
+
+This is an encoding mechanism refinement, not matched-cost or full marginal-cost
+and adoption qualification. Frozen cost, attribution and normal-bytecode
+campaigns remain unchanged. PostgreSQL host factory absence is already recorded;
+its store/service checks do not qualify a source/wheel host journey. Retain every
+original acceptance and I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, installed-host, full-cost/adoption and historical
+failure gap. Exact-head review, CI/readiness and maintainer merge authority remain
+separate gates.
