@@ -5,6 +5,7 @@ from ..control_plane.projects.registry_codec import load_project_registry
 from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 
 GOAL_SOURCE_LINKS_PATH = "/api/chat/goal-sources"
+GOAL_SOURCE_STRATEGIES_PATH = "/api/chat/goal-source-strategies"
 
 
 def goal_source_catalog(server):
@@ -29,6 +30,36 @@ def linked_goal_source(server, goal_id):
 
 
 class GoalSourceRequestMixin:
+    def _goal_source_strategies(self):
+        import subprocess
+        from urllib.parse import parse_qs, urlparse
+
+        if not self._require_loopback_origin():
+            return
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        if (set(query) != {"goal_id", "source_namespace"}
+                or any(len(values) != 1 for values in query.values())):
+            self._send_error("Choose one original Goal and source.", status=400)
+            return
+        goal_id = query["goal_id"][0]
+        resolved = linked_goal_source(self.server, goal_id)
+        if resolved is None:
+            self._send_error("The original Goal source is unavailable.", status=404)
+            return
+        _, reader = resolved
+        if query["source_namespace"] != [reader.source.namespace]:
+            self._send_error("Source identity changed; refresh the Goal.", status=409)
+            return
+        try:
+            result = reader.strategies(reader.source.goal_id)
+            latest = linked_goal_source(self.server, goal_id)
+            if latest is None or latest[1].source.namespace != reader.source.namespace:
+                self._send_error("Source identity changed; refresh the Goal.", status=409)
+                return
+            self._send_json(result)
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError, subprocess.SubprocessError):
+            self._send_error("The original strategy history is unavailable; retry after reconnecting.", status=503)
+
     def _completed_todos(self):
         import subprocess
         from urllib.parse import parse_qs, urlparse
