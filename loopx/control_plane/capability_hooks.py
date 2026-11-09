@@ -210,6 +210,15 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope
+    if "schema_version" in payload or "contract_binding" in payload:
+        from .quota.turn_envelope import quota_capability_automation_source
+
+        # A declared native contract must pass the same complete-source owner
+        # as participation. Never reinterpret a damaged version as raw quota.
+        source = quota_capability_automation_source(payload)
+        if isinstance(payload.get("heartbeat_receipt"), Mapping):
+            return {**payload, "agent_id": source.get("agent_id")}
+        return {"goal_id": source.get("goal_id"), "agent_id": source.get("agent_id")}
     agent_id = payload.get("agent_id")
     identity = payload.get("agent_identity")
     if isinstance(identity, Mapping):

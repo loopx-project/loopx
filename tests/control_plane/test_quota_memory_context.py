@@ -236,3 +236,127 @@ def test_quota_recall_size_limit_preserves_independently_enabled_ingest(size: in
     assert (delivered["context"] is not None) is (size == 40_000)
     assert result["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
     assert len(json.dumps(result, separators=(",", ":")).encode()) <= 65536
+
+
+
+def _complete_native_memory_source():
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    guard, recall = quota_context()
+    guard["retained_provider_evidence"] = {"revision": 1, "integer": 2**80, "float": -0.0}
+    result = memory_context_result(guard, recall)
+    dispatch_turn_context_hooks(guard, (TurnContextHookRegistration(
+        "reward-memory.turn-context", "reward-memory", ("reward_memory_recall",), lambda: result),))
+    return compose_turn_decision(guard), recall
+
+
+def test_complete_native_memory_keeps_exact_source_and_existing_guidance() -> None:
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision, quota_capability_automation_source,
+    )
+
+    source, recall = _complete_native_memory_source()
+    before = json.dumps(source, ensure_ascii=False, sort_keys=True)
+    assert_complete_turn_decision(source)
+    assert quota_capability_automation_source(source)["agent_id"] == "writer"
+    assert project_turn_context(source)["reward_memory_recall"]["context"] == recall["context"]
+    result = memory_context_result(source, recall)
+    assert result["context_fields"]["reward_memory_recall"]["context"] == recall["context"]
+    assert json.dumps(source, ensure_ascii=False, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("consumer", ["participation", "guidance"])
+@pytest.mark.parametrize("corruption", [
+    "content-hash", "retained-evidence", "codec", "future-version", "missing-version", "missing-binding",
+])
+def test_complete_native_memory_never_uses_legacy_binding_for_damaged_source(
+    consumer: str, corruption: str,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision, quota_capability_automation_source,
+    )
+
+    source, recall = _complete_native_memory_source()
+    before = json.dumps(source, ensure_ascii=False, sort_keys=True)
+    damaged = deepcopy(source)
+    if corruption == "content-hash":
+        damaged["contract_binding"]["content_hash"] = "sha256:" + "0" * 64
+    elif corruption == "retained-evidence":
+        # This field is outside the historical action-signature coverage.
+        damaged["retained_provider_evidence"]["revision"] += 1
+    elif corruption == "codec":
+        damaged["contract_binding"]["hash_codec"] = "unsupported-codec"
+    elif corruption == "future-version":
+        damaged["schema_version"] = "unsupported-native-version"
+    elif corruption == "missing-version":
+        del damaged["schema_version"]
+    else:
+        del damaged["contract_binding"]
+    with pytest.raises((RuntimeError, ValueError)):
+        assert_complete_turn_decision(damaged)
+    if consumer == "participation":
+        with pytest.raises((RuntimeError, ValueError)):
+            quota_capability_automation_source(damaged)
+        result = memory_context_result(damaged, recall)
+        assert result["context_fields"] == {} and result["result_fields"] == {}
+    else:
+        assert project_turn_context(damaged) == {}
+    assert json.dumps(source, ensure_ascii=False, sort_keys=True) == before
+
+
+def test_source_free_status_observation_survives_damaged_complete_native_source() -> None:
+    source, _ = _complete_native_memory_source()
+    source["contract_binding"]["content_hash"] = "sha256:" + "0" * 64
+    status = {"status": "unavailable"}
+    dispatch_turn_context_hooks(source, (TurnContextHookRegistration(
+        "observation.status", "observation", ("context_status",), lambda: {
+            "context_fields": {}, "instructions": [], "result_fields": {},
+            "readback": {"context_status": status},
+        }),))
+    assert source["context_status"] == status
+    assert project_turn_context(source) == {}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("entry", ["quota", "thin-heartbeat"])
+def test_real_guard_complete_memory_rejects_changed_source_without_provider_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, entry: str,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision, compose_turn_decision, quota_capability_automation_source,
+    )
+
+    registry, route = quota_fixture(tmp_path, monkeypatch, provider)
+    enable_live_memory(registry, recall=True, ingest=True)
+    _, config = resolve_reward_memory_experiment(
+        registry_path=registry, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    memory = RecallProvider(active_record(config, expires_at="2099-01-01T00:00:00+00:00"))
+    monkeypatch.setattr(
+        "loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
+        lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=memory))
+    turn = "complete-memory-source-check"
+    if entry == "thin-heartbeat":
+        bootstrap = run_cli(route + ["heartbeat-prompt", "--thin", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--available-capability", "filesystem_read"])
+        command = next(line for line in bootstrap["task_body"].splitlines()
+            if line.startswith("loopx ") and "quota should-run" in line)
+        args = shlex.split(command.replace('${LOOPX_TURN:?}', turn))[1:]
+    else:
+        args = route + ["quota", "should-run", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--codex-app", "--turn-instance-id", turn,
+            "--available-capability", "filesystem_read"]
+    guard = run_cli(args + ["--context-delivery", "off", "--delta-delivery", "off"])
+    # Main's raw quota and the migrated caller both reach the same complete
+    # source owner. Never reinterpret an already composed Host binding.
+    source = guard if "contract_binding" in guard else compose_turn_decision(guard)
+    assert_complete_turn_decision(source)
+    assert project_turn_context(source)["reward_memory_recall"]["context"]["guidance"]
+    before = json.dumps(source, ensure_ascii=False, sort_keys=True)
+    damaged = deepcopy(source)
+    damaged["retained_provider_evidence"] = {"revision": 2}
+    assert project_turn_context(damaged) == {}
+    with pytest.raises((RuntimeError, ValueError)):
+        quota_capability_automation_source(damaged)
+    assert memory.calls == 1
+    assert json.dumps(source, ensure_ascii=False, sort_keys=True) == before
