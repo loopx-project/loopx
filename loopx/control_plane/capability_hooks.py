@@ -278,7 +278,6 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
-            source = _turn_context_binding_source(payload)
             readback_only = (
                 result.get("context_fields") == {}
                 and result.get("instructions") == []
@@ -289,7 +288,9 @@ def dispatch_turn_context_hooks(
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    **({"readback_only": True} if readback_only else {"source": source}),
+                    **({"readback_only": True} if readback_only else {
+                        "source": _turn_context_binding_source(payload),
+                    }),
                 },
             )
             readback = contribution.pop("readback")
