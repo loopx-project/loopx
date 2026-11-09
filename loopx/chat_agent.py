@@ -486,6 +486,12 @@ WORK_RESULT_VERIFICATION_INSTRUCTION = (
 )
 
 
+COLLABORATION_INPUTS_GUIDANCE = (
+    "Use inputs only for shared-workspace relative file refs with a description and an optional verified sha256. "
+    "Put PR, issue and other URLs and their exact revisions in context, never in inputs. If there are no shared files, use inputs=[]. "
+)
+
+
 def _turn_prompt(
     user_message: str,
     *,
@@ -601,7 +607,9 @@ def _turn_prompt(
         "for ordinary work that belongs to a qualified existing responsible Agent, or to forward context for that Agent to assess/replan, emit context_handoff={goal_id,agent_id,brief} using "
         ) +
         "one exact catalog recipient, proposals=[], and no confirmation gate. Otherwise context_handoff=null. For one request involving several authorized Agents, context_handoff may instead be an array of at most 32 entries, each with its own exact goal_id/agent_id and complete recipient-specific brief. Resolve each recipient independently; do not force one to relay for the others. Never broadcast a private brief or another recipient's reply beyond the original audience grant. Each request is independently authorized, delivered and returned to this conversation; a partial failure is not batch success. Reuse delivered requests after checking receipts; include only remaining work or new corrections. "
-        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; then preserve relevant earlier corrections and rejected approaches, explicit constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. inputs are shared-workspace relative files {ref,description,sha256?}; include a digest only when actually read. This is semantic context, never a priority, task edit or new authority. "
+        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; preserve relevant corrections, rejected approaches, constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. "
+        + COLLABORATION_INPUTS_GUIDANCE
+        + "The envelope requests submission; claim delivery only after a host receipt. A brief is context, not a priority, task edit or new authority. "
         "Before preparing a new Goal, resolve the current conversation and permitted existing work by semantic relevance, not words like goal, research or continue. "
         "A continuation, correction or status question belongs to the established Goal/owner. Preserve its constraints; do not restart, create a duplicate Goal or ask for permission already granted. "
         "For requested work, inspect the supplied Goal directory and relevant work/Agent evidence (using the declared read tool when incomplete). An empty delivery-grant list does not prove there is no existing work. "

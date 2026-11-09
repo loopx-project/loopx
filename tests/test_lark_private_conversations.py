@@ -1374,7 +1374,8 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
 
 @pytest.mark.parametrize("fault", [None, "codex-fallback", "quota-restore", "quota-unchanged", "quota-unknown",
     "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
-    "cleared-before-proof", "retention-io"])
+    "cleared-before-proof", "retention-io", "link-inputs", "link-inputs-new-input", "link-inputs-bad-reference",
+    "link-inputs-ungranted", "link-inputs-codex-fallback", "link-inputs-oversized-description"])
 def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):  # noqa: F811 - imported pytest fixture
     """An already delivered, historical answer must not be sent/executed twice."""
     from copy import deepcopy
@@ -1389,12 +1390,26 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
     store, runtime, provider, transport, binding, _, workspace = next(fixture)
     try:
         registry = json.loads(runtime.registry_path.read_text())
-        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {"registered_agents": ["worker"]}}]
+        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {
+            "registered_agents": ["worker", "other-worker"] if fault == "link-inputs-ungranted" else ["worker"]}}]
         runtime.registry_path.write_text(json.dumps(registry))
         binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
             executor_endpoint_id="antigravity", context_kind="steward")
         original_brief = {"schema_version": "collaboration_brief_v0", "Hypotheses": ["Assess this hypothesis"],
             "Evidence": ["Original authorized evidence"], "Constraints": ["Return here; do not change frozen work"]}
+        link_inputs = str(fault).startswith("link-inputs")
+        codex_fallback = fault in {"codex-fallback", "link-inputs-codex-fallback"}
+        if link_inputs:
+            ref = "https://example.test/project/changes/123"
+            if fault == "link-inputs-bad-reference":
+                ref += "?opaque=synthetic"
+            description = ("x" * 1001 if fault == "link-inputs-oversized-description"
+                else "Review the identified change at its recorded revision.")
+            original_brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original hypothesis",
+                "context": "Review the recorded change and return its verified disposition.",
+                "constraints": ["Do not change frozen work"],
+                "inputs": [{"ref": ref, "description": description}],
+                "acceptance": ["Return the assessment"], "return_requirement": "Return to the original conversation"}
         handoff = {"schema_version": "context_handoff_v0", "goal_id": "work", "agent_id": "worker", "brief": original_brief}
         if fault == "unknown-outer":
             handoff["execution_binding_id"] = "unapproved-binding"
@@ -1406,7 +1421,8 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         def legacy_completion(adapter, message, event_sink, **kwargs):
             return start_turn(adapter, message, lambda kind, payload: event_sink(kind, payload)
                 if kind != "turn.native_result" else None, **kwargs)
-        monkeypatch.setattr(AntigravityAdapter, "start_turn", legacy_completion)
+        if not link_inputs:
+            monkeypatch.setattr(AntigravityAdapter, "start_turn", legacy_completion)
         event = provider.event("steward-app", "completed-metadata", "Ask the original worker to assess this hypothesis")
         transport.admit("steward-app", event)
         ref = identity_ref(binding["provider_ref"], event["message_id"])
@@ -1414,15 +1430,21 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         completed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
         assert completed["status"] == "completed"
         assert completed["response"]["gate"]["kind"] == "response_metadata_invalid"
+        if link_inputs:
+            original_send = next(body for method, body in language_server["calls"] if method == "SendUserCascadeMessage")
+            prompt = original_send["items"][0]["text"]
+            assert "Put PR, issue and other URLs and their exact revisions in context" in prompt
+            assert "claim delivery only after a host receipt" in prompt
         monkeypatch.setattr(AntigravityAdapter, "start_turn", start_turn)
         assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
         original_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
         original_events = store.events_after(original["session_id"], original["turn_id"], None)
-        assert not store.native_result(original["session_id"], original["turn_id"])
+        retained_native = store.native_result(original["session_id"], original["turn_id"])
+        assert bool(retained_native) is link_inputs
         # Another native input is historical context, not authority to replay it.
         language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
         language_server["sent_count"] += 1
-        if fault in {"quota-restore", "quota-unchanged", "codex-fallback"}:
+        if fault in {"quota-restore", "quota-unchanged"} or codex_fallback:
             language_server.update(quota_error_indices=[1], quota_fraction=0.006)
         elif fault == "quota-unknown":
             language_server["quota_unknown"] = True
@@ -1447,13 +1469,14 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             language_server["review_fault_start_index"] = 2
         language_server["review_response"] = response
         session = store.load_session(original["session_id"])
+        granted = "other-worker" if fault == "link-inputs-ungranted" else "worker"
         _write(_root(runtime.coordination_runtime_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
             session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]],
-                "targets": [{"goal_id": "work", "agent_id": "worker"}]}}})
+                "targets": [{"goal_id": "work", "agent_id": granted}]}}})
         if fault == "stop":
             store.append_event(session["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
             original_events = store.events_after(original["session_id"], original["turn_id"], None)
-        elif fault == "new-input":
+        elif fault in {"new-input", "link-inputs-new-input"}:
             store.create_queued_turn(session["session_id"], client_turn_id="new-correction", message="A correction", origin="lark")
         elif fault == "no-anchor":
             events_after = store.events_after
@@ -1472,7 +1495,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
                 return result
             monkeypatch.setattr(AntigravityAdapter, "completed_result_observation", staticmethod(changed))
         codex_sends = []
-        if fault == "codex-fallback":
+        if codex_fallback:
             from types import SimpleNamespace
             from test_chat_manager_model_adoption import configure
             from loopx.chat_manager import manager_executor_allocation
@@ -1537,7 +1560,8 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             assert (store._session_dir(original["session_id"]) / "native-results" / (original["turn_id"] + ".json")).read_bytes() == retained_bytes
         row = transport.core.read_request(ref)
         assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_bytes
-        if fault in {"quota-unchanged", "quota-unknown", "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer",
+        if fault in {"quota-unchanged", "quota-unknown", "stop", "new-input", "link-inputs-new-input",
+                     "no-anchor", "changed-proof", "unknown-outer",
                      "cleared-before-proof", "retention-io"}:
             assert row["turn_id"] == original["turn_id"]
             assert not pending(runtime.coordination_runtime_root, "work", "worker")["items"]
@@ -1547,10 +1571,20 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
         transport.reconcile_request(path)
         entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
-        if fault in {None, "quota-restore", "codex-fallback"}:
+        if codex_fallback or fault in {None, "quota-restore", "link-inputs", "link-inputs-bad-reference",
+                                     "link-inputs-oversized-description"}:
             assert reviewed["status"] == "completed", reviewed
             assert len(entries) == 1 and entries[0]["source_id"] == ref
             assert entries[0]["brief"]["context"] == context
+            if link_inputs:
+                assert entries[0]["brief"]["inputs"] == []
+                assert reviewed["response"]["context_handoff_receipts"][0]["request_id"] == entries[0]["request_id"]
+                assert store.native_result(original["session_id"], original["turn_id"]) == retained_native
+        elif fault == "link-inputs-ungranted":
+            assert reviewed["status"] == "completed" and not entries
+            assert not pending(runtime.coordination_runtime_root, "work", "other-worker")["items"]
+            assert not reviewed["response"]["context_handoff_receipts"]
+            assert reviewed["response"]["context_handoff_failures"]
         else:
             assert reviewed["status"] == "failed" and not entries
         assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_bytes
@@ -1560,18 +1594,27 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             for item in provider.messages.values()) == 1
         assert not any("Unverified model delivery claim" in write[1] for write in provider.writes)
         sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
-        if fault == "codex-fallback":
+        if codex_fallback:
             assert len(sends) == 1 and len(codex_sends) == 1
+            assert "Put PR, issue and other URLs and their exact revisions in context" in codex_sends[0]
             actual = store.load_session(session["session_id"])
             assert actual["agent_id"] == "codex" and actual["agent_model_id"] == "gpt-6.1-sol"
             assert actual["steward_context"] == session["steward_context"]
             assert actual["upstream_context_history"][-1]["thread_id"] == session["upstream_thread_id"]
+        elif fault in {"link-inputs", "link-inputs-ungranted"}:
+            assert len(sends) == 1, "Link-only metadata repair must not start a second model Turn"
+            assert json.loads(path.read_text())["status"] == "delivered"
+            assert transport.core.read_request(ref)["delivery_verified"] is True
+            if fault == "link-inputs":
+                assert "实际提交回执" in json.dumps(provider.messages, ensure_ascii=False)
         else:
             assert len(sends) == 2 and sends[-1]["cascadeConfig"]["plannerConfig"]["toolConfig"]["forceDisableToolCalling"] is True
+            if link_inputs:
+                assert "Put PR, issue and other URLs and their exact revisions in context" in sends[-1]["items"][0]["text"]
         before = (len(sends), len(provider.writes))
         transport.reconcile_request(path)
         assert (len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]), len(provider.writes)) == before
-        if fault == "codex-fallback":
+        if codex_fallback:
             # The next original-source input/status must reuse this canonical
             # Session even though the binding's preferred endpoint is Argon.
             monkeypatch.setattr(runtime, "enqueue_turn", lambda **kw: store.create_queued_turn(
@@ -5938,6 +5981,101 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         release_rest.set()
     assert len(started) == slots * 2 and len(set(started)) == len(started)
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
+
+
+@pytest.mark.parametrize(("initial", "body_scan_fails"), [
+    ("accepted", False), ("accepted", True), ("delivered", False),
+])
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
+    from concurrent.futures import Future
+    from loopx.chat_store import _atomic_write_json, _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+    from loopx.extensions.lark import private_conversations as private
+
+    class ImmediateExecutor:
+        """The worker still sees completed futures at the next scan boundary."""
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def submit(self, action, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(action(*args, **kwargs))
+            except Exception as error:
+                future.set_exception(error)
+            return future
+
+    # Same durable path: ordinary body sends first or an earlier native probe
+    # left no effect. A later full discovery finds eligibility, while the fast
+    # body scan continues to exclude the now-delivered receipt.
+    path = tmp_path / "original.json"
+    record = {"status": initial, "request_ref": "original", "session_id": "session",
+              "turn_id": "turn", "event": {"message_id": "source"}, "profile": "fixture"}
+    _atomic_write_json(path, record)
+    clock = [100.0]
+    now = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(worker, "time", now)
+    monkeypatch.setattr(private, "time", now)
+    monkeypatch.setattr(worker, "ThreadPoolExecutor", ImmediateExecutor)
+    attempts, discoveries, recovery_times = [], [], []
+    required_recoveries = 1 if initial == "accepted" else 2
+
+    def eligible(request_ref):
+        assert request_ref == record["request_ref"]
+        discoveries.append(clock[0])
+        return attempts.count("recovery") < required_recoveries
+
+    def reconcile(receipt):
+        assert receipt == path
+        current = _read_json(receipt)
+        if current["status"] == "accepted":
+            attempts.append("body")
+            _atomic_write_json(receipt, {**current, "status": "delivered"})
+        else:
+            attempts.append("recovery")
+            recovery_times.append(clock[0])
+            transport._context_recovery_probe_at[path] = clock[0] + 60
+        return 0
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.reconcile_app_feedback = lambda: 0
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: eligible)
+    transport.reconcile_request = reconcile
+    pending_body_paths = transport.pending_body_paths
+
+    def scan_bodies():
+        if body_scan_fails and clock[0] == 101:
+            raise OSError("temporary body scan failure")
+        return pending_body_paths()
+
+    transport.pending_body_paths = scan_bodies
+    service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport)
+
+    def drive(step, **_):
+        for tick in (100, 101, 102, 161, 162, 222, 223):
+            clock[0] = float(tick)
+            step()
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
+    assert len(discoveries) >= 2
+    assert attempts == expected, (attempts, discoveries)
+    if body_scan_fails:
+        assert recovery_times == [102.0]
+    assert _read_json(path) == {**record, "status": "delivered"}
 
 
 def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path, monkeypatch):

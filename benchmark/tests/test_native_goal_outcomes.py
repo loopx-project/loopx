@@ -184,7 +184,7 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
         internet=False, game_mode=False, submit_paths=["solver.py"],
         work=SimpleNamespace(agent_query="Synthetic task"),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
-    backend = SimpleNamespace(image_exists=lambda image: True,
+    backend = SimpleNamespace(image_exists=lambda image: True, registration_options=lambda provider: {},
                               execution_receipt={"exit_code": 0, "execution_started": True},
                               native_goal_receipt={"native_goal_outcome": outcome} if outcome else None,
                               provider_failure_receipt=({

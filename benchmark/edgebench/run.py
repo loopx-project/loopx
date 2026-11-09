@@ -565,8 +565,7 @@ def main(argv=None):
             **({"restored_registration": restored_registration} if restored_registration is not None else {}),
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
             max_submissions=0 if args.feedback != "native" else None,
-            **(backend.registration_options(run_agent)
-               if feedback is not None or checkpoint is not None else {}),
+            **backend.registration_options(run_agent),
         ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
