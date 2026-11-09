@@ -114,6 +114,25 @@ its PR manifest current. Changing the default repository/branch requires updatin
 the single source file and this protocol; adding a second contributor-specific
 default would split the source of truth again.
 
+### Inspect cached images by case
+
+The worker's existing Docker preflight records the local image ID and logical
+size for the work and judge images in `runtime-receipt.json`. Review observations
+across selected run directories without reading trajectories or contacting Docker:
+
+```sh
+python -m benchmark.edgebench.image_inventory \
+  --log-dir /data/private-runs --log-dir /data/older-runs --task TASK_ID
+```
+
+Omit `--task` to include every case in those directories. The report groups
+observations by task specification digest, image role and image ID. It counts
+older receipts without observations and keeps distinct image revisions separate.
+Docker's logical image sizes include shared layers. Use them for cache inventory,
+and measure incremental disk use and runtime memory separately. Observations
+describe the worker's local Docker daemon at preflight. A remote judge requires
+its own image provenance, and a later retag can change what gets launched.
+
 ## Worker profiles
 
 The five worker profiles are `official`, `single`, `native-goal`,

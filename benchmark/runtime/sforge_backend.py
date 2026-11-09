@@ -9,6 +9,7 @@ import json
 import tarfile
 from pathlib import Path, PurePosixPath
 
+from docker.errors import ImageNotFound
 from sforge.harness.backend.docker_backend import DockerBackend
 from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
@@ -42,6 +43,21 @@ class RecordingDockerBackend(DockerBackend):
         self.auth_ips = [] if oauth_proxy else resolve_hostname("auth.openai.com", logger)
         if not oauth_proxy and not self.auth_ips:
             raise RuntimeError("Cannot resolve Codex OAuth endpoint")
+
+    def observe_local_images(self, *, work_key, judge_key):
+        """Check both required local images and retain their Docker metadata."""
+        observations = {}
+        for key in dict.fromkeys((work_key, judge_key)):
+            try:
+                image = self.client.images.get(key)
+            except ImageNotFound as exc:
+                raise RuntimeError(f"Missing native image: {key}") from exc
+            size = image.attrs.get("Size")
+            observations[key] = {
+                "image_id": image.id,
+                "logical_size_bytes": size if type(size) is int and size >= 0 else None,
+            }
+        return {"work": observations[work_key], "judge": observations[judge_key]}
 
     def registration_options(self, run_agent):
         # Older frozen providers expose registration through container env;
