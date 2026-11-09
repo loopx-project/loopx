@@ -98,6 +98,44 @@ def acceptance_goal(tmp_path, monkeypatch, request):
     return project, document_path, cli, run
 
 
+@pytest.mark.parametrize("activation_state", [None, "active", "stopped"])
+def test_owner_resume_clears_legacy_pause_before_outcome_refinement(acceptance_goal, activation_state):
+    project, _, cli, run = acceptance_goal
+    registry_path = project.parent / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    goal = registry["goals"][0]
+    goal["status"] = "paused"
+    if activation_state is not None:
+        goal["activation"] = {"schema_version": "loopx_goal_activation_v1", "state": activation_state}
+    registry_path.write_text(json.dumps(registry))
+    state_before = (project / "state.md").read_bytes()
+    document = project / "resume-outcome.json"
+    document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": "agent-a",
+        "objective": "Produce the export", "requirements": [{"id": "content", "description": "Retain the content"}],
+        "source": {"ref": "message:owner-resume", "summary": "The owner resumed the export"}}))
+    revision = cli("inspect")[1]["provider_revision"]
+    args = ("refine", "--agent-id", "agent-a", "--document", str(document),
+        "--expected-provider-revision", revision, "--operation-id", "resumed-outcome", "--execute")
+    assert cli(*args)[0] == 1, "legacy pause must remain a gate until owner resume"
+    before = registry_path.read_bytes()
+    _, preview = run("goal-lifecycle", "--goal-id", "goal-acceptance", "--operation", "resume")
+    assert preview["changed"] and not preview["written"]
+    assert registry_path.read_bytes() == before
+    code, resumed = run("goal-lifecycle", "--goal-id", "goal-acceptance", "--operation", "resume",
+        "--actor-kind", "owner", "--expected-state-fingerprint", preview["observed_state_fingerprint"], "--execute")
+    assert code == 0 and resumed["written"] and resumed["readback"]["verified"], resumed
+    assert json.loads(registry_path.read_text())["goals"][0]["status"] == "active"
+    global_goal = json.loads((project.parent / "runtime" / "registry.global.json").read_text())["goals"][0]
+    assert global_goal["status"] == "active" and global_goal["activation"]["state"] == "active"
+    code, result = cli(*args)
+    assert code == 0 and result["status"] == "applied", result
+    assert (project / "state.md").read_bytes() == state_before
+    code, stopped = run("goal-lifecycle", "--goal-id", "goal-acceptance", "--operation", "stop",
+        "--actor-kind", "owner", "--execute")
+    assert code == 0 and stopped["readback"]["verified"], stopped
+    assert cli(*args)[0] == 1, "typed stop still rejects accepted operation replay"
+
+
 def test_outcome_refinement_retains_legacy_active_goal_admission(acceptance_goal):
     project, _, cli, _ = acceptance_goal
     registry_path = project.parent / "registry.json"

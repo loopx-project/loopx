@@ -225,14 +225,18 @@ def _readback(
     target_registry: Path,
     goal_id: str,
     expected_state: GoalActivationState,
+    expected_goal_status: str | None = None,
 ) -> dict[str, Any]:
-    source_state = goal_activation_state(
-        _goal(load_registry(source_registry), goal_id)
-    )
-    target_state = goal_activation_state(
-        _goal(load_registry(target_registry), goal_id)
-    )
+    source_goal = _goal(load_registry(source_registry), goal_id)
+    target_goal = _goal(load_registry(target_registry), goal_id)
+    source_state = goal_activation_state(source_goal)
+    target_state = goal_activation_state(target_goal)
     verified = source_state is expected_state and target_state is expected_state
+    if expected_goal_status is not None:
+        verified = verified and all(
+            goal.get("status") == expected_goal_status
+            for goal in (source_goal, target_goal)
+        )
     return {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
         "status": "verified" if verified else "mismatch",
@@ -294,7 +298,13 @@ def set_goal_activation_state(
         source_bytes=source_bytes,
     )
     before_state = goal_activation_state(source_goal)
-    changed = before_state is not target_state
+    # An explicit resume must clear the legacy pause too: acceptance still
+    # checks that field, even when activation was omitted or already active.
+    resume_legacy_pause = (
+        target_state is GoalActivationState.ACTIVE
+        and source_goal.get("status") == "paused"
+    )
+    changed = before_state is not target_state or resume_legacy_pause
     actor_label = actor.value if actor is not None else "owner"
     default_reason = (
         f"Stopped by {actor_label}"
@@ -444,7 +454,9 @@ def set_goal_activation_state(
                 return payload
             locked_goal = _goal(source_payload, normalized_goal_id)
             locked_state = goal_activation_state(locked_goal)
-            if locked_state is not before_state:
+            if locked_state is not before_state or (
+                resume_legacy_pause and locked_goal.get("status") != "paused"
+            ):
                 payload.update(
                     {
                         "ok": False,
@@ -460,6 +472,8 @@ def set_goal_activation_state(
             if changed:
                 locked_goal.pop("activation_state", None)
                 locked_goal["activation"] = proposed_activation
+                if resume_legacy_pause:
+                    locked_goal["status"] = "active"
                 transaction.commit(source_payload)
                 payload["written"] = True
 
@@ -485,6 +499,7 @@ def set_goal_activation_state(
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
                     expected_state=target_state,
+                    expected_goal_status="active" if resume_legacy_pause else None,
                 )
             )
     payload["readback"] = readback
