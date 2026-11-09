@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any
 from .quota_presentation import (
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
-    budgeted_spend_result, compose_quota_cli_source, native_quota_result, raw_quota_turn_view,
+    attach_quota_settlement_guidance, budgeted_spend_result, compose_quota_cli_source,
+    native_quota_result, project_scheduler_observation, raw_quota_turn_view,
 )
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
-    handle_native_context_command, handle_replan_view, prepare_quota_capture,
+    handle_native_context_command, prepare_quota_capture,
     native_context_activation, progressive_context_or_current, quota_context_surface,
 )
 from ..control_plane.turn_driver.decision_capture import (
@@ -356,20 +357,14 @@ def _emit_quota_result(
     from ..command_invocation import current_loopx_cli_argv
 
     reader_argv = current_loopx_cli_argv()
-    # Compose optional capability guidance after recovery has chosen the plan,
-    # before capture/compaction. The quota decision owner stays capability-neutral.
-    cli = (payload.get("interaction_contract") or {}).get("cli_channel")
-    if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
-        from ..capabilities.explore.turn_context import project_settlement_attachment
-
-        cli["settlement_plan"] = project_settlement_attachment(
-            cli["settlement_plan"], registry_path=registry_path,
-            runtime_root=context.runtime_root if context is not None else None,
-        )
+    scheduler_observation = getattr(args, "scheduler_observation", False)
+    if not scheduler_observation:
+        attach_quota_settlement_guidance(payload, registry_path=registry_path,
+            runtime_root=context.runtime_root if context is not None else None)
     budgeted_spend = (args.quota_command == "spend-slot" and args.format == "json" and context is not None
         and getattr(args, "max_page_output_bytes", None) is not None)
     activation = None
-    if not budgeted_spend:
+    if not (budgeted_spend or scheduler_observation):
         payload, activation = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
@@ -380,6 +375,10 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    if scheduler_observation:
+        succeeded = payload.get("ok") is True
+        print_payload(project_scheduler_observation(payload), args.format, _quota_renderer(args))
+        return 0 if succeeded else 1
     if budgeted_spend:
         assert context is not None
         view, result_code = budgeted_spend_result(payload, args,
@@ -548,8 +547,6 @@ def handle_quota_command(
         registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     if native_result is not None:
         return native_result
-    if args.quota_command == "replan-view":
-        return handle_replan_view(args, print_payload)
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -613,11 +610,13 @@ def handle_quota_command(
             heartbeat_receipt_existing = action_selection.receipt
             context_projector = _quota_turn_context_projector(args,
                 registry_path=registry_path, runtime_root=runtime_root)
+            progressive = (not getattr(args, "scheduler_observation", False)
+                           and native_context_activation(args)["progressive_enabled"])
             payload = _export("build_live_quota_should_run_decision")(
                 status_payload,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
-                inline_goal_source=native_context_activation(args)["progressive_enabled"],
+                inline_goal_source=progressive,
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
                 include_agent_todo_detail="agent-todos" in detail_sections,
@@ -644,7 +643,7 @@ def handle_quota_command(
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
                 turn_context_projector=context_projector,
-                context_navigation=native_context_activation(args)["progressive_enabled"],
+                context_navigation=progressive,
                 goal_ref=goal_ref,
             )
             action_selection_preflight = (

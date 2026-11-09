@@ -86,6 +86,14 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument(
+        "--scheduler-observation",
+        action="store_true",
+        help=(
+            "Return the shell worker's scheduler facts as JSON from should-run, "
+            "without starting a Turn or preparing model context."
+        ),
+    )
+    quota_parser.add_argument(
         "--verbose",
         action="store_true",
         help=(

@@ -1,5 +1,16 @@
 # Shell worker Host failures
 
+The worker's probe consumes the Core decision through `quota should-run
+--scheduler-observation`. It gets the current wake decision, cadence, stop and
+recovery identity without sending the model's work packet or overriding context
+delivery. This request does not admit a Turn, capture model input or spend
+quota; an actual wake still uses its own normal entry point and context policy.
+
+Use the worker and CLI from the same LoopX build. An older CLI that rejects the
+observation request prevents the worker from waking; pair the versions before
+resuming. Keep the worker state and original receipts when upgrading or rolling
+back. The existing explicit full view and historical readers remain available.
+
 `scripts/external_scheduler_worker.py` remains observe-only unless `--wake-cmd`
 is configured. Ordinary opaque shell commands retain their existing behavior.
 The optional `--wake-host-failure` adapter consumes the configured Host's JSON

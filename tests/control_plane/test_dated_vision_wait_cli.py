@@ -1,12 +1,15 @@
 """Real heartbeat coverage for an unbound, automatically scheduled Vision wait."""
 from __future__ import annotations
 
+from dataclasses import replace
 import json
+from math import ceil
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from time import monotonic
 
 import pytest
 from canonical_authority_fixture import read_fixture_todos, initialize_canonical_source_fixture
@@ -254,12 +257,24 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     packets, sleeps = [], []
 
     def real_probe(command, **kwargs):
-        # Adapt process transport only: every reply is produced by the real CLI
-        # against the isolated authority, with a fresh Turn identity.
-        rc, packet = cli(registry, runtime, *command[command.index("quota"):],
-                         "--turn-instance-id", f"scheduled-worker-{len(packets)}")
-        assert rc == 0, packet
-        packets.append(packet)
+        # Compare the actual worker view with the full CLI's policy diagnostics
+        # on the same authority state. Neither observer starts a Turn.
+        args = command[command.index("quota"):]
+        assert args[-1] == "--scheduler-observation"
+        started = monotonic()
+        rc, packet = cli(registry, runtime, *args)
+        raw_rc, raw = cli(registry, runtime, *args[:-1], "--context-delivery", "off",
+                          "--include-detail", "scheduler")
+        assert rc == raw_rc == 0, (packet, raw)
+        tick, source = worker.parse_tick(packet), worker.parse_tick(raw)
+        remaining, source_remaining = tick.recheck_after_seconds, source.recheck_after_seconds
+        if source_remaining is not None:
+            assert remaining is not None and 0 <= remaining - source_remaining <= ceil(monotonic() - started)
+        else:
+            assert remaining is None
+        assert replace(tick, recheck_after_seconds=source_remaining) == source
+        assert not packet.get("heartbeat_receipt")
+        packets.append(raw)
         return packet
 
     def advance_host(seconds):
@@ -353,7 +368,11 @@ def test_deferred_todo_without_vision_wakes_original_agent_at_deadline(tmp_path,
         assert now == due and not wakes
         assert guard["effective_action"] == "successor_replan_required"
         assert guard["selected_todo"]["todo_id"] == TODO
-        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+        source = command("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                         "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                         "--include-detail", "scheduler")
+        assert worker.parse_tick(guard) == worker.parse_tick(source)
+        assert source["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
         updated = command("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
                           "--todo-id", TODO, "--status", "open", "--clear-resume-when",
                           "--reason", "Scheduled condition satisfied")
