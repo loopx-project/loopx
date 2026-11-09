@@ -1398,6 +1398,14 @@ readers mounted, sharing its source readback. Pending or failed discovery still
 gates the ordinary queue. Disposable HTTP/store checks qualify this continuation
 path, not installed native or live-provider acceptance.
 
+After a complete bound Session read, the App can refresh a changed snapshot
+using its proof of up to 5,000 already visible rows. The same endpoint checks
+the current projected prefix, including quotes and return status. Only an
+exact match returns the appended suffix of at most 200 rows. A changed prefix,
+a larger suffix or an older service uses the ordinary full read. The App still
+rechecks the original binding before publishing the combined transcript. This
+transient proof does not replace the frozen cursor or authorize any effect.
+
 Following the newest reply also survives a resized viewport or timeline, including
 image layout and expanded replies, without waiting for another message. Scrolling
 up keeps the reader in history across layout changes; the existing latest-message
