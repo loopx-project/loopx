@@ -322,6 +322,10 @@ def main(argv=None):
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
+    if args.execution_observation is not None:
+        from benchmark.runtime.source import require_candidate_content
+
+        require_candidate_content(product, pins[0])
     if args.restore_checkpoint is not None:
         # Activating the native capsule starts its remaining phase clock.
         # Qualify the actual install archives first, including ignored assets;

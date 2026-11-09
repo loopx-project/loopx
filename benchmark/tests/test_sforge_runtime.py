@@ -1498,6 +1498,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
     (tmp_path / "fixture.json").write_text("{}")
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr("benchmark.runtime.source.require_candidate_content", lambda *a: None)
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
         cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
@@ -1530,8 +1531,8 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert installed_tools == ([
             ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
         ] if selected else [])
-        assert ("existing measurement's candidate reference already equals" in worker.feedback_prompt) is selected
-        assert ("submitted_file_set_ref" in worker.workspace_instructions) is selected
+        assert ("does not require a local probe or a new submission" in worker.feedback_prompt) is selected
+        assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
 
     monkeypatch.setattr(run, "run_agent", stop_before_model)
@@ -1550,3 +1551,25 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         run.main(args)
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
+
+
+def test_capture_preflight_requires_the_common_product_api_without_overlay(tmp_path):
+    from benchmark.runtime.source import require_candidate_content
+
+    product, runner = tmp_path / "product", tmp_path / "runner"
+    old, runner_rev = repository(product, "product"), repository(runner, "runner")
+    # Feature off retains the same split pins; capture explicitly rejects the missing API.
+    assert source_pins(product, runner, old, runner_rev) == (old, runner_rev)
+    with pytest.raises(ValueError, match="product pin containing Explore candidate_content"):
+        require_candidate_content(product, old)
+    module = product / "loopx/capabilities/explore/candidate_content.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def candidate_snapshot(paths, workspace): pass\n"
+                      "def candidate_manifest_sha256(files): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(module)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "capture API"], check=True)
+    new = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    require_candidate_content(product, new)
+    assert (product / "loopx/product.py").read_text() == "product"
+    with pytest.raises(ValueError):
+        require_candidate_content(product, old)
