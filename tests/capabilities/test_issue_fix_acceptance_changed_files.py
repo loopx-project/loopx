@@ -116,3 +116,56 @@ def test_the_caller_branch_packet_records_the_exact_names(tmp_path: Path) -> Non
     assert branch["changed_file_count"] == len(names)
     assert sorted(branch["changed_files"]) == sorted(names)
     assert branch["changed_files_truncated"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="control characters in names are POSIX-only")
+def test_a_carriage_return_is_not_folded_into_a_newline(tmp_path: Path) -> None:
+    """Text-mode capture would turn CR and CRLF into LF and collapse them."""
+
+    repo = _repository(tmp_path)
+    names = ["line\nbreak.txt", "line\rreturn.txt", "line\r\nboth.txt"]
+    for name in names:
+        (repo / name).write_text("content\n", encoding="utf-8")
+
+    files, truncated = _changed_files(repo, base_branch="main")
+
+    assert truncated is False
+    assert sorted(files) == sorted(names)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="control characters in names are POSIX-only")
+def test_committed_and_staged_carriage_return_names_survive(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    committed = "committed\r\n.txt"
+    staged = "staged\r.txt"
+
+    (repo / committed).write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", committed], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "add committed"], check=True)
+    (repo / staged).write_text("staged\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", staged], check=True)
+
+    files, truncated = _changed_files(repo, base_branch="main")
+
+    assert truncated is False
+    assert sorted(files) == sorted([committed, staged])
+
+
+@pytest.mark.skipif(os.name != "posix", reason="control characters in names are POSIX-only")
+def test_the_packet_counts_lf_cr_and_crlf_names_separately(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    names = ["line\nbreak.txt", "line\rreturn.txt", "line\r\nboth.txt"]
+    for name in names:
+        (repo / name).write_text("content\n", encoding="utf-8")
+
+    packet = build_issue_fix_caller_repo_branch_packet(
+        repo_path=str(repo),
+        base_branch="main",
+        issue_branch="issue",
+        validation_command=shlex.join([sys.executable, "-c", "print(1)"]),
+        execute=True,
+    )
+
+    branch = packet["caller_repo_branch"]
+    assert branch["changed_file_count"] == 3
+    assert sorted(branch["changed_files"]) == sorted(names)

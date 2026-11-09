@@ -103,6 +103,30 @@ def _run_git_capture(
     return result
 
 
+def _run_git_paths(
+    workspace: Path,
+    args: list[str],
+    *,
+    timeout: int = 10,
+) -> subprocess.CompletedProcess[bytes]:
+    """Capture path output as bytes; text mode would rewrite CR and CRLF.
+
+    Every caller frames records on NUL, and CPython's text mode translates
+    ``\r`` and ``\r\n`` to ``\n`` before any of that framing happens. A file
+    name carrying CR and one carrying LF would then decode to the same string
+    and collapse in the change list. Bytes keep the name Git wrote until
+    ``_split_git_paths`` decodes each record on its own.
+    """
+
+    return subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
 def _validate_branch_name(branch: str, *, field: str) -> str:
     value = str(branch or "").strip()
     if not value:
@@ -159,23 +183,26 @@ def _git_status_lines(workspace: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def _split_git_paths(output: str) -> list[str]:
-    """Return one path per NUL-framed record, byte for byte.
+def _split_git_paths(output: bytes) -> list[str]:
+    """Return one path per NUL-framed record, decoded after the split.
 
-    Every caller passes ``-z``: the default framing quotes a non-ASCII name
-    (``"\\344\\270\\255..."``) and ends records on LF, so one legal file name
-    carrying a newline or leading/trailing spaces would arrive as a fragment
-    that no later step could match back to the file it names.
+    Every caller passes ``-z`` and captures bytes: the default framing quotes a
+    non-ASCII name (``"\\344\\270\\255..."``) and ends records on LF, and text
+    mode turns a CR or CRLF inside a legal name into another LF before this
+    function ever sees it. Decoding each record separately keeps CR, LF and
+    CRLF names distinct, with leading and trailing spaces intact.
     """
 
-    return [item for item in output.split("\0") if item]
+    return [item.decode("utf-8", "replace") for item in output.split(b"\0") if item]
 
 
 def _git_untracked_paths(workspace: Path) -> list[str]:
     """Return the untracked paths exactly as Git recorded them."""
 
-    result = _run_git_capture(workspace, ["status", "--porcelain", "-z"])
-    entries = result.stdout.split("\0")
+    result = _run_git_paths(workspace, ["status", "--porcelain", "-z"])
+    if result.returncode != 0:
+        raise RuntimeError("git status --porcelain -z failed")
+    entries = result.stdout.split(b"\0")
     paths: list[str] = []
     index = 0
     while index < len(entries):
@@ -184,12 +211,12 @@ def _git_untracked_paths(workspace: Path) -> list[str]:
         if not entry or len(entry) < 4:
             continue
         status = entry[:2]
-        if status[0] in {"R", "C"} or status[1] in {"R", "C"}:
+        if status[0:1] in {b"R", b"C"} or status[1:2] in {b"R", b"C"}:
             # The next record names the rename or copy source.
             index += 1
             continue
-        if status == "??":
-            paths.append(entry[3:])
+        if status == b"??":
+            paths.append(entry[3:].decode("utf-8", "replace"))
     return paths
 
 
@@ -267,13 +294,8 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
                 return
 
     if _git_branch_exists(workspace, base_branch):
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "-z", f"{base_branch}...HEAD"],
-            cwd=workspace,
-            text=True, encoding="utf-8", errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10,
+        result = _run_git_paths(
+            workspace, ["diff", "--name-only", "-z", f"{base_branch}...HEAD"]
         )
         if result.returncode == 0:
             add_paths(_split_git_paths(result.stdout))
@@ -281,7 +303,9 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
         ["diff", "--name-only", "-z"],
         ["diff", "--cached", "--name-only", "-z"],
     ):
-        result = _run_git_capture(workspace, args)
+        result = _run_git_paths(workspace, args)
+        if result.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed")
         add_paths(_split_git_paths(result.stdout))
     add_paths(_git_untracked_paths(workspace))
     return files[:20], truncated
