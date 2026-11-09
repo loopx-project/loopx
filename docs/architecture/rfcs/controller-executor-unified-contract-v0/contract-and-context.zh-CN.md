@@ -451,11 +451,13 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 范围，不提高 provider 预算。这不构成模型 token、整任务成本或已验收成果收益结论。
 原生 quota 签名退役、installed 采用和相对原 quota 的资格验证仍未完成。
 
-[仅状态回读的 main 后续修复](https://github.com/loopx-project/loopx/pull/8455)
-也复用既有的无来源回读校验，不再先提取随后会被丢弃的可执行来源；注册、命名空间、槽位
-和大小检查保留。File／SQLite 案例在来源无效时保留状态观察，同时拒绝建议和 Host 构造；
-有效建议仍绑定原来源和规范结算计划。删除这次 RPC 不减少模型可见正文，也不证明
-整任务成本收益。
+[可选上下文来源的 main 后续修复](https://github.com/loopx-project/loopx/pull/8455)
+让仅状态回读不依赖可执行来源提取，同时使声明了完整版本的 native 来源在参与事实或
+指导读取前，由已有完整契约 owner 验证。绑定损坏、版本／codec 不支持或保留字段改变，
+不得回退到 raw quota 签名。召回观察与签名的治理 payload 分开传递，不能仅为附上 provider
+读回而改写来源。注册、命名空间、槽位和大小检查保留；有效指导与记录中的 Host 包装仍用
+原绑定和规范结算，无效来源保留状态观察但不能交付指导。这增加完整 native 来源验证。
+早期仅状态路径的 RPC 减少不证明模型窗口或整任务收益，native 签名退役仍未完成。
 
 当前 Todo 备注现已采用 [main 的字段 registry](https://github.com/loopx-project/loopx/pull/8386)，
 C1 删除自身独立的备注规则和重复的原生回归。共享身份绑定 Goal、registry/runtime 路由、

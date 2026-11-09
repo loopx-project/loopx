@@ -615,13 +615,18 @@ transport acceptance is extended without raising provider budgets. This is no
 model-token, whole-task cost or accepted-outcome claim. Native quota signature
 retirement, installed adoption and original-quota qualification remain open.
 
-The [status-only main follow-up](https://github.com/loopx-project/loopx/pull/8455)
-also reuses the existing source-free readback validator without first extracting
-an executable source that would be discarded. Registration, namespace, slot and
-budget checks remain. File/SQLite cases retain status observations under an invalid
-source while rejecting advice and Host construction; valid advice keeps its binding
-and the canonical settlement plan. Removing this RPC does not reduce model-visible text
-or qualify complete-task cost.
+The [optional-context source follow-up](https://github.com/loopx-project/loopx/pull/8455)
+keeps source-free status readback independent of executable-source extraction,
+while declared complete native sources pass the existing complete-decision owner
+before participation facts or guidance are read. A damaged binding, unsupported
+version/codec or changed retained field cannot fall back to the raw-quota signature.
+The recall observation is separate from the signed governing payload; enablement
+must not rewrite that source merely to attach provider readback. Registration,
+namespace, slot and budget checks remain. Valid guidance and recorded wrapped Host
+readers keep their binding and canonical settlement; invalid sources retain status
+observations but cannot deliver advice. This adds native complete-source validation.
+The earlier status-only RPC reduction does not qualify model-window or whole-task
+benefit, and native signature retirement remains open.
 
 Selected Todo notes now adopt the [main field registry](https://github.com/loopx-project/loopx/pull/8386).
 C1 removes its separate note rule and duplicate native regression. The shared
