@@ -3,6 +3,7 @@ import copy
 from hashlib import sha256
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -656,8 +657,6 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
     process = subprocess.run(command, cwd=Path(__file__).resolve().parents[2],
         capture_output=True, text=True, check=False)
     assert process.returncode == 0, process.stdout + process.stderr
-    text = process.stdout if format_name == "json" else process.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
-    output = json.loads(text)
     original = (capture / "decision.json").read_bytes()
     contract = json.loads(original)
     assert contract["schema_version"] == "loopx_turn_envelope_v1"
@@ -665,10 +664,25 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
     assert summary["first_open_items_ref"] == "$.agent_todo_summary.first_executable_items"
     assert summary["first_executable_items"][0]["todo_id"] == TODO_ID
     assert summary["first_executable_items"][0]["status"] == "open"
-    assert output["interaction_contract"] == contract["interaction_contract"]
-    assert output["contract_binding"] == contract["contract_binding"]
-    assert output == contract  # Every original fact and instruction survives rendering.
-    assert "action" not in output and "contract_capsule" not in output
+    if envelope_flag and format_name == "markdown":
+        # The legacy human view renders action lines and an optional work-context
+        # block. Its complete machine-readable source stays in decision.json.
+        assert process.stdout.startswith("# LoopX Turn Envelope\n")
+        assert f"- goal_id: `{GOAL_ID}`" in process.stdout
+        assert f"- decision: `{contract['decision']}`" in process.stdout
+        assert '"interaction_contract":' not in process.stdout
+    elif envelope_flag:
+        output = json.loads(process.stdout)
+        assert output["schema_version"] == "loopx_turn_envelope_v0"
+        assert output["action_signature"]["matches"] is True
+        assert output["action_signature"]["source_decision_hash"] == contract["contract_binding"]["content_hash"]
+        assert shlex.split(output["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
+        assert output["writeback"]["settlement_plan"]["identity"] == contract["heartbeat_receipt"]["settlement_identity"]
+    else:
+        text = process.stdout if format_name == "json" else process.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        output = json.loads(text)
+        assert output == contract  # Every original fact and instruction survives rendering.
+        assert "action" not in output and "contract_capsule" not in output
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="fixture", context_epoch="one")
     first = prepare_context_delivery(contract, scope=scope, capture_id="one", surface="complete_turn")
     current = prepare_context_delivery(contract, scope=scope, capture_id="two", surface="complete_turn")

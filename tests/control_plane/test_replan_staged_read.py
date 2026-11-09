@@ -282,8 +282,6 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
-            from loopx.control_plane.turn_driver.codex_context import codex_context_hook
-
             assert "--prepared-capture-reference" in commands[0] and "--defer-context-presentation" in commands[0]
             assert "--decision-output-root" not in commands[0]
             captured_dir = Path(commands[0][commands[0].index("--decision-output-dir") + 1])
@@ -532,19 +530,24 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
-            # This case consumes the authority decision to test its retained
-            # material codec. Native presentation has its own matrix above.
+            # Exercise complete output and the explicit bounded legacy view.
             "--context-delivery", "off",
             *(["--turn-envelope"] if envelope else []))
-        # Exercise the retained historical material-reader codec against the
-        # actual new capture. Complete input itself needs no deferred body.
-        packet = build_turn_envelope(guard)["replan_action_packet"]
-        assert guard["schema_version"] == "loopx_turn_envelope_v1"
-        assert "settlement_plan" in guard["interaction_contract"]["cli_channel"]
-        assert "settlement_read_ref" not in guard["interaction_contract"]["cli_channel"]
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
-        assert guard == source
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        entry_writeback = source["interaction_contract"]["cli_channel"]
+        assert "settlement_read_ref" not in entry_writeback
+        if envelope:
+            assert guard["schema_version"] == "loopx_turn_envelope_v0"
+            assert guard["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+            assert shlex.split(guard["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
+            packet = guard["replan_action_packet"]
+        else:
+            assert guard == source
+            # Complete output needs no deferred reads; test the historical
+            # material reader against this same capture as well.
+            packet = build_turn_envelope(source)["replan_action_packet"]
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):
@@ -574,7 +577,6 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 changed.pop("replan_read_path")
             projected = _turn_envelope_result("replan_cli_view", payload=changed)
             assert explore_source(projected)["content"]["graph"] == graph
-        entry_writeback = guard["interaction_contract"]["cli_channel"]
         assert entry_writeback["settlement_plan"]["identity"] == source["heartbeat_receipt"]["settlement_identity"]
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
         # Executable commands come from the production packet. Deliberately use
@@ -593,9 +595,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
-        # Complete input keeps supported authoring inline. Historical staged
-        # reads remain exact material reads, not a second execution contract.
-        assert explore_source(guard)["content"] == explore_source(source)["content"]
+        # Historical staged reads recover authoring from the original complete source.
         original_graph = explore_source(source)["content"]["graph"]
         writer_step = next(row for row in writer["writeback"]["settlement_plan"]["ordered_steps"]
                            if row["kind"] == "durable_writeback")
@@ -608,14 +608,10 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         assert attachment["attachment_template"] == original_graph["result_attachment_template"]
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
-        # Both retired flag values deliver complete planning facts. The
-        # original captured material reads cannot replace them with fresh state.
+        # Both display modes retain the complete facts in the original capture.
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        assert guard.get("core_goal") == source.get("core_goal")
-        assert guard.get("planning_horizon") == source.get("planning_horizon")
-        assert guard.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
         assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
