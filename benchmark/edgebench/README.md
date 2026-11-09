@@ -226,6 +226,18 @@ An Official worker without a checkpoint must retain its existing session and
 use its authorized runtime owner's idle credential handoff; this preparation
 helper does not provide a live credential-replacement transaction.
 
+An unchanged stopped heartbeat worker with an empty-output legacy Host failure
+can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
+native-history, source, current Goal and account qualification. Seal with
+`python -m benchmark.edgebench.stopped_recovery --idle-host-handoff` using the
+original source declaration; then select the original scheduler digest with
+`benchmark.runtime.scheduler --idle-host-state-sha256`. Both options are off by
+default. The original failure remains recorded. This route preserves the
+existing completed session and source rather than manufacturing an interrupted
+Turn. Native judge restoration, opportunity/cooldown conservation, the audited
+remaining allowance and a finite owner cutoff remain separate requirements.
+It does not apply to Official or native-Goal workers.
+
 When the product must run from main while the adapter is under development, set
 `LOOPX_SRC_DIR` / `LOOPX_EXPECTED_COMMIT` to the clean product checkout and
 `LOOPX_RUNNER_SRC_DIR` / `LOOPX_EXPECTED_RUNNER_COMMIT` to the clean runner checkout.
