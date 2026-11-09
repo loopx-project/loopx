@@ -22,25 +22,69 @@ type ReadSelection = {pointer: string; path: Path};
 type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
+const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
 
+function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] | undefined {
+  return (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
+    && Array.isArray(plan.ordered_steps) ? plan.ordered_steps : undefined;
+}
+
+function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
+    plan: JsonObject | null | undefined): JsonObject | undefined {
+  const cli = jsonObject(interaction.cli_channel), prepared = jsonObject(cli?.execution_preparation);
+  const identity = jsonObject(plan?.identity);
+  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && jsonObject(interaction.agent_channel)?.delivery_allowed === true && cli?.selection_required !== true
+    && prepared?.state === "ready" && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
+    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
+    && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
+    && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
+    ? identity : undefined;
+}
+
+function reusableWritebackPrecondition(context: JsonObject): ReusableReadField | undefined {
+  const interaction = jsonObject(context.interaction_contract);
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return undefined;
+  const plan = jsonObject(at(context, SETTLEMENT_PLAN_PATH)), steps = orderedSettlementSteps(plan);
+  const identity = readySettlementIdentity(context, interaction, plan);
+  const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+  const agent = context.agent_id ?? identityAgent;
+  if (!plan || !steps || !identity || typeof agent !== "string" || agent !== identity.agent_id
+      || (identityAgent !== undefined && identityAgent !== agent)
+      || typeof context.goal_id !== "string" || context.goal_id !== identity.goal_id
+      || typeof context.registry !== "string" || !context.registry
+      || typeof context.runtime_root !== "string" || !context.runtime_root) return undefined;
+  const writebacks = steps.map((value, index) => ({step: jsonObject(value), index}))
+    .filter(({step}) => step?.kind === "durable_writeback");
+  if (writebacks.length !== 1) return undefined;
+  const {step, index} = writebacks[0]!;
+  if (step?.owner !== "agent" || typeof step.precondition !== "string") return undefined;
+  return {path: [...SETTLEMENT_PLAN_PATH, "ordered_steps", index, "precondition"],
+    freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+    sourceIdentity: JSON.stringify([context.registry, context.runtime_root, context.goal_ref ?? null,
+      plan.schema_version, identity.goal_id, agent, identity.todo_id, step.kind, step.owner])};
+}
+
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
 function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactBody): ReusableReadField[] {
   const exactFields = exactBody && at(context, exactBody.path) !== undefined
     ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
+  const writeback = reusableWritebackPrecondition(context);
+  const fields = [...exactFields, ...(writeback ? [writeback] : [])];
   const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
   const work = jsonObject(at(context, workPath));
   const base = [...workPath, "sources"];
   const sources = work?.sources;
-  if (!Array.isArray(sources)) return exactFields;
+  if (!Array.isArray(sources)) return fields;
   const selectedId = jsonObject(context.selected_todo)?.todo_id;
   const selectedSources = sources.filter(value => jsonObject(value)?.source === "selected_todo").length;
-  return [...exactFields, ...sources.flatMap<ReusableReadField>((value, i) => {
+  return [...fields, ...sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
@@ -192,8 +236,27 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
   // retain a margin for the existing recovery guidance, or deliver it whole.
   if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES >= bytes(original))
     return undefined;
-  return {...(request.include_initial_read_plan === true
-    ? compactObservedSelection(original, grouped) : {selections: grouped}), reused};
+  if (request.include_initial_read_plan === true) {
+    // The IO adapter already has the ordinary plan. Keep unchanged runs even
+    // when reused sections are far apart in the ordered selection.
+    const positions = new Map(grouped.map((row, index) => [row.pointer, index]));
+    const splices: {start: number; end: number; selections: typeof selections}[] = [];
+    let start = 0, next = 0;
+    for (let end = 0; end < original.length; end++) {
+      const position = positions.get(original[end].pointer);
+      if (position === undefined || position < next) continue;
+      if (start < end || next < position)
+        splices.push({start, end, selections: grouped.slice(next, position)});
+      start = end + 1;
+      next = position + 1;
+    }
+    if (start < original.length || next < grouped.length)
+      splices.push({start, end: original.length, selections: grouped.slice(next)});
+    const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
+    if (splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: grouped})))
+      return {...edits, reused};
+  }
+  return {selections: grouped, reused};
 }
 
 function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
@@ -218,15 +281,34 @@ function withLinkedObservedRemainder(observed: JsonObject | undefined,
   if (!observed || !initial?.linked_opening_detail || !initial.remaining
       || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
   const ordinary = initial.plan.selections as ReadSelection[];
-  const splice = observed.selection_splice as {start: number; end: number; selections: ReadSelection[]} | undefined;
-  const selected = splice
-    ? [...ordinary.slice(0, splice.start), ...splice.selections, ...ordinary.slice(splice.end)]
-    : observed.selections as ReadSelection[];
+  const selected = observedSelection(ordinary, observed);
+  if (selected === undefined) return observed;
   const addresses = new Set(selected.map(row => row.pointer));
   const remaining = initial.remaining.selections as ReadSelection[];
   const scoped = remaining.flatMap(row => addresses.has(row.pointer) || selected.some(item => pathStartsWith(row.path, item.path))
     ? [row] : selected.filter(item => pathStartsWith(item.path, row.path)));
   return {...observed, linked_remaining: compactObservedSelection(remaining, scoped)};
+}
+
+function observedSelection(ordinary: ReadSelection[], observed: JsonObject): ReadSelection[] | undefined {
+  const candidate = observed.selection_splices ?? (observed.selection_splice === undefined
+    ? undefined : [observed.selection_splice]);
+  if (candidate === undefined)
+    return Array.isArray(observed.selections) ? observed.selections as ReadSelection[] : undefined;
+  if (!Array.isArray(candidate) || !candidate.length) return undefined;
+  const selected: ReadSelection[] = [];
+  let cursor = 0;
+  for (const value of candidate) {
+    const splice = jsonObject(value);
+    const start = splice?.start, end = splice?.end, replacement = splice?.selections;
+    if (typeof start !== "number" || !Number.isSafeInteger(start) || typeof end !== "number"
+        || !Number.isSafeInteger(end) || start < cursor || end < start || end > ordinary.length
+        || !Array.isArray(replacement)) return undefined;
+    selected.push(...ordinary.slice(cursor, start), ...replacement as ReadSelection[]);
+    cursor = end;
+  }
+  selected.push(...ordinary.slice(cursor));
+  return selected;
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject, exactBody?: ReusableExactBody): JsonObject {
@@ -792,23 +874,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include(...source, "content", "harness", "orchestration_gate");
   });
   const cli = object(interaction.cli_channel);
-  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const planPath = SETTLEMENT_PLAN_PATH;
   const plan = object(cli?.settlement_plan);
-  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
-    && Array.isArray(plan.ordered_steps)
-    ? plan.ordered_steps : undefined;
-  const prepared = object(cli?.execution_preparation);
-  const identity = object(plan?.identity);
+  const steps = orderedSettlementSteps(plan);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && cli?.selection_required !== true && prepared?.state === "ready"
-    && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
-    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
-    && object(context.selected_todo)?.todo_id === identity.todo_id
-    && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
+  const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
     && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
     && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));
