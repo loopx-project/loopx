@@ -128,18 +128,24 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
-function measuredSearchComparison(scopedFindings: readonly JsonObject[], decision: WorkYardstickDecision) {
-  const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) =>
-    measuredPair(projectExploreMeasurementFeedback(scopedFindings, candidates).find(row => matchesProfile(row, profile)));
+function measuredSearchComparison(
+  scopedFindings: readonly JsonObject[],
+  decision: WorkYardstickDecision,
+  cited: ReadonlySet<string>,
+) {
+  const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) => {
+    const feedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
+      (row.work_binding !== undefined || row.work_yardstick !== undefined || cited.has(measurement.evidence_ref))
+      && (!candidates || candidates.has(measurement.candidate_ref)));
+    return measuredPair(feedback.find(row => matchesProfile(row, profile)));
+  };
   const goal = pairFor(decision.authoritative);
   if (!goal) return null;
   // Both comparisons have two distinct candidates. Scope the proxy lookup to
   // the two goal candidates so a rejected sibling proxy false-positive or a
   // later proxy-only screening row cannot displace their paired comparison.
   const goalCandidates = new Set([goal.previous_best.candidate_ref, goal.latest.candidate_ref]);
-  const screen = decision.proxy && pairFor(decision.proxy, goalCandidates);
-  const proxy = screen && goalCandidates.has(screen.previous_best.candidate_ref)
-    && goalCandidates.has(screen.latest.candidate_ref) ? screen : null;
+  const proxy = decision.proxy && pairFor(decision.proxy, goalCandidates);
   const reversed = !!(goal.preferred_candidate_ref && proxy?.preferred_candidate_ref
     && goal.preferred_candidate_ref !== proxy.preferred_candidate_ref);
   const opening = goal.preferred_candidate_ref === null
@@ -176,16 +182,28 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     row.node_id === source.node_id && profiles.some(p => matchesProfile(row, p)));
   // An earlier target can share the same evaluator profile and work identity.
   // Filter source findings before ranking so its best cannot displace a legal pair.
+  const cited = new Set(counter);
+  const sourceOrder = source.recorded_order;
   const scopedFindings = findings.filter(row => {
-    if (row.node_id !== source.node_id || !belongsToWork(row, params)) return false;
+    if (row.node_id !== source.node_id) return false;
+    const bound = jsonObject(row.work_binding) !== null;
+    if (bound && (!belongsToWork(row, params) || row.status !== "confirmed")) return false;
+    // A decision can cite the agent's earlier measurements on this linked
+    // question without changing their provenance or assigning earlier work.
+    if (row.work_yardstick === undefined) {
+      if (bound) return true;
+      const order = row.recorded_order;
+      // A repeated reference appended later cannot change the decision's evidence.
+      return cited.size > 0 && typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
+        && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder
+        && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
+        && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
+    }
     const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
-    const recordedWork = jsonObject(row.work_binding);
-    if (target === undefined) return recordedWork !== null && row.status === "confirmed";
-    return target.summary === decision.target.summary && target.scope === decision.target.scope
-      && target.acceptance_ref === decision.target.acceptance_ref
-      && (recordedWork === null || row.status === "confirmed");
+    return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
+      && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
   });
-  const searchComparison = measuredSearchComparison(scopedFindings, decision);
+  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
     ...(searchComparison ? {search_comparison: searchComparison} : {}),
@@ -201,10 +219,11 @@ export function projectExploreFindingReceipt(params: JsonObject): JsonObject {
   const findings = (params.findings ?? []) as JsonObject[];
   const written = findings.find(row => row.finding_id === params.finding_id && belongsToWork(row, params));
   if (!written) throw new EffectRuntimeRequestError("Explore receipt requires its committed work finding");
-  const scoped = findings.filter(row => row.node_id === written.node_id && belongsToWork(row, params));
-  const feedback = projectExploreMeasurementFeedback(scoped.filter(row => row.status === "confirmed"));
+  const question = findings.filter(row => row.node_id === written.node_id);
+  const feedback = projectExploreMeasurementFeedback(question.filter(row =>
+    row.status === "confirmed" && belongsToWork(row, params)));
   const latest = feedback.filter(group => group.latest.finding_id === written.finding_id);
-  const cue = projectWorkYardstickCue({...params, findings: scoped, measurement_feedback: feedback});
+  const cue = projectWorkYardstickCue({...params, findings: question, measurement_feedback: feedback});
   const comparison = cue?.search_comparison as ReturnType<typeof measuredSearchComparison> | undefined;
   const participates = comparison && [comparison.goal, comparison.proxy].some(pair =>
     pair?.latest.finding_id === written.finding_id || pair?.previous_best.finding_id === written.finding_id);
