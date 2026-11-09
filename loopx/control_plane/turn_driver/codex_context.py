@@ -876,6 +876,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
                     result["baseline_reference"] = request["baseline_reference"]
+                read_plan = transaction.get("initial_read_plan")
                 if result.get("schema_version") == "context_delivery_v1":
                     state["recovery"]["target"] = result["target"]
                     state["recovery"]["continuity_basis"] = "captured_file"
@@ -889,12 +890,14 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     if plan := transaction.get("observed_first_read"):
                         from .native_first_read import observed_first_read_reference
 
-                        reference = observed_first_read_reference(directory, result["target"], recovery,
-                            transaction["context"], plan, transaction.get("initial_read_plan"))
-                        if reference is not None:
+                        pinned = observed_first_read_reference(directory, result["target"], recovery,
+                            transaction["context"], plan, read_plan)
+                        if pinned is not None:
+                            reference, opening = pinned
                             state["pending"]["observed_first_read"] = reference
+                            if opening is not None:
+                                read_plan = {**read_plan, "observed_opening": opening}
                     _save(root, state)
-                read_plan = transaction.get("initial_read_plan")
                 if read_plan is not None:
                     read_plan = {**read_plan, "capture": {key: recovery[key] for key in ("path", "sha256")}}
                 return NativeContextPreparation(result, read_plan)

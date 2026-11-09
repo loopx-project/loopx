@@ -303,6 +303,16 @@ immutable capture.
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
 
+The native `quota should-run` navigation can link two reads when a ready
+decision's write scope pushes its controls past the serialized first page
+budget. When those controls fit, the ordinary reader keeps its cursor.
+Read `first_read_command` for the decision, stop conditions and required reads.
+If `remaining_read_command` is present,
+follow it and its cursor before work, even when the opening reports EOF. It
+starts with the complete current write scope and uses the same capture.
+The remainder can refer to other fully observed, unchanged fields. If the
+observation is lost, its same-capture fallback restores the full remainder.
+
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
 已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
@@ -316,6 +326,13 @@ decision and its original receipt.
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+
+原生 `quota should-run` 的已就绪决策中，如果写入范围让控制信息超出序列化后的首页
+预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
+先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
+`remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
+续读从完整的当前写入范围开始，两段绑定同一份捕获。
+续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
