@@ -157,10 +157,9 @@ class ChatExternalConversations:
         elif selected_binding is None:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
         reservation = row.get("context_recovery") or {}
-        admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
-            if (reservation.get("routing_attempt") or reservation.get("quota_attempt") or reservation.get("preparation_attempt")
-                or reservation.get("read_only_review") or reservation.get("work_attempt")
-                or reservation.get("metadata_review"))
+        client_turn_id = reservation.get("client_turn_id")
+        admitted = (store.turn_for_client(session["session_id"], client_turn_id)
+            if isinstance(client_turn_id, str) and client_turn_id
             and reservation.get("failed_turn_id") == turn["turn_id"]
             and (retained_review is None or reservation.get("work_attempt") == 1
                  or reservation.get("legacy_result_review")) else None)

@@ -42,6 +42,20 @@ boundary to adopt it. Do not retain custom launch scripts or editable imports in
 temporary worktree. A missing optional channel or its credentials remains an
 explicit unavailable channel; never reconstruct credentials from chat history.
 
+When an existing macOS `com.loopx.codex-native-accounts` LaunchAgent watches
+the same account root as managed Chat, adopt the qualified Core and its pinned
+provider environment together. Run the installed target's
+`update activate --service all --runtime-executable <target-loopx>`.
+The supported direct `watch` job participates in the same handoff as Chat and
+Status. The handoff waits for accepted Chat and account work, starts the
+observer first, and verifies its lock and both loaded builds from the 0.15.5
+observer heartbeat before committing.
+It restores the previous job routes on failure. Once the watcher has been
+adopted, a Core update without a pinned provider defers before replacing any
+service. Core-only updates still leave unbound standalone watchers in place.
+Run the provider's separate relay reconciliation after the managed processes
+have adopted the same build.
+
 `loopx-native-account-provider` reads this JSON protocol on stdin:
 
 ```json

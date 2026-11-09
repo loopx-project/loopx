@@ -23,7 +23,8 @@ const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
 assert.ok(renderedStudy.includes(study.title));
 assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
 assert.ok(renderedStudy.includes('not current results'));
-assert.ok(renderedStudy.includes('unknown'), 'Missing values do not become zero');
+assert.match(renderedStudy, /候选 A<.*?>7<.*?候选 B<.*?>Not recorded<.*?候选 C<.*?>3</,
+  'Saved chart observations stay in author order, with numbers and the unrecorded value visible together');
 for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
 
 const casePack = {pack_id: "one", title: "First study", scope: caseFixture.analyses[0].input.scope,
