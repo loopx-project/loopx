@@ -3,6 +3,7 @@ import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../../loopx/control_plane/agents/a
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import {deflateSync} from "node:zlib";
 
 import {
   TURN_ACTION_ROUTES,
@@ -24,6 +25,20 @@ import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_o
 import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes}
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
+
+test("complete composition accepts exactly one bounded compressed source", () => {
+  const source = payload();
+  const packed = deflateSync(Buffer.from(JSON.stringify(source)));
+  const request = {operation: "compose_complete", scheduler_execution_args: "", source_edits: true};
+  const packedRequest = (data: Buffer) => ({...request, source_transport: {
+    encoding: "deflate-base64-json-v0", data: data.toString("base64")}});
+  assert.deepEqual(evaluateTurnEnvelope(packedRequest(packed)),
+    evaluateTurnEnvelope({...request, payload: source}));
+  for (const suffix of [Buffer.from([0, 255]),
+    deflateSync(Buffer.from(JSON.stringify({...source, goal_boundary: {stop_condition: "A different stop"}})))]) {
+    assert.throws(() => evaluateTurnEnvelope(packedRequest(Buffer.concat([packed, suffix]))), /valid compressed JSON/);
+  }
+});
 
 test("complete captures reuse progressive presentation only after source validation", () => {
   const source = payload();
