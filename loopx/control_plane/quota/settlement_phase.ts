@@ -2,7 +2,7 @@ import { settlementIdentity, type SettlementIdentity } from "../effect_program.t
 import { jsonObject } from "../runtime_decode.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { isCanonicalTodoId } from "../todos/identity.ts";
-import { isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
+import { blockedResumeInstant, isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
 
 function retryDelayIsBounded(seconds: number): boolean {
@@ -22,8 +22,9 @@ export function isBoundedBlockedRetry(value: unknown, todoId: string | null): bo
       typeof todoId !== "string" || retry.todo_id !== todoId ||
       typeof retry.observed_at !== "string" || typeof retry.due_at !== "string" ||
       retry.resume_when !== `resume_at:${retry.due_at}`) return false;
-  const observed = Date.parse(retry.observed_at);
-  const due = Date.parse(retry.due_at);
+  const observed = blockedResumeInstant(retry.observed_at);
+  const due = blockedResumeInstant(retry.due_at);
+  if (observed === null || due === null) return false;
   const delay = (due - observed) / 1000;
   return retryDelayIsBounded(delay);
 }
