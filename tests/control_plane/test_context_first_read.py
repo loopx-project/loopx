@@ -1185,3 +1185,76 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert Path(fallback[0]["reference_file"]) == ordinary
     assert {key: value for key, value in after.items() if key != body_pointer} == facts
     assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["none", "partial", "different_todo", "changed_rule", "compact"])
+def test_native_first_read_identifies_already_observed_vision_authoring(tmp_path, monkeypatch, provider, change):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact.", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "verify-source-artifact")
+    todo = added["todo_id"]
+    decision = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--turn-instance-id", "fixture-original-authoring", "--todo-id", todo)
+    assert decision["effective_action"] == "normal_run"
+    assert decision["heartbeat_receipt"]["closeout_required"] is True
+    interaction = decision["interaction_contract"]["cli_channel"]
+    steps = interaction["settlement_plan"]["ordered_steps"]
+    index, = (i for i, step in enumerate(steps) if step["kind"] == "durable_writeback")
+    prefix = "/interaction_contract/cli_channel/settlement_plan"
+    address = f"{prefix}/ordered_steps/{index}/vision_authoring"
+    original = steps[index]["vision_authoring"]
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = setup(native, monkeypatch)
+
+    def navigation(name, payload):
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(payload, directory=str(native),
+            capture_directory=directory, goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id=name)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(native), initial_read_plan=prepared.initial_read_plan))
+
+    first = navigation("original", decision)
+    page, _ = read_selection(first["first_read_command"])
+    assert "previously_delivered_fields" not in page
+    if change == "partial":
+        page = read_context_capture(Namespace(reference_file=first["recovery"]["reference_file"], offset=0,
+            page_bytes=900, format="json", select=[address]))
+        assert page["ok"] and not page["eof"]
+    else:
+        page, facts = read_selection(first["recovery"]["command"] + " --select " + address)
+        assert facts[address] == original
+    deliver(native, event, [page])
+
+    current = json.loads(json.dumps(decision).replace("fixture-original-authoring", "fixture-current-authoring"))
+    current_plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
+    if change == "different_todo":
+        current["selected_todo"]["todo_id"] = current_plan["identity"]["todo_id"] = "todo_distinct"
+        current["heartbeat_receipt"]["settlement_identity"]["todo_id"] = "todo_distinct"
+    if change == "changed_rule":
+        current_plan["ordered_steps"][index]["vision_authoring"]["authoring_hint"] += " New applicable rule."
+    second = navigation("current", current)
+    page, facts = read_selection(second["first_read_command"])
+    seen = change in {"none", "compact"}
+    assert (address in page.get("previously_delivered_fields", [])) is seen
+    for key, value in current_plan["identity"].items():
+        assert facts[prefix + "/identity/" + key] == value
+    command_path = f"{prefix}/ordered_steps/{index}/semantic_closeout_command_template"
+    assert facts[command_path] == current_plan["ordered_steps"][index]["semantic_closeout_command_template"]
+    assert "fixture-current-authoring" in facts[command_path]
+    if change == "compact":
+        codex_context.codex_context_hook(str(native), {**event, "hook_event_name": "PostCompact"})
+        fallback, _ = read_selection(second["first_read_command"])
+        assert "previously_delivered_fields" not in fallback
+    if change == "none":
+        deliver(native, event, [page])
+        next_page, _ = read_selection(navigation("later", current)["first_read_command"])
+        assert address in next_page.get("previously_delivered_fields", [])
+    _, full = read_selection(second["recovery"]["command"] + " --select " + address)
+    assert full[address] == current_plan["ordered_steps"][index]["vision_authoring"]

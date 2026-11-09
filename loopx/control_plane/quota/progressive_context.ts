@@ -75,6 +75,37 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
   });
 }
 
+function knownVisionAuthoring(step: JsonObject): boolean {
+  return step.kind === "durable_writeback" &&
+    [false, true].some(replan => isDeepStrictEqual(step.vision_authoring, visionAuthoringContract(replan)));
+}
+
+/** Only the stable writing instructions can carry forward. The ready decision,
+ * current precondition, command and settlement identity must still be delivered. */
+function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undefined {
+  const path: Path = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = jsonObject(at(context, path)), identity = jsonObject(plan?.identity);
+  const receipt = jsonObject(context.heartbeat_receipt);
+  if (context.effective_action !== EffectiveAction.NORMAL_RUN || context.normal_delivery_allowed !== true ||
+      at(context, ["interaction_contract", "user_channel", "action_required"]) !== false ||
+      receipt?.status !== "committed" || receipt.closeout_required !== true ||
+      !identity || typeof identity.effect_id !== "string" || !identity.effect_id ||
+      typeof identity.todo_id !== "string" || identity.todo_id !== jsonObject(context.selected_todo)?.todo_id ||
+      identity.goal_id !== context.goal_id || typeof identity.agent_id !== "string" ||
+      typeof identity.turn_instance_id !== "string" || identity.turn_instance_id !== receipt.turn_instance_id ||
+      !isDeepStrictEqual(identity, receipt.settlement_identity) ||
+      (plan?.schema_version !== "quota_settlement_plan_v1" && plan?.schema_version !== "quota_settlement_plan_v2") ||
+      !Array.isArray(plan.ordered_steps)) return undefined;
+  const steps = plan.ordered_steps.map(jsonObject);
+  const index = steps.findIndex(step => step?.kind === "durable_writeback");
+  const step = steps[index];
+  if (!step || step.owner !== "agent" || !isDeepStrictEqual(step.vision_authoring, visionAuthoringContract(false)) ||
+      steps.slice(index + 1).some(other => other?.kind === "durable_writeback") ||
+      typeof step.semantic_closeout_command_template !== "string" || !step.semantic_closeout_command_template) return undefined;
+  return {path: [...path, "ordered_steps", index, "vision_authoring"],
+    freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES};
+}
+
 function observedSectionDigest(body: string, field?: ReusableReadField): string {
   // Same text at a reused array index is insufficient after a Goal file rebind.
   const value = field?.sourceFile === undefined ? body : JSON.stringify([field.sourceFile, body]);
@@ -88,6 +119,8 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
   const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const authoring = reusableVisionAuthoring(context);
+  if (authoring) fields.set(pointer(authoring.path), authoring);
   const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
   for (const [address, field] of fields)
     if (paths.some(parent => pathStartsWith(field.path, parent))) covered.set(address, field);
@@ -132,6 +165,21 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   const parents = new Set([...fields.values()].flatMap(({path}) => path.map((_, i) => pointer(path.slice(0, i)))));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
+  const authoring = reusableVisionAuthoring(context);
+  const authoringAddress = authoring && pointer(authoring.path);
+  const retainedAuthoring: JsonObject = {};
+  if (authoring && authoringAddress && typeof seen[authoringAddress] === "string" &&
+      pointers.includes(pointer([...authoring.path, "rule"]))) {
+    const body = identity(at(context, authoring.path), ["context", ...authoring.path]);
+    if (Buffer.byteLength(body) >= authoring.minimumBytes &&
+        observedSectionDigest(body, authoring) === seen[authoringAddress])
+      retainedAuthoring[authoringAddress] = seen[authoringAddress];
+  }
+  const authoringOnly = () => Object.keys(retainedAuthoring).length === 0 ? undefined :
+    request.include_initial_read_plan === true
+      ? {selection_splice: {start: 0, end: 0, selections: []}, reused: retainedAuthoring}
+      : {selections: capturedContextSelection({context, initial_read: true}, pointers).selections,
+        reused: retainedAuthoring};
   // Match semantic fields before the reader groups complete parents. Otherwise
   // selecting every outcome hides the individual unchanged bodies from reuse.
   const selections = capturedContextSelection({context, select: pointers,
@@ -157,15 +205,16 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
     return Object.keys(reused).length > before ? children : [row];
   };
   const current = selections.flatMap(visit);
-  if (!Object.keys(reused).length) return undefined;
+  if (!Object.keys(reused).length) return authoringOnly();
   const grouped = capturedContextSelection({context, initial_read: true}, current.map(row => row.pointer)).selections as typeof selections;
   const original = capturedContextSelection({context, initial_read: true}, pointers).selections as typeof selections;
   const bytes = (rows: typeof selections) => rows.reduce((total, row) => total + Buffer.byteLength(
     JSON.stringify({pointer: row.pointer}).slice(0, -1) + ',"value":' + identity(at(context, row.path), ["context", ...row.path]) + '}'), 0);
   // Splitting a container repeats addresses. Count those and the reuse index;
   // retain a margin for the existing recovery guidance, or deliver it whole.
-  if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES >= bytes(original))
-    return undefined;
+  if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
+      + MIN_REUSABLE_BODY_BYTES >= bytes(original)) return authoringOnly();
+  Object.assign(reused, retainedAuthoring);
   if (request.include_initial_read_plan === true) {
     // The IO adapter already receives the ordinary plan. Send the changed
     // middle of that list, keeping its exact order and coalescing decisions.
@@ -729,8 +778,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {
-        if (field === "vision_authoring" && step.kind === "durable_writeback"
-            && [false, true].some(replan => isDeepStrictEqual(step[field], visionAuthoringContract(replan)))) {
+        if (field === "vision_authoring" && knownVisionAuthoring(step)) {
           // Keep the decision and continuation policy at admission. Field limits
           // and worked examples are read from this step when writing the Vision.
           for (const key of ["schema_version", "rule", "continuation_review"]) include(...stepPath, field, key);
