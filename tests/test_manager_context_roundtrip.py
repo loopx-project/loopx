@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -133,20 +132,22 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps the fresh journal reader")
 def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
         frozen_private_reply, private_snapshot, monkeypatch):
     store, session, turn, request, *_ = frozen_private_reply
     sid = session["session_id"]
     answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
-    journal_reads = []
-    read_messages = store.messages
+    journal = store.sessions_root / sid / "messages.jsonl"
+    original_row = journal.read_bytes().split(b"\n", 1)[0]
+    decoded_original_rows = []
+    loads = json.loads
 
-    def observe(session_id, *, strict=False):
-        journal_reads.append((session_id, strict))
-        return read_messages(session_id, strict=strict)
+    def observe(value, *args, **kwargs):
+        if value == original_row:
+            decoded_original_rows.append(value)
+        return loads(value, *args, **kwargs)
 
-    monkeypatch.setattr(store, "messages", observe)
+    monkeypatch.setattr(json, "loads", observe)
     first = private_snapshot(message_limit=1)
     assert "reply_context" in first["messages"][0]
     cursor = first["message_page"]["next_cursor"]
@@ -156,9 +157,8 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
     fresh = private_snapshot(message_limit=1)
     assert "reply_context" not in fresh["messages"][0]
     assert fresh["message_page"] == first["message_page"]
-    assert journal_reads == [(sid, True)]
+    assert len(decoded_original_rows) == 1
 
-    journal = store.sessions_root / sid / "messages.jsonl"
     open_path = Path.open
 
     def unavailable(path, *args, **kwargs):
@@ -173,7 +173,7 @@ def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
 
 @pytest.mark.parametrize("replace", [False, True])
 def test_warm_history_keeps_frozen_prefix_and_rejects_same_stamp_rewrite(
-        frozen_private_reply, private_snapshot, replace):
+        frozen_private_reply, private_snapshot, monkeypatch, replace):
     store, session, turn, *_ = frozen_private_reply
     sid = session["session_id"]
     answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
@@ -194,8 +194,12 @@ def test_warm_history_keeps_frozen_prefix_and_rejects_same_stamp_rewrite(
     os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     if replace:
         target.replace(path)
-    rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=400)
-    assert "history cursor source changed" in rejected["error"]
+    # A filesystem can expose the same metadata for different journal bytes.
+    stat_path = Path.stat
+    with monkeypatch.context() as observation:
+        observation.setattr(Path, "stat", lambda item, *a, **kw: stat if item == path else stat_path(item, *a, **kw))
+        rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=400)
+        assert "history cursor source changed" in rejected["error"]
     assert private_snapshot(message_limit=3)["messages"][1]["text"] == "Modified answer"
     path.write_bytes(rewritten + b"{invalid record}\n")
     rejected = private_snapshot(message_limit=3, expected_status=400)

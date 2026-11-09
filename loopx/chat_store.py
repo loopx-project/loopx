@@ -21,7 +21,6 @@ from .chat import (
     resolve_attached_completion_replay,
 )
 from .capabilities.steward_executor.allocation import normalize_manager_executor_allocation
-from .capabilities.native_chat.file_discovery import file_change_fingerprint
 from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
@@ -101,6 +100,10 @@ def _read_jsonl(
         if raise_on_error:
             raise
         return []
+    return _decode_jsonl(lines, strict=strict)
+
+
+def _decode_jsonl(lines: list[bytes], *, strict: bool) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in lines:
         if not line.strip():
@@ -218,7 +221,7 @@ class ChatSessionStore(ChatIngressStore):
         self._event_cache = ChatEventCache(self._event_lock)
         self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
-        self._paged_history: tuple[str, tuple[int, ...], list[dict[str, Any]]] | None = None
+        self._paged_history: tuple[str, bytes, list[dict[str, Any]]] | None = None
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
@@ -899,26 +902,23 @@ class ChatSessionStore(ChatIngressStore):
                           raise_on_error=strict, strict=strict)
 
     def _paged_history_messages(self, session_id: str) -> list[dict[str, Any]]:
-        """Reuse one bounded strict parse; cursors and provider overlays still verify live."""
-        path = self._session_dir(session_id) / "messages.jsonl"
-
-        def revision() -> tuple[int, ...] | None:
-            with suppress(OSError), path.open("rb"):
-                if (stamp := file_change_fingerprint(path)) and stamp[-1] <= 64 * 1024 * 1024:
-                    return stamp
-            return None
-
-        stamp, cached = revision(), self._paged_history
-        if cached is not None and cached[:2] == (session_id, stamp):
+        """Reuse one bounded parse only after a fresh read of identical bytes."""
+        try:
+            raw = (self._session_dir(session_id) / "messages.jsonl").read_bytes()
+        except FileNotFoundError:
+            raw = b""
+        digest = hashlib.sha256(raw).digest() if len(raw) <= 64 * 1024 * 1024 else None
+        cached = self._paged_history
+        if cached is not None and cached[:2] == (session_id, digest):
             with suppress(RecursionError):
-                rows = deepcopy(cached[2])
-                if stamp == revision():
-                    return rows
+                return deepcopy(cached[2])
         self._paged_history = None
-        rows = self.messages(session_id, strict=True)
-        if stamp is not None and len(rows) <= 8192 and stamp == revision():
+        lines = raw.split(b"\n")
+        del raw
+        rows = _decode_jsonl(lines, strict=True)
+        if digest is not None and len(rows) <= 8192:
             with suppress(RecursionError):
-                self._paged_history = (session_id, stamp, deepcopy(rows))
+                self._paged_history = (session_id, digest, deepcopy(rows))
         return rows
 
     def prepared_managed_turn_request(
