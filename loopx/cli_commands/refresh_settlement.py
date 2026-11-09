@@ -18,6 +18,34 @@ from ..control_plane.quota.settlement import (
 )
 
 
+def settle_requested_refresh(payload, args, registry_path, goal_ref):
+    """Keep refresh's optional settlement composition with its existing owner."""
+    if not getattr(args, "settle_turn", False):
+        return
+    from ..history import load_registry
+    from ..paths import resolve_runtime_root
+
+    runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
+    settle_refreshed_turn(payload, registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+        replan_obligation_id=args.replan_obligation_id,
+        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
+        delivery_workspace_path=(
+            Path(args.delivery_workspace_path)
+            if args.delivery_workspace_path else None
+        ))
+    if getattr(args, "settlement_receipt", False):
+        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+        try:
+            view = present_settled_refresh(payload, runtime_root=runtime_root)
+        except QuotaDecisionTransportError as exc:
+            payload.update(ok=False, error=str(exc))
+            return  # Exact committed receipts stay visible; never re-admit.
+        if view is not payload:
+            payload.clear()
+            payload.update(view)
+
+
 def settle_refreshed_turn(
     payload: dict[str, Any], *, registry_path: Path, runtime_root: Path,
     goal_id: str, agent_id: str, todo_id: str | None,

@@ -1734,10 +1734,13 @@ All prefixes share the configured hard Turn time budget; it is not renewed for
 each compaction.
 
 A bound Codex steward can retain its working thread across an isolated answer
-review. Before entering review, Core verifies the current working adapter is
-idle and stores its native identity, provider and source-policy basis with the
-review Turn. On return with the same authority, the adapter resumes that native
-thread directly if there are no new visible review answers. Otherwise it uses a
+review. Opening the working adapter under a verified account records its
+native thread, provider and source-policy basis. If the service restarts before
+the review, this saved identity is eligible only while the account, settings
+and binding still match. A live adapter must be idle before Core parks its
+working identity with the review Turn. On return with the same authority, the
+adapter resumes that native thread directly if there are no new visible review
+answers. Otherwise it uses a
 native fork to inherit the compaction checkpoint and injects only those answers.
 The recovered user input already belongs to the original request. It is not a
 new history message. The child is published only after the exact policy, source,

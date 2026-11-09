@@ -176,9 +176,11 @@ def test_model_can_recover_from_one_unexecuted_read_shape(
         _stop_response("User gate: review the unrelated product first screen."),
     ]
     call_count = 0
+    requests: list[dict[str, Any]] = []
 
-    def transport(**_: Any) -> Mapping[str, Any]:
+    def transport(**kwargs: Any) -> Mapping[str, Any]:
         nonlocal call_count
+        requests.append(json.loads(kwargs["body"]))
         response = responses[call_count]
         call_count += 1
         return response
@@ -197,6 +199,14 @@ def test_model_can_recover_from_one_unexecuted_read_shape(
         "workspace_read_rejected",
         "selected_action",
     ]
+    feedback = requests[2]["messages"][-1]
+    assert feedback["role"] == "tool"
+    assert "without executing it" in feedback["content"]
+    assert "`cat <that exact path>`" in feedback["content"]
+    assert "do not rediscover the workspace or inspect state" in feedback["content"]
+    assert "no additional read scope or tool budget" in feedback["content"]
+    assert "using pwd, ls" not in feedback["content"]
+    assert receipt["tool_call_limit"] == SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS
 
 
 def test_mutating_command_is_not_retried_as_read_intent(tmp_path: Path) -> None:

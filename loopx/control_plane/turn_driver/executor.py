@@ -381,7 +381,7 @@ def validate_loopx_turn_host_result(
 ) -> dict[str, Any]:
     result = dict(value)
     errors: list[str] = []
-    optional_fields = capability_result_fields(project_turn_context(plan))
+    optional_fields = capability_result_fields(project_turn_context(plan, from_journal=from_journal))
     if (
         from_journal
         and "turn_context_contributions" not in plan
@@ -1038,8 +1038,9 @@ def _host_result_stage(
         result = dict(host_observation["value"])
         completed_phases = list(TRANSACTION_PHASES[:2])
 
+    recorded_plan = journal.get("plan")
     validation = validate_loopx_turn_host_result(
-        plan,
+        recorded_plan if from_journal and isinstance(recorded_plan, Mapping) else plan,
         result or {},
         completion_lifecycle_configured=completion_lifecycle_configured,
         from_journal=from_journal,
@@ -1473,6 +1474,26 @@ def _prepare_host_invocation(
     return None, {"executable": "built-in", "kind": str(planned_host.get("kind") or "codex-cli")}
 
 
+def _host_attempt_requirements(
+    journal: Mapping[str, Any] | None,
+) -> tuple[bool, bool, Mapping[str, Any] | None]:
+    """Choose the Host attempt, result retry and recorded complete input."""
+    if journal is None:
+        return True, False, None
+    receipt = journal.get("receipt")
+    retry_validation = (
+        journal.get("status") == "failed"
+        and isinstance(receipt, Mapping)
+        and receipt.get("failed_phase") == "validation"
+        and journal.get("validation_stage") != "task_postcondition"
+    )
+    needs_host = retry_validation or "typed_result" not in list(journal.get("completed_phases") or [])
+    recorded = journal.get("plan")
+    if isinstance(recorded, Mapping) and recorded.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        return needs_host, retry_validation, recorded
+    return needs_host, retry_validation, None
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1583,6 +1604,10 @@ def run_loopx_turn_once(
 
     with exclusive_file_lock(journal_path):
         journal = _load_journal(journal_path)
+        # Settlement recovery uses its cached host result and must not reserve
+        # another interval. A new host attempt, including failed-result retry,
+        # goes through admission before any host or journal attempt mutation.
+        needs_host, validation_reinvokes_host, recorded_plan = _host_attempt_requirements(journal)
         recovery_decision: dict[str, Any] | None = None
         if journal is not None:
             if goal_admission is not None:
@@ -1592,6 +1617,10 @@ def run_loopx_turn_once(
                     operation="turn_recovery_lifetime",
                 ):
                     pass
+            if recorded_plan is not None:
+                # Recovery uses the recorded source through Host dispatch,
+                # cached-result validation and settlement.
+                plan, request = recorded_plan, build_loopx_turn_host_request(recorded_plan)
             if settlement_lineage is not None:
                 agent_id = settlement_lineage["agent_id"]
             else:
@@ -1632,22 +1661,6 @@ def run_loopx_turn_once(
                 return payload
             request = require_turn_recovery_continuation(assessment)
 
-        # Settlement recovery uses its cached host result and must not reserve
-        # another interval. A new host attempt, including failed-result retry,
-        # goes through admission before any host or journal attempt mutation.
-        receipt = journal.get("receipt") if isinstance(journal, Mapping) else None
-        validation_reinvokes_host = (
-            isinstance(journal, Mapping)
-            and journal.get("status") == "failed"
-            and isinstance(receipt, Mapping)
-            and receipt.get("failed_phase") == "validation"
-            and journal.get("validation_stage") != "task_postcondition"
-        )
-        needs_host = (
-            validation_reinvokes_host
-            or journal is None
-            or "typed_result" not in list(journal.get("completed_phases") or [])
-        )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
         if needs_host and argv is not None and (reason := host_request_schema_mismatch(

@@ -54,6 +54,22 @@ def test_satisfied_outcome_needs_evidence_and_no_competing_effect():
     assert not evaluation.score(case, {"message": "Done."})["passed"]
 
 
+def test_accepted_report_fixture_supplies_the_content_it_claims_to_have_read():
+    suite = json.loads((ROOT / "examples/evaluations/chat-intake.public.json").read_text())
+    case = next(row for row in suite["cases"] if row["id"] == "already-accepted-report")
+    context = suite["contexts"][case["context_ref"]]
+    report = next(row for row in context["external_observations"] if row["ref"] == "report-v2")
+    assert report["content_read"] is True and report["status"] == "accepted"
+    assert isinstance(report["content"], str) and report["content"].strip()
+    assert "report-v2" in report["content"]
+    assert "synthetic" in report["content"]
+    assert evaluation.score(case, {"message": report["content"]})["passed"]
+    assert not evaluation.score(case, {
+        "message": report["content"],
+        "context_handoff": {"goal_id": "cashflow", "agent_id": "researcher"},
+    })["passed"]
+
+
 def test_shared_intake_guidance_precedes_handoff_without_widening_runtime():
     from loopx.chat_agent import CONVERSATION_INTENT_RESOLUTION_INSTRUCTION, _turn_prompt
     from loopx.chat_manager import manager_agent_objective
