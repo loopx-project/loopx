@@ -26,7 +26,7 @@ import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES, verifiedSelectedTodoSource } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -598,17 +598,8 @@ function referenceVisionContinuation(payload: JsonObject,
 function currentTaskTitleOwner(payload: JsonObject): {index: number; todo: JsonObject} | null {
   const lane = object(payload.agent_lane_next_action), selected = object(payload.selected_todo);
   const context = object(object(object(payload.interaction_contract).agent_channel).work_context);
-  if (context.complete !== true || context.selected_todo_text_verified !== true ||
-      typeof lane.todo_id !== "string" || !lane.todo_id || selected.todo_id !== lane.todo_id ||
-      !Array.isArray(context.sources)) return null;
-  const matches = context.sources.map((value, index) => ({source: object(value), index}))
-    .filter(({source}) => source.source === "selected_todo");
-  if (matches.length !== 1) return null;
-  const {source, index} = matches[0], content = object(source.content), todo = object(content.todo);
-  if (content.ok !== true || content.matched !== true || content.ambiguous === true ||
-      content.read_complete === false || typeof todo.text !== "string" ||
-      todo.archive_state === "archive" || todo.status === "done" || todo.todo_id !== lane.todo_id) return null;
-  return {index, todo};
+  if (selected.todo_id !== lane.todo_id) return null;
+  return verifiedSelectedTodoSource(context, lane.todo_id);
 }
 
 function requireCurrentTaskTitleReference(payload: JsonObject): void {

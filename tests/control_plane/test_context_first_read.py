@@ -1185,3 +1185,119 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert Path(fallback[0]["reference_file"]) == ordinary
     assert {key: value for key, value in after.items() if key != body_pointer} == facts
     assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ready_native_guard_reuses_only_observed_selected_todo_note(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    task = "Validate and settle the selected delivery. "
+    task += "Keep the independent verification and its evidence available. " * 32
+    state.write_text(state.read_text().replace("Validate and settle the selected delivery.", task.strip()))
+    registry_body = json.loads(registry.read_text())
+    registry_body["goals"][0]["quota"]["allowed_slots"] = 3
+    registry.write_text(json.dumps(registry_body))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+
+    journal = tmp_path / "journal"
+    journal.mkdir(mode=0o700)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    event = setup(journal, monkeypatch)
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+
+    def run(*args):
+        code, reply = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and reply["ok"], {key: reply.get(key) for key in ("error", "error_code", "reason", "state")}
+        return reply
+
+    claim = run("todo", "claim", *scope, "--claimed-by", AGENT_ID)
+    note = ("复核原始证据并保留任务的完整验证条件。 " * 360).strip()
+
+    def update_note(text, operation):
+        current = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        assert current is not None
+        run("todo", "update", *scope, "--update-operation-id", operation, "--note", text,
+            "--update-expected-provider-revision", current["provider_revision"],
+            "--claim-operation-id", claim["claim_operation_id"])
+
+    def capture(turn):
+        return run("quota", "should-run", "--codex-app", "--context-delivery", "on",
+            "--codex-context-dir", str(journal), "--decision-output-root", str(captures),
+            "--turn-instance-id", turn, "--available-capability", "shell",
+            "--available-capability", "filesystem_read", *scope)
+
+    def read(command):
+        pages, offset = [], 0
+        while command:
+            words = shlex.split(command)
+            page = run(*words[words.index("quota"):])
+            assert page["offset"] == offset
+            pages.append(page)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(page["content"] for page in pages))
+
+    def settle(view):
+        plan_path = "/interaction_contract/cli_channel/settlement_plan"
+        plan = read(view["recovery"]["command"] + " --select " + plan_path)[1][plan_path]
+        steps = {step["kind"]: step for step in plan["ordered_steps"]}
+        command = shlex.split(steps["durable_writeback"]["command_template"])
+        replacements = {"<validated_progress>": "fixture_note_reviewed",
+                        "<scale>": "single_surface", "<outcome>": "outcome_progress"}
+        argv = [replacements.get(word, word) for word in command[command.index("refresh-state"):]]
+        written = run(*argv, "--delivery-boundary", "in_flight_continuation",
+            "--no-global-sync", "--suppress-external-sinks")
+        if written["settlement_progress"]["state"] == "spend_required":
+            command = shlex.split(steps["quota_spend"]["command_template"])
+            written = run(*command[command.index("quota"):])
+        assert written["settlement_progress"]["state"] == "settled"
+        assert written["settlement_identity"] == plan["identity"]
+
+    update_note(note, "fixture-note-original")
+    cold = capture("note-cold")
+    pages, facts = read(cold["first_read_command"])
+    note_pointer = next(path for path in facts if path.endswith("/content/todo/note"))
+    assert facts[note_pointer] == note
+    task_pointer = note_pointer.removesuffix("/note") + "/text"
+    current_task = facts[task_pointer]
+    assert current_task.endswith(task.strip())
+    assert "previously_delivered_fields" not in pages[0]
+    deliver(journal, event, pages)
+    settle(cold)
+
+    warm = capture("note-warm")
+    pages, facts = read(warm["first_read_command"])
+    assert note_pointer in pages[0]["previously_delivered_fields"]
+    assert note_pointer not in facts
+    assert facts[task_pointer] == current_task
+    assert facts["/heartbeat_receipt"]["turn_instance_id"] == "note-warm"
+    assert "/goal_boundary" in facts
+
+    recovery = warm["recovery"]["command"] + " --select " + shlex.quote(note_pointer)
+    assert read(recovery)[1][note_pointer] == note
+    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    pages, facts = read(warm["first_read_command"])
+    assert "previously_delivered_fields" not in pages[0] and facts[note_pointer] == note
+    deliver(journal, event, pages)
+    settle(warm)
+
+    correction = note + " 采用新的独立验收条件。"
+    update_note(correction, "fixture-note-corrected")
+    corrected = capture("note-corrected")
+    pages, facts = read(corrected["first_read_command"])
+    assert note_pointer not in pages[0].get("previously_delivered_fields", [])
+    assert facts[note_pointer] == correction
+    assert all(_heartbeat_receipt_count(runtime, turn) == 1
+        for turn in ("note-cold", "note-warm", "note-corrected"))
+    assert _spend_run_count(runtime) == 2
