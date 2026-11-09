@@ -685,7 +685,9 @@ def test_http_resume_rejects_stale_confirmation_before_clearing_new_legacy_pause
         assert code == 200 and replayed["proposal"]["receipt"] == applied["proposal"]["receipt"]
         assert (source_registry.read_bytes(), global_registry.read_bytes()) == after
     finally:
-        server.shutdown(); thread.join(timeout=5); server.server_close()
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
