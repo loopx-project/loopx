@@ -341,7 +341,8 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
 
 
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None, turn_id=None):
+                                  message_limit=None, message_cursor=None, turn_id=None,
+                                  project_history_messages=None):
     """Project return delivery state into one existing Chat snapshot."""
 
     snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
@@ -355,6 +356,10 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         # OriginalRequest already displays only this Turn. Select it before
         # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
+    elif project_history_messages is not None:
+        # Extension-owned, presentation-only rows must join the frozen page
+        # prefix. A selected Turn only reads its canonical messages.
+        snapshot["messages"] = project_history_messages(snapshot["messages"])
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)

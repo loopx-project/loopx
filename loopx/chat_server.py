@@ -60,7 +60,8 @@ from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
-from .extensions.lark.private_conversations import LarkPrivateConversations, project_private_reply_history
+from .extensions.lark.private_conversations import (LarkPrivateConversations, PrivateUnsupportedMediaHistory,
+    project_private_reply_history)
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
@@ -480,6 +481,7 @@ class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTP
         self.runtime_identity = release_runtime_identity()
         super().__init__(*args, **kwargs)
         self.completed_todo_pages = CompletedTodoPages()
+        self.private_media_history = PrivateUnsupportedMediaHistory()
 
     def server_close(self) -> None:
         background_api.close_chat_background_services(self)
@@ -935,17 +937,24 @@ class ChatRequestHandler(
             # execution. Ordinary Chat refresh keeps its existing recovery path.
             if "turn_id" not in query:
                 self.server.runtime_controller.recover_exited_turn(session_id)
+            store = self.server.chat_store
+            session = store.load_session(session_id) or {}
+            media = self.server.private_media_history
+            contexts = getattr(self.server.runtime_controller, "project_contexts", None)
+            bindings = getattr(contexts, "conversation_bindings", None)
+            markers = [] if "turn_id" in query else media.read(store, bindings, session)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
             payload = snapshot(
                 self.server.runtime_controller.coordination_runtime_root,
                 self.server.chat_store, session_id,
                 registry=self.server.registry_path, message_limit=message_limit,
                 message_cursor=query.get("message_cursor", [None])[0],
-                turn_id=query.get("turn_id", [None])[0])
-            # The HTTP composition root joins provider history onto the selected page.
-            payload["messages"] = project_private_reply_history(
-                self.server.chat_store, self.server.chat_store.load_session(session_id) or {},
-                payload["messages"])
+                turn_id=query.get("turn_id", [None])[0],
+                project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None)
+            if markers:
+                payload["session"] = media.summary(payload["session"], markers)
+            # Reply context is a view of rows already selected by the page.
+            payload["messages"] = project_private_reply_history(store, session, payload["messages"])
             self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)
@@ -1021,6 +1030,10 @@ class ChatRequestHandler(
                 if bindings is None:
                     raise ValueError("conversation bindings unavailable")
                 snapshot = bindings.local_session_snapshot(query["conversation_binding_id"][0])
+                media = self.server.private_media_history
+                store = self.server.chat_store
+                snapshot["sessions"] = [media.summary(row, media.read(store, bindings,
+                    store.load_session(row["session_id"]) or {})) for row in snapshot["sessions"]]
             except (ValueError, OSError, KeyError):
                 # A failed provider/store read may contain private diagnostics.
                 # Refuse this selector; never fall back to an unfiltered list.

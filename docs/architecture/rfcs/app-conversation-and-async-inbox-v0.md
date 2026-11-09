@@ -336,6 +336,14 @@ Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
 long captions, restart, missing/unknown receipts, byte mismatch, revocation and
 provider replacement. Installed provider readback remains a separate gate.
 
+The bound App history also displays a read-only notice for an original Lark
+file, audio or video that Core recorded as unsupported. It verifies the exact
+Session, current local owner binding and both original receipts before showing
+the notice. Its source time participates in history pagination; late rows
+invalidate any affected prefix, and a changed notice refreshes the App's
+transcript even when no Turn runs. The notice carries no resource bytes or
+credentials, creates no Turn, and does not resend the original reply.
+
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
 

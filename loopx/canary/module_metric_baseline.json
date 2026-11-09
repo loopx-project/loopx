@@ -44,7 +44,7 @@
     "loopx/chat_server.py": {
       "any_count": 25,
       "dict_any_count": 0,
-      "lines": 2046
+      "lines": 2058
     },
     "loopx/chat_store.py": {
       "lines": 2141
@@ -84,7 +84,7 @@
       "lines": 2760
     },
     "loopx/extensions/lark/private_conversations.py": {
-      "lines": 2024
+      "lines": 2181
     },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,

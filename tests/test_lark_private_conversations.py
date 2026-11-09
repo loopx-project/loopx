@@ -4993,6 +4993,74 @@ def test_disconnect_failure_returns_original_retry_evidence_without_manual_statu
         runtime.close()
 
 
+def test_bound_app_history_keeps_original_unsupported_media_without_a_turn(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    try:
+        assert transport.admit(profile, provider.event(profile, "original-text", "Original text."))["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        transport.reconcile()
+        def snapshot(query=""):
+            return ordinary[3](f"/api/chat/sessions/{sid}{query}")
+
+        status, first = snapshot("?message_limit=1")
+        assert status == 200
+        old_cursor = first["message_page"]["next_cursor"]
+        assert old_cursor
+        original_messages = store.messages(sid)
+        model_requests = ordinary[-3].read_bytes()
+
+        event = provider.event(profile, "late-unsupported-audio", "private-resource-token", kind="audio")
+        event["create_time"] = "1700000000123"
+        provider.messages[event["message_id"]]["create_time"] = event["create_time"]
+        assert transport.admit(profile, event)["status"] == "command_recorded"
+        assert transport.reconcile() == 1
+        sent = list(provider.writes)
+        assert "未提交执行" in sent[-1][1]
+        assert transport.admit(profile, {**event, "event_id": "duplicate-audio"})["status"] == "command_recorded"
+        transport.reconcile()
+        assert provider.writes == sent
+        original_notice = next(row for row in transport.core.pending() if row.get("command") == "unsupported")
+        assert original_notice["session_id"] == sid and original_notice["turn_id"] is None
+
+        binding_id = original_notice["binding_id"]
+        listed_status, listed = ordinary[3](f"/api/chat/sessions?conversation_binding_id={binding_id}")
+        assert listed_status == 200
+        listed_revision = listed["sessions"][0]["transcript_revision"]
+        assert listed_revision != first["session"]["transcript_revision"]
+        provider_calls = list(provider.calls)
+        status, page = snapshot("?message_limit=1")
+        assert status == 200 and page["session"]["transcript_revision"] == listed_revision
+        notice, = page["messages"]
+        assert notice["role"] == "error" and notice["origin"] == "lark" and notice["turn_id"] is None
+        assert notice["created_at"] == "2023-11-14T22:13:20.123000+00:00"
+        assert "飞书音频" in notice["text"] and "未提交执行" in notice["text"]
+        assert "private-resource-token" not in json.dumps(page)
+        assert snapshot("?message_limit=1&message_cursor=" + old_cursor)[0] == 400
+        status, tail = snapshot("?message_limit=10&message_cursor=" + page["message_page"]["next_cursor"])
+        assert status == 200 and [r["message_id"] for r in tail["messages"]] == [r["message_id"] for r in original_messages]
+        status, turn = snapshot(f"?message_limit=10&turn_id={tid}")
+        assert status == 200 and all(row["message_id"] != notice["message_id"] for row in turn["messages"])
+        assert provider.calls == provider_calls and store.messages(sid) == original_messages
+        assert ordinary[-3].read_bytes() == model_requests
+
+        # The same transport source cannot be surfaced under another native
+        # correlation, nor after the original grant is disconnected.
+        native_path = transport.core.root / f"{original_notice['request_ref']}.json"
+        native_path.write_text(json.dumps({**original_notice, "session_id": "other-session"}))
+        assert notice["message_id"] not in {row["message_id"] for row in snapshot()[1]["messages"]}
+        native_path.write_text(json.dumps(original_notice))
+        assert notice["message_id"] in {row["message_id"] for row in snapshot()[1]["messages"]}
+        current = transport.bindings.read()
+        binding = next(row for row in current["bindings"] if row["transport_ref"] == profile)
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=current["revision"])
+        assert notice["message_id"] not in {row["message_id"] for row in snapshot()[1]["messages"]}
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:
