@@ -2985,6 +2985,41 @@ release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 PostgreSQL host/wheel and every frozen failure. The original task remains open;
 this checkpoint does not authorize merge or declare the minimal kernel complete.
 
+### 2026-11-08 — Canonical source scalar-comparison refinement
+
+The existing `todo.read` owner now uses exact equality for unchanged primitive
+fields after its complete canonical-field digest and JSON clone. Containers and
+altered scalar values keep the full canonical digest comparison; missing fields,
+source-lane additions, scalar-fact protections and stale-reference rejection
+remain with their current owners. No source allowlist, provider cache, protocol,
+configuration or competing decision owner is introduced.
+
+A fresh synthetic complete-CLI caller trace on `main@aee777008` confirms the
+existing two-role native transaction is adopted. Quota before/after projections
+belong to different budget decisions, so their repeated read recipes do not
+justify an authority cache. The bounded refactoring stays in the existing
+canonical source comparison instead of collapsing those decisions.
+
+Final `read_transaction.ts` SHA-256 `ac0ae4311e4fe5c385ec75b3569cd8ebbe98328189e2885b5ecdcccb11c476b3`
+passes 61 Python and 56 TypeScript cases plus real isolated PostgreSQL16.15
+store391/service11, zero skips in these qualified runs. The immutable original
+passes the selected native PostgreSQL source-protection case; a mutation that
+treats all primitives as unchanged fails it. Parent replacement, deletion and
+restoration, changed notes/scopes/counts and provider-state readback remain covered.
+Four complete 101-Todo source/wheel × File/SQLite CLI lifecycles preserve sum45,
+original completion time, four receipts, one debit, restart and refusal/replay;
+each owns and observes two normal native process exits. The isolated wheel's
+runtime source bytes match the checkout. Validation uses macOS arm64,
+CPython3.13.5 and Node22.22.3. Earlier toolchain/setup failures and a service-env
+skip remain preparation evidence, distinct from the qualified runs.
+
+This removes redundant scalar digest work; it is not a matched-cost or full
+marginal-cost/adoption result. Frozen cost, attribution and normal-bytecode
+campaigns remain unchanged. Preserve the original complete transaction and all
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel and historical failure gaps.
+Exact-head review, required CI/readiness and maintainer merge authority remain
+separate gates; no installed-host upgrade or Goal completion is claimed.
 ### 2026-11-09 — Reuse validated complete source-basis bytes
 
 The existing Python Todo compatibility transport now retains its validated
@@ -3013,3 +3048,249 @@ original acceptance and I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, installed-host, full-cost/adoption and historical
 failure gap. Exact-head review, CI/readiness and maintainer merge authority remain
 separate gates.
+
+### 2026-11-09 — Combined report and canonical-source caller qualification
+
+The original #8360 proposal now combines report construction isolation with
+the scalar comparison from #8372 and complete validated source-basis reuse from
+#8374 over target main `aee777008`. Runtime qualification uses
+`8b4df2fac966933e200ba15bb36b2f7afb9a194a` and preserves the original proposal's
+ancestry. The same existing report and typed Todo owners retain configuration
+validation, complete canonical reads, source/revision/lease protection and
+receipt/refusal/replay semantics; no decoder, authority cache or provider is added.
+
+Four fresh 101-Todo source/wheel × File/SQLite complete CLI lifecycles retain
+the original fixture/artifact fingerprints, scopes and completion time, four
+receipts, one debit and two observed normal native exits each. All 1,921 present
+tracked wheel entries match source bytes; seventeen existing source-only,
+documentation and media omissions remain. On Node 22.22.3 and CPython 3.13.5,
+the control-plane typecheck and 105 adjacent TypeScript cases pass. Real isolated
+PostgreSQL 16.15 store/service checks pass (391/11, zero skips), and the owned
+server is stopped afterward.
+
+The isolated wheel's packaged browser passes `typed-actions`,
+`conversation-activity` and `conversation-history-recovery` with synthetic
+upstream data. The original exact interruption assertion and completion/Turn
+isolation remain. Extended report caller checks return 70 passes and one failure:
+the calendar capability-action test expects a missing `turn_envelope`. The same
+test fails identically on immutable target main `aee777008`; this is retained
+as an unresolved validation gap, not relabeled as passing. Initial relative
+interpreter, installed-package provenance and missing-browser preparation
+failures are retained separately from the qualified runs.
+
+This combined boundary qualifies integration correctness, not whole-path or
+full marginal-cost/adoption benefit. Frozen cost, attribution, normal-bytecode
+campaigns, every original acceptance gap and historical failure remain intact.
+#8372/#8374 remain separate open proposals pending reconciliation; combination
+is not merge. Exact-head review, CI/readiness and explicit maintainer merge
+authority remain required. The original task stays open.
+
+### 2026-11-09 — Reconcile merged loading and the remaining source proposal
+
+Before publication, #8360 was observed merged as `e37a1d691`; #8011 is also in
+target main `520a1ab47`. The remaining source refinements now continue through
+the original #8372 proposal, preserving its `cbda59c6e` ancestry and incorporating
+#8374's complete-basis change. The merged report proposal is not recreated.
+
+Fresh runtime qualification at `4e72980bee91c7bbfcedb2eb481b8573113340b3` over
+that main passes 82 focused Python cases, 105 TypeScript cases, typecheck,
+real isolated PostgreSQL store/service (391/11), four complete 101-Todo
+source/wheel × File/SQLite lifecycles and the three packaged browser scenarios.
+Wheel ownership remains 1,921 matching entries and seventeen existing omissions.
+The standard premerge at that runtime revision passes six direct and nineteen
+selected checks. The expanded report family remains 70 passed/one failed;
+immutable `520a1ab47` reproduces the same `turn_envelope` assertion failure.
+That unresolved packet-contract qualification remains a hold alongside exact-head
+review, required CI/readiness and maintainer merge authority. Initial collection,
+environment and interrupted interim runs retain their original limits.
+
+This reconciles shipped loading with the remaining reviewed source boundary;
+it does not close the original task, installed-host, PostgreSQL host/wheel,
+full-cost/adoption or any other retained acceptance. No frozen campaign is rerun
+or relabeled, and this lane performs no main merge.
+
+### 2026-11-09 — Reconcile the M0 ratchet after the merged status move
+
+The exact #8372 qualification head's CI fails its kernel-static prerequisite:
+merged #8011 moved `chat_status_api.py` into `chat/status_api.py`, reducing the
+root from 128 modules to 127, while the fixture still pins 128. The downstream
+Stage 2C, checks and aggregate pytest jobs reject their skipped/failed inputs;
+those results do not establish new runtime failures or passes.
+
+The existing M0 fixture now records measured main `520a1ab47` and lowers its pin
+to 127. Its schema, entrypoint allowlist, exact-count rule and over-budget
+rejection remain intact. The same seven kernel-static checks pass on CPython
+3.13 and 3.11. In the same isolated source tree, an added unapproved 128th root
+module still fails; removing only that synthetic module restores the pass.
+The original CI and local 127-versus-128 failures remain retained evidence.
+
+This repairs the validation handoff for an already merged module relocation;
+it neither moves another runtime owner nor changes a production limit. Pages,
+the separate report packet-contract gap, full CI/review/readiness and every
+original installed-host, PostgreSQL host/wheel, full-cost/adoption and frozen
+qualification remain separate. The complete original task stays open.
+
+
+### 2026-11-09 — Complete-source report caller qualification
+
+The M0 pin repair passes CI, together with the real PostgreSQL, typed kernel,
+TypeScript, browser and Stage 2C checks at the recorded proposal head. Integration
+now includes target main `1cba745f5` while retaining the original proposal ancestry.
+The report calendar CLI smoke still fails on that integrated source because it
+reads the retired `turn_envelope` carrier. Its `None` replan assertion also
+belongs to the old projected adapter: the complete source retains competing
+advice while the typed controller owns final capability precedence.
+
+The smoke now gives the single `work_contract` directly to the existing controller.
+Across plan, dry-run and executing generic/Codex CLI calls, it checks the same
+owned next command, idle host, absent premature report artifacts and unchanged
+effect flags. A changed command with the original source binding is rejected.
+Dropping the next command from the real CLI result makes the independent smoke
+assertion fail. No runtime decoder, compatibility adapter or authority owner is added.
+
+The source and isolated-wheel report families each pass all 71 cases; 101
+adjacent Python cases and the control-plane typecheck pass. All inventoried
+present tracked wheel entries match the source bytes.
+This closes the stale caller-test gap without claiming new execution semantics,
+full-cost/adoption benefit or installed-host qualification. Initial reader-choice
+and missing-bundle preparation failures remain separate evidence. Pages retains
+its known out-of-scope broken link; exact-head CI, review/readiness, maintainer
+merge authority and every original acceptance/frozen campaign remain open.
+
+
+### 2026-11-09 — Complete CLI qualification across native context integration
+
+The retained follow-through plan now runs through complete 101-Todo CLI
+lifecycles, rather than stopping at report cases. Source and isolated wheel ×
+File/default-SQLite pass at proposal `bb65769cc`. The next target-main snapshot
+`3b16b8491` adds native preparation/navigation changes; the combined runtime
+`9baeafd8a` passes the same four complete lifecycles with a newly rebuilt wheel.
+
+Every case retains the original immutable synthetic fixture and independently
+verified sum-45 artifact, complete source/lease/refusal/replay/recovery checks,
+four committed receipt kinds, one debit, unchanged completion time and two
+observed normal native exits. The existing scalar/source-basis owner bytes
+remain unchanged. All inventoried present tracked wheel entries match this
+runtime source. Seven progressive-context contract cases and its typecheck pass.
+The stale frontend bundle's initial wheel-build refusal remains separate from
+the rebuilt package's qualification.
+
+This is integration correctness for the recorded source/package snapshots.
+It does not rerun or relabel the frozen cost, attribution or normal-bytecode
+campaigns, qualify current browser/installed-host or PostgreSQL host/wheel
+behavior, or establish full marginal-cost/adoption benefit. Current exact-head
+CI, review/readiness, maintainer merge authority and the existing out-of-scope
+Pages hold remain separate. The original task and all original acceptance stay open.
+
+### 2026-11-09 — Minimum supported Python CLI qualification
+
+CPython 3.11.15 now qualifies the complete 101-Todo source/isolated-wheel ×
+File/default-SQLite lifecycle at `15c937821`, extending the earlier 3.13
+qualification. Target main `a3b589610` subsequently changes context reading and
+settlement guidance; integration `220275f6a` repeats the four complete paths
+against that new input and a newly built wheel. Both groups preserve the same
+immutable fixture and independently verified sum45 artifact, original completion
+time, full source/lease/refusal/replay/recovery behavior, four committed receipts,
+one debit and two observed normal native exits per case.
+
+The earlier source and wheel each pass nine canonical-source cases; the current
+integration separately checks the merged report CLI caller in both distributions.
+Loaded wheel modules retain package provenance. Inventoried tracked entries
+present directly in the new wheel match source bytes; inventory counts are not
+used as a benefit comparison. Merge reconciliation retains the upstream module
+baseline and unchanged 127-module limit, explicit transaction-detail delivery,
+capability precedence and the original source-binding negative assertion.
+
+The private verifier's initial Python syntax failure and stale-bundle build
+refusal remain preparation failures, distinct from runtime qualification. The
+previous-head synthetic 200-item lens-switch CI budget failure remains a hold;
+these CLI checks do not qualify browser performance. No frozen cost, attribution
+or normal-bytecode campaign is rerun or relabeled. I3/minor-release, M1/#8011,
+full R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel,
+installed-host, full-cost/adoption and all historical gaps remain open. Exact-head
+review, required CI/readiness and maintainer merge authority still apply.
+
+### 2026-11-09 — Current-main required-Vision refusal qualification
+
+The proposal incorporates `main@aa475b29f` and its merged #8388 qualification
+repair at integration `2dd6c3d97`. The existing qualification adapter preserves
+the native `refresh-state` refusal output for required Vision while retaining
+its nonzero status and existing feedback bound. A missing stride cannot append
+writeback or spend; the caller can inspect the structured refusal, correct the
+same draft and then settle once. The typed writer remains the decision owner.
+
+On macOS arm64 with CPython 3.11.15 and Node 22.22.3, the complete existing
+required-Vision family passes 35 cases from source and 35 from an isolated wheel.
+The source-pinned `a3b589610` adapter fails the new missing-stride correction
+case. An initial comparison accidentally loaded the candidate through pytest's
+checkout insertion; that pass is invalid as a baseline result. The corrected
+comparison and wheel run verify every loaded LoopX module's package origin.
+These are scripted synthetic native-CLI qualification cases, not model results.
+
+The wheel matches 1,921 directly corresponding tracked ZIP entries, including
+the qualification adapter. This count is not compared with historical inventory
+methods. `read_transaction.ts` and `summary_item.py` retain the bytes qualified
+at `86d08a01c`; the earlier complete 101-Todo File/SQLite source/wheel lifecycle
+and PostgreSQL API/store evidence are retained, not rerun or relabeled. Standard
+premerge at the integration head passes six direct and nineteen selected checks.
+The bounded refactoring pass needs no additional production abstraction here;
+the existing writer and feedback boundary already own this behavior.
+
+The review published for `86d08a01c` remains historical evidence for that head.
+The updated proposal still needs current-head CI, review and merge readiness;
+this qualification grants no merge authority. Preserve the original transaction,
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, installed-host, complete-cost
+and adoption gaps, and all frozen negative results. No kernel completion or
+whole-path benefit is claimed.
+
+### 2026-11-09 — Reuse fresh canonical field digests in quota reconstruction
+
+The proposal incorporates `main@c44eb156d`. A complete canonical read already
+returns a digest for each projected Todo field. Quota reconstruction now uses
+that digest from the same fresh in-process read rather than hashing the entire
+field again. The existing selector path retains its direct hash comparison.
+Complete cloning, immutable provider facts, source revisions, role checks and
+caller-change rejection remain in the existing TypeScript owner. The digest is
+neither caller-provided authority nor retained across requests; supplied-source
+fallback is unchanged. No protocol, configuration or provider is added.
+
+The current source and isolated wheel each pass 24 complete-source cases; 76
+adjacent planning cases, 23 native read cases and control-plane typing pass.
+A swapped user/agent digest is rejected, followed by a successful valid pair.
+The same negative case passes on the current-main baseline; removing digest
+rejection in an isolated source copy makes both File and SQLite cases fail.
+Every loaded LoopX module is checked against its selected source or wheel.
+Current-main and candidate source File/SQLite CLI lifecycles, plus candidate
+wheel File/SQLite lifecycles, preserve the same 101-Todo fixture and sum45
+artifact, original completion time, refusals/replay/restart, four committed
+receipts, one debit and two normal native exits per case. The initially stale
+frontend bundle refused packaging; rebuilding through its existing owner makes
+the new wheel build pass. These are correctness checks, with no cost comparison
+or rerun of frozen campaigns. All earlier acceptance gaps and negative evidence
+remain open; the changed head needs fresh review, CI and merge readiness.
+
+
+### 2026-11-09 — Kernel integration with the prospective M2 qualification
+
+The original #8372 branch integrates target main `6787fc8d5`, including the
+prospective Dashboard qualification in #8433. Kernel runtime `17d85c971` passes
+53 source and 53 isolated-wheel Python cases, twelve focused TypeScript cases
+and typing. All 1,921 directly corresponding tracked wheel entries match. The
+same six complete 101-Todo base/candidate source and candidate-wheel File/SQLite
+CLI lifecycles retain the fixture, sum45, original completion time, complete
+scopes, four receipts, one debit, restart/refusal/replay and two normal native
+exits per case. Real isolated PostgreSQL16.15 store391/service11 pass without
+skips. The same current PostgreSQL source-protection harness passes base/head;
+a primitive-protection mutation fails its expected-rejection oracle. Standard
+premerge passes six direct and nineteen selected checks. Local runtime checks
+use CPython3.13.5; CLI and mutation qualification use Node22.22.3, while the
+focused source and full PostgreSQL suites use Node26.0.0. Initial packaging,
+fixture-import and mutation-snapshot preparation failures remain distinct.
+
+This qualifies kernel integration correctness. It neither repeats frozen cost,
+attribution or normal-bytecode campaigns nor qualifies Linux browser recovery,
+installed-host, PostgreSQL host/wheel, full marginal-cost or model/team adoption.
+Keep every historical failure and original acceptance open. The prospective M2
+rule does not turn a historical frozen failure into a pass; unchanged-head
+review, required validation and fresh merge readiness still govern delivery.
