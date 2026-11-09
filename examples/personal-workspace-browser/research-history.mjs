@@ -128,6 +128,59 @@ runpy.run_path(sys.argv[0], run_name="__main__")
   } catch (failure) {await close(); throw failure;}
 }
 
+async function readElapsedTimePrecision(browser) {
+  const directory = await mkdtemp(resolve(tmpdir(), "loopx-recorded-time-"));
+  let owner, page;
+  try {
+    execFileSync(resolveTestPython(), ["-c", `
+from datetime import datetime, timedelta, timezone
+import json, sys
+from pathlib import Path
+from loopx.capabilities.explore.result_log import build_explore_node_event
+
+start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+for elapsed in (1900, 0, 9, 61002):
+    goal = f'recorded-time-{elapsed}'
+    events = [build_explore_node_event(goal_id=goal, node_id=f'record-{index}',
+        title=f'Record {index + 1}', recorded_at=at.isoformat(timespec='milliseconds'))
+        for index, at in enumerate((start, start + timedelta(milliseconds=elapsed)))]
+    Path(sys.argv[1], f'{elapsed}.json').write_text(json.dumps({'goal_id': goal, 'events': events}))
+`, directory], {cwd: repoRoot});
+    owner = await startHistoryOwner([1900, 0, 9, 61002].map(elapsed => resolve(directory, `${elapsed}.json`)));
+    page = await browser.newPage({viewport: {width: 1440, height: 900}});
+    await page.addInitScript(() => {
+      if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "en");
+    });
+    const ticks = page.locator(".research-axis time");
+    const open = async elapsed => {
+      const goal = `recorded-time-${elapsed}`;
+      const query = new URLSearchParams({goalId: goal, view: "research", statusUrl: `/status.json?goal_id=${goal}`});
+      await page.goto(`${owner.base}/chat/?${query}`, {waitUntil: "domcontentloaded"});
+      await ticks.first().waitFor();
+    };
+    await open(1900);
+    await ticks.nth(2).waitFor();
+    assert.deepEqual(await ticks.allTextContents(), ["0s", "1s", "1.9s"], "Distinct recorded times have distinct labels");
+    assert.equal(await ticks.last().getAttribute("datetime"), "PT1.9S");
+    assert.equal(new Set(await ticks.evaluateAll(elements => elements.map(element => element.title))).size, 3,
+      "The absolute clock labels distinguish ticks within the same minute");
+    await page.setViewportSize({width: 390, height: 844});
+    await page.waitForFunction(() => document.querySelectorAll(".research-axis time").length === 2);
+    assert.deepEqual(await ticks.allTextContents(), ["0s", "1.9s"], "The narrow endpoint keeps its recorded precision");
+    await open(0);
+    assert.deepEqual(await ticks.allTextContents(), ["0s"], "Coincident records share one tick");
+    await open(9);
+    assert.deepEqual(await ticks.allTextContents(), ["0s", "9ms"], "Subsecond spans retain their millisecond label");
+    await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "zh-CN"));
+    await open(61002);
+    assert.equal(await ticks.last().textContent(), "1 分 1.002 秒", "A longer span retains fractional seconds in Chinese");
+  } finally {
+    await page?.close();
+    await owner?.close();
+    await rm(directory, {recursive: true, force: true});
+  }
+}
+
 // Whole-page comparison pressure: repeated conditions must not bury the next
 // decision, while its exact original finding remains one keyboard action away.
 async function readDecisionTrail(browser) {
@@ -302,6 +355,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
 export const researchHistoryScenario = {
   id: "research-history",
   async run({browser, collectCoverage, url}) {
+    await readElapsedTimePrecision(browser);
     await readDecisionTrail(browser);
     // The ordinary journey uses the real source verifier and HTTP owner, with
     // no intercepted analysis response and no analysis process or Goal writes.
@@ -979,10 +1033,13 @@ export const researchHistoryScenario = {
       assert.equal(await history.locator(".research-history-edges .is-grouping").count(),0);
       await page.screenshot({path:resolve(outputDir,'research-history-portfolio-graph.png'),animations:'disabled'});
       await history.getByRole('button',{name:'时间线',exact:true}).click();
+      const beforeRefreshAxis = await history.locator(".research-axis time").allTextContents();
+      assert(beforeRefreshAxis.length >= 2);
       unavailable=true;
       await history.getByRole('button',{name:'刷新记录',exact:true}).click();
       await history.getByRole('alert').waitFor();
       assert.match(await history.textContent(),/76 \/ 76/,'A failed refresh retains the complete real capture');
+      assert.deepEqual(await history.locator(".research-axis time").allTextContents(), beforeRefreshAxis, "A failed refresh retains the verified time scale");
       const readError = history.locator('.research-history-read-error');
       assert.match(await readError.innerText(), /刷新失败，当前记录已保留/);
       assert.equal(await readError.getByRole('tooltip').isVisible(), false, 'Technical failure detail stays secondary');

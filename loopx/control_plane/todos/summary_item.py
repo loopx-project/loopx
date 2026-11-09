@@ -53,15 +53,16 @@ def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) ->
         digest = metadata.get("field_digests", {}).get(field)
         if not isinstance(value, dict) or not isinstance(digest, str):
             continue
-        basis = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "backslashreplace")
         observed = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8", "backslashreplace")
         if sha256(observed).hexdigest() != digest:
             # A modified response or a numeric JSON spelling mismatch cannot
             # mint a native reference. Keep the complete supplied source codec.
             continue
+        # The basis is decoded as JSON; mapping insertion order is not a
+        # source difference. Retain the complete bytes already validated here.
         fields[field] = _CanonicalTodoSummary(value, read={key: value for key, value in metadata.get("replay_read", read).items() if key != "return_projection"},
             expected=metadata["source"], field=field, digest=digest,
-            basis=basis, request_identity=identity,
+            basis=observed, request_identity=identity,
             evaluations=(result.get("field_evaluations") or {}).get(field),
             source_row_fields=tuple(metadata.get("source_row_fields", [])))
 
