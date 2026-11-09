@@ -8,12 +8,96 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_antigravity_steward_adapter import language_server  # noqa: F401
+from test_antigravity_steward_adapter import language_server as language_server
 from test_native_steward_private import steward  # noqa: F401
 
 from loopx.capabilities.native_chat import antigravity_adapter as native
 from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+@pytest.mark.parametrize("prior_status, error_status, cancellation_needed", [
+    ("CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_ERROR", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_CANCELED", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_CLEARED", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_RUNNING", "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_WAITING", "CORTEX_STEP_STATUS_DONE", True),
+    (None, "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_WAITING", True),
+    ("CORTEX_STEP_STATUS_DONE", None, True),
+])
+def test_idle_native_error_keeps_only_unsettled_work_cancellable(
+    tmp_path, language_server, monkeypatch, prior_status, error_status, cancellation_needed,
+):
+    from test_antigravity_steward_adapter import _native_clock, _native_frames, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    frame = _native_frames()[-1]
+    detail = {"shortError": "stream interrupted", "userErrorMessage": "Network interrupted", "errorCode": 2}
+    frame["steps"] = [frame["steps"][0],
+        {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": prior_status,
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+         "runCommand": {"commandLine": "synthetic inspection", "exitCode": 0}},
+        {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": error_status,
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+         "errorMessage": {"error": detail}},
+    ]
+    _native_clock(monkeypatch, language_server, [frame])
+    language_server["cancel_failure"] = True
+    adapter = adapter_for(tmp_path)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("Inspect existing state", lambda kind, data: events.append((kind, data)))
+
+    error = raised.value
+    waiting_for_permission = "CORTEX_STEP_STATUS_WAITING" in {prior_status, error_status}
+    if waiting_for_permission:
+        assert error.error_code == "host_tool_gate" and error.gate is not None
+    else:
+        assert error.error_code == "antigravity_step_error" and error.native_error_info == detail
+        assert str(error).startswith("Network interrupted")
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == int(cancellation_needed)
+    assert ("cancellation remains unconfirmed" in str(error)) is cancellation_needed
+    assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
+
+
+def test_settled_native_error_releases_core_for_independent_input(tmp_path, language_server):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    store = ChatSessionStore(tmp_path / "runtime")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-codex")
+    session, _ = controller.open_session(goal_id="synthetic-goal", agent_id="antigravity",
+        work_dir=tmp_path, objective="Synthetic conversation", mode="new", channel_id="synthetic-argon-chat")
+    sid = session["session_id"]
+    language_server.update(quota_error_indices=[0], cancel_failure=True)
+    try:
+        original, _ = controller.submit_turn(session_id=sid, client_turn_id="original-failure",
+            message="Original request", work_dir=tmp_path, objective="Synthetic conversation")
+        failed = controller.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=8)
+        assert failed["status"] == "failed" and failed["error_code"] == "antigravity_step_error"
+        assert "cancellation remains unconfirmed" not in failed["error"]
+        assert store.load_session(sid)["active_turn_id"] is None
+        retained = store._turn_path(sid, original["turn_id"]).read_bytes()
+
+        language_server["quota_error_indices"] = []
+        later, _ = controller.submit_turn(session_id=sid, client_turn_id="later-independent",
+            message="A separate question", work_dir=tmp_path, objective="Synthetic conversation")
+        completed = controller.wait_for_turn(session_id=sid, turn_id=later["turn_id"], timeout_sec=8)
+        assert completed["status"] == "completed" and completed["response"]["message"] == "Argon answer 2"
+        assert store._turn_path(sid, original["turn_id"]).read_bytes() == retained
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == [
+            "Original request", "A separate question"]
+        methods = [method for method, _ in language_server["calls"]]
+        assert methods.count("SendUserCascadeMessage") == 2
+        assert "CancelCascadeInvocation" not in methods
+        assert not any(e["kind"] == "answer.final" for e in store.events_after(sid, original["turn_id"], None))
+    finally:
+        controller.close_session(sid)
 
 
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed",
