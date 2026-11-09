@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from copy import deepcopy
 import json
 from dataclasses import dataclass
 from typing import Any, cast
+import zlib
 
-from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
+from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -93,6 +95,16 @@ def _apply_context_projection_changes(
     return cast(dict[str, Any], projected)
 
 
+def pack_turn_source(source: Mapping[str, Any]) -> dict[str, str] | None:
+    """Use the lossless wire for bounded sources that compress well."""
+    raw = _encode_rpc_json(source)
+    if 16 * 1024 <= len(raw) <= 1024 * 1024:
+        data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
+        if len(data) + 128 < len(raw):
+            return {"encoding": "deflate-base64-json-v0", "data": data}
+    return None
+
+
 def _turn_envelope_result(
     operation: str,
     **params: object,
@@ -103,7 +115,8 @@ def _turn_envelope_result(
     payload = params.get("payload")
     complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
     staged_replan = (
-        operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture"}
+        operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture",
+                      "capability_automation_source"}
         and isinstance(payload, Mapping)
         and (
             (operation == "replan_cli_view" and params.get("source_edits") is True)
@@ -118,6 +131,11 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
+    if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
+        transport = pack_turn_source(payload)
+        if transport is not None:
+            del request["payload"]
+            request["source_transport"] = transport
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
@@ -259,6 +277,11 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
         "quota_signature",
         payload=dict(payload),
     )
+
+
+def quota_capability_automation_source(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Read the quota capability gate without returning the action document."""
+    return _turn_envelope_result("capability_automation_source", payload=dict(payload))
 
 
 def turn_envelope_replan_settlement_identity(

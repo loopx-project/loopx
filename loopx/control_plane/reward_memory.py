@@ -60,9 +60,9 @@ def reward_memory_automation_enabled(
             return False
         # Reuse the typed quota projection rather than interpreting another
         # copy of the legacy quota boundary in this compatibility adapter.
-        from .quota.turn_envelope import quota_action_signature_document
+        from .quota.turn_envelope import quota_capability_automation_source
 
-        boundary = quota_action_signature_document(payload).get("boundary")
+        boundary = quota_capability_automation_source(payload).get("boundary")
     else:
         return False
     try:
