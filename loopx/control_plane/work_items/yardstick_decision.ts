@@ -90,6 +90,10 @@ export function projectWorkYardstickPresentation(params: JsonObject): Pick<WorkY
   const {decision, binding} = normalizeWorkYardstickCapture(params);
   return {decision, binding};
 }
+export function projectWorkYardstickPresentations(params: JsonObject): JsonObject {
+  if (!Array.isArray(params.captures)) throw new EffectRuntimeRequestError("yardstick presentation requires capture requests");
+  return {captures: params.captures.map(row => projectWorkYardstickPresentation(requireJsonObject(row, "capture request")))};
+}
 function sourceSnapshot(value: unknown): NonNullable<WorkYardstickCapture["source_snapshot"]> {
   const row = object(value, ["event_count", "event_ids_sha256"], "yardstick source snapshot");
   if (!Number.isSafeInteger(row.event_count) || Number(row.event_count) < 0

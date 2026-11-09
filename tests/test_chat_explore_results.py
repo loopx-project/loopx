@@ -250,7 +250,7 @@ def test_saved_findings_survive_unavailable_task_associations(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provider):
+def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provider, monkeypatch):
     from tests.control_plane.test_work_yardstick_cli import (
         setup, attachment, refresh, GOAL_ID, AGENT_ID, TODO_ID,
     )
@@ -264,6 +264,17 @@ def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provid
     records = [json.loads(line) for line in original.splitlines()]
     capture = next(row["work_yardstick"] for row in records if "work_yardstick" in row)
     assert "source_snapshot" in capture
+    append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL_ID, agent_id=AGENT_ID,
+        node_id=receipt["explore_result_delivery"]["node_id"], finding_id="finding-presentation-2",
+        title="Another captured declaration", evidence_refs=attachment()["evidence_refs"], work_yardstick=capture))
+    original = log.read_bytes()
+    import loopx.control_plane.work_items.yardstick_decision as transport
+    invoke, batches = transport.effect_runtime_result, []
+    def observe(operation, params):
+        if operation == "work_item.yardstick.presentation":
+            batches.append(len(params["captures"]))
+        return invoke(operation, params)
+    monkeypatch.setattr(transport, "effect_runtime_result", observe)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root_override, server.runtime_root = registry, str(runtime), runtime
     server.verbose = False
@@ -272,9 +283,13 @@ def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provid
     base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
     try:
         for suffix in ("", "&view=history"):
+            previous = len(batches)
             with urlopen(base + suffix) as response:
                 page = json.load(response)
+            assert batches[previous:] == [2]
             public = next(row for row in page["items"] if "work_yardstick" in row)
+            assert all(set(row["work_yardstick"]) == {"decision", "binding"}
+                for row in page["items"] if "work_yardstick" in row)
             # Installed readers decode precisely these two capture fields.
             assert set(public["work_yardstick"]) == {"decision", "binding"}
             assert public["work_yardstick"] == {key: capture[key] for key in ("decision", "binding")}
