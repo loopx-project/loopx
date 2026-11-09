@@ -2330,7 +2330,13 @@ S12 发行资格提案将 package/sdist/已安装 frontend/DSH 与 snapshot 检�
 catalog/team/craft 命令。每个原场景和 companion 仍为必需；craft 命令还包含
 它已有的 command-palette 检查。这改变发行浏览器并发，并重复依赖安装和
 静态检查；job 总限、场景期限、M2 阈值和六条共享 Python 验证通道不变。
-关键路径缩短及完整 CI 成本仍需在拟议 workflow 上实测。
+首次完整 Linux 资格验证
+[run 42633152296](https://github.com/loopx-project/loopx/actions/runs/42633152296)
+中，prepare 用时 1m43s，浏览器 worker 为 12m46s/9m25s/7m29s，最终门为 22s。
+86 个唯一场景和必需 companion 全部通过，snapshot 检查完成。被测 synthetic
+merge `ef048a32c` 与整合提案 `5a9fd8020` 的完整 tracked source tree 相同；
+该证据只验证这个 candidate。后续 main 整合改变 product source，需重新取得
+packaged 资格。完整 CI 成本和可比条件下的端到端边际成本收益仍未取得资格。
 
 Worker 安装同一个 candidate wheel，只采用 producer 精确选定的 fixture
 commit/path。源码侧 fixture authority 还获得从同一 wheel 复制的预构建页面，

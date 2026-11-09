@@ -3000,8 +3000,15 @@ commands. Every original scenario and companion remains required; the craft
 command also includes its existing command-palette check. This changes release
 browser concurrency and repeats dependency setup/static checks. It does not
 change job limits, scenario deadlines, M2 thresholds or the six shared Python
-validation lanes. Reduced critical-path time and complete CI cost still require
-measurement on the proposed workflow.
+validation lanes. The first complete Linux qualification,
+[run 42633152296](https://github.com/loopx-project/loopx/actions/runs/42633152296),
+finished preparation in 1m43s, browser workers in 12m46s/9m25s/7m29s and the
+final gate in 22s. All 86 unique scenarios and required companions passed,
+and the snapshot checks completed. The tested synthetic merge `ef048a32c`
+and integrated proposal `5a9fd8020` have the same complete tracked source tree;
+this qualifies that candidate only. Later main integration changes product
+sources and requires fresh packaged qualification. Complete CI cost and
+comparable end-to-end marginal-cost benefit remain unqualified.
 
 Workers install the same candidate wheel and adopt only the producer's exact
 selected fixture commit/paths. Source-side fixture authorities also receive the

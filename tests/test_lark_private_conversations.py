@@ -1375,7 +1375,7 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
 @pytest.mark.parametrize("fault", [None, "codex-fallback", "quota-restore", "quota-unchanged", "quota-unknown",
     "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
     "cleared-before-proof", "retention-io", "link-inputs", "link-inputs-new-input", "link-inputs-bad-reference",
-    "link-inputs-ungranted", "link-inputs-codex-fallback", "link-inputs-oversized-description"])
+    "link-inputs-ungranted", "link-inputs-codex-fallback", "link-inputs-oversized-description", "settled-tool-error"])
 def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):  # noqa: F811 - imported pytest fixture
     """An already delivered, historical answer must not be sent/executed twice."""
     from copy import deepcopy
@@ -1444,6 +1444,25 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         # Another native input is historical context, not authority to replay it.
         language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
         language_server["sent_count"] += 1
+        if fault == "settled-tool-error":
+            from loopx.capabilities.native_chat import antigravity_adapter as native
+            rpc = native._rpc_post
+            language_server["ignore_step_range"] = True
+            def later_handled_tool_error(url, token, method, body, **kwargs):
+                result = rpc(url, token, method, body, **kwargs)
+                if method == "GetCascadeTrajectory":
+                    result["numTotalSteps"] += 1
+                elif method == "GetCascadeTrajectorySteps":
+                    result = deepcopy(result)
+                    for step in result["steps"]:
+                        index = step["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"]
+                        if index >= 3:
+                            step["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] += 1
+                    later = next(s for s in result["steps"] if s["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] == 2)
+                    result["steps"].insert(3, {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_ERROR",
+                        "metadata": {**later["metadata"], "sourceTrajectoryStepInfo": {"stepIndex": 3}}})
+                return result
+            monkeypatch.setattr(native, "_rpc_post", later_handled_tool_error)
         if fault in {"quota-restore", "quota-unchanged"} or codex_fallback:
             language_server.update(quota_error_indices=[1], quota_fraction=0.006)
         elif fault == "quota-unknown":
@@ -1537,7 +1556,27 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
                 return Formatter()
             monkeypatch.setattr(runtime, "_start_adapter", start)
         path = transport.root / f"{ref}.json"
-        transport.reconcile_request(path)
+        if fault == "settled-tool-error":
+            from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+            service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+                runtime_controller=runtime, private_conversations=transport)
+            def drive(step, **_):
+                deadline = time.monotonic() + 15
+                try:
+                    while time.monotonic() < deadline:
+                        step()
+                        current = transport.core.read_request(ref)
+                        if (current["turn_id"] != original["turn_id"]
+                                and current.get("context_recovery", {}).get("metadata_review") and current.get("delivery_verified")):
+                            return
+                        time.sleep(.01)
+                    pytest.fail("The existing discovery/reply worker did not complete the original metadata review")
+                finally:
+                    service._closed.set()
+            monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+            service._reconcile_private()
+        else:
+            transport.reconcile_request(path)
         if fault in {"quota-restore", "quota-unchanged"}:
             held = transport.core.read_request(ref)
             assert held["metadata_quota_wait"]["remaining_fraction"] == 0.006
@@ -1571,7 +1610,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
         transport.reconcile_request(path)
         entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
-        if codex_fallback or fault in {None, "quota-restore", "link-inputs", "link-inputs-bad-reference",
+        if codex_fallback or fault in {None, "quota-restore", "link-inputs", "link-inputs-bad-reference", "settled-tool-error",
                                      "link-inputs-oversized-description"}:
             assert reviewed["status"] == "completed", reviewed
             assert len(entries) == 1 and entries[0]["source_id"] == ref
