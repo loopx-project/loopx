@@ -31,6 +31,30 @@ async function loadCursor(path: string, goalId: string): Promise<string | null> 
   return record.last_consumed_cursor;
 }
 
+/** Publish the hold marker only with its cursor bytes complete.
+ *
+ * `writeFile` on `hold-ready` creates that name before the write lands, so a
+ * parent polling the name can observe a zero-byte file and treat it as cursor
+ * 0. The staging file is in the same directory; the rename is the publication.
+ * The parent acknowledges `hold-staging-seen` only after it has observed that
+ * staging file and the absence of `hold-ready`, which keeps the window open
+ * until the observation is real rather than a race against rename. */
+async function publishHoldReady(directory: string, cursor: string): Promise<void> {
+  const ready = join(directory, "hold-ready");
+  const staging = `${ready}.staging`;
+  const seen = join(directory, "hold-staging-seen");
+  await writeFile(staging, cursor, {mode: 0o600});
+  const deadline = Date.now() + 30000;
+  while (!existsSync(seen)) {
+    if (Date.now() > deadline) {
+      process.stdout.write(`${JSON.stringify({hold_publish_unacknowledged: true})}\n`);
+      process.exit(1);
+    }
+    await sleep(5);
+  }
+  await rename(staging, ready);
+}
+
 const [directory, goalId, cursorPath, limitArg, holdDir, holdAfterArg] = process.argv.slice(2);
 const store = new SqliteAuthorityStore(directory!, goalId!);
 const limit = Number(limitArg);
@@ -42,7 +66,7 @@ const limit = Number(limitArg);
 const holdAfter = Number(holdAfterArg ?? "0");
 const hold = async (cursor: string): Promise<void> => {
   if (!holdDir || Number(cursor) < holdAfter) return;
-  await writeFile(join(holdDir, "hold-ready"), cursor, {mode: 0o600});
+  await publishHoldReady(holdDir, cursor);
   const deadline = Date.now() + 30000;
   while (!existsSync(join(holdDir, "hold-release"))) {
     if (Date.now() > deadline) {

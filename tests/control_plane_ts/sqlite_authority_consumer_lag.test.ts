@@ -141,6 +141,135 @@ async function loadPersistedCursor(path: string): Promise<string | null> {
   return record.last_consumed_cursor;
 }
 
+/** Missing and raced-away files are "not yet". ENOENT between `existsSync` and
+ * `readFile` is that race, not a failed read of a published marker. */
+async function readTextIfPresent(path: string): Promise<string | null> {
+  if (!existsSync(path)) return null;
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** A hold marker counts as published only when it contains a complete cursor.
+ * An empty file is the create-before-write gap of a direct `writeFile` and
+ * must not become cursor 0. The child renames a finished same-directory temp
+ * file into place, so a stable read is the full cursor. */
+async function readPublishedHoldCursor(path: string): Promise<string | null> {
+  const body = await readTextIfPresent(path);
+  if (body === null || body.length === 0) return null;
+  assert.match(body, /^[1-9]\d*$/, "hold-ready must publish a complete cursor");
+  return body;
+}
+
+/** `exit` can fire before the pipe delivers the last stdout. Await `close` so
+ * the caller's buffers include that write, then let the caller decide whether
+ * the marker it was waiting for actually arrived. */
+async function exitedConsumer(
+  child: {exitCode: number | null; signalCode: NodeJS.Signals | null},
+  closed: Promise<{code: number | null; signal: NodeJS.Signals | null}>,
+): Promise<{code: number | null; signal: NodeJS.Signals | null} | null> {
+  if (child.exitCode === null && child.signalCode === null) return null;
+  return closed;
+}
+
+/** An early exit is the outcome, not a missed deadline. Report the code,
+ * signal, and the last line the child actually wrote. */
+function failConsumerExited(
+  exited: {code: number | null; signal: NodeJS.Signals | null},
+  output: string,
+  stderr: string,
+  when: string,
+): never {
+  const tail = output.trim().split("\n").at(-1) ?? "";
+  assert.fail(`consumer child exited ${when} (code=${String(exited.code)}, signal=${String(exited.signal)}, last_stdout=${JSON.stringify(tail)}, stderr=${JSON.stringify(stderr)})`);
+}
+
+interface RunningConsumer {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+}
+
+interface ConsumerLogs {
+  output: string;
+  stderr: string;
+}
+
+/** Ready is a stdout line. An exit before it is reported with the drained
+ * pipes, not left to the test timeout. */
+async function waitForConsumerReady(
+  child: RunningConsumer,
+  closed: Promise<{code: number | null; signal: NodeJS.Signals | null}>,
+  readLogs: () => ConsumerLogs,
+): Promise<void> {
+  const deadline = Date.now() + 30000;
+  for (;;) {
+    if (readLogs().output.includes("ready\n")) return;
+    const exited = await exitedConsumer(child, closed);
+    if (exited !== null) {
+      const logs = readLogs();
+      if (logs.output.includes("ready\n")) return;
+      failConsumerExited(exited, logs.output, logs.stderr, "before signaling ready");
+    }
+    assert.ok(Date.now() < deadline,
+      `consumer child did not signal ready: stderr=${JSON.stringify(readLogs().stderr)}`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+/** Wait until `hold-ready` is a complete cursor published by rename.
+ *
+ * The child writes the cursor to `hold-ready.staging` and renames it only
+ * after `hold-staging-seen`. This parent reads that staging cursor while
+ * `hold-ready` is still absent, then acknowledges. A missing or empty
+ * `hold-ready` is not a cursor. A child that exits first fails here with its
+ * code and signal instead of spinning until the deadline. */
+async function waitForPublishedHold(
+  holdDir: string,
+  child: RunningConsumer,
+  closed: Promise<{code: number | null; signal: NodeJS.Signals | null}>,
+  readLogs: () => ConsumerLogs,
+): Promise<string> {
+  const holdReady = join(holdDir, "hold-ready");
+  const holdStaging = `${holdReady}.staging`;
+  const holdStagingSeen = join(holdDir, "hold-staging-seen");
+  const deadline = Date.now() + 30000;
+  let heldCursor: string | null = null;
+  let stagedCursor: string | null = null;
+  let sawEmptyMarker = false;
+  while (heldCursor === null) {
+    if (stagedCursor === null && !existsSync(holdReady)) {
+      const staged = await readTextIfPresent(holdStaging);
+      if (staged !== null && /^[1-9]\d*$/.test(staged) && !existsSync(holdReady)) {
+        stagedCursor = staged;
+        const ackStaging = `${holdStagingSeen}.staging`;
+        await writeFile(ackStaging, "seen", {mode: 0o600});
+        await rename(ackStaging, holdStagingSeen);
+      }
+    }
+    const readyBody = await readTextIfPresent(holdReady);
+    if (readyBody !== null && readyBody.length === 0) sawEmptyMarker = true;
+    heldCursor = await readPublishedHoldCursor(holdReady);
+    if (heldCursor !== null) break;
+    const exited = await exitedConsumer(child, closed);
+    if (exited !== null) {
+      heldCursor = await readPublishedHoldCursor(holdReady);
+      if (heldCursor !== null) break;
+      const logs = readLogs();
+      failConsumerExited(exited, logs.output, logs.stderr, "before publishing hold-ready");
+    }
+    assert.ok(Date.now() < deadline, existsSync(holdReady)
+      ? "consumer child left an empty hold-ready marker; an incomplete marker is not a published cursor"
+      : "consumer child did not reach its hold point");
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(sawEmptyMarker, false, "hold-ready must not be visible until its cursor bytes are complete");
+  assert.equal(stagedCursor, heldCursor, "hold-ready must be the staged cursor, published by rename");
+  return heldCursor;
+}
+
 /** Verify the full consumed stream against the write-time ledger: exact
  * operation set (zero loss, zero duplication), strictly contiguous cursors,
  * original events and receipts, the exact committed projection, and provider
@@ -355,28 +484,25 @@ test("SQLite consumer restart after a real process kill resumes from the durable
   child.stderr.on("data", data => {error += String(data);});
   const closed = new Promise<{code: number | null; signal: NodeJS.Signals | null}>(resolve =>
     child.on("close", (code, signal) => resolve({code, signal})));
-  await new Promise<void>(resolve => {
-    const ready = () => {
-      if (output.includes("ready\n")) {child.stdout.off("data", ready); resolve();}
-    };
-    child.stdout.on("data", ready);
-  });
+  const logs = (): ConsumerLogs => ({output, stderr: error});
+  await waitForConsumerReady(child, closed, logs);
   assert.equal(error, "");
   child.stdin.end("go");
 
-  // Kill at the child's controlled hold point: hold-ready exists only after
-  // the durable cursor passed killAfterCursor AND the child verified more
-  // pages remain, so the kill provably lands on a blocked mid-journal
-  // consumer instead of racing the child's own completion.
-  const holdReady = join(holdDir, "hold-ready");
-  const killDeadline = Date.now() + 30000;
-  while (!existsSync(holdReady)) {
-    assert.ok(Date.now() < killDeadline, "consumer child did not reach its hold point");
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-  const heldAtCursor = Number(await readFile(holdReady, "utf8"));
+  // Kill at the child's controlled hold point. The marker name appears only
+  // after the same-directory staging write is renamed into place, and only
+  // once the durable cursor passed killAfterCursor and unconsumed pages
+  // remain. The parent reads the staging cursor while hold-ready is absent,
+  // then lets the rename happen, so an empty marker is not a cursor.
+  const heldCursor = await waitForPublishedHold(holdDir, child, closed, logs);
+  const heldAtCursor = Number(heldCursor);
   assert.ok(heldAtCursor >= killAfterCursor, "the child held only after the durable cursor advanced");
   assert.ok(heldAtCursor < ledger.length, "the child held with unconsumed transactions remaining");
+  const exitedBeforeKill = await exitedConsumer(child, closed);
+  if (exitedBeforeKill !== null) {
+    failConsumerExited(exitedBeforeKill, output, error,
+      `after publishing hold-ready at cursor ${heldCursor} and before SIGKILL`);
+  }
   child.kill("SIGKILL");
   const killed = await closed;
   assert.notEqual(killed.code, 0);
@@ -467,4 +593,39 @@ test("SQLite consumer restart after a real process kill resumes from the durable
   const audit = await store.verifyAuthorityHistory();
   assert.equal(audit.status, "verified");
   if (audit.status === "verified") assert.equal(audit.commits, TOTAL);
+});
+
+test("SQLite consumer hold wait reports a child that exits before the marker is published", {timeout: 30000}, async t => {
+  const root = await mkdtemp(join(tmpdir(), "sqlite-consumer-lag-exit-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const cursorPath = join(root, "consumer-cursor.json");
+  const holdDir = join(root, "consumer-hold");
+  await mkdir(holdDir, {recursive: true});
+  const store = new SqliteAuthorityStore(root, GOAL_ID);
+  await commitPlanned(store, Array.from({length: 10}, (_, index) => plannedCommit(index + 1, null)), null);
+
+  // The hold threshold is past the journal, so the child drains every page
+  // and exits 0 without publishing hold-ready. The parent must say so
+  // immediately instead of waiting out the deadline and reporting a miss.
+  const child = spawn(process.execPath, ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+    fileURLToPath(new URL("./sqlite_authority_consumer_process.ts", import.meta.url)),
+    root, GOAL_ID, cursorPath, "5", holdDir, "1000"],
+  {stdio: ["pipe", "pipe", "pipe"]});
+  t.after(() => child.kill());
+  let output = "", error = "";
+  child.stdout.on("data", data => {output += String(data);});
+  child.stderr.on("data", data => {error += String(data);});
+  const closed = new Promise<{code: number | null; signal: NodeJS.Signals | null}>(resolve =>
+    child.on("close", (code, signal) => resolve({code, signal})));
+  const logs = (): ConsumerLogs => ({output, stderr: error});
+  await waitForConsumerReady(child, closed, logs);
+  child.stdin.end("go");
+  const started = Date.now();
+  await assert.rejects(() => waitForPublishedHold(holdDir, child, closed, logs), (caught: unknown) => {
+    assert.ok(caught instanceof Error);
+    assert.match(caught.message, /consumer child exited before publishing hold-ready \(code=0, signal=null,/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 5000, "an early exit must not wait for the hold deadline");
+  assert.equal(existsSync(join(holdDir, "hold-ready")), false);
 });
