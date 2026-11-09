@@ -89,6 +89,7 @@ class LarkGoalTopicRuntimeService:
             return
         pending: dict[Path, Future[int]] = {}
         attempted: dict[Path, int] = {}
+        ready: dict[Path, None] = {}
         attention: Future[int] | None = None
         attention_due = 0.0
         reports: Future[int] | None = None
@@ -105,14 +106,14 @@ class LarkGoalTopicRuntimeService:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def step() -> None:
-                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
+                nonlocal attempted, ready, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                discovered_paths: list[Path] = []
                 if discovery is not None and discovery.done():
                     try:
-                        for path in discovery.result():
-                            attempted.setdefault(path, 0)
+                        discovered_paths = discovery.result()
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat historical discovery is pending")
                     discovery = None
@@ -168,14 +169,13 @@ class LarkGoalTopicRuntimeService:
                     # backoff. Retain its fairness count until the source is
                     # actually removed, so earlier hints cannot starve later work.
                     attempted = {path: count for path, count in attempted.items() if path.exists()}
-                    for path in paths:
-                        attempted.setdefault(path, 0)
-                    # A scan is not an attempt. Keep unsubmitted discoveries in
-                    # this same fairness map when the pool is full; discovery's
-                    # read-only backoff must not hide them after a slot opens.
-                    # Reconciliation re-reads the source and Core authority.
-                    paths = list(dict.fromkeys([
-                        *(path for path, count in attempted.items() if count == 0), *paths]))
+                    # Keep scheduling hints apart from lifetime attempt counts.
+                    # A delivered body or an earlier held recovery can become
+                    # eligible again. Retain the new hint until a slot opens.
+                    ready = {path: None for path in ready if path.exists()}
+                    for path in (*paths, *discovered_paths):
+                        if path not in pending:
+                            ready.setdefault(path, None)
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())
@@ -193,13 +193,12 @@ class LarkGoalTopicRuntimeService:
                     # full. Attempts retain fairness within each class. This
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
-                    for path in sorted(paths, key=lambda path: (recovery_path(path), attempted.get(path, 0))):
+                    for path in sorted(ready, key=lambda path: (recovery_path(path), attempted.get(path, 0))):
                         if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) + int(discovery is not None) >= 4 or self._closed.is_set()):
                             break
-                        if path in pending:
-                            continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
+                        del ready[path]
                         attempted[path] = attempted.get(path, 0) + 1
                     if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():
                         reports = pool.submit(report_provider.reconcile)
