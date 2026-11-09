@@ -11,7 +11,7 @@ import pytest
 import loopx
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload, selected_context_values
 from test_replan_successor_durable_ack import AGENT, GOAL, history
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
@@ -108,6 +108,86 @@ def _add(call, obligation_id: str):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("native_session", [False, True])
+def test_bound_successor_review_reads_current_evidence_and_uses_creation_receipt(
+    tmp_path, monkeypatch, provider, native_session,
+):
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    for directory in (native, captures):
+        directory.mkdir(mode=0o700)
+    project = tmp_path / "project"
+    session = "bound-successor-review"
+
+    def hook(name, **fields):
+        result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(tmp_path / "registry.json"),
+            "--runtime-root", str(runtime), "--format", "json", "quota", "context-hook",
+            "--codex-app", "--context-delivery", "on", "--codex-context-dir", str(native)],
+            input=json.dumps({"hook_event_name": name, "session_id": session, "cwd": str(project), **fields}),
+            cwd=project, text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        state = json.loads((native / "session.json").read_bytes())
+        assert state["session_id"] == session
+        return state["context_epoch"]
+
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    if native_session:
+        monkeypatch.setenv("CODEX_THREAD_ID", session)
+        epoch = hook("SessionStart", source="startup")
+    flags = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+             "--turn-instance-id", TURN, "--context-delivery", "on",
+             "--codex-context-dir", str(native), "--decision-output-root", str(captures))
+    navigation = call(*flags)
+    assert navigation["schema_version"] == "context_capture_navigation_v1"
+
+    def read(command):
+        content, offset = [], 0
+        while command:
+            words = shlex.split(command)
+            page = call(*words[words.index("quota"):])
+            assert page["offset"] == offset
+            content.append(page["content"])
+            offset += len(content[-1].encode())
+            command = page.get("next_command")
+        assert page["eof"] and offset == page["total_bytes"]
+        return selected_context_values("".join(content))
+
+    review = read(navigation["replan_review_command"])
+    decision = read(navigation["first_read_command"])
+    assert review["/effective_action"] == "autonomous_replan_required"
+    identity = review["/heartbeat_receipt"]["settlement_identity"]
+    assert identity == decision["/heartbeat_receipt"]["settlement_identity"]
+    assert review["/goal_boundary"] == decision["/goal_boundary"]
+    channel = "/interaction_contract/agent_channel"
+    assert review[channel + "/required_reads"] == decision[channel + "/required_reads"]
+    obligation = review["/autonomous_replan_obligation"]
+    assert obligation["replan_context"]["core_goal"]["objective"] == "Deliver the independently accepted source outcome."
+    assert obligation["replan_context"]["evidence"]
+    assert obligation["obligation_id"] == identity["replan_obligation_id"]
+    if native_session:
+        assert hook("PostCompact") != epoch
+        assert read(navigation["replan_review_command"]) == review
+    authoring = "/replan_action_packet/writeback_contract"
+    cli = "/interaction_contract/cli_channel"
+    assert cli + "/next_cli_actions" not in review
+    assert cli + "/settlement_plan" in decision
+    direct = read(navigation["recovery"]["command"] + " --select " + authoring)
+    assert direct[authoring]["vision_authoring"]["fields"]
+    binding = shlex.split(review[authoring + "/successor_binding_args"])
+    assert binding == shlex.split(direct[authoring]["successor_binding_args"])
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-source-artifact",
+        "--replan-obligation-id", identity["replan_obligation_id"], *binding)
+    assert added["settlement_identity"] == identity
+    assert added["settlement_plan"]["identity"] == identity
+    assert added["replan_transition"]["outcome"] == "new_runnable_successor"
+    assert "replan_review_command" not in call(*flags)  # Original settlement is no longer review.
+    assert "replan_review_command" not in _guard(call)  # Explicit inline delivery remains complete.
+    assert not any(json.loads(row).get("classification") == "quota_slot_spent" for row in index.read_text().splitlines())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_successor_cli_reads_policy_with_context_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
@@ -166,6 +246,12 @@ def test_machine_default_stride_due_allows_evidence_linked_terminal_review(
     assert "periodic_review_due" in {trigger["kind"] for trigger in obligation["triggers"]}
     control = guard["replan_action_packet"]["stride_control"]
     assert control["strategy_version"] == "evidence_conditioned_v1"
+    captures = tmp_path / "stride-captures"
+    captures.mkdir(mode=0o700)
+    navigation = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--turn-instance-id", turn, "--context-delivery", "on", "--decision-output-root", str(captures))
+    assert navigation["schema_version"] == "context_capture_navigation_v1"
+    assert "replan_review_command" not in navigation
     common = ("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
         "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", turn,
         "--classification", "source_review", "--delivery-batch-scale", "single_surface",

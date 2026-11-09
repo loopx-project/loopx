@@ -1,7 +1,7 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
-  progressiveContextPlan} from "./progressive_context.ts";
+  progressiveContextPlan, successorReplanReadSelection} from "./progressive_context.ts";
 import {withComposedCliSettlement} from "./settlement_plan.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -2260,8 +2260,12 @@ function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" |
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(request, initial ? initialContextReadPointers(
-    requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+  if (!initial) return capturedContextSelection(request, []);
+  const context = requireJsonObject(request.context, "captured context");
+  const pointers = initialContextReadPointers(context, INITIAL_CONTEXT_DECISION_FIELDS);
+  const result = capturedContextSelection(request, pointers);
+  const review = request.include_replan_review === true ? successorReplanReadSelection(context, pointers) : undefined;
+  return review ? {...result, replan_review: review} : result;
 }
 
 function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = canonicalHash,

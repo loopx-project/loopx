@@ -115,6 +115,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    replan_review = None
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
@@ -134,6 +135,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     if progressive_enabled and initial_read_plan is not None:
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
+            replan_review = initial_read_plan.get("replan_review")
             if initial:
                 pin_initial_selection(plan)
             else:
@@ -143,12 +145,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             pass
     elif progressive_enabled and not stateless_first_read:
         try:
-            plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
+            plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True,
+                include_replan_review=not page_attached)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass
         else:
             field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
             initial_read_pointers = plan.get("initial_read_pointers")
+            replan_review = plan.get("replan_review")
 
     def view(kind: str, ref: dict[str, Any], body: bytes) -> dict[str, Any]:
         return _native_context_reference(projected, ref, mode=kind, current=current,
@@ -201,6 +205,22 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
+    if replan_review and not page_attached and "first_read_command" in result:
+        try:
+            path, digest = Path(current["path"]), current["sha256"]
+            reader, _ = write_initial_context_read_reference(path, digest, current_document, replan_review["selections"])
+            candidate = {**result, "replan_review_command": context_capture_read_command(path, digest,
+                reference_file=reader, page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes,
+                reader_argv=reader_argv),
+                "instruction": ("To consider a runnable successor, start with replan_review_command and follow its cursor "
+                    "to completion. Follow all current read obligations before choosing. Use the captured binding "
+                    "and the successor creation receipt's original settlement plan only if choosing that successor. "
+                    "For other outcomes read the ordinary context and the complete applicable authoring contract first. "
+                    "Ordinary context: " + result["instruction"])}
+            if len(_native_output_bytes(candidate)) <= min(output_bytes, 7900):
+                result = candidate
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            pass  # The ordinary reader and original receipt are already published.
     return result
 
 

@@ -9,6 +9,7 @@ import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.t
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
   from "../work_items/interaction_contract.ts";
+import {projectReplanSemantics} from "../work_items/replan_semantics.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
@@ -489,8 +490,64 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
+  const review = successorReplanReadSelection(context, pointers);
   return {initial: true, plan: select(pointers), ...(groups.opening.length && groups.remaining.length
-    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {})};
+    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {}),
+    ...(review ? {replan_review: review} : {})};
+}
+
+/** Address a review before choosing a successor. The ordinary reader and
+ * complete source retain authoring for every other outcome. */
+export function successorReplanReadSelection(context: JsonObject, pointers: string[]): JsonObject | undefined {
+  const obligation = jsonObject(context.autonomous_replan_obligation);
+  const replan = jsonObject(context.replan_action_packet);
+  const review = jsonObject(obligation?.replan_context);
+  const writer = jsonObject(replan?.writeback_contract);
+  const receipt = jsonObject(context.heartbeat_receipt);
+  const identity = jsonObject(receipt?.settlement_identity);
+  const interaction = jsonObject(context.interaction_contract), cli = jsonObject(interaction?.cli_channel);
+  const plan = jsonObject(cli?.settlement_plan);
+  const binding = jsonObject(jsonObject(cli?.replan_settlement_contract)?.settlement_binding);
+  const choices = jsonObject(replan?.uncovered_frontier)?.required_any_of;
+  if (!pointers.length || context.schema_version !== "loopx_turn_envelope_v1" ||
+      context.ok !== true || context.should_run !== true || context.normal_delivery_allowed !== false ||
+      context.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED || context.selected_todo != null ||
+      jsonObject(interaction?.user_channel)?.action_required !== false || cli?.turn_binding_required === true ||
+      replan?.schema_version !== "replan_action_packet_v0" || replan.decision !== "replan_required" ||
+      replan.settlement_only === true || !obligation || review?.schema_version !== "replan_context_v0" ||
+      receipt?.status !== "committed" ||
+      !identity || identity.binding_kind !== "autonomous_replan" || !identity.replan_obligation_id ||
+      identity.replan_obligation_id !== obligation.obligation_id || identity.replan_obligation_id !== replan.obligation_id ||
+      identity.replan_obligation_id !== review.obligation_id || identity.goal_id !== context.goal_id ||
+      identity.goal_id !== review.goal_id || identity.agent_id !== review.agent_id ||
+      typeof identity.turn_instance_id !== "string" || identity.turn_instance_id !== receipt?.turn_instance_id ||
+      plan?.schema_version !== "quota_settlement_plan_v1" || !isDeepStrictEqual(plan.identity, identity) ||
+      binding?.kind !== "autonomous_replan" || binding.id !== identity.replan_obligation_id ||
+      binding.cli_argument !== "--replan-obligation-id" ||
+      typeof writer?.successor_binding_args !== "string" || !writer.successor_binding_args ||
+      typeof writer.successor_settlement !== "string" || !writer.successor_settlement ||
+      !Array.isArray(choices) || !choices.includes("new_runnable_successor")) return undefined;
+  if (!Array.isArray(plan.ordered_steps) || plan.ordered_steps.some(value => {
+    const step = jsonObject(value);
+    return !step || (step.kind !== "validation" && step.kind !== "durable_writeback" && step.kind !== "quota_spend") ||
+      (Object.hasOwn(step, "optional_attachments") && (!Array.isArray(step.optional_attachments) ||
+        step.optional_attachments.some(item => jsonObject(item)?.required !== false)));
+  })) return undefined;
+  // Reuse the typed owner for plain reviews. Cadence, observed stalls, capability
+  // gates, lifecycle recovery and mixed triggers need their ordinary authoring.
+  if (!projectReplanSemantics({operation: "receipt_review_source", obligation,
+    agent_id: identity.agent_id}).review_source) return undefined;
+
+  const ob = "/autonomous_replan_obligation", policy = "/replan_action_packet";
+  const contract = policy + "/writeback_contract", cliPath = "/interaction_contract/cli_channel";
+  const omit = [ob, cliPath + "/next_cli_actions", cliPath + "/settlement_plan"];
+  const scoped = pointers.filter(path => !omit.some(root => path === root || path.startsWith(root + "/")));
+  const atReview = scoped.indexOf(policy + "/planning_guidance");
+  if (atReview < 0) return undefined;
+  scoped.splice(atReview + 1, 0, ob, policy + "/uncovered_frontier",
+    cliPath + "/replan_settlement_contract", contract + "/successor_binding_args",
+    contract + "/successor_settlement", ...(typeof writer.successor_command === "string" ? [contract + "/successor_command"] : []));
+  return capturedContextSelection({context, initial_read: true}, scoped);
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {

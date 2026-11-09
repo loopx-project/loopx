@@ -274,6 +274,22 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+A complete quota decision may advertise `replan_review_command` when the
+current bound review can create a runnable successor. It selects the current
+Goal and replan evidence, applicable controls, and exact successor binding from
+the same capture. Follow its cursor and the current read obligations before
+choosing work. When creating that successor, settle the original Turn from
+the creation receipt. For another outcome, use the ordinary reader and read
+the complete applicable authoring contract before acting. Cadence and stall
+reviews, capability-owned outcomes, and original settlement recovery keep
+the ordinary reader. This optional read does not admit work or prove retention.
+
+中文：如果当前绑定的重规划允许创建可运行的后继，完整 quota 决策可提供
+`replan_review_command`。它从同一捕获读取当前 Goal、重规划证据、适用控制和后继的
+精确绑定。选择工作前读完续页并履行当前读取义务；创建后继时，用创建回执结算原
+Turn。选择其他结果时，先沿常规读取取得完整适用的写回契约。周期与停滞复盘、
+能力专属结果和原结算恢复继续走常规读取。这个按需入口不重新准入，也不证明上下文已保留。
+
 The generated `first_read_command` and its paging cursor default to a 12,000-byte
 serialized UTF-8 output limit when the caller supplied no tool budget. This
 applies after explicit Todo selection as well. An explicit output limit still
