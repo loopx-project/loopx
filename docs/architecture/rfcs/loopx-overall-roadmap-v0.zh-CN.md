@@ -4,7 +4,8 @@
 - 替代 / 关闭：无
 - 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 依据
   `5c62c5c03` 更新至 2026-10-11；controller/契约修订使用 2026-10-27 的
-  `08e290fb5`。管家故障复现基线单独保留在第 8 节。
+  `08e290fb5`。管家故障复现基线单独保留在第 8 节。历史工作集 RFC 的清单新增
+  使用 2026-11-09 的 `701795db2`，不代表对整个路线重新审计。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
@@ -423,6 +424,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [可组合状态机与恢复验证 v0](composable-state-machines-recovery-verification-v0.zh-CN.md) | S2/S3/S10 | 仅设计；复用局部 conformance 证据 | P1：一条 typed 边界，再验 ownership/writeback/settlement 故障序列与有条件推进；真实入口及后端证据 |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [Controller / Executor 与统一工作契约](controller-executor-unified-contract-v0.zh-CN.md) | S2/S4/S6/S7/S11 | 仅设计；schema cutover 与双会话未实现 | P1：C1–C9 收敛统一契约、精确差分、角色绑定、共享生命周期与 benchmark/App 采用；独立成果和完整成本先于默认提升 |
+| [可回读历史工作集与上下文策略扩展 v0](history-working-set-context-policy-v0.zh-CN.md) | S2/S4/S6/S8/S11 | 仅提案；#8450 细化 T02，尚未交付历史策略或插件端口 | 与在审 C1 协调；先验证一个最终模型输入消费者与同 capture 恢复，再验证来源绑定的可选历史视图、扩展生命周期及可比成果/完整成本，之后才评审推广 |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |

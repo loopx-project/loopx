@@ -201,6 +201,15 @@ Paired diffs do not certify translation accuracy.
     Existing Core/request/session owners retain authority, identity and recovery.
     C1–C9 connect concrete refactors, real host adoption and complete-cost
     qualification without changing defaults or launching experiments.
+- [Recoverable History Working Sets and Context Policy Extensions v0](history-working-set-context-policy-v0.md)
+  ([中文版](history-working-set-context-policy-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; tracking [#8450](https://github.com/loopx-project/loopx/issues/8450).
+  - **Current boundary:** A bounded T02 continuation design informed by
+    billion-context. Reuses complete sources, shared TypeScript presentation
+    and exact delivery; first qualifies one real model-input consumer, then
+    source-bound historical views and optional provider extensions. Source
+    retention, original readback, actual adoption and complete-cost evidence
+    remain unqualified; no runtime, default or experiment change.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.
