@@ -3610,13 +3610,18 @@ def _add_legacy_topic(binding_path: Path, bindings: dict[str, Any], target_ref: 
     return read_goal_channel_binding(binding_path)
 
 
-@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load", "legacy_topic"), [
-    *((manager, "session_queue", load, False) for manager in (False, True) for load in (63, 64, 128)),
-    (False, "live_steering", 63, False), (False, "live_steering", 64, False),
-    *((False, "session_queue", load, True) for load in (63, 64, 128)),
+@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load", "legacy_topic", "late_binding", "callbacks"), [
+    *((manager, "session_queue", load, False, False, False) for manager in (False, True) for load in (63, 64, 128)),
+    (False, "live_steering", 63, False, False, False), (False, "live_steering", 64, False, False, False),
+    *((False, "session_queue", load, True, False, False) for load in (63, 64, 128)),
+    pytest.param(False, "session_queue", 63, True, True, False, id="late-binding-63-service"),
+    pytest.param(False, "session_queue", 64, True, True, False, id="late-binding-64-service"),
+    pytest.param(False, "session_queue", 128, True, True, False, id="late-binding-128-service"),
+    pytest.param(False, "session_queue", 64, True, True, True, id="late-binding-64-callback-service"),
 ])
 def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
-    tmp_path: Path, manager: bool, ingress_mode: str, ordinary_load: int, legacy_topic: bool,
+    tmp_path: Path, monkeypatch, manager: bool, ingress_mode: str, ordinary_load: int, legacy_topic: bool,
+    late_binding: bool, callbacks: bool,
 ) -> None:
     """Use the actual listener, Inbox, Chat store, and Codex stdio protocol."""
     import runpy
@@ -3690,6 +3695,14 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     if legacy_topic:
         binding_payload = _add_legacy_topic(binding_path, binding_payload, original_binding["target_ref"])
         ordinary_topic = binding_for_goal(binding_payload, "goal-legacy")["topic"]["root_message_id"]
+    if late_binding:
+        # The App already has a direct-session connection when its listener
+        # opens. Saving a compatible mode later must affect that same stream.
+        save_goal_connection(
+            binding_path=binding_path, payload=binding_payload, goal_id="goal-alpha",
+            binding={**original_binding, "routing": {**original_binding["routing"], "ingress_mode": "direct_session"}},
+        )
+        binding_payload = read_goal_channel_binding(binding_path)
     snapshot.update(target_payload=target_payload, binding_payloads={
         "goal-alpha": binding_payload, **({"goal-legacy": binding_payload} if legacy_topic else {}),
     })
@@ -3789,6 +3802,14 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     total_events = ordinary_load + 5
 
     def lines():
+        nonlocal binding_payload
+        if late_binding:
+            save_goal_connection(
+                binding_path=binding_path, payload=binding_payload, goal_id="goal-alpha",
+                binding=original_binding,
+            )
+            binding_payload = read_goal_channel_binding(binding_path)
+            snapshot["binding_payloads"] = {"goal-alpha": binding_payload, "goal-legacy": binding_payload}
         yield json.dumps(ordinary) + "\n"
         if starts_in_app:
             assert ordinary_reply_started.wait(5)
@@ -3866,14 +3887,48 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             fixture["wait_for_active_turn"](
                 store, session_id=session_id, turn_id=started["turn_id"], require_upstream=True,
             )
-        result = stream_lark_goal_topic_profile(
-            profile="mew", snapshot_provider=lambda: snapshot, stop=threading.Event(), runtime_root=runtime_root,
-            answer=answer, process_factory=lambda _: FinishedConsumer(), reply_runner=reply,
+        options = dict(
+            process_factory=lambda _: FinishedConsumer(), reply_runner=reply,
             provider_runner=lambda args, **kwargs: subprocess.CompletedProcess(
                 args, 0, json.dumps({"ok": True, "data": {"items": [], "has_more": False}}), "",
             ),
-            capture_mention=lambda route: capture_topic_mention(route, controller),
         )
+        if late_binding:
+            from loopx.extensions.lark import goal_topic_runtime as runtime
+            from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+            service = LarkGoalTopicRuntimeService(
+                snapshot_provider=lambda: snapshot, runtime_root=runtime_root,
+                runtime_controller=controller, action_service=object() if callbacks else None,
+            )
+            result = {}
+            stream_errors = []
+
+            def owned_stream(**kwargs):
+                nonlocal result
+                try:
+                    result = stream_lark_goal_topic_profile(**{**kwargs, "answer": answer, **options})
+                    return result
+                except Exception as error:
+                    stream_errors.append(error)
+                    raise
+                finally:
+                    service._closed.set()
+                    kwargs["stop"].set()
+
+            # Only provider IO is synthetic: the service supplies the actual
+            # capture callback and owns the real machine/App consumer lease.
+            monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+            monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
+            monkeypatch.setattr(runtime, "start_team_plan_review_callback_stream", lambda **kwargs: None)
+            service._poll_profile("mew", threading.Event())
+            if stream_errors:
+                raise stream_errors[0]
+        else:
+            result = stream_lark_goal_topic_profile(
+                profile="mew", snapshot_provider=lambda: snapshot, stop=threading.Event(), runtime_root=runtime_root,
+                answer=answer, capture_mention=lambda route: capture_topic_mention(route, controller), **options,
+            )
         assert result["ok"] and result["event_count"] == total_events and result["replied_count"] == total_events - 2, result
         initial = store.turn_for_client(session_id, initial_id)
         assert store.turn_for_client(session_id, mention_id) is None

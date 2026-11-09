@@ -135,6 +135,32 @@ def test_unplanned_reader_failure_keeps_active_ownership_without_dispatching_wai
     assert observed == ["active"]
 
 
+def test_disabling_priority_reservation_restores_four_ordinary_workers():
+    entered = [threading.Event() for _ in range(4)]
+    release = threading.Event()
+    observed = []
+
+    def handle(line):
+        observed.append(line)
+        entered[int(line)].set()
+        assert release.wait(5)
+
+    dispatch = ProfileEventDispatch(
+        handle, threading.Event(), workers=4, capacity=8, reserve_priority=True,
+    )
+    try:
+        for index in range(4):
+            assert dispatch.submit((f"source-{index}",), str(index))
+        assert all(event.wait(3) for event in entered[:3])
+        assert not entered[3].is_set()
+        dispatch.set_priority_reservation(False)
+        assert entered[3].wait(3)
+    finally:
+        release.set()
+        dispatch.close()
+    assert sorted(observed) == ["0", "1", "2", "3"]
+
+
 def test_reserved_priority_admits_steering_when_ordinary_capacity_is_full():
     active, release, steered, submitting = [threading.Event() for _ in range(4)]
     observed = []

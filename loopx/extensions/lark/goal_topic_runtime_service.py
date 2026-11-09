@@ -444,13 +444,10 @@ class LarkGoalTopicRuntimeService:
                             stop=stop,
                             runtime_root=self.runtime_root,
                             answer=answer,
-                            capture_mention=(
-                                capture
-                                if runtime._profile_supports_mention_steering(
-                                    self.snapshot_provider(), profile, capture
-                                )
-                                else None
-                            ),
+                            # The listener checks current binding eligibility
+                            # per event; a later saved Session must not require
+                            # replacing a consumer with an active reply.
+                            capture_mention=capture,
                             private_admitter=(self._admit_private
                                 if self.private_conversations is not None else None),
                             proposal_deliverer=deliver_proposals,

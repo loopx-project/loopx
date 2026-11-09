@@ -96,7 +96,9 @@ def test_core_recovers_bounded_effect_free_transient_attempts_without_reacceptin
     body = {"message": "transport recovery", "client_turn_id": "original-request"}
     accepted = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     tid = accepted["turn_id"]
-    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+    # Four native attempts include paginated readback and durable Core IO.
+    # The retry count and unchanged original input below are the oracle.
+    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=30)
     assert completed["status"] == expected_status
     duplicate = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     assert duplicate["turn_id"] == tid and not duplicate["created"]

@@ -811,8 +811,11 @@ def stream_lark_goal_topic_profile(
         ingress_mode = route.route.get("ingress_mode", IngressMode.DIRECT_SESSION.value)
         # Previously captured compatibility input still belongs to its Topic
         # even if another connection no longer reserves a steering worker.
+        current_steering = capture_mention is not None and _profile_supports_mention_steering(
+            snapshot, profile, capture_mention
+        )
         return (
-            (reserve_priority or ingress_mode == IngressMode.DIRECT_SESSION.value)
+            (current_steering or ingress_mode == IngressMode.DIRECT_SESSION.value)
             and route.inbox_key == inbox_key
             and route.digest == packet["route_ref"] and lane == packet["lane"]
             and (
@@ -883,12 +886,20 @@ def stream_lark_goal_topic_profile(
                     # App or Session is now routed to a different Goal Topic.
                     report_retained_input()
                     continue
+                # The App can save a compatible binding after this consumer
+                # starts. Adopt its current eligibility on the same stream;
+                # unqualified profiles retain all ordinary worker capacity.
+                current_snapshot = snapshot_provider()
+                reserve_priority = capture_mention is not None and _profile_supports_mention_steering(
+                    current_snapshot, profile, capture_mention
+                )
+                dispatch.set_priority_reservation(reserve_priority)
                 lane, mention_capture, intake_route = _profile_event_lane(
                     profile=profile,
-                    snapshot=snapshot_provider(),
+                    snapshot=current_snapshot,
                     event=event,
                     runtime_root=runtime_root,
-                    capture_mention=capture_mention,
+                    capture_mention=capture_mention if reserve_priority else None,
                     include_capture=True,
                     prepare_intake=reserve_priority,
                 )

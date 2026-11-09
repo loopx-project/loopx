@@ -633,7 +633,6 @@ def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
     stream = runtime.stream_lark_goal_topic_profile
 
     def owned_stream(**kwargs):
-        assert kwargs.get("capture_mention") is None
         result = stream(**kwargs, process_factory=lambda _args: _Consumer(lines()))
         service._closed.set()
         return result

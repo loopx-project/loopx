@@ -82,6 +82,17 @@ class ProfileEventDispatch:
         with self._condition:
             return self._full(False)
 
+    def set_priority_reservation(self, enabled: bool) -> None:
+        """Apply current binding eligibility without replacing the stream or work."""
+
+        with self._condition:
+            enabled = enabled and self._workers > 1
+            if self._reserve_priority == enabled:
+                return
+            self._reserve_priority = enabled
+            self._start_ready()
+            self._condition.notify_all()
+
     def _full(self, priority: bool) -> bool:
         transient = self._ordinary_pending + self._priority_pending
         if not self._reserve_priority:
