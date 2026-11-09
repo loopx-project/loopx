@@ -83,6 +83,19 @@ def test_inventory_keeps_resolved_receipts_in_their_selected_case(tmp_path, caps
         assert result["unreadable_receipts"] == 0
 
 
+def test_inventory_retains_literal_receipt_lookup_on_the_filesystem(tmp_path, capsys):
+    receipt = tmp_path / "runs" / "run" / "case" / "RUNTIME-RECEIPT.JSON"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({"task": "case"}))
+    # Retain each runtime's existing literal-glob matching for readable files.
+    literal_matches = list(tmp_path.glob("runs/*/*/runtime-receipt.json"))
+
+    main(["--log-dir", str(tmp_path)])
+    result = json.loads(capsys.readouterr().out)
+    assert [row["task"] for row in result["cases"]] == (["case"] if literal_matches else [])
+    assert result["unreadable_receipts"] == 0
+
+
 def test_preflight_looks_up_each_required_image_once_and_keeps_missing_image_gate(tmp_path):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
