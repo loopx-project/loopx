@@ -2333,7 +2333,9 @@ catalog/team/craft 命令。每个原场景和 companion 仍为必需；craft �
 关键路径缩短及完整 CI 成本仍需在拟议 workflow 上实测。
 
 Worker 安装同一个 candidate wheel，只采用 producer 精确选定的 fixture
-commit/path。Package、checksum、snapshot 和 source digest 加 candidate
+commit/path。源码侧 fixture authority 还获得从同一 wheel 复制的预构建页面，
+并对 product source 验证，不自行重建。首次分片运行漏供这些源码资源，
+两条 research companion 路径失败；该失败运行单独保留。Package、checksum、snapshot 和 source digest 加 candidate
 artifact id 将最终 `build` 门绑定到成功的分片回执。门禁导入真实 catalog
 而不启动浏览器，在 attestation 或既有 validated-bundle 上传前拒绝缺失、
 失败、未知、重复、分片错误场景、错误来源和不完整 companion。仅发布恢复保留

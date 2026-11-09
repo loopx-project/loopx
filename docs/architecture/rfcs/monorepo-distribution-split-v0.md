@@ -3004,7 +3004,10 @@ validation lanes. Reduced critical-path time and complete CI cost still require
 measurement on the proposed workflow.
 
 Workers install the same candidate wheel and adopt only the producer's exact
-selected fixture commit/paths. Package, checksum, snapshot and source digests,
+selected fixture commit/paths. Source-side fixture authorities also receive the
+prebuilt frontend copied from that wheel, validated against the product source;
+they do not rebuild it. The initial partition run omitted these source assets
+and failed two research companion paths; preserve that failed run separately. Package, checksum, snapshot and source digests,
 plus the candidate artifact id, bind the final `build` gate to successful
 partition receipts. The gate imports the actual catalog without starting a
 browser and rejects missing/failed/unknown/duplicate/mispartitioned scenarios,

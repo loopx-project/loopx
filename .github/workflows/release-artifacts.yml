@@ -492,6 +492,18 @@ jobs:
           python -m venv "${RUNNER_TEMP}/loopx-browser-wheel"
           "${RUNNER_TEMP}/loopx-browser-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist/packages/*.whl
           python scripts/verify_installed_chat.py --python "${RUNNER_TEMP}/loopx-browser-wheel/bin/python"
+          # Some catalog scenarios start real source-side fixture authorities.
+          # Supply their frontend from this same wheel; never rebuild it here.
+          "${RUNNER_TEMP}/loopx-browser-wheel/bin/python" -I - <<'PY'
+          from pathlib import Path
+          import shutil
+          from loopx.chat_server import default_chat_assets_dir
+          from loopx.presentation.chat_bundle import validate_bundle
+
+          target = Path("loopx/web/chat")
+          shutil.copytree(default_chat_assets_dir(), target, dirs_exist_ok=True)
+          validate_bundle(target, source_root=Path.cwd())
+          PY
 
       - name: Install browser validation dependencies
         working-directory: apps/presentation/dashboard
