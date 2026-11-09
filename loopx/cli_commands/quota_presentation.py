@@ -119,10 +119,12 @@ def compose_quota_cli_source(
     capture_directory: Path | None,
     compose: Callable[..., dict[str, object]],
 ) -> tuple[dict[str, object], bool, dict[str, object] | None]:
-    """Prepare one decided source and an optional raw compatibility display."""
-    # Delta-only and managed handoff still consume the complete source.
+    """Prepare one decided source and an optional bounded compatibility display."""
+    # Ordinary Markdown retains its caller view; native delivery and managed
+    # handoff still consume the complete source through their own presentation.
     raw_envelope = (getattr(args, "turn_envelope", False)
-        and activation.get("requested") == "off" and not activation["enabled"]
+        and not activation["enabled"]
+        and (activation.get("requested") == "off" or getattr(args, "format", None) == "markdown")
         and not getattr(args, "decision_handoff_socket", None))
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None

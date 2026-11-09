@@ -600,6 +600,13 @@ carrier 增长余量。相同版本增长、变化／缺失控制继续受约束
 [预算 owner 的决定](../../../reference/contracts/interface-budget-contract.md#complete-quota-carrier-differential-qualification)。
 该控制子集不证明完整来源等价、模型采用或效率净收益，不关闭父 C1 验收。
 
+上述版本化 carrier 资格不退役现有普通 Markdown `--turn-envelope` reader。
+省略 context delivery 或设为 `auto`，且没有活动原生交付或 managed handoff 时，
+它保留与完整 capture 同一次 TypeScript 组合产生的有界视图。显式 `off` 保留原
+展示，JSON、原生及 handoff 路径各自遵守原交付合同。这是展示适配器，不是第二个
+writer 或决策 owner；只有具名消费者迁移、替换与恢复资格完成后才能退役，
+carrier 余量通过本身不够。
+
 薄提示明确从原来源的所需分节及原身份恢复，保留行动前工作上下文、显式全文义务和
 capture／handoff flags。完整来源可用，不等于丢失上下文后无条件重读整包。措辞和
 成功 fixture 都不证明 retention，也不授权重新准入。原 quota 单会话的成果／完整

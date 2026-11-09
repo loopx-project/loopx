@@ -829,6 +829,15 @@ unchanged. See the [owned budget decision](../../../reference/contracts/interfac
 This control subset is not complete-source parity, model adoption or a net
 efficiency result, and does not close the parent C1 acceptance.
 
+That versioned carrier qualification does not retire the existing ordinary
+Markdown `--turn-envelope` reader. With context delivery omitted or `auto`,
+and no active native delivery or managed handoff, it keeps the bounded view
+from the same TypeScript composition that supplies the complete capture.
+Explicit `off` keeps its existing display; JSON and native/handoff routes
+retain their own delivery contracts. This is a display adapter, not a second
+writer or decision owner. Retire it only with a named consumer migration and
+qualified replacement/recovery; a passing carrier allowance is insufficient.
+
 Thin recovery now explicitly asks for needed sections of the original source
 and its identity, while retaining current work context before action, explicit
 full-read duties and capture/handoff flags. Complete-source availability does

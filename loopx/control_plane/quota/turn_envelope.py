@@ -288,7 +288,7 @@ def compose_turn_decision_with_raw_envelope(
     ) = None,
     captured_decision_path: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Return the complete capture and its bounded explicit-off view in one call."""
+    """Return the complete capture and its bounded compatibility view in one call."""
     return _compose_turn_source(payload,
         scheduler_execution_context=scheduler_execution_context,
         legacy_output={"include_legacy_envelope": True,

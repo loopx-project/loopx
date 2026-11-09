@@ -1,19 +1,95 @@
 """Settlement remains executable and signed through the opt-in compact view."""
 from copy import deepcopy
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
+import loopx
 import pytest
 
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope,
+    compose_turn_decision,
+    compose_turn_decision_with_raw_envelope,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
 from tests.test_turn_envelope import _full_decision
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
     _configure_read_only_todo, _run_cli, _run_generated_cli,
-    _spend_run_count, _write_fixture, _initialize_fixture_authority,
+    _spend_run_count, _write_fixture, _initialize_fixture_authority, _heartbeat_receipt_count,
 )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery", [None, "auto", "off"])
+def test_ordinary_markdown_keeps_bounded_view_and_complete_capture(
+    tmp_path, monkeypatch, record_property, provider, delivery,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture = tmp_path / "original-capture"
+    root = Path(loopx.__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--runtime-root", str(runtime), "--format", "markdown", "quota", "should-run",
+         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+         "--turn-instance-id", TURN_ID, "--turn-envelope", "--decision-output-dir", str(capture),
+         *(["--context-delivery", delivery] if delivery else [])],
+        cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    record_property("markdown_chars", len(result.stdout))
+    record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
+    assert result.stdout.startswith("# LoopX Turn Envelope\n")
+    assert "- should_run: `True`" in result.stdout
+    assert "- effective_action: `normal_run`" in result.stdout
+    assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
+    assert '"schema_version": "loopx_turn_envelope_v1"' not in result.stdout
+    assert len(result.stdout) <= 4800
+    # The display is not another writer or a loss of the original decision.
+    original = (capture / "decision.json").read_bytes()
+    source = json.loads(original)
+    assert source["schema_version"] == "loopx_turn_envelope_v1"
+    assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    _, recovered, restored = read_context_capture_file(
+        str(capture / "decision.json"), hashlib.sha256(original).hexdigest(), private=True,
+    )
+    assert recovered == original and restored == source
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+def test_compatibility_display_preserves_the_same_complete_source(tmp_path):
+    payload = _full_decision()
+    payload["future_requirement"] = {
+        "raw": 'Preserve the final stop: 汉🙂"\\\n',
+        "numbers": [1.0, -0.0, 2**60 + 1], "unknown": [None, False, {}, []],
+    }
+    before = deepcopy(payload)
+    complete = compose_turn_decision(payload)
+    source, view = compose_turn_decision_with_raw_envelope(
+        payload, captured_decision_path=str(tmp_path / "decision.json"),
+    )
+    assert json.dumps(source, ensure_ascii=False) == json.dumps(complete, ensure_ascii=False)
+    assert json.dumps(source["future_requirement"], ensure_ascii=False) == json.dumps(
+        before["future_requirement"], ensure_ascii=False,
+    )
+    assert payload == before
+    assert view is not None and view["schema_version"] == "loopx_turn_envelope_v0"
 
 
 def _plan():
