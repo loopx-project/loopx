@@ -157,6 +157,10 @@ test("phase reading retains successive decisions for one question, including a l
   const view = projectExploreHistory(rows, goal), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
   assert.deepEqual(selectExploreTimelineDecisions(timeline, 0).map(item => item.event.event_id), ["early-stop", "backfill", "early"]);
   assert.deepEqual(selectExploreTimelineDecisions(timeline, null).map(item => item.sections!.decision!.outcome), ["wait", "stop", "no_change", "continue"]);
+  assert.deepEqual(timeline.phases.map(phase => phase.nodes), [1, 0, 1], "A late finding keeps the original question active without adding a new one");
+  const original = timeline.nodes.get("route")!;
+  assert.deepEqual([...original.recordedPhases], [0, 2]);
+  assert.equal(original.first, timeline.start, "Later activity does not move the question on the axis");
   assert.equal(timeline.phases[0]!.lastDecision!.event.event_id, "early-stop");
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.phases[1]!.start), 1, "a boundary belongs to one reading group");
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.end), 2);

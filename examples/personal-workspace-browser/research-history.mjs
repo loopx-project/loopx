@@ -170,6 +170,20 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     await page.goto(`${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
     const history = page.locator('.research-history');
     await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+    const readLatePhase = async (locale, size) => {
+      const late = history.getByRole('button', {name: locale === 'zh-CN' ? /^后段 ·/ : /^Late ·/});
+      await late.focus();
+      await late.press('Enter');
+      assert.equal(await late.getAttribute('aria-pressed'), 'true');
+      await page.screenshot({path: resolve(outputDir, 'recorded-phase-' + size + '-' + locale + '.png'), animations: 'disabled'});
+      assert.equal(await history.locator('[data-research-nodes~="question-2"]:not(.is-dimmed)').count(), 1,
+        'A question with a late record stays highlighted at its earlier first record');
+      assert.equal(await history.locator('[data-research-nodes~="question-3"].is-dimmed').count(), 1,
+        'A question with no records in the selected phase stays dimmed');
+      assert.match(await late.getAttribute('aria-label'), locale === 'zh-CN' ? /2 个有记录的研究项/ : /2 research items with records/);
+      await late.press('Enter');
+    };
+    await readLatePhase('zh-CN', 'desktop');
     const trail = history.locator('.research-trail');
     const group = trail.locator('.research-trail-question').first();
     const assertReturn = async control => {
@@ -198,6 +212,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       await page.evaluate(value => localStorage.setItem('loopx-pw-locale', value), locale);
       await page.reload({waitUntil: 'domcontentloaded'});
       await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await readLatePhase(locale, 'phone');
       const row = group.locator('[data-research-decision]').first();
       assert.match(await row.innerText(), locale === 'zh-CN' ? /停止 2.*保留 3/s : /Stopped 2.*Retained 3/s);
       await row.scrollIntoViewIfNeeded();

@@ -35,7 +35,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   }, [timeline.start, timeline.end]);
   const findingCopy = exploreFindingCopy(zh);
   const copy: Copy = zh ? {
-    early: "前段", middle: "中段", late: "后段", item: "研究项", items: "研究项", question: "个问题", questions: "个问题",
+    early: "前段", middle: "中段", late: "后段", item: "个有记录的研究项", items: "个有记录的研究项", question: "个问题", questions: "个问题",
     decisions: "显式决策", none: "未记录显式决策", changed: "变化", stopped: "停止", retained: "保留",
     unstructured: "决策未结构化", unstructuredHint: "结论未按 writeback 结构记录，无法拆出依据与决策。",
     density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", ticks: "转向 / 继续",
@@ -46,7 +46,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
     whole: "全程",
   } : {
-    early: "Early", middle: "Middle", late: "Late", item: "Research item", items: "Research items", question: "question", questions: "questions",
+    early: "Early", middle: "Middle", late: "Late", item: "research item with records", items: "research items with records", question: "question", questions: "questions",
     decisions: "Explicit decisions", none: "No explicit decision recorded", changed: "Changed", stopped: "Stopped", retained: "Retained",
     unstructured: "Unstructured decisions", unstructuredHint: "Findings were not recorded in writeback sections; evidence and decisions cannot be separated.",
     density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", ticks: "Replan / continue",
@@ -62,6 +62,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   const span = Math.max(1, end - start);
   const pct = (at: number) => `${((at - start) / span) * 100}%`;
   const inPhase = (at: number | null) => phase === null || exploreTimelinePhaseAt(timeline.phases, at) === phase;
+  const nodeInPhase = (item: TimelineNode) => phase === null || item.recordedPhases.has(phase);
   const label = (key: string) => copy[key] ?? key;
   const hours = (from: number, to: number) => { const value = (to - from) / 3_600_000; return value >= 48 ? `${(value / 24).toFixed(1)} ${zh ? "天" : "d"}` : `${value.toFixed(1)} ${zh ? "小时" : "h"}`; };
   const maxEvents = Math.max(1, ...timeline.bins.map(bin => bin.events));
@@ -73,7 +74,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   const marker = (item: TimelineNode, style: CSSProperties, extra = "") => {
     const title = `${item.node.latest.title} · ${label(item.label || "unlabeled")}${item.first !== null ? ` · ${timeLabel(item.first)}` : ""}`;
     return <button key={item.node.id} type="button" title={title} aria-label={title} aria-pressed={selectedIds.includes(item.node.id)} data-research-nodes={item.node.id}
-      className={`research-timeline-marker ${tone(item.label)}${isOpen(item) ? " is-open" : ""}${selectedIds.includes(item.node.id) ? " is-selected" : ""}${inPhase(item.first) ? "" : " is-dimmed"}${extra}`}
+      className={`research-timeline-marker ${tone(item.label)}${isOpen(item) ? " is-open" : ""}${selectedIds.includes(item.node.id) ? " is-selected" : ""}${nodeInPhase(item) ? "" : " is-dimmed"}${extra}`}
       style={style} onClick={() => onSelect(item.node.id)}/>;
   };
   const points = (items: readonly TimelineNode[], extra = "") => groupExploreTimelinePoints(items, start, end, plotWidth).map(group => {
@@ -83,7 +84,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     const title = zh ? `${ids.length} 项相邻研究 · ${timeLabel(group.items[0]!.first!)} — ${timeLabel(group.items.at(-1)!.first!)} · 展开全部记录与依据`
       : `${ids.length} nearby research items · ${timeLabel(group.items[0]!.first!)} — ${timeLabel(group.items.at(-1)!.first!)} · Read every record and source`;
     return <button key={ids[0]} type="button" title={title} aria-label={title} aria-pressed={selected} data-research-nodes={ids.join(" ")}
-      className={`research-timeline-marker is-cluster${selected ? " is-selected" : ""}${group.items.some(item => inPhase(item.first)) ? "" : " is-dimmed"}`}
+      className={`research-timeline-marker is-cluster${selected ? " is-selected" : ""}${group.items.some(nodeInPhase) ? "" : " is-dimmed"}`}
       style={{left: pct(group.at)}} onClick={event => onSelectMany(ids, event.currentTarget)}><span>{ids.length}</span></button>;
   });
   const trail = groupExploreTimelineDecisions(timeline, phase);
@@ -124,6 +125,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
       <p>{findingCopy.meaning}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
+      <p>{zh ? "选中时段后，高亮其中有记录的研究项。各项位置仍按首次记录时间。" : "Selecting a period highlights items with records in it. Each item stays at its first recorded time."}</p>
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹按研究问题归组，组内保留各轮显式决策，最近记录在前；同名问题不会自动合并。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history groups explicit decisions by question, newest record first; matching titles do not merge questions."}</p>
       <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl>
         </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}
@@ -188,7 +190,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
       {dayGroups.length ? <>
         <div className="research-row-label"><strong>{copy.singles} · {groupedIds.size}</strong></div>
         <div className="research-unlinked-days">{dayGroups.map(group => <button type="button" key={group.day} data-research-day={group.day} aria-pressed={selectedDay === group.day}
-          className={`${selectedDay === group.day ? "is-selected" : ""}${group.nodes.some(node => inPhase(timeline.nodes.get(node.id)!.first)) ? "" : " is-dimmed"}`}
+          className={`${selectedDay === group.day ? "is-selected" : ""}${group.nodes.some(node => nodeInPhase(timeline.nodes.get(node.id)!)) ? "" : " is-dimmed"}`}
           onClick={event => onGroupSelect(group.day, event.currentTarget)}><time>{group.day ? `${group.day} UTC` : (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions}</strong></button>)}</div>
       </> : null}
       {swarm.length ? <>

@@ -52,7 +52,7 @@ export type TimelineFinding = {event: ExploreHistoryEvent; at: number | null; se
 export type TimelineBin = {start: number; end: number; events: number; nodes: number; labels: Record<string, number>; decisions: Record<string, number>};
 export type TimelinePhase = {index: number; start: number; end: number; nodes: number; findings: number; labels: Record<string, number>; decisions: Record<string, number>; lastDecision: TimelineFinding | null};
 export type TimelineRoute = {id: string; nodeIds: string[]; first: number | null; last: number | null};
-export type TimelineNode = {node: ExploreHistoryNode; first: number | null; last: number | null; label: string; routeId: string | null};
+export type TimelineNode = {node: ExploreHistoryNode; first: number | null; last: number | null; label: string; routeId: string | null; recordedPhases: Set<number>};
 export type ExploreTimeline = {
   start: number | null; end: number | null;
   bins: TimelineBin[]; phases: TimelinePhase[];
@@ -138,7 +138,7 @@ export function buildExploreTimeline(nodes: readonly ExploreHistoryNode[], edges
   for (const node of nodes) {
     const stamps = [...node.updates, ...node.findings].map(event => time(event.recorded_at)).filter((at): at is number => at !== null);
     const label = node.findings.at(-1)?.status ?? "";
-    timelineNodes.set(node.id, {node, first: stamps.length ? Math.min(...stamps) : null, last: stamps.length ? Math.max(...stamps) : null, label, routeId: null});
+    timelineNodes.set(node.id, {node, first: stamps.length ? Math.min(...stamps) : null, last: stamps.length ? Math.max(...stamps) : null, label, routeId: null, recordedPhases: new Set()});
   }
   const routes: TimelineRoute[] = [];
   const singles: string[] = [];
@@ -162,8 +162,22 @@ export function buildExploreTimeline(nodes: readonly ExploreHistoryNode[], edges
   const phaseCount = span >= MIN_THIRDS_SPAN_MS ? 3 : 1;
   const phases: TimelinePhase[] = span ? Array.from({length: phaseCount}, (_, index) => ({index, start: start! + span * index / phaseCount, end: start! + span * (index + 1) / phaseCount, nodes: 0, findings: 0, labels: {}, decisions: {}, lastDecision: null})) : [];
   const slot = <T,>(items: T[], at: number) => items[Math.min(items.length - 1, Math.floor((at - start!) / span * items.length))]!;
-  for (const event of events) { const at = time(event.recorded_at); if (at !== null && bins.length) slot(bins, at).events++; }
-  for (const item of timelineNodes.values()) if (item.first !== null && bins.length) { slot(bins, item.first).nodes++; slot(phases, item.first).nodes++; }
+  for (const event of events) {
+    const at = time(event.recorded_at);
+    if (at === null || !bins.length) continue;
+    slot(bins, at).events++;
+    // Count each recorded item once per phase, including later findings on
+    // earlier items. Edges alone do not make an item active in that phase.
+    const node = event.event_kind === "node" ? timelineNodes.get(event.result_id)
+      : event.event_kind === "finding" ? timelineNodes.get(event.node_id) : undefined;
+    if (!node) continue;
+    const phase = slot(phases, at);
+    if (!node.recordedPhases.has(phase.index)) {
+      node.recordedPhases.add(phase.index);
+      phase.nodes++;
+    }
+  }
+  for (const item of timelineNodes.values()) if (item.first !== null && bins.length) slot(bins, item.first).nodes++;
   for (const item of findings) {
     if (item.at === null || !bins.length) continue;
     const bin = slot(bins, item.at), phase = slot(phases, item.at);
