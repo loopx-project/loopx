@@ -30,6 +30,12 @@ type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; 
 type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]; unreadable_pack_ids?: string[]}; pack: Pack | null;
   originalPack?: Pack | null; originalReadError?: string};
 type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
+type EvidenceRead = {
+  scope: string;
+  busy?: boolean;
+  value?: Citation;
+  failure?: {message: string; route: string; selection: Record<string, string>};
+};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -86,15 +92,15 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
       || !["observed", "unavailable"].includes(value.comparison.status)) throw new Error("Comparison readback unavailable");
     return value.comparison;
   }, [goalId, readSourceUrl, outputLanguage]);
-  const [citation, setCitation] = useState<Citation | null>(null);
-  const [citationFailure, setCitationFailure] = useState<{
-    message: string; sourceScope: string; packId: string; analysisKey: string;
-    route: string; selection: Record<string, string>;
-  } | null>(null);
-  const [citationBusy, setCitationBusy] = useState(false);
+  const [evidenceRead, setEvidenceRead] = useState<EvidenceRead | null>(null);
   const citeGeneration = useRef(0);
   const sourcePanel = useRef<HTMLElement>(null);
   const sourceTrigger = useRef<HTMLButtonElement | null>(null);
+  const invalidateCitation = useCallback(() => {
+    citeGeneration.current++;
+    sourceTrigger.current = null;
+    setEvidenceRead(null);
+  }, []);
   const [location, setLocation] = useState(() => locationFor(goalId));
   const sourceScope = JSON.stringify([goalId, outputLanguage, readSourceUrl ?? ""]);
   const [readState, setReadState] = useState<{scope: string; packId: string | null; snapshot: Snapshot | null; error: string; loading: boolean}>(
@@ -148,14 +154,14 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     // pending reads/actions before a new scope can display the old snapshot.
     if (scope.current.packId !== next.packId) {
       generation.current++; readSequence.current++; submitting.current = false;
-      citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false);
+      invalidateCitation();
       setPending(false); setCancelPending(false); setError("");
       setReadState(previous => ({scope: sourceScope, packId: next.packId, snapshot: previous.scope === sourceScope && previous.snapshot
         ? previous.snapshot.pack?.pack_id === next.packId ? previous.snapshot : {...previous.snapshot, pack: null, originalPack: null, originalReadError: ""} : null, error: "", loading: true}));
     }
     scope.current = {goalId, packId: next.packId, outputLanguage, sourceScope};
     setLocation(next);
-  }, [goalId, outputLanguage, sourceScope]);
+  }, [goalId, outputLanguage, sourceScope, invalidateCitation]);
   useEffect(() => {
     generation.current++; submitting.current = false;
     applyLocation(locationFor(goalId));
@@ -174,11 +180,16 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const currentSnapshot = snapshot;
   const pack = currentSnapshot?.pack ?? null;
   const readingPack = currentSnapshot?.originalPack ?? pack;
-  const failedCitation = citationFailure?.sourceScope === sourceScope && citationFailure.packId === readingPack?.pack_id
-    && citationFailure.analysisKey === readingPack.analysis_key ? citationFailure : null;
+  // A saved original and a later result in the requested language can share
+  // the selection and pack ID. Evidence belongs to the result being displayed.
+  const evidenceScope = readingPack ? JSON.stringify([sourceScope, readingPack.pack_id, readingPack.analysis_key]) : null;
+  const visibleEvidence = evidenceRead?.scope === evidenceScope ? evidenceRead : null;
+  const citation = visibleEvidence?.value ?? null;
+  const citationBusy = Boolean(visibleEvidence?.busy);
+  const failedCitation = visibleEvidence?.failure;
   const citationError = failedCitation?.message ?? "";
   const savedOriginal = Boolean(currentSnapshot?.originalPack);
-  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
+  useLayoutEffect(invalidateCitation, [evidenceScope, invalidateCitation]);
   useEffect(() => {
     if ((!citation && !citationBusy && !citationError) || !active) return;
     // A response can arrive before React mounts the source panel. Move only
@@ -239,25 +250,32 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   };
   const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLButtonElement) => {
     const p = readingPack;
-    if (!p) return;
+    if (!p || evidenceScope === null) return;
     if (origin) sourceTrigger.current = origin;
-    const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationFailure(null);
+    const current = ++citeGeneration.current;
+    setEvidenceRead({scope: evidenceScope, busy: true});
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
       ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
-    try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`)); if (current === citeGeneration.current) setCitation(value);}
-    catch (e) {
-      if (current === citeGeneration.current) setCitationFailure({
-        message: errorText(e), sourceScope, packId: p.pack_id, analysisKey: p.analysis_key, route, selection,
+    try {
+      const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`));
+      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, value});
+    } catch (e) {
+      if (current === citeGeneration.current) setEvidenceRead({
+        scope: evidenceScope, failure: {message: errorText(e), route, selection},
       });
     }
-    finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
   const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
   const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route) : undefined;
-  const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
+  const closeCitation = () => {
+    const origin = sourceTrigger.current;
+    invalidateCitation();
+    const closedAt = citeGeneration.current;
+    requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
+  };
   return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
-    close: () => {citeGeneration.current++; setCitation(null); setCitationFailure(null); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
+    close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
 
