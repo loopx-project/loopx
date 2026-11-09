@@ -692,6 +692,64 @@ def test_later_completion_returns_to_original_conversation_once(flow, external):
         assert len({m[-1] for m in sent}) == 3
 
 
+@pytest.mark.parametrize("outcome", ["delivered", "retry_pending", "explicit_unverified"])
+def test_return_commit_refreshes_session_hint_without_rewriting_original_messages(flow, monkeypatch, outcome):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    sid, rid = session["session_id"], receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Accepted")
+    report(root, "research", "worker", rid, "conclusion", "The receiver returned the original result.")
+    queued = {}
+
+    def sender(*_):
+        # The App can read the appended reply before its provider receipt settles.
+        queued["session"] = store.public_session(store.load_session(sid))
+        queued["messages"] = store.messages(sid)
+        queued["journal"] = (store.sessions_root / sid / "messages.jsonl").read_bytes()
+        view = project_chat_return_deliveries(root, sid, queued["messages"], source_store=store)
+        assert view[-1]["return_delivery"]["status"] == "queued"
+        stamp = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+        monkeypatch.setattr("loopx.chat_store.utc_now", lambda: stamp)
+        return {"ok": outcome == "delivered", "reply_verified": outcome == "delivered",
+                "external_write_performed": outcome == "explicit_unverified"}
+
+    drain(root, registry, store, sender)
+    current = store.public_session(store.load_session(sid))
+    assert reply_status(root, receipt)[0]["status"] == outcome
+    assert current["updated_at"] != queued["session"]["updated_at"], (
+        "A committed delivery change must invalidate a cached bound conversation")
+    assert current["transcript_revision"] == queued["session"]["transcript_revision"]
+    assert store.messages(sid) == queued["messages"]
+    assert (store.sessions_root / sid / "messages.jsonl").read_bytes() == queued["journal"]
+    assert current["active_turn_id"] is None and current["status"] == "ready"
+    assert {path.stem for path in (store.sessions_root / sid / "turns").glob("*.json")} == {turn["turn_id"]}
+    assert all(current[key] == queued["session"][key]
+               for key in current if key != "updated_at")
+
+
+def test_return_read_hint_failure_does_not_resend_committed_reply(flow, monkeypatch, caplog):
+    root, registry, store, create = flow
+    _, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Accepted")
+    report(root, "research", "worker", rid, "conclusion", "The original result is ready.")
+    sent = []
+
+    def unavailable(*args, **kwargs):
+        raise OSError("Synthetic session metadata failure")
+
+    def sender(*args):
+        sent.append(args)
+        monkeypatch.setattr(store, "update_session", unavailable)
+        return {"ok": True, "reply_verified": True}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert "Manager return session read hint unavailable" in caplog.text
+    assert drain(root, registry, store, sender) == 0
+    assert len(sent) == 1
+
+
 def test_result_update_does_not_overtake_unknown_external_delivery(flow):
     root, registry, store, create = flow
     session, _, receipt = create(True)
@@ -742,7 +800,11 @@ def test_external_failure_retries_same_reply_after_restart_without_duplicate_tra
     assert len(calls) == 1
 
     def online(*args):
-        assert args == calls[0]
+        assert args[0] == calls[0][0] and args[2:] == calls[0][2:]
+        assert {key: value for key, value in args[1].items() if key != "updated_at"} == {
+            key: value for key, value in calls[0][1].items() if key != "updated_at"
+        }
+        assert args[1]["updated_at"] != calls[0][1]["updated_at"]
         return {"ok": True, "reply_verified": True}
 
     drain(
