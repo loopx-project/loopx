@@ -13,7 +13,18 @@ from .decision_capture import (read_context_capture_file, read_context_read_refe
     context_selection_view)
 
 
-def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> dict[str, Any] | None:
+def _terminal_range_seen(state: dict[str, Any], digest: str, total: int) -> bool:
+    reads = state.get("section_reads")
+    view = reads.get(digest) if isinstance(reads, dict) else None
+    ranges = view.get("ranges") if isinstance(view, dict) else None
+    return isinstance(ranges, list) and any(
+        isinstance(span, list) and len(span) == 2 and span[1] == total for span in ranges
+    )
+
+
+def verified_context_selection(
+    state: dict[str, Any], page: dict[str, Any], *, defer_section_digests: bool = False,
+) -> dict[str, Any] | None:
     from ..quota.turn_envelope import _turn_envelope_result
 
     current = state.get("source_recovery")
@@ -81,17 +92,23 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
             or (page.get("eof") is False and (end >= total or page.get("next_offset") != end))
             or type(page.get("eof")) is not bool):
         return None
-    inherited = {}
-    if isinstance(observation, dict):
-        from .native_first_read import observation_current
+    # The reducer only publishes digests after complete coverage. A nonterminal
+    # batch without a previously observed terminal range cannot complete it.
+    # The empty map still marks this as a selected page for range tracking.
+    sections = {}
+    if not defer_section_digests or _terminal_range_seen(state, view_digest, total):
+        # A display edit is not an observation of its literal source text.
+        literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
+        if literal_pointers:
+            inherited = {}
+            if isinstance(observation, dict):
+                from .native_first_read import observation_current
 
-        # The hook already matched its event session/workspace to this journal.
-        # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
-        if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
-            inherited = observation["fields"]
-    # A display edit is not an observation of its literal source text.
-    literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
-    sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
-        consumed_pointers=inherited)["sections"] if literal_pointers else {}
+                # The hook already matched its event session/workspace to this journal.
+                # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
+                if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
+                    inherited = observation["fields"]
+            sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
+                consumed_pointers=inherited)["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
         "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}

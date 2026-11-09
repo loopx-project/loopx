@@ -636,6 +636,8 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
         references.append(ready_ref)
     files: dict[str, bytes] = {}
     result = []
+    # One tool response can contain the terminal page anywhere in its batch.
+    defer_section_digests = not any(page.get("eof") is True for page in pages)
     for page in pages:
         # These observations originate only below, after byte/source checks.
         page = {key: value for key, value in page.items() if key not in ("read_sections", "source_sha256")}
@@ -646,7 +648,7 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
             from .native_context_selection import verified_context_selection
 
             try:
-                observed = verified_context_selection(state, page)
+                observed = verified_context_selection(state, page, defer_section_digests=defer_section_digests)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 observed = None
             if observed is not None:
