@@ -87,9 +87,12 @@ function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undef
   const path: Path = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = jsonObject(at(context, path)), identity = jsonObject(plan?.identity);
   const receipt = jsonObject(context.heartbeat_receipt);
+  // Explicit Todo selection can finish binding the original receipt, and a
+  // retry can read it back. Both still require its exact settlement identity.
   if (context.effective_action !== EffectiveAction.NORMAL_RUN || context.normal_delivery_allowed !== true ||
       at(context, ["interaction_contract", "user_channel", "action_required"]) !== false ||
-      receipt?.status !== "committed" || receipt.closeout_required !== true ||
+      receipt?.closeout_required !== true || receipt.settlement_binding_owed === true ||
+      (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed") ||
       !identity || typeof identity.effect_id !== "string" || !identity.effect_id ||
       typeof identity.todo_id !== "string" || identity.todo_id !== jsonObject(context.selected_todo)?.todo_id ||
       identity.goal_id !== context.goal_id || typeof identity.agent_id !== "string" ||
