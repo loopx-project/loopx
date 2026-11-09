@@ -493,6 +493,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     compact = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                   "--todo-id", TODO_ID)["graph"]["work_yardsticks"][0]
     assert compact["comparison_candidate_ref"] == "candidate:dictionary"
+    assert compact["proxy_order_reversed"] is True
     assert compact["cue"] == choice["next_action"]["reason"]
     assert "different mechanism or a compatible combination" in compact["comparison_cue"]
     assert "full implementation and validation cost" in compact["comparison_cue"]
