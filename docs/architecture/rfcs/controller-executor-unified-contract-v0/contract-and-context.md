@@ -624,6 +624,18 @@ source while rejecting advice and Host construction; valid advice keeps its bind
 and C1 composed settlement. Removing this RPC does not reduce model-visible text
 or qualify complete-task cost.
 
+Selected Todo notes now adopt the [main field registry](https://github.com/loopx-project/loopx/pull/8386).
+C1 removes its separate note rule and duplicate native regression. The shared
+identity binds the Goal, registry/runtime route, canonical provider and selected
+Todo; a fresh evidence update does not invalidate an unchanged note body. The
+native CLI regression covers complete/partial delivery and an evidence-only edit
+to that same Todo. Current task and authority facts keep their existing source
+and reader; missing observed coverage, changed text, a different Todo or context
+loss returns the full note from the same capture. C1's checked exact write-scope
+and Vision instruction reuse remain separate fields of the existing registry.
+This consolidation does not qualify model retention, installed adoption or
+original-quota accepted outcomes and complete costs.
+
 Failed-session retry is also a live reader. In this proposal,
 `session_recovery.py::assess_failed_turn_retry_request` gives the binding callback
 the checked complete decision for a v1 request. A recorded v0 request retains its

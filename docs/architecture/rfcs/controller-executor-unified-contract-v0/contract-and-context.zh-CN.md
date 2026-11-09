@@ -457,6 +457,14 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 有效建议仍绑定原来源，并保留 C1 组合结算。删除这次 RPC 不减少模型可见正文，也不证明
 整任务成本收益。
 
+当前 Todo 备注现已采用 [main 的字段 registry](https://github.com/loopx-project/loopx/pull/8386)，
+C1 删除自身独立的备注规则和重复的原生回归。共享身份绑定 Goal、registry/runtime 路由、
+canonical provider 和当前 Todo；新鲜证据更新不会使未变的备注正文失效。原生 CLI 回归
+覆盖完整／部分交付，以及同一 Todo 仅修改证据。当前任务与权限事实仍由既有来源和 reader
+提供；缺少已观察覆盖、正文变化、更换 Todo 或上下文丢失时，从同一 capture 返回完整备注。
+C1 已校验的精确 write-scope 与 Vision 指令复用继续作为同一 registry 中的独立字段。
+这一收敛不认证模型保留、installed 采用，或相对原 quota 的已验收成果与完整成本。
+
 失败会话重试也是活跃 reader。本提案中的
 `session_recovery.py::assess_failed_turn_retry_request` 为 v1 请求向绑定回调交付
 校验后的完整决定；已记录的 v0 请求仍交付原 envelope，即使同时携带完整来源副本。
