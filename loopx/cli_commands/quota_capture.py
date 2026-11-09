@@ -28,7 +28,7 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
-    _bounded_initial_read,
+    budgeted_ready_opening,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
     _saved_context_read_page,
@@ -118,19 +118,18 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     initial_read_reference = None
     replan_review = None
     ordinary_selections = []
-    initial_read_size = 0
+    initial_read_content = b""
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
-        nonlocal initial_read_pointers, initial_read_reference, initial_read_size
+        nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
-            initial_read_size = len(content)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
@@ -203,7 +202,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
-    observed_remaining = None
+    opening_observation = None
     used_observed = (progressive_enabled and observed and "first_read_command" in result
         and observed["pointer_bytes"] <= first_output_bytes // 4)
     if used_observed:
@@ -212,12 +211,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
-        observed_remaining = observed.get("linked_remaining")
-    if (not page_attached and (not used_observed or observed_remaining is not None) and initial_read_plan and initial_read_plan.get("linked_opening_detail")
-            and initial_read_size > first_page_bytes):
-        result = _bounded_initial_read(result, initial_read_plan, page_bytes=first_page_bytes,
-            output_bytes=first_output_bytes, reader_argv=reader_argv, attach_page=False,
-            remaining_reference=Path(observed_remaining) if observed_remaining else None) or result
+        candidate = (initial_read_plan or {}).get("observed_opening")
+        if candidate is not None and candidate["path"] == str(first):
+            opening_observation = candidate
+    if (not page_attached and (not used_observed or opening_observation is not None)
+            and initial_read_plan and initial_read_plan.get("linked_opening_detail")):
+        result = budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
+            page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
+            context_directory=context_directory, observation=opening_observation)
     if replan_review and not page_attached and "first_read_command" in result:
         try:
             path, digest = Path(current["path"]), current["sha256"]

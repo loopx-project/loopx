@@ -462,7 +462,10 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 @pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path, monkeypatch, provider, warm):
+@pytest.mark.parametrize(("scope_count", "page_budget"), [(165, 12000), (290, 12000), (165, 16000)])
+def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget,
+):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _heartbeat_receipt_count, _initialize_fixture_authority,
@@ -477,7 +480,9 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
     narrative = "Keep the current verification requirements visible. " * 130
     state.write_text(state.read_text().replace("## Next Action", narrative + "\n\n## Next Action", 1))
     configuration = json.loads(registry.read_text())
-    scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/published/**" for index in range(290)]
+    scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
+    if scope_count == 165:
+        assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
     configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
     configuration["goals"][0]["quota"]["allowed_slots"] = 3
     registry.write_text(json.dumps(configuration))
@@ -498,7 +503,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
     def capture(turn):
         return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
             *binding, "--turn-instance-id", turn, "--decision-output-root", str(captures),
-            "--codex-context-dir", str(journal), "--max-page-output-bytes", "12000")
+            "--codex-context-dir", str(journal), "--max-page-output-bytes", str(page_budget))
 
     def read(command):
         pages, body = [], bytearray()
@@ -532,12 +537,25 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
         registry.write_text(json.dumps(configuration))
 
     view = capture("wide-ready")
-    assert "Before work" in view["instruction"] and "remaining_read_command" in view
     _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
     path = Path(source_ref["path"])
     raw = path.read_bytes()
     source = json.loads(raw)
     pages, opening = read(view["first_read_command"])
+    if page_budget == 16000:
+        # A paged body is not itself a reason to add a second reader. The
+        # ordinary first page fits the scope, selected Todo and read controls.
+        assert "remaining_read_command" not in view and len(pages) > 1
+        assert opening["/goal_boundary/write_scope"] == scopes
+        assert opening["/selected_todo/todo_id"] == TODO_ID
+        assert TODO_ID in pages[0]["content"] and "required_reads" in pages[0]["content"]
+        assert "execution_preparation" in pages[0]["content"]
+        assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
+        assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
+        assert _heartbeat_receipt_count(runtime, "wide-ready") == 1
+        assert _spend_run_count(runtime) == int(warm)
+        return
+    assert "Before work" in view["instruction"] and "remaining_read_command" in view
     assert len(pages) == 1 and pages[0]["eof"]
     assert not pages[0].get("previously_delivered_fields")
     _, opening_ref = read_context_read_reference(pages[0]["reference_file"])

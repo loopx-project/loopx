@@ -567,9 +567,11 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
+  const readyScope = request.include_initial_read_plan === true && groups
+    ? prepareReadyOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
-    ? nativeContextReadPlan(required.context, pointers, groups, exactBody?.path) : undefined;
+    ? nativeContextReadPlan(required.context, pointers, groups, readyScope) : undefined;
   const observed = observe && pointers.length
     ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
@@ -588,12 +590,28 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
+function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
+    scope?: Path): {boundary: string; detail: string; controls: string[]} | undefined {
+  if (!scope) return undefined;
+  const parent = scope.slice(0, -1), detail = scope.at(-1)!;
+  const body = jsonObject(at(context, parent)), boundary = pointer(parent);
+  if (!groups.opening.includes(boundary) || !body
+      || !Array.isArray(body[detail]) || !body[detail].length) return undefined;
+  // Current readiness belongs with the decision. Reorder only the new pinned
+  // reader, so an explicit historical initial-read cursor still replays.
+  const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
+  if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
+  return {boundary, detail: pointer(scope),
+    controls: Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]))};
+}
+
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>, openingDetail?: Path): {
+    groups: ReturnType<typeof initialContextReadGroups>, readyScope?: ReturnType<typeof prepareReadyOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
       replan_review?: JsonObject;
+      ordinary_opening_rows?: number;
     } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
@@ -608,26 +626,18 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
       .map(row => positions.get(row.pointer) ?? row)};
   })();
   let {opening, remaining} = groups;
-  let linkedDetail: string | undefined;
-  if (openingDetail) {
-    const parent = openingDetail.slice(0, -1), detail = openingDetail.at(-1)!;
-    const body = jsonObject(at(context, parent)), address = pointer(parent);
-    // Small lists stay in the ordinary opening. The IO adapter also checks
-    // the serialized size against the actual tool window before linking.
-    if (opening.includes(address) && body && Object.hasOwn(body, detail)
-        && Buffer.byteLength(JSON.stringify(body[detail])) >= 8192) {
-      const preparation = "/interaction_contract/cli_channel/execution_preparation";
-      opening = opening.flatMap(field => field === address
-        ? Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key])) : [field]);
-      if (remaining.includes(preparation)) opening.push(preparation);
-      remaining = [pointer(openingDetail), ...remaining.filter(field => field !== preparation)];
-      linkedDetail = pointer(openingDetail);
-    }
+  if (readyScope) {
+    // The reader chooses the split using the actual serialized opening.
+    opening = opening.flatMap(field => field === readyScope.boundary ? readyScope.controls : [field]);
+    remaining = [readyScope.detail, ...remaining];
   }
-  // Keep the ordinary selection (and historical raw cursors) byte-compatible.
+  const ordinaryRows = readyScope ? (ordinary.selections as ReadSelection[]).reduce((end, row, index) =>
+    groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
+      ? index + 1 : end, 0) : undefined;
+  // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan: ordinary, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(linkedDetail ? {linked_opening_detail: linkedDetail} : {}),
+    ...(readyScope ? {linked_opening_detail: readyScope.detail, ordinary_opening_rows: ordinaryRows} : {}),
     ...(relativeReview ? {replan_review: relativeReview} : {})};
 }
 
