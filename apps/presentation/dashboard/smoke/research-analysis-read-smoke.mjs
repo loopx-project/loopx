@@ -18,7 +18,10 @@ import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-res
 const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
 const study = caseFixture.analyses[0].case_study;
 const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
-  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope, onCitation: () => {throw Error('read executed a citation');},
+  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope,
+  navigation: {url: new URL('http://127.0.0.1/chat/'), goalId: 'child', packId: 'saved-pack', namespace: null,
+    follow: () => {throw Error('read navigated');}},
+  onCitation: () => {throw Error('read executed a citation');},
 }));
 assert.ok(renderedStudy.includes(study.title));
 assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));

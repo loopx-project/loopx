@@ -7,7 +7,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
-import {ResearchCaseStudy} from "./research-case-study";
+import {ResearchCaseStudy, caseChapterHashPrefix} from "./research-case-study";
 import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
@@ -196,14 +196,31 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     timer = setTimeout(poll, 1000);
     return () => {stopped = true; clearTimeout(timer);};
   }, [active, location.open, pending, recordedRunning, read]);
-  const navigate = (open: boolean, packId = location.packId, push = false) => {
+  const analysisUrl = (open: boolean, packId: string | null) => {
     const url = new URL(window.location.href);
     if (packId) {url.searchParams.set("research_pack", packId); url.searchParams.set("research_analysis_goal", goalId);}
     else {url.searchParams.delete("research_pack"); url.searchParams.delete("research_analysis_goal");}
     if (open) url.searchParams.set("research_analysis", goalId);
     else url.searchParams.delete("research_analysis");
+    return url;
+  };
+  const navigate = (open: boolean, packId = location.packId, push = false) => {
+    const url = analysisUrl(open, packId);
+    if (packId !== location.packId && url.hash.startsWith(caseChapterHashPrefix)) url.hash = "";
     window.history[push ? "pushState" : "replaceState"](window.history.state, "", url);
     applyLocation({open, packId});
+  };
+  const studyNavigation = (packId: string) => {
+    const url = analysisUrl(location.open, packId);
+    url.searchParams.set("goalId", goalId);
+    url.searchParams.set("view", "research");
+    url.searchParams.set("research_goal", goalId);
+    url.searchParams.set("research_reading", "case");
+    const namespace = readSourceUrl ? new URL(readSourceUrl, url).searchParams.get("source_namespace") : null;
+    return {url, goalId, packId, namespace, follow: (href: URL) => {
+      if (href.href !== window.location.href) window.history.pushState(window.history.state, "", href);
+      if (location.packId !== packId) applyLocation({open: location.open, packId});
+    }};
   };
   const show = () => {
     navigate(true, pack?.pack_id ?? location.packId, !location.open);
@@ -246,7 +263,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
   return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
-    close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
+    studyNavigation, close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
 
@@ -365,7 +382,7 @@ export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Control
       </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
     {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
-      scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
 }

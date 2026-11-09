@@ -1,4 +1,4 @@
-import {useId} from 'react';
+import {useEffect, useRef} from 'react';
 import type {TrajectoryCaseStudy} from '../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js';
 import type {AssessmentCitation} from '../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js';
 import {MarkdownText} from './markdown';
@@ -44,18 +44,52 @@ function CaseSeries({series, zh}: {series: Series; zh: boolean}) {
   </figure>;
 }
 
+export const caseChapterHashPrefix = '#case-section-';
+
+function focusChapter(chapter: HTMLElement) {
+  chapter.focus({preventScroll: true});
+  chapter.scrollIntoView({block: 'start'});
+}
+
 /** A document's author controls the composition; the host owns navigation and evidence. */
-export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
+export function ResearchCaseStudy({study, zh, historical, scope, navigation, onCitation}: {
   study: TrajectoryCaseStudy; zh: boolean; historical: boolean;
   scope: {case_id: string; run_id: string; revision: string; window: string};
+  navigation: {url: URL; goalId: string; packId: string; namespace: string | null; follow: (href: URL) => void};
   onCitation: (c: AssessmentCitation, origin?: HTMLButtonElement) => void;
 }) {
-  const id = useId().replace(/:/g, '');
+  const article = useRef<HTMLElement>(null);
+  const {url, goalId, packId, namespace, follow} = navigation;
+  const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
+  useEffect(() => {
+    // The URL can arrive before the saved study is mounted, or while history
+    // switches to another Goal/version. Only restore a visible matching chapter.
+    let frame = 0;
+    const restore = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const {searchParams, hash} = new URL(window.location.href);
+        if (searchParams.get('view') !== 'research' || searchParams.get('research_reading') !== 'case'
+          || searchParams.get('research_goal') !== goalId || searchParams.get('research_analysis_goal') !== goalId
+          || searchParams.get('research_pack') !== packId || !hash.startsWith(`#${prefix}`)) return;
+        const chapter = document.getElementById(hash.slice(1));
+        if (chapter && article.current?.contains(chapter) && chapter.getClientRects().length) focusChapter(chapter);
+      });
+    };
+    restore();
+    window.addEventListener('popstate', restore);
+    window.addEventListener('hashchange', restore);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('popstate', restore);
+      window.removeEventListener('hashchange', restore);
+    };
+  }, [goalId, packId, prefix]);
   const sources = (citations: AssessmentCitation[]) => <details className="case-sources"><summary>{zh ? '依据与原文' : 'Evidence and originals'}</summary>
     {citations.map((c, i) => <button key={i} type="button" onClick={e => onCitation(c, e.currentTarget)}>
       {c.source_id} · {c.first_line}–{c.last_line} ↗</button>)}
   </details>;
-  return <article className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
+  return <article ref={article} className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
     <header className="case-opening">
       <p className="case-eyebrow">{scope.case_id} <span>· {zh ? 'Case 深度解读' : 'Case study'}</span></p>
       <h2>{study.title}</h2>
@@ -69,10 +103,19 @@ export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
       </details>
     </header>
     <div className="case-reading-layout">
-      <nav className="case-outline" aria-label={zh ? '解读目录' : 'Study contents'}>{study.sections.map((s, n) =>
-        <button type="button" key={s.id} onClick={() => {const target = document.getElementById(`${id}-${s.id}`); target?.focus({preventScroll: true}); target?.scrollIntoView({block: 'start'});}}>
-          <span>{String(n + 1).padStart(2, '0')}</span>{s.title}</button>)}</nav>
-      <div className="case-sections">{study.sections.map((s, n) => <section className="case-section" key={s.id} id={`${id}-${s.id}`} tabIndex={-1}>
+      <nav className="case-outline" aria-label={zh ? '解读目录' : 'Study contents'}>{study.sections.map((s, n) => {
+        const id = prefix + s.id;
+        const href = new URL(url);
+        href.hash = id;
+        return <a key={s.id} href={href.href} onClick={e => {
+          if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+          e.preventDefault();
+          follow(href);
+          const chapter = document.getElementById(id);
+          if (chapter && article.current?.contains(chapter)) focusChapter(chapter);
+        }}><span>{String(n + 1).padStart(2, '0')}</span>{s.title}</a>;
+      })}</nav>
+      <div className="case-sections">{study.sections.map((s, n) => <section className="case-section" key={s.id} id={prefix + s.id} tabIndex={-1}>
         <div className="case-section-number">{String(n + 1).padStart(2, '0')}</div><h3>{s.title}</h3>
         <MarkdownText text={s.text}/>
         {s.series ? <CaseSeries series={s.series} zh={zh}/> : null}
