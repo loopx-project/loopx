@@ -13,6 +13,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..control_plane.effect_program import (
+    SETTLEMENT_RECEIPT_SCHEMA_VERSION, SettlementStepKind, decode_settlement_receipt_payload,
+)
 from ..control_plane.quota.settlement import (
     SettlementIdentity, attach_settlement_progress, read_heartbeat_settlement, settlement_result_payload,
 )
@@ -44,6 +47,53 @@ def settle_requested_refresh(payload, args, registry_path, goal_ref):
         if view is not payload:
             payload.clear()
             payload.update(view)
+
+
+def _has_verified_fresh_spend(
+    refresh: Mapping[str, Any], child: Mapping[str, Any], identity: Mapping[str, Any],
+) -> bool:
+    # The pinned child already read the authoritative receipt chain after
+    # append. Match it to the parent's own writeback readback before reuse.
+    progress = refresh["settlement_progress"]
+    source = progress["quota_spend_source"]
+    effect_id = identity["effect_id"]
+    if (progress.get("state") != "spend_required"
+            or child.get("ok") is not True or child.get("appended") is not True
+            or child.get("idempotent_replay") is not False or child.get("transaction_repaired") is not False
+            or child.get("dry_run") is not False or child.get("mode") != "spend-slot"
+            or child.get("settlement_identity") != identity or child.get("source") != source
+            or child.get("effect_id") != f"{effect_id}#{SettlementStepKind.QUOTA_SPEND.value}"
+            or child.get("settlement_owed") is not None or child.get("result_delivery_error") is not None
+            or child.get("settlement_progress") != {
+                "schema_version": "quota_settlement_progress_v0", "state": "settled",
+                "next_step": None, "quota_spend_source": source,
+            }):
+        return False
+    before, after = refresh.get("settlement_result"), child.get("settlement_result")
+    for result in (before, after):
+        if (not isinstance(result, dict) or set(result) != {"ok", "receipts", "failure"}
+                or result["ok"] is not True or result["failure"] is not None
+                or not isinstance(result["receipts"], list)):
+            return False
+    receipts = after["receipts"]
+    if (len(receipts) != 3 or receipts[:-1] != before["receipts"]
+            or any(not isinstance(row, dict) or row.get("schema_version") != SETTLEMENT_RECEIPT_SCHEMA_VERSION
+                   for row in receipts)):
+        return False
+    event = child.get("rollout_event")
+    if (not isinstance(event, dict) or event.get("event_kind") != "quota_spend"
+            or not isinstance(event.get("event_id"), str) or not event["event_id"]):
+        return False
+    try:
+        checked = tuple(decode_settlement_receipt_payload(row) for row in receipts)
+    except RuntimeError:
+        return False
+    return (
+        tuple(row.step_kind for row in checked)
+        == (SettlementStepKind.VALIDATION, SettlementStepKind.DURABLE_WRITEBACK, SettlementStepKind.QUOTA_SPEND)
+        and all(row.effect_id == effect_id and row.status == "committed" and row.source_ref for row in checked)
+        and checked[-1].source_ref == f"rollout_event:{event['event_id']}"
+    )
 
 
 def settle_refreshed_turn(
@@ -124,6 +174,11 @@ def settle_refreshed_turn(
         "ok", "appended", "idempotent_replay", "json_path", "rollout_event",
         "reward_memory_ingest", "error", "error_code",
     ) if key in spent}
+    if error is None and not settled_replay and _has_verified_fresh_spend(payload, spent, expected):
+        payload["settlement_progress"] = spent["settlement_progress"]
+        payload["settlement_result"] = spent["settlement_result"]
+        payload.pop("settlement_owed", None)
+        return
     try:
         readback = read_heartbeat_settlement(
             runtime_root, registry_path=registry_path, goal_ref=goal_ref,
