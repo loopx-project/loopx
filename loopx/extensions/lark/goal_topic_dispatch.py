@@ -15,6 +15,7 @@ from ...chat_manager import manager_channel
 from .event_inbox import LarkTopicInboxIntake, LarkTopicInput
 from .goal_channel_contracts import bindings_for_goal
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_topic_routing import IngressMode
 from .manager_context import opaque_digest
 
 
@@ -226,7 +227,11 @@ def topic_intake_route(
     profile: str, route: Mapping[str, object], targets: Mapping[str, object],
     event: Mapping[str, object],
 ) -> TopicIntakeRoute | None:
-    if route.get("ingress_mode") not in {"session_queue", "live_steering"} or not route.get("session_id"):
+    ingress_mode = route.get("ingress_mode", IngressMode.DIRECT_SESSION.value)
+    if ingress_mode != IngressMode.DIRECT_SESSION.value and (
+        ingress_mode not in {IngressMode.SESSION_QUEUE.value, IngressMode.LIVE_STEERING.value}
+        or not route.get("session_id")
+    ):
         return None
     target = goal_channel_target_for_name(targets, str(route.get("target_ref") or ""))
     identity = target.get("identity") if target is not None else None
@@ -378,7 +383,7 @@ class ProfileTopicIntake:
 
     def restore(
         self, dispatch: ProfileEventDispatch,
-        matches: Callable[[str, LarkTopicInput], bool] | None,
+        matches: Callable[[str, LarkTopicInput], bool],
     ) -> None:
         config_dir = self._root / ".loopx" / "config" / "lark-goal-topics"
         for config_path in config_dir.glob("*.json"):
@@ -392,8 +397,6 @@ class ProfileTopicIntake:
             if not inbox.has_retained_input:
                 continue
             self._sources[key] = inbox
-            if matches is None:
-                continue
             restored = set()
             for path in inbox.pending():
                 packet = inbox.read(path)

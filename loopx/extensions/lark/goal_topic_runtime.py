@@ -57,6 +57,7 @@ from .goal_topic_dispatch import (
     topic_inbox_key,
     topic_intake_route,
 )
+from .goal_topic_routing import IngressMode
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
 from .manager_reply_delivery import (
     load_delivery as _load_manager_delivery,
@@ -487,10 +488,12 @@ def _profile_event_lane(
             )
             if capture and capture.get("target_turn_id"):
                 return result(("steer." + source, "steer.session." + str(route["session_id"])), capture)
+            # A compatibility Topic may share this reader without a Session.
+            # Persist its ordinary inputs before waiting for its reply lane.
+            intake = topic_intake_route(profile, route, targets, routed_event) if prepare_intake else None
             if route.get("session_id"):
-                intake = topic_intake_route(profile, route, targets, routed_event) if prepare_intake else None
                 return result((source, "session." + str(route["session_id"])), capture, intake)
-            return result((source,), capture)
+            return result((source,), capture, intake)
     return result(("unmatched." + _opaque_digest(profile, event.get("chat_id")),))
 
 
@@ -803,11 +806,17 @@ def stream_lark_goal_topic_profile(
             profile=profile, snapshot=snapshot, event=packet["event"],
             runtime_root=root, include_capture=True, prepare_intake=True,
         )
+        if route is None:
+            return False
+        ingress_mode = route.route.get("ingress_mode", IngressMode.DIRECT_SESSION.value)
+        # Previously captured compatibility input still belongs to its Topic
+        # even if another connection no longer reserves a steering worker.
         return (
-            route is not None and route.inbox_key == inbox_key
+            (reserve_priority or ingress_mode == IngressMode.DIRECT_SESSION.value)
+            and route.inbox_key == inbox_key
             and route.digest == packet["route_ref"] and lane == packet["lane"]
             and (
-                route.route.get("ingress_mode") != "live_steering"
+                ingress_mode != IngressMode.LIVE_STEERING.value
                 or packet.get("live_turn_capture") is not None
                 or packet["mention_capture"] is not None
             )
@@ -839,7 +848,7 @@ def stream_lark_goal_topic_profile(
     try:
         intake.restore(
             dispatch,
-            (lambda key, packet: matches_input(key, packet, snapshot)) if reserve_priority else None,
+            lambda key, packet: matches_input(key, packet, snapshot),
         )
         stdout = process.stdout
         if stdout is None:

@@ -21,6 +21,7 @@ from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import (
     binding_for_goal,
     read_goal_channel_binding,
+    save_goal_connection,
 )
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
 from loopx.extensions.lark.goal_topic_connections import connect_lark_goal_topic
@@ -3597,12 +3598,25 @@ def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance
         assert row["content"] == "plain rendered text"
 
 
-@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load"), [
-    *((manager, "session_queue", load) for manager in (False, True) for load in (63, 64, 128)),
-    (False, "live_steering", 63), (False, "live_steering", 64),
+def _add_legacy_topic(binding_path: Path, bindings: dict[str, Any], target_ref: str) -> dict[str, Any]:
+    save_goal_connection(
+        binding_path=binding_path, payload=bindings, goal_id="goal-legacy",
+        binding={
+            "enabled": True, "provider": "lark", "target_ref": target_ref,
+            "topic": {"root_message_id": "om_legacy_topic"},
+            "routing": {"ingress_mode": "direct_session", "incoming_mode": "mentions", "reply_mode": "topic_reply"},
+        },
+    )
+    return read_goal_channel_binding(binding_path)
+
+
+@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load", "legacy_topic"), [
+    *((manager, "session_queue", load, False) for manager in (False, True) for load in (63, 64, 128)),
+    (False, "live_steering", 63, False), (False, "live_steering", 64, False),
+    *((False, "session_queue", load, True) for load in (63, 64, 128)),
 ])
 def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
-    tmp_path: Path, manager: bool, ingress_mode: str, ordinary_load: int,
+    tmp_path: Path, manager: bool, ingress_mode: str, ordinary_load: int, legacy_topic: bool,
 ) -> None:
     """Use the actual listener, Inbox, Chat store, and Codex stdio protocol."""
     import runpy
@@ -3670,21 +3684,31 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     assert connected["ok"], connected
     target_payload = read_goal_channel_targets(target_path)
     binding_payload = read_goal_channel_binding(binding_path)
-    topic = binding_for_goal(binding_payload, "goal-alpha")["topic"]["root_message_id"]
-    snapshot.update(target_payload=target_payload, binding_payloads={"goal-alpha": binding_payload})
+    original_binding = binding_for_goal(binding_payload, "goal-alpha")
+    topic = original_binding["topic"]["root_message_id"]
+    ordinary_topic = topic
+    if legacy_topic:
+        binding_payload = _add_legacy_topic(binding_path, binding_payload, original_binding["target_ref"])
+        ordinary_topic = binding_for_goal(binding_payload, "goal-legacy")["topic"]["root_message_id"]
+    snapshot.update(target_payload=target_payload, binding_payloads={
+        "goal-alpha": binding_payload, **({"goal-legacy": binding_payload} if legacy_topic else {}),
+    })
+    starts_in_app = legacy_topic or ingress_mode == "live_steering"
     ordinary = {"event_id": "evt_native_initial", "message_id": "om_native_initial",
-                "chat_id": "oc_public_fixture", "root_id": topic, "content": "wait for steer",
-                "sender_id": "ou_fixture_sender", "sender_type": "user", "message_type": "text", "mentions": [],
+                "chat_id": "oc_public_fixture", "root_id": ordinary_topic, "content": "wait for steer",
+                "sender_id": "ou_fixture_sender", "sender_type": "user", "message_type": "text",
+                "mentions": [{"id": "ou_fixture_bot"}] if legacy_topic else [],
                 "create_time": "1794140000000"}
     mention_text = "@Current bot Add the error case.\nKeep both outcomes."
     mention = {**ordinary, "event_id": "evt_native_mention", "message_id": "om_native_mention",
-               "content": mention_text,
+               "content": mention_text, "root_id": topic,
                "mentions": [{"key": "@_user_1", "name": "Current bot", "id": "ou_fixture_bot"}]}
     attachment = {**mention, "event_id": "evt_native_file", "message_id": "om_native_file",
                   "message_type": "file", "content": json.dumps({"file_key": "file_fixture"})}
     wrong_bot = {**mention, "event_id": "evt_other_bot", "message_id": "om_other_bot",
-                 "content": "ordinary input for this connection",
-                 "mentions": [{"key": "@_user_1", "name": "Current bot", "id": "ou_other_bot"}]}
+                 "content": "ordinary input for this connection", "root_id": ordinary_topic,
+                 "mentions": [{"key": "@_user_1", "name": "Current bot",
+                               "id": "ou_fixture_bot" if legacy_topic else "ou_other_bot"}]}
     backlog = [
         {
             **wrong_bot,
@@ -3725,12 +3749,16 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         mid = str(route.get("message_id") or "")
         if not route.get("native_mention"):
             observed_ordinary.append(mid)
-            if ingress_mode == "live_steering" and mid in ordinary_ids:
-                assert route["live_turn_capture"]["target_turn_id"] == store.turn_for_client(
-                    session_id, initial_id
-                )["turn_id"]
-                # The active Turn already came from the App. Hold one ordinary
-                # reply while the listener reads and delivers the native @.
+            if starts_in_app and mid in ordinary_ids:
+                if legacy_topic:
+                    assert route["goal_id"] == "goal-legacy"
+                    assert route.get("ingress_mode", "direct_session") == "direct_session"
+                else:
+                    assert route["live_turn_capture"]["target_turn_id"] == store.turn_for_client(
+                        session_id, initial_id
+                    )["turn_id"]
+                # Hold one ordinary reply while the listener delivers the @
+                # to the active Turn that came from the App.
                 if mid == ordinary["message_id"]:
                     ordinary_reply_started.set()
                     assert allow_ordinary_reply.wait(10)
@@ -3752,7 +3780,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         }
 
     initial_id = (
-        "app-original" if ingress_mode == "live_steering"
+        "app-original" if starts_in_app
         else "lark." + opaque_digest(ordinary["message_id"], topic)
     )
     mention_id = "lark." + opaque_digest(mention["message_id"], topic)
@@ -3762,7 +3790,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
 
     def lines():
         yield json.dumps(ordinary) + "\n"
-        if ingress_mode == "live_steering":
+        if starts_in_app:
             assert ordinary_reply_started.wait(5)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -3801,7 +3829,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             release.touch()
             allow_ordinary_reply.set()
         assert last_ordinary_answer.wait(40), "the FIFO backlog did not reach its last ordinary input"
-        if ingress_mode == "session_queue":
+        if not starts_in_app:
             queued = store.turn_for_client(session_id, wrong_id)
             assert queued and queued["status"] == "completed"
         deadline = time.monotonic() + 3
@@ -3830,7 +3858,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             return 0
 
     try:
-        if ingress_mode == "live_steering":
+        if starts_in_app:
             started, _ = controller.enqueue_turn(
                 session_id=session_id, client_turn_id=initial_id, message="wait for steer",
                 work_dir=tmp_path, objective="Review delivery", origin="web",
@@ -3866,7 +3894,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         ]
         ordinary_prompts = [msg["text"] for msg in user if msg["turn_id"] != initial["turn_id"]]
         expected_ordinary = [idle["content"]]
-        if ingress_mode == "session_queue":
+        if not starts_in_app:
             expected_ordinary[:0] = [backlog[0]["content"], wrong_bot["content"]]
         assert len(ordinary_prompts) == len(expected_ordinary)
         for prompt, expected in zip(ordinary_prompts, expected_ordinary, strict=True):
@@ -3948,8 +3976,10 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         controller.close_session(session_id)
 
 
-@pytest.mark.parametrize("binding_change", ["unchanged", "session", "topic"])
-@pytest.mark.parametrize("ingress_mode", ["session_queue", "live_steering"])
+@pytest.mark.parametrize(("ingress_mode", "binding_change"), [
+    *((mode, change) for mode in ("session_queue", "live_steering") for change in ("unchanged", "session", "topic")),
+    ("direct_session", "unchanged"), ("direct_session", "topic"),
+])
 def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
     tmp_path: Path, binding_change: str, ingress_mode: str,
 ) -> None:
@@ -3961,39 +3991,54 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
                            "coordination": {"registered_agents": ["codex"]}}]}
     targets_path = tmp_path / "targets.json"
     binding_path = tmp_path / "binding.json"
-    state: dict[str, Any] = {}
+    legacy_topic = ingress_mode == "direct_session"
+    source_goal = "goal-legacy" if legacy_topic else "goal-alpha"
+    original_session = "" if legacy_topic else "session-original"
+    state: dict[str, Any] = {"bot_open_id": "ou_fixture_bot"}
     assert connect_lark_goal_topic(
         registry=registry, goal_id="goal-alpha", agent_id="codex",
         session_id="session-original", target_path=targets_path, binding_path=binding_path,
         app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
-        capture_scope="configured_chat_all", ingress_mode=ingress_mode,
+        capture_scope="configured_chat_all", ingress_mode="session_queue" if legacy_topic else ingress_mode,
         runner=_connection_runner(state), cli_bin="fake-lark",
     )["ok"]
     targets = read_goal_channel_targets(targets_path)
     bindings = read_goal_channel_binding(binding_path)
-    topic = binding_for_goal(bindings, "goal-alpha")["topic"]["root_message_id"]
-    snapshot = {"target_payload": targets, "binding_payloads": {"goal-alpha": bindings}}
+    if legacy_topic:
+        bindings = _add_legacy_topic(binding_path, bindings, binding_for_goal(bindings, "goal-alpha")["target_ref"])
+    topic = binding_for_goal(bindings, source_goal)["topic"]["root_message_id"]
+    binding_payloads = {"goal-alpha": bindings, source_goal: bindings}
+    snapshot = {"target_payload": targets, "binding_payloads": binding_payloads}
     original = {
         "event_id": "evt_started", "message_id": "om_started",
         "chat_id": "oc_public_fixture", "root_id": topic, "content": "Original request.",
         "create_time": "1794140000000", "sender_type": "user",
-        "sender_id": "ou_fixture_sender", "message_type": "text", "mentions": [],
+        "sender_id": "ou_fixture_sender", "message_type": "text",
+        "mentions": [{"id": "ou_fixture_bot"}] if legacy_topic else [],
     }
     later = [
         {**original, "event_id": f"evt_{suffix}", "message_id": f"om_{suffix}",
          "content": f"{suffix}\n" + "Complete source text. " * 100 + "\nLast line."}
         for suffix in ("second", "first_by_id")
     ]
+    fresh_legacy = {**original, "event_id": "evt_after_reconnect", "message_id": "om_after_reconnect",
+                    "content": "New ordinary input after reconnect."}
     entered = threading.Event()
     release = threading.Event()
     stop = threading.Event()
     last_reply = threading.Event()
+    fresh_legacy_reply = threading.Event()
     answered = []
 
     def answer(route, text):
+        assert route["goal_id"] == source_goal
+        if route["message_id"] == fresh_legacy["message_id"]:
+            # With no steerable connection, fresh legacy traffic keeps the
+            # original transient lane while already accepted input recovers.
+            assert not list(runtime_root.rglob(".state/topic-intake/om_after_reconnect.json"))
         if ingress_mode == "live_steering":
             assert route["live_turn_capture"]["target_turn_id"] == "turn-original"
-        answered.append((route["session_id"], route["message_id"], text))
+        answered.append((route.get("session_id", ""), route["message_id"], text))
         if route["message_id"] == original["message_id"]:
             entered.set()
             assert release.wait(5)
@@ -4041,7 +4086,7 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
 
     stopped = consume(first_consumer(), stop, unverified_reply, active_turn="turn-original")
     assert stopped["status"] == "stopped"
-    assert answered == [("session-original", original["message_id"], original["content"])]
+    assert answered == [(original_session, original["message_id"], original["content"])]
     assert first_writes == [original["message_id"]]
 
     captures = {
@@ -4054,17 +4099,24 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
         assert captures[row["message_id"]]["event"] == row
 
     rebind = binding_change != "unchanged"
-    connection, = bindings["bindings"]["goal-alpha"]["connections"].values()
+    connection, = bindings["bindings"][source_goal]["connections"].values()
     if binding_change == "session":
         connection["session_id"] = "session-replacement"
     elif binding_change == "topic":
         connection["topic"]["root_message_id"] = "om_topic_replacement"
+    if legacy_topic:
+        # The unrelated steering-capable connection can disappear while the
+        # old Topic still owns its accepted inputs.
+        del binding_payloads["goal-alpha"]
 
     def recovered_reply(args):
         result = runner(args)
         if "+messages-reply" in args and "--dry-run" not in args:
-            if args[args.index("--message-id") + 1] == later[-1]["message_id"]:
+            message_id = args[args.index("--message-id") + 1]
+            if message_id == later[-1]["message_id"]:
                 last_reply.set()
+            elif message_id == fresh_legacy["message_id"]:
+                fresh_legacy_reply.set()
         return result
 
     def replacement_consumer():
@@ -4073,17 +4125,19 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
         yield json.dumps(later[0]) + "\n"
         if not rebind:
             assert last_reply.wait(5), "the original Inbox should recover without provider redelivery"
+            if legacy_topic:
+                yield json.dumps(fresh_legacy) + "\n"
+                assert fresh_legacy_reply.wait(5)
         yield "[event] exited (reason: timeout)\n"
 
     resumed = consume(replacement_consumer(), threading.Event(), recovered_reply, active_turn="turn-replacement")
     assert resumed["status"] == "stream_ended"
-    expected = [] if rebind else [
-        ("session-original", row["message_id"], row["content"]) for row in later
-    ]
+    resumed_rows = [] if rebind else [*later, *([fresh_legacy] if legacy_topic else [])]
+    expected = [(original_session, row["message_id"], row["content"]) for row in resumed_rows]
     assert answered[1:] == expected
     replies = [args[args.index("--message-id") + 1] for args in state["calls"]
                if "+messages-reply" in args and "--dry-run" not in args]
-    assert replies == ([] if rebind else [row["message_id"] for row in later])
+    assert replies == [row["message_id"] for row in resumed_rows]
     retained = list(runtime_root.rglob(".state/topic-intake/om_*.json"))
     assert {path.stem for path in retained} == (
         set(captures) if rebind else {original["message_id"]}
