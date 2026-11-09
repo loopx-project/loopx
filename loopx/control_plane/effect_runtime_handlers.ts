@@ -345,6 +345,7 @@ export function createEffectRuntimeHandlers(
     ["goal.vision_wait.project", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectGoalVisionWaitState}) => projectGoalVisionWaitState)],
     ["goal.shared_goal_alignment.project", lazyHandler(() => import("./goals/shared_goal_alignment.ts"), ({projectSharedGoalAlignment}) => projectSharedGoalAlignment)],
     ["goal.operator_actions.project", lazyHandler(() => import("./goals/operator_actions.ts"), ({projectGoalOperatorActions}) => projectGoalOperatorActions)],
+    ["goal.activation.migrate", lazyHandler(() => import("./goals/activation_migration.ts"), ({migrateGoalActivationMetadata}) => migrateGoalActivationMetadata)],
     ["goal.amendment.execute", lazyHandler(() => import("./goals/goal_amendment_authority.ts"), ({goalAmendmentLocal}) => goalAmendmentLocal)],
     ["goal.direction.execute", lazyHandler(() => import("./goals/direction_authority.ts"), ({directionLocal}) => directionLocal)],
     ["goal.amendment_proposal.admit", lazyHandler(() => import("./goals/goal_amendment_proposal.ts"), ({admitGoalAmendmentProposal}) => admitGoalAmendmentProposal)],
