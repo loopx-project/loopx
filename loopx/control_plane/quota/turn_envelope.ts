@@ -2362,8 +2362,13 @@ export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "
   }
   let source: unknown;
   try {
-    const decoded = inflateSync(Buffer.from(data, "base64"), {maxOutputLength: maxSourceBytes});
-    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(decoded));
+    const compressed = Buffer.from(data, "base64");
+    // Inflate may stop at the first stream and silently leave input unread.
+    // The synchronous info result reports consumed bytes on supported Node versions.
+    const {buffer, engine} = inflateSync(compressed,
+      {info: true, maxOutputLength: maxSourceBytes}) as unknown as {buffer: Buffer; engine: {bytesWritten: number}};
+    if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
+    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(buffer));
   } catch {
     throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
   }

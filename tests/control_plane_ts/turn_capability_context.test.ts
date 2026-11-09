@@ -67,6 +67,23 @@ test("the shared quota source transport preserves capability gates and contribut
     ...source_transport, data: "AAAA"}}), /valid compressed JSON/);
 });
 
+for (const [suffixName, suffix] of [
+  ["trailing bytes", Buffer.from([0, 255])],
+  ["a second stream", deflateSync(Buffer.from(JSON.stringify({...quotaSource, goal_boundary: {
+    ...quotaSource.goal_boundary, stop_condition: "A different stop"}})))],
+] as const) {
+  const data = Buffer.concat([deflateSync(Buffer.from(JSON.stringify(quotaSource))), suffix]).toString("base64");
+  const source_transport = {encoding: "deflate-base64-json-v0", data};
+  test(`quota capability gates reject ${suffixName} after the packed source`, () => {
+    assert.throws(() => evaluateTurnEnvelope({operation: "capability_automation_source", source_transport}),
+      /valid compressed JSON/);
+  });
+  test(`quota contribution validation rejects ${suffixName} after the packed source`, () => {
+    assert.throws(() => validateTurnContextContribution({registration, result, source_transport}),
+      /valid compressed JSON/);
+  });
+}
+
 test("an existing quota contribution can replay with its exact legacy reader binding", () => {
   const source = {...quotaSource, replan_read_path: "fixture/decision.json",
     replan_action_packet: {obligation_id: "fixture-replan", decision: "replan_required"}};
