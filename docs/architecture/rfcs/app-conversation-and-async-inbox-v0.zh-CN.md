@@ -237,6 +237,11 @@ Lark 历史回插旧时间或全渠道广播。Core 中的 App 图片复用既�
 旅程覆盖重复输入、完整图片和长正文、重启、回执缺失/未知、字节不符、撤权及
 App 身份替换；安装态 provider 读回另行验收。
 
+绑定的 App 历史也显示 Core 已明确判为不支持的原飞书文件、音频或视频的只读
+提示。展示前核对原 Session、当前本地本人绑定和两份原回执；原来源时间参与
+历史分页，迟到记录会使受影响的旧游标失效；即使没有新 Turn，提示变化也会触发
+App 刷新。提示不携带资源字节或凭据，不创建 Turn，也不重发原回复。
+
 实现判断来自一手源码比较，不把共享上下文视为双向送达已经成立：
 
 - [OpenClaw 历史增量](https://github.com/openclaw/openclaw/blob/b3ba4d622638ac23f64c0cec415bf5bfe81f5cf5/src/gateway/server-methods/chat-history-delta.ts)
