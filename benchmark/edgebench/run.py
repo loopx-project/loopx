@@ -24,7 +24,7 @@ from benchmark.edgebench.source import active_source_receipt, bootstrap
 if __name__ == "__main__":
     bootstrap()  # Select SForge before any provider or adapter imports.
 
-from sforge.harness.benchmark import load_benchmark
+from sforge.harness.benchmark import BENCHMARK_FILENAME, load_benchmark
 from sforge.harness.config import load_config
 from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
@@ -352,7 +352,7 @@ def main(argv=None):
         native_result_scope = {
             "judge_url": args.judge_url, "run": args.run_id, "task": task.task_id,
             "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
-            "scorer_commit": sforge_source["commit"],
+            "benchmark_sha256": hashlib.sha256((args.tasks_dir / BENCHMARK_FILENAME).read_bytes()).hexdigest(),
             "higher_is_better": task.judge.score_direction == "maximize",
         }
     if research_sidecar:

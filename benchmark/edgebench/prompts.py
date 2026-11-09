@@ -43,7 +43,8 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
         binding += (
             "For an existing submission, use the same tool with --submission-id to read feedback and its "
             "verified native_measurement. Use task:<task_sha256> from /etc/loopx-benchmark/native-result-scope.json "
-            "as the probe and snapshot input revision. Record the measurement on the current Todo with "
+            "as the probe and snapshot input revision; use its evaluation_ref for the native Yardstick. "
+            "Record the measurement on the current Todo with "
             "loopx explore finding --result-json FILE, using the current Goal, Agent, Todo and Turn. "
             "Reuse the same question and submitted candidate reference for local and native findings. "
             "Use the receipt's comparison to decide the next probe while its conditions still apply.\n\n"
