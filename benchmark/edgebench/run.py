@@ -330,7 +330,7 @@ def main(argv=None):
     if args.execution_observation is not None or args.native_result_comparison:
         from benchmark.runtime.source import require_candidate_content
 
-        require_candidate_content(product, pins[0])
+        require_candidate_content(product, pins[0], work_finding=args.native_result_comparison)
     if args.restore_checkpoint is not None:
         # Activating the native capsule starts its remaining phase clock.
         # Qualify the actual install archives first, including ignored assets;

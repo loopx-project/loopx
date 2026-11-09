@@ -308,11 +308,14 @@ class SForgeWorker(CodexAgent):
         # Fetch once through the worker's actual route, before its solver starts.
         # The protected Python/source paths exclude task imports and shell env.
         context = backend.exec_run(handle, [f"{_PYTHON}/bin/python3", "-I", "-c",
-            "import json,runpy,sys; module=runpy.run_path(sys.argv[1]); "
+            f"import json,runpy,sys; sys.path.insert(0, {_SRC!r}); "
+            "from loopx.capabilities.explore.candidate_content import candidate_manifest_sha256; "
+            "from loopx.capabilities.explore.result_writeback import record_work_finding; "
+            "module=runpy.run_path(sys.argv[1]); "
             "print(json.dumps(module['read_run_evaluation_context'](sys.argv[2])))",
             f"{_SRC}/benchmark/runtime/sforge_native_result.py", observed.output], user="root")
         if context.exit_code:
-            raise RuntimeError("Native evaluator conditions are unavailable; disable "
+            raise RuntimeError("Native result product APIs or evaluator conditions are unavailable; disable "
                                "--native-result-comparison for ordinary native feedback")
         scope = NativeResultScope(relay=observed.output, goal=self.runtime.goal_id,
                                   agent=self.runtime.agent_id, evaluation_context=json.loads(context.output), **spec)

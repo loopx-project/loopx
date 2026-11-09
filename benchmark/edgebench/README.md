@@ -463,7 +463,10 @@ explicit offline diagnostic for sealed probe artifacts. They keep their strict
 original correspondence checks and do not gate ordinary native facts.
 
 For an explicit native Explore trial, opt in with `--native-result-comparison`.
-`local_probe` is an independent option. Use `--submission-id ID` instead of
+`local_probe` is an independent option. Split source pins must also include the
+product's existing `record_work_finding` and `explore finding --result-json`
+entrypoint. Preflight rejects an older product explicitly; startup checks the
+actual staged product APIs before qualifying the service context. Use `--submission-id ID` instead of
 `--result FILE` to read one existing result. A single GET supplies native feedback
 and, when its service receipt/context are valid, a formal `native_measurement`
 with the stable accepted `archive:<sha256>` subject. No local execution or local

@@ -1501,7 +1501,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     (tmp_path / "fixture.json").write_text("{}")
     (tmp_path / "BENCHMARK.yaml").write_text("id: fixture\n")
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
-    monkeypatch.setattr("benchmark.runtime.source.require_candidate_content", lambda *a: None)
+    monkeypatch.setattr("benchmark.runtime.source.require_candidate_content", lambda *a, **k: None)
     monkeypatch.setattr(run, "active_source_receipt", lambda *a, **k: {"commit": "b" * 40})
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
@@ -1596,3 +1596,31 @@ def test_capture_preflight_requires_the_common_product_api_without_overlay(tmp_p
     assert (product / "loopx/product.py").read_text() == "product"
     with pytest.raises(ValueError):
         require_candidate_content(product, old)
+
+
+def test_formal_preflight_requires_the_existing_product_writeback_and_cli(tmp_path):
+    from pathlib import Path
+    from benchmark.runtime.source import require_candidate_content
+
+    product = tmp_path / "product"
+    repository(product, "product")
+    root = Path(__file__).resolve().parents[2]
+    def copy_and_commit(paths):
+        for name in paths:
+            target = product / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+        subprocess.run(["git", "-C", str(product), "add", *paths], check=True)
+        subprocess.run(["git", "-C", str(product), "commit", "-qm", "product API"], check=True)
+        return subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    content = copy_and_commit(["loopx/capabilities/explore/candidate_content.py"])
+    require_candidate_content(product, content)
+    with pytest.raises(ValueError, match="Explore work finding"):
+        require_candidate_content(product, content, work_finding=True)
+    direct_only = copy_and_commit(["loopx/capabilities/explore/result_writeback.py"])
+    with pytest.raises(ValueError, match="Explore work finding CLI"):
+        require_candidate_content(product, direct_only, work_finding=True)
+    complete = copy_and_commit(["loopx/cli_commands/explore.py"])
+    require_candidate_content(product, complete, work_finding=True)
+    # Capture-only remains compatible with the earlier product; source pins are never rewritten.
+    require_candidate_content(product, content)
