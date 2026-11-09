@@ -106,18 +106,11 @@ class LarkGoalTopicRuntimeService:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def step() -> None:
-                nonlocal attempted, ready, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
+                nonlocal attempted, ready, attention, attention_due, reports, reports_due
+                nonlocal ingress, ingress_due, feedback, feedback_due, discovery, discovery_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
-                discovered_paths: list[Path] = []
-                if discovery is not None and discovery.done():
-                    try:
-                        discovered_paths = discovery.result()
-                    except Exception:
-                        logging.getLogger(__name__).warning("Private Chat historical discovery is pending")
-                    discovery = None
-                    discovery_due = time.monotonic() + 5
                 if feedback is not None and feedback.done():
                     try:
                         feedback.result()
@@ -162,6 +155,17 @@ class LarkGoalTopicRuntimeService:
                         future.result()
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat delivery reconciliation is pending")
+                if discovery is not None and discovery.done():
+                    try:
+                        # Keep new hints even if the separate body scan fails.
+                        # A previous attempt only affects their order.
+                        for path in discovery.result():
+                            if path not in pending:
+                                ready.setdefault(path, None)
+                    except Exception:
+                        logging.getLogger(__name__).warning("Private Chat historical discovery is pending")
+                    discovery = None
+                    discovery_due = time.monotonic() + 5
                 try:
                     body_paths = getattr(transport, "pending_body_paths", None)
                     paths = body_paths() if callable(body_paths) else transport.pending_delivery_paths()
@@ -173,7 +177,7 @@ class LarkGoalTopicRuntimeService:
                     # A delivered body or an earlier held recovery can become
                     # eligible again. Retain the new hint until a slot opens.
                     ready = {path: None for path in ready if path.exists()}
-                    for path in (*paths, *discovered_paths):
+                    for path in paths:
                         if path not in pending:
                             ready.setdefault(path, None)
                     owner_attention = getattr(transport, "owner_attention", None)

@@ -5940,8 +5940,10 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
-@pytest.mark.parametrize("initial", ["accepted", "delivered"])
-def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial):
+@pytest.mark.parametrize(("initial", "body_scan_fails"), [
+    ("accepted", False), ("accepted", True), ("delivered", False),
+])
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
     from concurrent.futures import Future
     from loopx.chat_store import _atomic_write_json, _read_json
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -5978,7 +5980,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     monkeypatch.setattr(worker, "time", now)
     monkeypatch.setattr(private, "time", now)
     monkeypatch.setattr(worker, "ThreadPoolExecutor", ImmediateExecutor)
-    attempts, discoveries = [], []
+    attempts, discoveries, recovery_times = [], [], []
     required_recoveries = 1 if initial == "accepted" else 2
 
     def eligible(request_ref):
@@ -5994,6 +5996,7 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
             _atomic_write_json(receipt, {**current, "status": "delivered"})
         else:
             attempts.append("recovery")
+            recovery_times.append(clock[0])
             transport._context_recovery_probe_at[path] = clock[0] + 60
         return 0
 
@@ -6006,11 +6009,19 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     transport.reconcile_app_feedback = lambda: 0
     transport.core = SimpleNamespace(context_recovery_observer=lambda: eligible)
     transport.reconcile_request = reconcile
+    pending_body_paths = transport.pending_body_paths
+
+    def scan_bodies():
+        if body_scan_fails and clock[0] == 101:
+            raise OSError("temporary body scan failure")
+        return pending_body_paths()
+
+    transport.pending_body_paths = scan_bodies
     service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=transport)
 
     def drive(step, **_):
-        for tick in (100, 101, 161, 162, 222, 223):
+        for tick in (100, 101, 102, 161, 162, 222, 223):
             clock[0] = float(tick)
             step()
 
@@ -6019,6 +6030,8 @@ def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, i
     expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
     assert len(discoveries) >= 2
     assert attempts == expected, (attempts, discoveries)
+    if body_scan_fails:
+        assert recovery_times == [102.0]
     assert _read_json(path) == {**record, "status": "delivered"}
 
 
