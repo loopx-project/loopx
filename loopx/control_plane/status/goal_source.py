@@ -252,9 +252,11 @@ class GoalSourceReader:
         self._pages = CompletedTodoPages()
 
     def status(self, goal_id=None, *, fresh=False):
+        # A bad selector belongs to this request, not the source's page snapshot.
+        selected = self.source.check_scope(goal_id)
         with self._lock:
             try:
-                selected = self.source.check_access(goal_id)
+                self.source.check_access(selected)
                 if (fresh or self._status is None or selected != self._selected
                         or monotonic() - self._read_at >= 2):
                     self._status = None
