@@ -19,11 +19,22 @@ def observed_first_read_reference(directory: str, target: dict[str, Any], recove
         selections = plan.get("selections")
         if initial_read_plan is not None and initial_read_plan.get("initial") is True:
             ordinary = initial_read_plan["plan"]["selections"]
-            if splice := plan.get("selection_splice"):
-                start, end = splice["start"], splice["end"]
-                if type(start) is not int or type(end) is not int or not 0 <= start <= end <= len(ordinary):
+            splices = plan.get("selection_splices")
+            if splices is None and (splice := plan.get("selection_splice")) is not None:
+                splices = [splice]
+            if splices is not None:
+                if not isinstance(splices, list) or not splices:
                     return None
-                selections = [*ordinary[:start], *splice["selections"], *ordinary[end:]]
+                selections, cursor = [], 0
+                for splice in splices:
+                    start, end, replacement = splice["start"], splice["end"], splice["selections"]
+                    if (type(start) is not int or type(end) is not int or not cursor <= start <= end <= len(ordinary)
+                            or not isinstance(replacement, list)):
+                        return None
+                    selections.extend(ordinary[cursor:start])
+                    selections.extend(replacement)
+                    cursor = end
+                selections.extend(ordinary[cursor:])
             fallback, body = write_initial_context_read_reference(path, digest, context, ordinary)
             observation["fallback_reference"] = {"filename": fallback.name,
                 "selection_sha256": hashlib.sha256(body).hexdigest()}

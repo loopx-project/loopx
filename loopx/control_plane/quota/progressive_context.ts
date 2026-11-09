@@ -54,7 +54,9 @@ function reusableWritebackPrecondition(context: JsonObject): ReusableReadField |
   const agent = context.agent_id ?? identityAgent;
   if (!plan || !steps || !identity || typeof agent !== "string" || agent !== identity.agent_id
       || (identityAgent !== undefined && identityAgent !== agent)
-      || typeof context.goal_id !== "string" || context.goal_id !== identity.goal_id) return undefined;
+      || typeof context.goal_id !== "string" || context.goal_id !== identity.goal_id
+      || typeof context.registry !== "string" || !context.registry
+      || typeof context.runtime_root !== "string" || !context.runtime_root) return undefined;
   const writebacks = steps.map((value, index) => ({step: jsonObject(value), index}))
     .filter(({step}) => step?.kind === "durable_writeback");
   if (writebacks.length !== 1) return undefined;
@@ -62,7 +64,8 @@ function reusableWritebackPrecondition(context: JsonObject): ReusableReadField |
   if (step?.owner !== "agent" || typeof step.precondition !== "string") return undefined;
   return {path: [...SETTLEMENT_PLAN_PATH, "ordered_steps", index, "precondition"],
     freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-    sourceIdentity: JSON.stringify([plan.schema_version, identity.goal_id, agent, identity.todo_id, step.kind, step.owner])};
+    sourceIdentity: JSON.stringify([context.registry, context.runtime_root, context.goal_ref ?? null,
+      plan.schema_version, identity.goal_id, agent, identity.todo_id, step.kind, step.owner])};
 }
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
@@ -208,17 +211,24 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES >= bytes(original))
     return undefined;
   if (request.include_initial_read_plan === true) {
-    // The IO adapter already receives the ordinary plan. Send the changed
-    // middle of that list, keeping its exact order and coalescing decisions.
-    let start = 0, end = original.length, stop = grouped.length;
-    while (start < end && start < stop && original[start].pointer === grouped[start].pointer) start++;
-    while (end > start && stop > start && original[end - 1].pointer === grouped[stop - 1].pointer) {
-      end--;
-      stop--;
+    // The IO adapter already has the ordinary plan. Keep unchanged runs even
+    // when reused sections are far apart in the ordered selection.
+    const positions = new Map(grouped.map((row, index) => [row.pointer, index]));
+    const splices: {start: number; end: number; selections: typeof selections}[] = [];
+    let start = 0, next = 0;
+    for (let end = 0; end < original.length; end++) {
+      const position = positions.get(original[end].pointer);
+      if (position === undefined || position < next) continue;
+      if (start < end || next < position)
+        splices.push({start, end, selections: grouped.slice(next, position)});
+      start = end + 1;
+      next = position + 1;
     }
-    const selection_splice = {start, end, selections: grouped.slice(start, stop)};
-    if (Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(grouped)))
-      return {selection_splice, reused};
+    if (start < original.length || next < grouped.length)
+      splices.push({start, end: original.length, selections: grouped.slice(next)});
+    const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
+    if (splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: grouped})))
+      return {...edits, reused};
   }
   return {selections: grouped, reused};
 }

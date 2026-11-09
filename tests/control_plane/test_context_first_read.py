@@ -1188,7 +1188,7 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
 
 
 @pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
-@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version"])
+@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
 def test_native_first_read_reuses_only_observed_writeback_precondition(
     tmp_path, monkeypatch, decision, version, transition,
 ):
@@ -1196,8 +1196,16 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
 
     event = setup(tmp_path, monkeypatch)
     decision.update(agent_id="agent", should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    decision.update(registry=str(tmp_path / "registry.json"), runtime_root=str(tmp_path / "runtime"))
     contract = decision["interaction_contract"]
     contract["agent_channel"]["delivery_allowed"] = True
+    source = contract["agent_channel"]["work_context"]["sources"][0]
+    narrative = source["content"]["text"]
+    source.update(source="goal_state", content={
+        "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+        "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+    })
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
     cli = contract["cli_channel"]
     cli["execution_preparation"] = {"state": "ready", "todo_id": "todo_current", "agent_id": "agent"}
     plan = cli["settlement_plan"]
@@ -1231,6 +1239,8 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
         step["precondition"] += " Await the updated external approval."
     elif transition == "unknown_version":
         plan["schema_version"] = "unknown"
+    elif transition == "rebound":
+        decision["registry"] = str(tmp_path / "another-registry.json")
     decision["goal_boundary"]["stop_condition"] = "Stop before publishing."
     second = capture("next")
     page, facts = read_selection(second["first_read_command"])
@@ -1242,9 +1252,11 @@ def test_native_first_read_reuses_only_observed_writeback_precondition(
         assert facts[precondition] == step["precondition"]
         return
 
-    assert page["previously_delivered_fields"] == [precondition] and precondition not in facts
+    assert set(page["previously_delivered_fields"]) == {goal_text, precondition}
+    assert goal_text not in facts and precondition not in facts
     _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition)
     assert recovered[precondition] == text
     codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
     page, facts = read_selection(second["first_read_command"])
     assert "previously_delivered_fields" not in page and facts[precondition] == text
+    assert facts[goal_text] == narrative
