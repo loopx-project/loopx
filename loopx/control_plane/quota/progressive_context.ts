@@ -7,7 +7,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, verifiedSelectedTodoSource}
   from "../work_items/interaction_contract.ts";
 import {projectReplanSemantics} from "../work_items/replan_semantics.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
@@ -19,7 +19,7 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceFile?: string};
+type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
@@ -30,10 +30,11 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
 function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
-  const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
-  const sources = at(context, base);
-  if (!Array.isArray(sources)) return [];
-  return sources.flatMap<ReusableReadField>((value, i) => {
+  const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
+  const work = jsonObject(at(context, workPath));
+  if (!work || !Array.isArray(work.sources)) return [];
+  const base = [...workPath, "sources"];
+  const fields = work.sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
@@ -43,7 +44,7 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
         (content.status === undefined || content.status === "loaded") &&
         typeof content.state_file === "string" && completeGoalNarrative(content))
       return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-        sourceFile: content.state_file}];
+        sourceIdentity: content.state_file}];
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
@@ -74,6 +75,31 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
       return fields;
     }) : [];
   });
+  // Only the note may carry forward, after a fresh canonical read of the ready
+  // Todo. Keep the current task, ownership, constraints and settlement visible.
+  const todoId = jsonObject(context.selected_todo)?.todo_id;
+  const selected = verifiedSelectedTodoSource(work, todoId);
+  const authority = jsonObject(selected?.content.authority_read);
+  const preparation = jsonObject(at(context, ["interaction_contract", "cli_channel", "execution_preparation"]));
+  const identity = jsonObject(context.agent_identity);
+  if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+      && at(context, ["interaction_contract", "agent_channel", "delivery_allowed"]) === true
+      && preparation?.state === "ready" && preparation.delivery_allowed === true && preparation.todo_id === todoId
+      && typeof preparation.agent_id === "string" && preparation.agent_id === (context.agent_id ?? identity?.agent_id)
+      && (identity?.agent_id === undefined || identity.agent_id === preparation.agent_id)
+      && typeof context.goal_id === "string" && selected?.content.ambiguous === false
+      && typeof selected.source.command === "string" && selected.source.command.length > 0
+      && typeof selected.todo.note === "string" && typeof selected.todo.updated_at === "string"
+      && authority?.decision_read_from_provider === true && authority.legacy_fallback_used === false
+      && typeof authority.provider_revision === "string" && typeof authority.source_authority === "string"
+      && authority.source_authority === selected.content.source) {
+    fields.push({path: [...base, selected.index, "content", "todo", "note"], freshKeys: [],
+      minimumBytes: MIN_REUSABLE_BODY_BYTES, sourceIdentity: JSON.stringify([
+        context.goal_id, preparation.agent_id, todoId, selected.source.command, authority.source_authority,
+        selected.todo.updated_at,
+      ])});
+  }
+  return fields;
 }
 
 function knownVisionAuthoring(step: JsonObject): boolean {
@@ -111,8 +137,8 @@ function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undef
 }
 
 function observedSectionDigest(body: string, field?: ReusableReadField): string {
-  // Same text at a reused array index is insufficient after a Goal file rebind.
-  const value = field?.sourceFile === undefined ? body : JSON.stringify([field.sourceFile, body]);
+  // A repeated body at the same position can belong to a different source.
+  const value = field?.sourceIdentity === undefined ? body : JSON.stringify([field.sourceIdentity, body]);
   return createHash("sha256").update(value).digest("hex");
 }
 
