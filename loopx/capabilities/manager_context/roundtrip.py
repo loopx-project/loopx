@@ -602,6 +602,15 @@ def _deliver_return(host, path, sender, frozen_route):
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
     settled = transact("settle", outcome=outcome, message_id=plan["message_id"])
+    # The reply may already be visible while its provider receipt is queued.
+    # Invalidate the existing session read hint after settlement so cached
+    # conversations re-read the receipt without rewriting history or activity.
+    try:
+        store.update_session(source["route"]["session_id"])
+    except (OSError, ValueError):
+        # Publication is already committed. A presentation hint failure must
+        # never reclassify delivery or cause the original reply to be resent.
+        logging.getLogger(__name__).warning("Manager return session read hint unavailable")
     if settled.get("observe_verified"):
         from ...usage_ping import observe_verified_return
         observe_verified_return()
