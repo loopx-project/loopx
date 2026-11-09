@@ -517,20 +517,14 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         parent_surface_id="quota_should_run",
         command="quota should-run --context-delivery off --turn-envelope",
         output_formats=("json", "markdown"),
-        semantic_json_keys=(
-            "schema_version", "contract_binding", "interaction_contract",
-            "selected_todo",
-        ),
+        semantic_json_keys=("schema_version", "contract_capsule", "action_signature"),
         markdown_anchor="# LoopX Turn Envelope",
-        # v1 is the complete inline source, including on explicit off. Matched
-        # File/SQLite small, multi-subagent and 128-character-root cases reach
-        # 28,928 JSON / 27,414 Markdown chars with a bound Turn/capture.
-        # Preserve v0's 13,000 / 4,800
-        # failures as migration evidence; do not drop facts to emulate v0.
-        # These presentation allowances do not change a transport hard limit.
-        max_chars={"json": 30_000, "markdown": 28_000},
+        # The same canonical fixture costs 10,681 JSON chars (12,268 with
+        # multi-subagent) on base/head. Rendering the instruction once reduces
+        # Markdown 4,996 -> 4,521 chars without removing source content.
+        # These stdout guards do not change the envelope's wire byte limit.
+        max_chars={"json": 13_000, "markdown": 4_800},
         max_lines={"json": 300, "markdown": 140},
-        output_contract_version=COMPLETE_TURN_DECISION_VERSION,
     ),
     CliOutputModeVariantSpec(
         variant_id="loopx_turn_plan_transaction_detail",

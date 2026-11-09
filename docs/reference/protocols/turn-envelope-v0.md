@@ -18,6 +18,14 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
+In the C1 candidate, `quota should-run --context-delivery off --turn-envelope`
+keeps this bounded v0 view when Delta delivery and managed handoff are inactive.
+The existing composition returns it from the same complete decision, without
+another guard or RPC. When requested, `decision.json` retains the complete
+source and original settlement identity; the compatibility signature binds
+that source. Retire the view after the supported raw readers migrate. Keep
+historical decoding for the original recovery window.
+
 The C1 native candidate reuses advisory outcome navigation and the generic
 same-capture selector. Its existing native planner and full/delta encoder retain
 their two calls; the retired mandatory scoped-reading wrapper adds no third
@@ -84,6 +92,12 @@ original source, with no extra validation request or model-facing view.
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+
+在 C1 候选中，`quota should-run --context-delivery off --turn-envelope`
+在 Delta 与托管交接均未启用时仍返回有界 v0。现有组合调用从同一份完整决策返回
+该视图，无需再次准入或发起 RPC。若要求捕获，`decision.json` 仍保存完整来源与
+原结算身份，兼容视图的签名绑定该来源。支持的原始读取方迁移后再退役此视图，
+并在原恢复窗口内保留历史解码。
 提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
 仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)

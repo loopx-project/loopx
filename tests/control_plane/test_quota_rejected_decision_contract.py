@@ -89,18 +89,18 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             *(
                 ["--context-delivery", "on", "--codex-context-root", str(context)]
                 if profile == "codex_app_heartbeat"
-                else []
+                else ["--context-delivery", "off"]
             ),
             cwd=project,
         )
         assert rc == 1 and denied["ok"] is False and denied["should_run"] is False, (
             denied
         )
-        assert denied["error_code"] == "quota_action_selection_rejected"
         captured = json.loads((capture / "decision.json").read_text())
         if profile == "codex_app_heartbeat":
             # Main's bounded refusal response points to the original complete
             # capture; it neither delivers work nor establishes a baseline.
+            assert denied["error_code"] == "quota_action_selection_rejected"
             reference = denied["captured_decision"]
             assert reference["path"] == str(capture / "decision.json")
             assert denied["heartbeat_receipt"] == captured["heartbeat_receipt"]
@@ -117,6 +117,22 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
                     break
                 offset = page["next_offset"]
             denied = json.loads(contents)
+        elif flag:
+            # The raw compatibility view is signed against the same complete
+            # refusal and must preserve the stop without granting settlement.
+            assert denied["schema_version"] == "loopx_turn_envelope_v0"
+            assert denied["action"]["must_attempt"] is False
+            assert denied["action"]["delivery_allowed"] is False
+            assert denied["writeback"]["spend_allowed_now"] is False
+            assert denied["writeback"]["spend_after_validation"] is False
+            assert "settlement_plan" not in denied["writeback"]
+            assert denied["contract_capsule"]
+            signature = denied["action_signature"]
+            assert signature["matches"] is True
+            assert signature["source_decision_hash"] == captured["contract_binding"]["content_hash"]
+            assert denied["detail_ref"]["captured_decision"]["path"] == str(capture / "decision.json")
+            denied = captured
+        assert denied["error_code"] == "quota_action_selection_rejected"
         assert denied["schema_version"] == "loopx_turn_envelope_v1"
         assert denied == captured
         assert "context_delivery" not in denied
@@ -237,6 +253,8 @@ def test_unhealthy_paused_decision_keeps_stop_policy_in_complete_capture(
         quota_command="should-run",
         turn_envelope=flag,
         format="json",
+        context_delivery="auto",
+        goal_id=PAUSED_GOAL,
         agent_id=PAUSED_AGENT,
     )
 
@@ -324,7 +342,7 @@ def test_success_without_contract_is_rejected_before_capture_or_handoff(
             {"ok": True, "should_run": True, "effective_action": "run",
                 "schema_version": schema},
             Namespace(quota_command="should-run", turn_envelope=flag,
-                format="json", agent_id="synthetic-agent"),
+                format="json", goal_id=GOAL_ID, agent_id=AGENT_ID),
             context=None,
             registry_path=tmp_path / "registry.json",
             heartbeat_turn_id="missing-contract",

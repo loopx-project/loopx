@@ -276,14 +276,41 @@ def compose_turn_decision(
     composed_settlement: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
+    source, _ = _compose_turn_source(payload,
+        scheduler_execution_context=scheduler_execution_context,
+        composed_settlement=composed_settlement)
+    return source
+
+
+def compose_turn_decision_with_raw_envelope(
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+    captured_decision_path: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return the complete capture and its bounded explicit-off view in one call."""
+    return _compose_turn_source(payload,
+        scheduler_execution_context=scheduler_execution_context,
+        legacy_output={"include_legacy_envelope": True,
+                       **({"captured_decision_path": captured_decision_path}
+                          if captured_decision_path is not None else {})})
+
+
+def _compose_turn_source(
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+    composed_settlement: bool = False,
+    legacy_output: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
-        **({"composed_settlement": True} if composed_settlement else {}))
-    return _apply_context_projection_changes(source, result)
-
+        **({"composed_settlement": True} if composed_settlement else {}), **(legacy_output or {}))
+    view = result.pop("legacy_envelope", None) if legacy_output is not None else None
+    return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
 
 def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
     """Validate the original contract; keep its host binding and caller-owned bytes."""

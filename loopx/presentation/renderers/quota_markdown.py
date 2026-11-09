@@ -352,7 +352,7 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
-    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+    if payload.get("schema_version") in ("loopx_turn_envelope_v0", "loopx_turn_envelope_v1"):
         from .turn_envelope_markdown import render_turn_envelope_markdown
 
         return render_turn_envelope_markdown(payload)

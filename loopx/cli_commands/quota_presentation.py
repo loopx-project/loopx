@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..control_plane.scheduler.execution_context import SchedulerExecutionContextResolution
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 
@@ -59,6 +63,49 @@ def native_quota_result(payload, args, *, capture_directory: Path,
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv,
         initial_read_plan=prepared.initial_read_plan)
     return model_context_reference(payload, reader_argv=reader_argv)
+
+
+def compose_quota_cli_source(
+    payload: dict[str, object], args: argparse.Namespace, activation: Mapping[str, object], *,
+    scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    capture_directory: Path | None,
+    compose: Callable[..., dict[str, object]],
+) -> tuple[dict[str, object], bool, dict[str, object] | None]:
+    """Prepare one decided source and an optional raw compatibility display."""
+    # Delta-only and managed handoff still consume the complete source.
+    raw_envelope = (getattr(args, "turn_envelope", False)
+        and activation.get("requested") == "off" and not activation["enabled"]
+        and not getattr(args, "decision_handoff_socket", None))
+    if not isinstance(payload.get("interaction_contract"), Mapping):
+        return payload, raw_envelope, None
+    if not raw_envelope:
+        return compose(payload, scheduler_execution_context=scheduler_context,
+            composed_settlement=activation["enabled"]), False, None
+
+    from ..control_plane.quota.turn_envelope import compose_turn_decision_with_raw_envelope
+
+    source, view = compose_turn_decision_with_raw_envelope(payload,
+        scheduler_execution_context=scheduler_context,
+        captured_decision_path=str(capture_directory / "decision.json") if capture_directory else None)
+    return source, True, view
+
+
+def raw_quota_turn_view(
+    source: dict[str, object], view: dict[str, object] | None,
+) -> dict[str, object]:
+    """Finalize the display after the complete source has been captured."""
+    from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+
+    if view is None:
+        if isinstance(source.get("interaction_contract"), Mapping):
+            raise QuotaDecisionTransportError(
+                "Bounded Turn envelope projection failed after guard evaluation. "
+                "Inspect the original capture or Turn receipt; do not rerun admission."
+            )
+        return {**source, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
+    if "host_poll_receipt" in source:
+        view["host_poll_receipt"] = source["host_poll_receipt"]
+    return view
 
 
 def _quota_renderer(args: argparse.Namespace) -> Callable[[dict[str, object]], str]:
@@ -123,8 +170,8 @@ def _project_quota_cli_payload(
             "should-run emission requires a composed complete decision; "
             "historical captures require their explicit recovery reader"
         )
-    # The request owner admits --turn-envelope only on should-run, whose
-    # complete decision returned above. No normal route builds a v0 adapter.
+    # Decided should-run inputs have one complete source; any v0 reader gets a
+    # compatibility view from that source after capture.
     if args.quota_command in {"status", "plan"}:
         return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
     if args.quota_command == "monitor-poll":

@@ -2012,7 +2012,10 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("Turn adapter host binding differs from captured contract");
     }
   }
-  const schedulerExecutionArgs = request.scheduler_execution_args;
+  return boundedTurnEnvelope(request, payload, request.scheduler_execution_args);
+}
+
+function boundedTurnEnvelope(request: JsonObject, payload: JsonObject, schedulerExecutionArgs: string): JsonObject {
   const capturedDecisionPath = request.captured_decision_path;
   if (capturedDecisionPath !== undefined && (
     typeof capturedDecisionPath !== "string" || !capturedDecisionPath.trim() || capturedDecisionPath.includes("\0")
@@ -2456,9 +2459,25 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "compose_complete") {
     const input = request.source_transport === undefined ? request
       : {...request, payload: decodeCompositionSource(request)};
+    const legacy = request.include_legacy_envelope === undefined ? false
+      : requireBoolean(request.include_legacy_envelope, "include_legacy_envelope");
+    if (legacy && (request.source_edits !== true || request.composed_settlement === true)) {
+      throw new EffectRuntimeRequestError("legacy Turn view requires raw complete source edits");
+    }
     const result = composeCompleteTurnDecision(input);
-    return request.source_edits === true
-      ? contextProjectionChanges(requireJsonObject(input.payload, "complete Turn source"), result) : result;
+    if (request.source_edits !== true) return result;
+    const changes = contextProjectionChanges(requireJsonObject(input.payload, "complete Turn source"), result);
+    if (!legacy) return changes;
+    // Compose already verified and bound this source. Return its display-only
+    // compatibility view alongside edits, without a second transport or guard.
+    try {
+      return {...changes, legacy_envelope: boundedTurnEnvelope(input, result, input.scheduler_execution_args as string)};
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      // The caller still needs to save the original decision and report its
+      // receipt even when the optional display cannot be produced.
+      return {...changes, legacy_envelope: null};
+    }
   }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);

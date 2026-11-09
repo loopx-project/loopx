@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from .quota_presentation import (
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
-    budgeted_spend_result, native_quota_result,
+    budgeted_spend_result, compose_quota_cli_source, native_quota_result, raw_quota_turn_view,
 )
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
@@ -388,17 +388,16 @@ def _emit_quota_result(
         return result_code
     assert activation is not None
     context_delivery_enabled = activation["enabled"]
+    raw_envelope, legacy_view = False, None
     delivery_request = None
     decision_identity = ("", "")
-    # A decided refusal has the same complete contract as an admission. `ok`
-    # still controls exit status and host handoff; composition grants no work.
-    if args.quota_command == "should-run" and isinstance(payload.get("interaction_contract"), Mapping):
-        payload = _export("compose_turn_decision")(payload,
-            scheduler_execution_context=context.scheduler_context if context is not None else None,
-            composed_settlement=context_delivery_enabled)
     if args.quota_command == "should-run":
-        # Validate new decisions before durable capture or host handoff. This
-        # projection is identity for complete decisions and early diagnostics.
+        payload, raw_envelope, legacy_view = compose_quota_cli_source(
+            payload, args, activation, compose=_export("compose_turn_decision"),
+            scheduler_context=context.scheduler_context if context is not None else None,
+            capture_directory=capture_directory,
+        )
+        # Validate before capture or handoff; the complete source is unchanged.
         payload = _project_quota_cli_payload(payload, args, detail_sections)
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
@@ -417,6 +416,9 @@ def _emit_quota_result(
             return 1
         if payload.get("ok") is True:
             delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
+        if raw_envelope:
+            print_payload(raw_quota_turn_view(payload, legacy_view), args.format, _quota_renderer(args))
+            return 0 if payload.get("ok") is True else 1
     except QuotaDecisionTransportError as exc:
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace

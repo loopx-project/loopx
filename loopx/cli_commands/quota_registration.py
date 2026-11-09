@@ -189,8 +189,8 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "Compatibility spelling for the complete v1 decision from `quota should-run`. "
-            "It does not select a second packet format; --context-delivery off keeps the complete source inline."
+            "Request the bounded v0 Turn envelope with raw --context-delivery off. "
+            "Progressive or Delta delivery and managed handoff use the complete decision."
         ),
     )
     capture_group = quota_parser.add_mutually_exclusive_group()

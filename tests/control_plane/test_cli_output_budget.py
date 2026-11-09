@@ -960,10 +960,11 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    assert payload["schema_version"] == "loopx_turn_envelope_v1"
-    assert payload["selected_todo"]["todo_id"] == "todo_fixture_000"
-    assert payload["selected_todo"]["text"]
-    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
+    assert payload["schema_version"] == "loopx_turn_envelope_v0"
+    assert payload["action"]["selected_todo"]["todo_id"] == "todo_fixture_000"
+    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
+    assert payload["action"]["recommended_action"]
+    work_context = payload["work_context"]
     assert work_context["selected_todo_ref"] == "selected_todo"
     source = next(row for row in work_context["sources"] if row["source"] == "selected_todo")
     authority = source["content"]["authority_read"]
@@ -1022,6 +1023,11 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
     payload = _json_payload(json_text)
+    if surface_id == "quota_should_run_turn_envelope":
+        assert payload["schema_version"] == "loopx_turn_envelope_v0"
+        instruction = payload["work_context"]["instruction"]
+        assert instruction and markdown_text.count(instruction) == 1
+        return
     assert payload["schema_version"] == "loopx_turn_envelope_v1"
     work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     instruction = work_context["instruction"]
@@ -1853,7 +1859,7 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_complete_explicit_modes_keep_full_contract_on_long_routes(
+def test_explicit_modes_keep_original_contracts_on_long_routes(
     tmp_path: Path, provider: str,
 ) -> None:
     # Combine the supported route length and enabled subagent policy rather
@@ -1891,16 +1897,20 @@ def test_complete_explicit_modes_keep_full_contract_on_long_routes(
                                "--turn-instance-id", "complete-explicit"]
                 code, text = _invoke_cli(command)
                 assert code == 0, text
-                payload = (json.loads(text) if output_format == "json" else
-                    json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]))
-                source = payload
                 if variant_id == "loopx_turn_plan_transaction_detail":
+                    payload = json.loads(text)
                     source = payload["work_contract"]
                     assert build_loopx_turn_host_request(payload)["work_contract"] == source
                 else:
-                    # off is literal, even for the compatibility spelling and
-                    # Markdown. Every captured fact and clause is delivered.
-                    assert payload == json.loads((capture / "decision.json").read_text())
+                    source = json.loads((capture / "decision.json").read_text())
+                    if output_format == "json":
+                        view = json.loads(text)
+                        assert view["schema_version"] == "loopx_turn_envelope_v0"
+                        assert view["action_signature"]["matches"] is True
+                        assert view["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+                    else:
+                        assert text.startswith("# LoopX Turn Envelope")
+                        assert "- envelope_bytes: `" in text
                 assert_complete_turn_decision(source)
                 assert_cli_output_mode_variant(spec, output_format=output_format, text=text,
                     measurement=measure_cli_output(text, output_format=output_format))
@@ -1912,10 +1922,10 @@ def test_complete_explicit_modes_keep_full_contract_on_long_routes(
 
 @pytest.mark.parametrize("output_format", ["json", "markdown"])
 @pytest.mark.parametrize("measurement_only", [False, True])
-def test_explicit_version_qualification_rejects_old_or_incomplete_carriers(
+def test_complete_detail_qualification_rejects_old_or_incomplete_carriers(
     output_format: str, measurement_only: bool,
 ) -> None:
-    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_turn_envelope"]
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"]
     valid = {key: {} for key in spec.semantic_json_keys}
     valid["schema_version"] = spec.output_contract_version
     def check(payload):
@@ -2358,11 +2368,11 @@ def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
 
 
 
-@pytest.mark.parametrize("context_delivery", ["off", "on"])
+@pytest.mark.parametrize("context_delivery", ["off", "on", "delta_only"])
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     tmp_path: Path, context_delivery: str,
 ) -> None:
-    if context_delivery == "on" and os.name != "posix":
+    if context_delivery != "off" and os.name != "posix":
         pytest.skip("native context delivery requires the POSIX host transport")
     project, runtime, registry_path, state_file = _write_fixture(
         tmp_path,
@@ -2378,8 +2388,10 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     )["quota_should_run_turn_envelope"]
 
     turn = "budget-native-host-binding"
-    command.extend(["--context-delivery", context_delivery])
-    if context_delivery == "on":
+    command.extend(["--context-delivery", "off" if context_delivery == "delta_only" else context_delivery])
+    if context_delivery == "delta_only":
+        command.extend(["--delta-delivery", "auto"])
+    if context_delivery != "off":
         # Own the synthetic native context; do not borrow the test process's
         # real desktop session or machine-configured context root.
         context = runtime / "native-context"
@@ -2391,9 +2403,14 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    # The compatibility spelling now returns the complete original decision.
-    # Check its actual host binding without executing another admission as a
-    # purported recovery read of this observation.
+    if context_delivery == "off":
+        assert payload["schema_version"] == "loopx_turn_envelope_v0"
+        assert payload["goal_id"] == GOAL_ID and payload["agent_id"] == AGENT_IDS[0]
+        assert payload["action_signature"]["matches"] is True
+        assert "--codex-app" in shlex.split(payload["detail_ref"]["full_decision"])
+        assert payload["scheduler"]["app_automation"]
+        return
+
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     assert_complete_turn_decision(payload)

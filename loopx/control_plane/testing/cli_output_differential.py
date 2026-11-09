@@ -736,12 +736,9 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
         "quota_should_run_scheduler_detail", "quota_should_run_todo_summary_detail",
         "quota_should_run_user_todo_summary_detail", "quota_should_run_goal_boundary_detail",
         "quota_should_run_vision_detail", "quota_should_run_all_detail",
-        "quota_should_run_turn_envelope", "quota_should_run_turn_envelope_blocking_user_gate",
-        "quota_should_run_turn_envelope_multi_subagent",
     }
     scenario, output_format = base.get("scenario"), base.get("format")
     variant = base.get("variant_id")
-    legacy_envelope = str(variant or "").startswith("quota_should_run_turn_envelope")
     policy = "explicit_opt_in_cold_path" if variant else "absolute_hot_path"
     row = (f"variant/{variant}/{scenario}/{output_format}" if variant
            else f"surface/quota_should_run/{scenario}/{output_format}")
@@ -751,36 +748,29 @@ def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, 
         and scenario == candidate.get("scenario") and scenario in {"small", "crowded", "multi_agent"}
         and (scenario == "small" if variant else True)
         and output_format == candidate.get("format") and output_format in formats
-        and (output_format == "json" if variant in {
-            "quota_should_run_turn_envelope_blocking_user_gate",
-            "quota_should_run_turn_envelope_multi_subagent"} else True)
         and (variant in variants if variant else True)
         and base.get("qualification_policy") == candidate.get("qualification_policy") == policy
         and base.get("output_contract_version") is None
         and candidate.get("output_contract_version") == "loopx_turn_envelope_v1"
-        and base.get("markdown_anchor") == ("# LoopX Turn Envelope" if legacy_envelope else "# LoopX Quota Should Run")
+        and base.get("markdown_anchor") == "# LoopX Quota Should Run"
         and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
         and _matching_quota_controls(base, candidate)):
         return False
-    return (base["quota_controls"].get("source_schema") == ("loopx_turn_envelope_v0" if legacy_envelope else None)
+    return (base["quota_controls"].get("source_schema") is None
             and candidate["quota_controls"].get("source_schema") == "loopx_turn_envelope_v1")
 
 
 def _complete_quota_source_allowance(base: dict[str, Any], candidate: dict[str, Any]) -> dict[Metric, int]:
     if not _complete_quota_source_migration(base, candidate):
         return {}
-    # Same 98-row workload at main 36289306 / C1 94cd16bb. JSON deltas:
-    # ordinary +959/+1958/+4060, details <=959, explicit <=16003 chars /
-    # 16115 bytes. Markdown changes from partial narrative to complete JSON:
-    # +17060/+36373/+23425, details <=17984, explicit +22221. Absolute v1
-    # ceilings and collection growth remain enforced by the real CLI probe.
+    # Complete-source changes in the matched main 36289306 / C1 94cd16bb
+    # workload. Explicit raw v0 readers retain their old limits and keys.
+    # Absolute v1 ceilings and collection growth remain enforced.
     variant = str(base.get("variant_id") or "")
     if base["format"] == "json":
-        chars = 16_256 if variant.startswith("quota_should_run_turn_envelope") else (
-            {"small": 1_024, "crowded": 2_048, "multi_agent": 4_096}[base["scenario"]])
+        chars = {"small": 1_024, "crowded": 2_048, "multi_agent": 4_096}[base["scenario"]]
         return {"chars": chars, "utf8_bytes": chars, "compact_payload_chars": chars}
-    chars = (22_352 if variant.startswith("quota_should_run_turn_envelope") else 18_112
-             if variant else {"small": 17_184, "crowded": 36_512, "multi_agent": 23_552}[base["scenario"]])
+    chars = 18_112 if variant else {"small": 17_184, "crowded": 36_512, "multi_agent": 23_552}[base["scenario"]]
     return {"chars": chars, "utf8_bytes": chars, "lines": 6 if variant else 3}
 
 

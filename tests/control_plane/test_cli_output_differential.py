@@ -1602,11 +1602,10 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_complete_producer(tmp_path, monkeypatch):
+def test_public_multi_subagent_probe_preserves_bounded_orchestration(tmp_path, monkeypatch):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.testing import cli_output_semantics as semantics
 
     emitted = []
@@ -1628,18 +1627,15 @@ def test_public_multi_subagent_probe_reaches_complete_producer(tmp_path, monkeyp
     with probe._stable_budget_fixture_root(tmp_path) as root:
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
     assert len(rows) == len(emitted) == 1
-    source = emitted[0]
-    assert_complete_turn_decision(source)
-    # Check the enabled policy supplied by the fixture in its signed source,
-    # rather than expecting the retired short envelope's v4 coverage marker.
-    assert source["goal_boundary"]["orchestration"] == {
+    view = emitted[0]
+    assert view["boundary"]["orchestration"] == {
         "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
         "model_config": {"model": "example-small", "reasoning_effort": "max"},
     }
-    assert rows[0]["output_contract_version"] == source["schema_version"] == "loopx_turn_envelope_v1"
-    assert rows[0]["action_signature_coverages"] == []
-    assert "$.contract_binding.source_decision_hash" in rows[0]["json_shape_paths"]
-    assert "$.goal_boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
+    assert view["schema_version"] == "loopx_turn_envelope_v0"
+    assert view["action_signature"]["matches"] is True
+    assert rows[0]["action_signature_coverages"] == ["turn_envelope_action_dimensions_v4"]
+    assert "$.boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
 
 
 def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None:
@@ -2196,11 +2192,9 @@ def _quota_source_rows(output_format="json", *, variant=None, scenario="small"):
 @pytest.mark.parametrize("output_format,variant,scenario,growth", [
     ("json", None, "small", 959), ("json", None, "crowded", 1958),
     ("json", None, "multi_agent", 4060),
-    ("json", "quota_should_run_turn_envelope", "small", 16115),
     ("markdown", None, "small", 17060), ("markdown", None, "crowded", 36373),
     ("markdown", None, "multi_agent", 23425),
     ("markdown", "quota_should_run_vision_detail", "small", 17984),
-    ("markdown", "quota_should_run_turn_envelope", "small", 22221),
 ])
 def test_complete_quota_migration_keeps_measured_controls_and_bounded_cost(output_format, variant, scenario, growth):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
@@ -2221,6 +2215,16 @@ def test_complete_quota_migration_keeps_measured_controls_and_bounded_cost(outpu
     same_version.update(output_contract_version=head["output_contract_version"], markdown_anchor=head["markdown_anchor"])
     same_version["quota_controls"]["source_schema"] = "loopx_turn_envelope_v1"
     assert _compare_row(same_version, head)["failures"]
+
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_complete_quota_migration_never_waives_explicit_off_carrier(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    base, head = _quota_source_rows(output_format, variant="quota_should_run_turn_envelope")
+    result = _compare_row(base, head)
+    assert result["failures"]
+    assert not any("Quota v0 -> complete v1" in signal for signal in result["review_signals"])
 
 
 @pytest.mark.parametrize("damage", ["wrong-goal", "dropped-read", "missing-field", "missing-witness", "wrong-carrier",

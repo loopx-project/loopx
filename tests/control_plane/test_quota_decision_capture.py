@@ -249,7 +249,7 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'boundary-decision'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope', '--decision-output-dir', str(capture))
+    code, envelope = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture))
     assert code == 0, envelope
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
@@ -288,6 +288,73 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     assert envelope['action']['delivery_allowed'] == full['interaction_contract']['agent_channel']['delivery_allowed']
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("projection_fails", [False, True])
+def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
+    tmp_path, monkeypatch, provider, projection_fails,
+):
+    from loopx.cli import main
+    from loopx.control_plane.quota import turn_envelope
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _initialize_fixture_authority, _spend_run_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    monkeypatch.chdir(project)
+    bindings = ["--registry", str(registry), "--runtime-root", str(runtime)]
+    guard = ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+             "--turn-instance-id", TURN_ID, "--codex-app", "--context-delivery", "off", "--turn-envelope"]
+
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    if projection_fails:
+        compose = turn_envelope.compose_turn_decision_with_raw_envelope
+
+        def reject_view(payload, **options):
+            # The typed compatibility projector rejects this target; the
+            # original complete decision is still valid and must be saved.
+            return compose(payload, **{**options, "captured_decision_path": ""})
+
+        monkeypatch.setattr(turn_envelope, "compose_turn_decision_with_raw_envelope", reject_view)
+
+    def deliver(output_format, *extra, expected=0):
+        output = StringIO()
+        with redirect_stdout(output):
+            assert main([*bindings, "--format", output_format, *guard, *extra]) == expected
+        return output.getvalue()
+
+    directory = tmp_path / "complete-capture"
+    output = deliver("json", "--decision-output-dir", str(directory), expected=int(projection_fails))
+    raw = (directory / "decision.json").read_bytes()
+    source = json.loads(raw)
+    turn_envelope.assert_complete_turn_decision(source)
+    shown = json.loads(output)
+    if projection_fails:
+        assert shown["error_code"] == "quota_decision_transport_failed"
+        assert shown["heartbeat_receipt"] == source["heartbeat_receipt"]
+        assert shown["captured_decision"] == {"path": str(directory / "decision.json")}
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+        assert _spend_run_count(runtime) == 0
+        return
+    assert shown["schema_version"] == "loopx_turn_envelope_v0"
+    assert shown["contract_capsule"] and shown["action_signature"]["matches"] is True
+    assert shown["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+    identity = source["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    assert identity["turn_instance_id"] == TURN_ID and identity["todo_id"] == TODO_ID
+    assert shown["action"]["selected_todo"]["todo_id"] == TODO_ID
+    assert shlex.split(shown["detail_ref"]["full_decision"]) == ["cat", "--", str(directory / "decision.json")]
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    markdown = deliver("markdown")
+    assert markdown.startswith("# LoopX Turn Envelope")
+    assert "effective_action: `normal_run`" in markdown
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before == 1
+    assert _spend_run_count(runtime) == 0
+    assert (directory / "decision.json").read_bytes() == raw
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path, monkeypatch, provider):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -318,14 +385,10 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
     assert code == 0, envelope
-    assert envelope['schema_version'] == 'loopx_turn_envelope_v1'
+    assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
     saved = capture / 'decision.json'
     full = json.loads(saved.read_text())
-    assert envelope == full
-    # Retain historical long-route capture recovery coverage explicitly;
-    # the current producer no longer selects this view with --turn-envelope.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    envelope = build_turn_envelope(full, captured_decision_path=str(saved))
+    assert full['schema_version'] == 'loopx_turn_envelope_v1'
     app = envelope['scheduler']['app_automation']
     assert 'ack_cli_args' not in app
     ref = app['ack_cli_args_detail_ref']
@@ -376,8 +439,8 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert json.loads((second / 'decision.json').read_text())['heartbeat_receipt']['status'] == 'replayed'
     assert json.loads(saved.read_text()) == full
 
-    assert fresh == json.loads((second / 'decision.json').read_text())
-    fresh = build_turn_envelope(fresh, captured_decision_path=str(second / 'decision.json'))
+    assert fresh['action_signature']['source_decision_hash'] == json.loads(
+        (second / 'decision.json').read_text())['contract_binding']['content_hash']
     assert shlex.split(fresh['detail_ref']['full_decision']) == ['cat', '--', str(second / 'decision.json')]
     # Missing old evidence fails locally; it never substitutes a new guard observation.
     saved.unlink()
