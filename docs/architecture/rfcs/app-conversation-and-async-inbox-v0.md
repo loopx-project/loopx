@@ -336,6 +336,14 @@ Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
 long captions, restart, missing/unknown receipts, byte mismatch, revocation and
 provider replacement. Installed provider readback remains a separate gate.
 
+The bound App history also displays a read-only notice for an original Lark
+file, audio or video that Core recorded as unsupported. It verifies the exact
+Session, current local owner binding and both original receipts before showing
+the notice. Its source time participates in history pagination; late rows
+invalidate any affected prefix, and a changed notice refreshes the App's
+transcript even when no Turn runs. The notice carries no resource bytes or
+credentials, creates no Turn, and does not resend the original reply.
+
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
 
@@ -1397,6 +1405,14 @@ across steward/Goal navigation. The App entry keeps one workspace and its
 readers mounted, sharing its source readback. Pending or failed discovery still
 gates the ordinary queue. Disposable HTTP/store checks qualify this continuation
 path, not installed native or live-provider acceptance.
+
+After a complete bound Session read, the App can refresh a changed snapshot
+using its proof of up to 5,000 already visible rows. The same endpoint checks
+the current projected prefix, including quotes and return status. Only an
+exact match returns the appended suffix of at most 200 rows. A changed prefix,
+a larger suffix or an older service uses the ordinary full read. The App still
+rechecks the original binding before publishing the combined transcript. This
+transient proof does not replace the frozen cursor or authorize any effect.
 
 Following the newest reply also survives a resized viewport or timeline, including
 image layout and expanded replies, without waiting for another message. Scrolling

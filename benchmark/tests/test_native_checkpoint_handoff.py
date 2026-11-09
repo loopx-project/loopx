@@ -714,7 +714,9 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
     if capture == "controller" and os.environ.get("LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER") != "1":
         pytest.skip("Requires an explicitly attached host checkpoint supervisor")
     project, runtime, registry = _write_fixture(tmp_path / "authority")
-    _initialize_fixture_authority(project, runtime)
+    # Select the controller fixture's SQLite store before its first writer fence.
+    provider = "sqlite" if capture == "controller" else "file"
+    _initialize_fixture_authority(project, runtime, provider=provider)
     logs = Path("/logs/agent/wakes") if capture == "controller" else tmp_path / "trial" / "wakes"
     candidate = project / "candidate.txt"
     candidate.write_text("original candidate")
@@ -764,21 +766,16 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
             _configure_autonomous_replan_fixture(project, runtime, registry)
             # This fixture's later scenario is canonical too. Do not reseed a
             # promoted store or make Markdown authoritative after cutover.
-            from tests.control_plane.canonical_authority_fixture import read_fixture_todos
+            from tests.control_plane.canonical_authority_fixture import (
+                advance_canonical_fixture_authority, read_fixture_todos,
+            )
             from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
             projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
                 todos=read_fixture_todos(project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"),
-                handoff_mode="soft_claim")
-            provider = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
-            script = (f"import {{openLocalAuthorityStore}} from {json.dumps(provider.as_uri())};"
-                "let raw='';for await(const part of process.stdin)raw+=part;const v=JSON.parse(raw);"
-                "const s=await openLocalAuthorityStore(v.root,v.goal);const h=await s.loadAuthority();"
-                "const r=await s.commitAuthority({expected_provider_revision:h.provider_revision,"
-                "operation_id:'fixture-midwake-scenario',events:[],receipts:[],next_projection:v.projection});"
-                "if(r.status!=='applied')throw Error(JSON.stringify(r));")
-            subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-                input=json.dumps({"root": str(runtime), "goal": GOAL_ID, "projection": projection}),
-                text=True, capture_output=True, check=True, timeout=30)
+                handoff_mode="hard_lease" if capture == "controller" else "soft_claim")
+            advance_canonical_fixture_authority(
+                runtime, GOAL_ID, projection, operation_id="fixture-midwake-scenario",
+            )
             # Preserve the actual preflight settlement evidence. The reusable
             # fixture replaces the index; its two later synthetic observations
             # must not erase the already settled original Host Turn.
@@ -790,15 +787,6 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                 Path(row["json_path"]).write_text(json.dumps(row))
                 later.append(json.dumps(row) + "\n")
             index_path.write_text(prior_runs + "".join(later))
-            if capture == "controller":
-                from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
-                from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-                rc, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-                assert rc == 0, listed
-                initialize_canonical_authority(runtime, GOAL_ID,
-                    build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=listed["todos"],
-                        handoff_mode="hard_lease", leases=[]),
-                    state_path=project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md", provider="sqlite")
             body = next(t for t in texts(payload) if "quota should-run" in t and "```sh" in t)
             guard = next(line for line in body.splitlines() if "quota should-run" in line)
             guard = guard.replace('${LOOPX_TURN:?}', TURN_ID)

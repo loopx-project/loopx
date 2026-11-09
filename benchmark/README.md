@@ -1399,6 +1399,20 @@ and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
 
+### Preserve an interrupted Official control
+
+For `--worker official --feedback native --eval-interval 0`, the explicit
+`--preserve-failed-worker` option keeps the original Docker worker after a
+confirmed final solver failure. Native auto-resume, scoring, and final archive
+collection keep their ordinary behavior. The retained worker is stopped and
+verified by exact identity; a failed stop observation or receipt write never
+falls through to deletion. Without the option, ordinary cleanup still applies.
+
+The private terminal receipt records source retention only. It does not
+export an authentication file, create a joint checkpoint, or authorize
+a resume. Recover the original evaluator, session, and finite remaining
+budget separately before treating later work as part of this control.
+
 ### Continue an interrupted Host in its retained filesystem
 
 The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
@@ -1502,6 +1516,12 @@ authorized experiment account through its existing provider and verify its fresh
 allowance before requesting another phase. This does not change the desktop
 login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
 into automatic timed retries.
+
+`benchmark.runtime.codex_accounts` observes the native account owner without
+resuming desktop service recovery or adopting an out-of-band login selection.
+A missing or mismatched active selection remains an ownership error for the
+native account manager to resolve. `--execute` only permits the explicitly
+requested private continuation-login copy; it does not expand desktop authority.
 
 For a retained complete worker, the same scheduler entrypoint accepts
 `--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.

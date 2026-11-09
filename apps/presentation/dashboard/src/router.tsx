@@ -36,6 +36,8 @@ const searchSchema = z.object({
   research_goal: z.unknown().optional(),
   research_node: z.unknown().optional(),
   research_finding: z.unknown().optional(),
+  research_event: z.unknown().optional(),
+  research_state: z.unknown().optional(),
   research_group: z.unknown().optional(),
   research_pack: z.unknown().optional(),
   research_analysis: z.unknown().optional(),

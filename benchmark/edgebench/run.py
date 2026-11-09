@@ -165,7 +165,7 @@ def main(argv=None):
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
     parser.add_argument("--preserve-failed-worker", action="store_true",
-                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
+                        help="Retain an Official worker after confirmed failure, or capture and retain a failed heartbeat worker with full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -274,8 +274,9 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
-    if args.preserve_failed_worker and not handoff:
-        parser.error("Failed-worker preservation requires full native controller capture")
+    retain_official_failure = args.preserve_failed_worker and args.worker == "official" and args.feedback == "native"
+    if args.preserve_failed_worker and not (handoff or retain_official_failure):
+        parser.error("Failed-worker preservation requires native Official feedback or full native controller capture")
     if args.preserve_failed_worker and args.eval_interval != 0:
         parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
@@ -480,10 +481,11 @@ def main(argv=None):
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      docker_host_bridge=args.docker_host_bridge,
                                      research_sidecar=research_sidecar,
+                                     retain_failed_native_worker=retain_official_failure,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
-    for image in (task.work_image_key, task.judge_image_key):
-        if not backend.image_exists(image):
-            raise RuntimeError(f"Missing native image: {image}")
+    local_docker_images = backend.observe_local_images(
+        work_key=task.work_image_key, judge_key=task.judge_image_key,
+    )
     if warm_start is not None:
         activated = restore(args.checkpoint_controller_file, root=capsule,
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
@@ -509,6 +511,7 @@ def main(argv=None):
         **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
+        "local_docker_images": local_docker_images,
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
