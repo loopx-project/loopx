@@ -413,7 +413,9 @@ def handle_turn_command(
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"
-        else _render_loopx_turn_plan_markdown
+        else lambda value: _render_loopx_turn_plan_markdown(
+            value, include_transaction_detail=args.include_transaction_detail,
+        )
     )
     print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1
