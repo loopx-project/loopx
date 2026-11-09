@@ -13,7 +13,7 @@ type Copy = Record<string, string>;
 type Props = {
   timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
   selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string, button: HTMLButtonElement) => void;
-  onSelect: (id: string, finding?: string) => void; onSelectMany: (ids: string[], button: HTMLButtonElement) => void; onPhase: (index: number | null) => void;
+  onSelect: (id: string, finding?: string, event?: string) => void; onSelectMany: (ids: string[], button: HTMLButtonElement) => void; onPhase: (index: number | null) => void;
   timeLabel: (value: number) => string; dayLabel: (value: number) => string;
 };
 
@@ -215,7 +215,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
 
 function TrailList({groups, copy, label, timeLabel, selectedEventId, onSelect}: {
   groups: ReturnType<typeof groupExploreTimelineDecisions>; copy: Copy; label: (key: string) => string;
-  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: (id: string, finding?: string) => void;
+  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: Props["onSelect"];
 }) {
   const [limit, setLimit] = useState(3);
   const selectedIndex = groups.findIndex(group => group.items.some(item => item.event.event_id === selectedEventId));
@@ -232,7 +232,7 @@ function TrailList({groups, copy, label, timeLabel, selectedEventId, onSelect}: 
 
 function TrailQuestion({group, copy, label, timeLabel, selectedEventId, onSelect}: {
   group: ReturnType<typeof groupExploreTimelineDecisions>[number]; copy: Copy; label: (key: string) => string;
-  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: (id: string, finding?: string) => void;
+  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: Props["onSelect"];
 }) {
   const [limit, setLimit] = useState(3);
   const selectedIndex = group.items.findIndex(item => item.event.event_id === selectedEventId);
@@ -259,7 +259,7 @@ function TrailQuestion({group, copy, label, timeLabel, selectedEventId, onSelect
         <button type="button" data-research-decision={item.event.event_id}
           aria-label={`${label(decision.outcome)} · ${item.at === null ? copy.unknownTime : timeLabel(item.at)} · ${label(item.event.status)} · ${item.event.title}`}
           className={selectedEventId === item.event.event_id ? "is-selected" : ""}
-          onClick={event => {event.currentTarget.focus({preventScroll: true}); onSelect(item.event.node_id, item.event.result_id);}}>
+          onClick={event => {event.currentTarget.focus({preventScroll: true}); onSelect(item.event.node_id, item.event.result_id, item.event.event_id);}}>
           <span className="research-trail-main">
             <span className="research-trail-meta"><b className={`research-outcome is-${decision.outcome}`}>{label(decision.outcome)}</b>
               <time dateTime={item.at === null ? undefined : item.event.recorded_at}>{item.at === null ? copy.unknownTime : timeLabel(item.at)}</time>

@@ -89,13 +89,13 @@ export function exploreTimelinePhaseAt(phases: readonly TimelinePhase[], at: num
   return index < 0 ? null : index;
 }
 
-/** Choose from the question's readable findings. Superseded revisions remain
- * in source history; a later backfill does not become the latest record time. */
+/** Select the original event in this reading period, including a finding that
+ * was revised later. A backfill does not become the latest record time. */
 export function latestExploreFindingInPhase(timeline: ExploreTimeline, nodeId: string, phase: number): ExploreHistoryEvent | undefined {
   let latest: ExploreHistoryEvent | undefined;
   let latestAt = -Infinity;
-  for (const finding of timeline.nodes.get(nodeId)?.node.findings ?? []) {
-    const at = time(finding.recorded_at);
+  for (const {event: finding, at} of timeline.findings) {
+    if (finding.node_id !== nodeId) continue;
     if (at !== null && at >= latestAt && exploreTimelinePhaseAt(timeline.phases, at) === phase) {
       latest = finding;
       latestAt = at;

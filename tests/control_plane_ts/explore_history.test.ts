@@ -171,6 +171,20 @@ test("phase reading retains successive decisions for one question, including a l
   assert.equal(view.nodes[0]!.latest.status, "open", "display-time sorting cannot rewrite canonical node state");
 });
 
+test("period reading selects the original finding event before a same-id revision", async () => {
+  const {buildExploreTimeline, latestExploreFindingInPhase} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const earlier = event({event_id: "tentative-event", event_kind: "finding", result_id: "revised-finding", node_id: "route",
+    recorded_at: "2026-01-01T09:00:00Z", status: "tentative", summary: "The middle-period observation is still uncertain"});
+  const later = {...earlier, event_id: "confirmed-event", recorded_at: "2026-01-01T18:00:00Z", status: "confirmed", summary: "Later evidence confirms a different conclusion"};
+  const view = projectExploreHistory([event(), earlier, later], goal);
+  const timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
+  assert.equal(view.nodes[0]!.findings[0]!.event_id, later.event_id, "Canonical current state remains append-owned");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 1)?.event_id, earlier.event_id);
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 1)?.status, "tentative");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 2)?.event_id, later.event_id);
+  assert.equal(latestExploreFindingInPhase(timeline, "missing", 1), undefined);
+});
+
 test("coincident and nearby records remain accessible without overlapping 44px targets", async () => {
   const {buildExploreTimeline, groupExploreTimelinePoints} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
   const rows = Array.from({length: 25}, (_, index) => event({event_id: `point-${index}`, result_id: `q-${index}`,
