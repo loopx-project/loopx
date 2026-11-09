@@ -212,9 +212,11 @@ set of alternatives, expanding source-bound detail only when needed. It asks:
   results? Does the remaining horizon justify that investment?
 - Would changing target, measurement method, or both resolve the bottleneck?
 
-Use complete marginal cost: construction + search + repair/calibration + true
-confirmation + model/control + switching/opportunity cost. Cheap evaluation time
-alone is insufficient. For speed optimization, a measured cost share `w` can
+Account for construction, search, repair/calibration, true confirmation,
+model/control and actual switching in their resource units. Under §5.8's fixed
+budget, compare the opportunities foregone rather than adding a second synthetic
+opportunity-cost debit. Cheap evaluation time alone is insufficient. For speed
+optimization, a measured cost share `w` can
 bound ideal whole-program speedup by `1/(1-w)`; this is an upper bound under its
 assumptions, not attainable headroom or a universal objective for other domains.
 Prefer defensible comparisons/ranges over a fabricated universal utility score.
