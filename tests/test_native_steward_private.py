@@ -247,14 +247,23 @@ def test_existing_scanner_automatically_continues_legacy_failure_and_returns_ori
         store.update_session(row["session_id"], manager_context_version=MANAGER_CONTEXT_VERSION)
     if fault in {"reservation-crash", "post-enqueue-crash"}:
         enqueue = runtime.enqueue_turn
+        continued = None
         def crash(**kwargs):
+            nonlocal continued
             if fault == "post-enqueue-crash":
-                enqueue(**kwargs)
+                continued, _ = enqueue(**kwargs)
             raise OSError("simulated admission crash")
         monkeypatch.setattr(runtime, "enqueue_turn", crash)
         with pytest.raises(OSError, match="admission"):
             transport.reconcile()
         monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+        if continued is not None:
+            assert finish(runtime, continued)["status"] == "completed"
+            assert transport.core.read_request(row["request_ref"])["turn_id"] == row["turn_id"]
+            assert transport.core.context_recovery_candidate(row["request_ref"])
+            # The original provider proof may no longer be readable after
+            # the already-admitted continuation has finished.
+            monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: None))
     elif fault == "transport-sync-crash":
         recover = transport.core.recover_failed_request
         def crash_sync(*args, **kwargs):

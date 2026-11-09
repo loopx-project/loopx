@@ -460,7 +460,8 @@ class Accounts:
         self.pending.unlink()
         return {'operation': operation, 'backup': str(backup), 'history_untouched': True}
 
-    def status(self):
+    def status(self, *, adopt_current=True):
+        """Read selection; callers without repair authority can disable adoption."""
         names = []
         kinds = {}
         folder = checked(self.root / 'slots')
@@ -474,7 +475,7 @@ class Accounts:
         if self.auth.exists():
             try:
                 current = identity(read_private(self.auth))
-                if not state or current != state['identity']:
+                if adopt_current and (not state or current != state['identity']):
                     state = self._adopt(current) or state
                 matches = current == state['identity'] if state else None
             except ValueError:
