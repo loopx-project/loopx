@@ -1133,6 +1133,24 @@ facts in `boundary.capabilities.reward_memory`: `automatic_recall` and
 projection. It carries neither private provider configuration nor memory content
 and grants no action authority. Existing action-signature coverage includes it.
 
+A declared complete native source passes the existing complete-decision validator
+before capability facts or reusable guidance are read. A damaged binding, unknown
+version/codec, or changed retained field cannot fall back to the unversioned quota
+signature path. Provider recall observations are passed separately from that
+immutable source; they cannot be merged into its signed fields for enablement.
+Unversioned quota input and recorded wrapped Host input keep their own readers.
+Source-free status readback keeps its registration, namespace, slot and size
+checks without requiring an executable source; it cannot deliver guidance or
+result schemas. This adds complete-source validation on native advice, rather
+than qualifying a reduction in context, RPCs or complete-task cost.
+
+中文：声明了版本的完整 native 来源在能力参与事实和可复用指导读取前，先由已有完整
+契约 owner 验证。绑定损坏、版本／codec 不支持或保留字段变动，均不得回退到未版本化
+quota 的签名路径。召回观察与原来源分开传递，不能为判断参与而改写签名字段；未版本化
+quota 与记录中的 Host 包装保留各自 reader。仅状态读回仍校验注册、命名空间、槽位和
+大小，但不要求可执行来源，也不能提供指导或结果 schema。完整 native 指导增加来源
+验证；这不是上下文、RPC 或整任务成本下降的资格证据。
+
 Codex CLI host requests use these facts together with the fresh runtime binding
 readback. Recall guidance is added only with enabled recall and actual context;
 the reflection instruction and output-schema field appear only with enabled

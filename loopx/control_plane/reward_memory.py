@@ -24,6 +24,8 @@ def enabled_reward_memory_automation(
 
     The experiment resolver owns enablement, config/receipt verification and
     provider policy. A recall packet's presence or old context is not opt-in.
+    An explicit recall observation stays separate from the governing payload,
+    so its participation check never rewrites a complete source's signed fields.
     """
     if not isinstance(payload, Mapping):
         return frozenset()
