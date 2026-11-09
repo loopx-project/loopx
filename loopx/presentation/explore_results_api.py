@@ -39,6 +39,7 @@ def _result_rows(runtime_root, goal_id, registry_path):
 
 def _finding_rows(events, todos, *, goal_id):
     """Same Explore projection and task associations for every physical source."""
+    from ..control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
     events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
     projection = build_explore_result_projection(
         events, goal_id=goal_id, finding_limit=len(events),
@@ -51,13 +52,13 @@ def _finding_rows(events, todos, *, goal_id):
                 "todo_id": todo["todo_id"], "text": todo["text"],
                 "status": todo["status"], "claimed_by": todo.get("claimed_by") or "",
             })
-    return [
+    return project_work_yardstick_presentations([
         {**finding, "linked_todos": links.get(finding["node_id"], []),
          **({"linked_todos_available": False} if todos is None else {}),
          "question": nodes.get(finding["node_id"], {}).get("title", ""),
          "scope": nodes.get(finding["node_id"], {}).get("summary", "")}
         for finding in projection["findings"]
-    ]
+    ], goal_id=goal_id)
 
 
 def _history_rows(runtime_root, goal_id):

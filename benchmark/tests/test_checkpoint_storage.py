@@ -136,7 +136,7 @@ def test_cli_routes_export_and_retains_capture_off_parity(tmp_path, monkeypatch,
             assert kwargs["checkpoint"].destination == expected
         else:
             assert not calls and "checkpoint" not in kwargs
-        return SimpleNamespace(image_exists=lambda image: True, registration_options=lambda f: {})
+        return SimpleNamespace(observe_local_images=lambda **keys: {}, registration_options=lambda f: {})
 
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     def before_solver(**kwargs):

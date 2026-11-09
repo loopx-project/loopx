@@ -518,7 +518,10 @@ def lock_holder_liveness(path: Path) -> tuple[str, dict[str, object]]:
     return (LOCK_HOLDER_LIVE if process_is_alive(pid) else LOCK_HOLDER_DEAD), record
 
 
-def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str, object]:
+def _operator_action(
+    holder: dict[str, object], *, retry_mode: str, kernel_fence: bool
+) -> dict[str, object]:
+    fence = "kernel lock" if kernel_fence else "mutation marker"
     return {
         "required": True,
         "action": "inspect_lock_holder",
@@ -529,9 +532,13 @@ def _operator_action(holder: dict[str, object], *, retry_mode: str) -> dict[str,
         "retry_mode": retry_mode,
         "steps": [
             "Inspect the recorded holder host, PID and operation on that host.",
-            "Confirm the process is stalled before terminating it.",
+            "Confirm the process still holds the lock and is stalled before terminating it.",
             "Retry according to retry_mode after the holder exits.",
             "Do not delete the lock file; the kernel lock is authoritative.",
+        ] if holder else [
+            f"The {fence} was busy at the deadline; current holder unknown.",
+            "Check for overlapping operations and retry according to retry_mode after contention clears.",
+            "Do not delete the lock files.",
         ],
     }
 
@@ -573,10 +580,11 @@ class LockAcquireTimeoutError(TimeoutError):
         self.incident_channel = incident_channel
         raw_holder = incident.get("holder")
         holder: dict[str, object] = raw_holder if isinstance(raw_holder, dict) else {}
-        super().__init__(
-            "file lock acquisition timed out"
-            + (f" while waiting for holder pid {holder.get('pid')}" if holder.get("pid") else "")
+        detail = (
+            f"recorded holder pid {holder['pid']}" if holder.get("pid")
+            else "lock busy, current holder unknown"
         )
+        super().__init__(f"file lock acquisition timed out ({detail})")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -597,6 +605,7 @@ def lock_timeout_error_fields(error: BaseException) -> dict[str, object]:
 def _timeout_error(
     path: Path,
     *,
+    kernel_fence: bool,
     policy: LockAcquisitionPolicy,
     timeout_seconds: float,
     waited_seconds: float,
@@ -604,24 +613,38 @@ def _timeout_error(
     agent_id: str | None,
     operation: str | None,
 ) -> LockAcquireTimeoutError:
-    holder, _ = _read_latest_holder_record(path)
+    state, last_holder = lock_holder_liveness(path)
+    lock_id = _lock_id(path)
+    holder: dict[str, object] = {}
+    if kernel_fence and state == LOCK_HOLDER_LIVE and last_holder.get("lock_id") == lock_id:
+        # A marker can belong to a reader that preserves the kernel record, or
+        # to a contender still waiting for the kernel lock. Neither binds the
+        # recorded PID to the fence we are waiting on.
+        try:
+            _effect_mutation_lock_path(path).lstat()
+        except FileNotFoundError:
+            holder = last_holder
+        except OSError:
+            pass
     waiter = {
         **_identity(agent_id=agent_id, operation=operation, policy=policy),
         "started_at": started_at,
         "timeout_seconds": round(timeout_seconds, 3),
         "waited_seconds": round(waited_seconds, 3),
     }
-    action = _operator_action(holder, retry_mode=LOCK_POLICIES[policy].retry_mode)
+    action = _operator_action(holder, retry_mode=LOCK_POLICIES[policy].retry_mode, kernel_fence=kernel_fence)
     incident: dict[str, object] = {
         "schema_version": LOCK_INCIDENT_SCHEMA_VERSION,
         "error_code": LOCK_ACQUIRE_TIMEOUT_ERROR_CODE,
         "recorded_at": _utc_now_iso(),
-        "lock_id": _lock_id(path),
+        "lock_id": lock_id,
         "policy": policy.value,
         "holder": holder,
         "waiter": waiter,
         "operator_action": action,
     }
+    if last_holder and not holder:
+        incident["last_kernel_holder"] = last_holder
     recorded = _append_incident(path, incident)
     return LockAcquireTimeoutError(
         incident=incident,
@@ -673,6 +696,7 @@ def exclusive_file_lock(
             if now >= deadline:
                 raise _timeout_error(
                     path,
+                    kernel_fence=True,
                     policy=selected_policy,
                     timeout_seconds=timeout,
                     waited_seconds=now - started,
@@ -777,7 +801,7 @@ def _effect_mutation_claim_path(path: Path, token: str) -> Path:
 def process_is_alive(pid: object) -> bool:
     """Probe a process without sending signals or console control events."""
 
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+    if isinstance(pid, bool) or not isinstance(pid, int) or not 0 < pid <= 0xFFFFFFFF:
         return False
     if os.name == "nt":
         # Windows signal 0 is CTRL_C_EVENT, not the side-effect-free POSIX
@@ -785,7 +809,7 @@ def process_is_alive(pid: object) -> bool:
         return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
@@ -1192,6 +1216,7 @@ def exclusive_mutation_file_lock(
             if now >= deadline:
                 raise _timeout_error(
                     path,
+                    kernel_fence=False,
                     policy=selected_policy,
                     timeout_seconds=timeout,
                     waited_seconds=now - started,
