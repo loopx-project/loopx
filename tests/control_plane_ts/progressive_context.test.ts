@@ -4,6 +4,8 @@ import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_ch
 import {initialContextReadPointers, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
+const noDecisionFields = {fields: []};
+
 const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owner_agent_id: "a", todo_ids: ["t"],
   sources: [{ref: "original", summary: "Supporting history."}], requirements: [{id: "r", description: "Final stop.",
     status: "unverified", planning_satisfied: false, agent_review: {id: "r", conclusion: "unmet", note: "Why it failed.",
@@ -22,15 +24,15 @@ test("initial navigation keeps unknown supporting-index obligations whole", () =
     const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
       context_details: {instruction: "Read applicable supporting evidence before dependent work.", unread_context_index: index}};
     const before = structuredClone(context);
-    assert.ok(initialContextReadPointers(context, []).includes(base));
+    assert.ok(initialContextReadPointers(context, noDecisionFields).includes(base));
     assert.deepEqual(context, before);
   }
   assert.ok(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
-    context_details: {unread_context_index: known}}, []).includes(base));
-  assert.deepEqual(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"}}, []), []);
+    context_details: {unread_context_index: known}}, noDecisionFields).includes(base));
+  assert.deepEqual(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"}}, noDecisionFields), []);
   for (const index of [known, {...known, source_blocks: ["/supporting/source/content"]}]) {
     const pointers = initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
-      context_details: {instruction: "Read applicable evidence before dependent work.", unread_context_index: index}}, []);
+      context_details: {instruction: "Read applicable evidence before dependent work.", unread_context_index: index}}, noDecisionFields);
     assert.ok(pointers.includes(`${base}/source`));
     assert.ok(pointers.includes(`${base}/read_before_dependent_work`));
     assert.ok(pointers.includes("/context_details/instruction"));
@@ -53,7 +55,7 @@ test("initial outcome ids carry only verified supporting-material addresses", ()
         source: {path: "complete.json", sha256: "fixture-digest"}}}};
   const canonicalAlias = base + "/0/supporting_material_pointer";
   const before = structuredClone(context);
-  const first = initialContextReadPointers(context, []);
+  const first = initialContextReadPointers(context, noDecisionFields);
   assert.ok(first.includes(base + "/0/id") && !first.includes(canonicalAlias));
   assert.ok(first.includes(base + "/1/supporting_material_pointer"), "preserve an explicit different address");
   assert.ok(first.includes(base + "/2/supporting_material_pointer"), "a missing id cannot carry the address");
@@ -63,7 +65,7 @@ test("initial outcome ids carry only verified supporting-material addresses", ()
     {...context.context_details, path: "different.json"}, {...context.context_details, sha256: "different-digest"},
     {...context.context_details, instruction: undefined}, {...context.context_details,
       unread_context_index: {...context.context_details.unread_context_index, future_obligation: true}}]) {
-    assert.ok(initialContextReadPointers({...context, context_details: changed}, []).includes(canonicalAlias));
+    assert.ok(initialContextReadPointers({...context, context_details: changed}, noDecisionFields).includes(canonicalAlias));
   }
 });
 
@@ -171,11 +173,11 @@ test("first read keeps decision rules and preserves nonstandard Vision obligatio
     const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0", cli_channel: {
       settlement_plan: {schema_version: "quota_settlement_plan_v1", ordered_steps: [required]},
     }}};
-    const pointers = initialContextReadPointers(context, []);
+    const pointers = initialContextReadPointers(context, noDecisionFields);
     assert.ok(pointers.includes(base + "/rule"));
     assert.equal(pointers.includes(base + "/continuation_review"), Object.hasOwn(schema, "continuation_review"));
     assert.ok(!pointers.includes(base));
     required.vision_authoring = {...schema, new_stop: "Keep this changed policy visible."};
-    assert.ok(initialContextReadPointers(context, []).includes(base));
+    assert.ok(initialContextReadPointers(context, noDecisionFields).includes(base));
   }
 });

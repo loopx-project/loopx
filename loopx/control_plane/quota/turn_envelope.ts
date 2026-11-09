@@ -2214,6 +2214,7 @@ const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "age
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
   "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+const INITIAL_CONTEXT_DECISION_ORDER = {fields: INITIAL_CONTEXT_DECISION_FIELDS, afterReadyInteraction: "goal_boundary"};
 
 /** The read-only plan needs the current decision and executable authoring
  * guidance. Evidence and diagnostics remain in its exact source capture. */
@@ -2259,7 +2260,7 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
   return capturedContextSelection(request, initial ? initialContextReadPointers(
-    requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+    requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_ORDER) : []);
 }
 
 function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = canonicalHash,
@@ -2507,7 +2508,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
-    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
+    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_ORDER,
       checkedContextPresentationPlan(request));
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

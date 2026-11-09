@@ -449,7 +449,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+    decisionOrder: InitialContextDecisionOrder, plan?: JsonObject): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -462,7 +462,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
-    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+    ? initialContextReadGroups(required.context, decisionOrder) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const observed = observe && pointers.length ? observedFirstRead(codec, pointers) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
@@ -493,12 +493,17 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
     ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {})};
 }
 
-export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
-  const {opening, remaining} = initialContextReadGroups(context, decisionFields);
+interface InitialContextDecisionOrder {
+  fields: readonly string[];
+  afterReadyInteraction?: string;
+}
+
+export function initialContextReadPointers(context: JsonObject, order: InitialContextDecisionOrder): string[] {
+  const {opening, remaining} = initialContextReadGroups(context, order);
   return [...opening, ...remaining];
 }
 
-function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
+function initialContextReadGroups(context: JsonObject, {fields, afterReadyInteraction}: InitialContextDecisionOrder): {
   opening: string[]; remaining: string[];
 } {
   const object = (value: unknown): JsonObject | undefined =>
@@ -524,7 +529,16 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && unread.pointers.every(pointer => typeof pointer === "string")
       && typeof supportingSource?.path === "string" && typeof supportingSource.sha256 === "string"
       && typeof details?.instruction === "string" && details.instruction.length > 0;
-  for (const field of decisionFields) include(field);
+  const channel = object(interaction.agent_channel), cli = object(interaction.cli_channel);
+  const prepared = object(cli?.execution_preparation);
+  const ready = context.should_run === true && context.effective_action === EffectiveAction.NORMAL_RUN
+    && context.normal_delivery_allowed === true && channel?.delivery_allowed === true
+    && prepared?.state === "ready" && prepared.delivery_allowed === true
+    && cli?.selection_required !== true && cli?.turn_binding_required !== true;
+  // In a ready Turn, deliver the bound decision and required reads before
+  // a potentially long authority block. Keep the entire block in the opening.
+  const deferredField = ready ? afterReadyInteraction : undefined;
+  for (const field of fields) if (field !== deferredField) include(field);
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
@@ -560,14 +574,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed", "next_task_action"])
     include("interaction_contract", "agent_channel", field);
-  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  const turnBindingRequired = cli?.turn_binding_required === true;
   if (turnBindingRequired)
     for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
       include("interaction_contract", "cli_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
-  const channel = object(interaction.agent_channel);
+  if (deferredField && fields.includes(deferredField)) include(deferredField);
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
   const selectedTodo = object(context.selected_todo);
@@ -683,13 +697,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  const cli = object(interaction.cli_channel);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(cli?.settlement_plan);
   const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
     && Array.isArray(plan.ordered_steps)
     ? plan.ordered_steps : undefined;
-  const prepared = object(cli?.execution_preparation);
   const identity = object(plan?.identity);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   // A ready Turn already shows its ordered writeback and spend with their

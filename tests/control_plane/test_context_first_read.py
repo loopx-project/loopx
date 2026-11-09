@@ -456,7 +456,10 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_advertised_native_reader_keeps_the_complete_current_contract_across_pages(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("wide_boundary", [False, True])
+def test_advertised_native_reader_keeps_the_complete_current_contract_across_pages(
+    tmp_path, monkeypatch, provider, wide_boundary,
+):
     from test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
         _run_cli, _spend_run_count, _write_fixture,
@@ -467,6 +470,11 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
+    if wide_boundary:
+        scopes = [f"src/feature-{index:03}/nested/acceptance/canonical-output/**" for index in range(270)]
+        registry_body = json.loads(registry.read_text())
+        registry_body["goals"][0]["coordination"]["write_scope"] = scopes
+        registry.write_text(json.dumps(registry_body))
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
         "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
@@ -481,21 +489,34 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     _, reference = read_context_read_reference(view["recovery"]["reference_file"])
     raw = Path(reference["path"]).read_bytes()
     source = json.loads(raw)
+    page_limit = 12000 if wide_boundary else 4500
     words = shlex.split(view["first_read_command"])
     for option in ("--page-bytes", "--max-page-output-bytes"):
-        words[words.index(option) + 1] = "4500"
+        words[words.index(option) + 1] = str(page_limit)
     content = []
     for _ in range(20):
         code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
         assert code == 0 and page["ok"], page
-        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
+        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= page_limit
         assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
         content.append(page["content"])
         if page["eof"]:
             break
         words = shlex.split(page["next_command"])
     assert page["eof"] and len(content) > 1
-    values = selected_context_values("".join(content))
+    selection = "".join(content)
+    values = selected_context_values(selection)
+    if wide_boundary:
+        assert source["execution_preparation"]["state"] == "ready"
+        boundary = source["goal_boundary"]
+        assert set(scopes).issubset(boundary["write_scope"])
+        assert len(json.dumps(boundary).encode()) > page_limit
+        assert values["/goal_boundary"] == boundary
+        rows = json.loads(selection)["selections"]
+        for field in ("/heartbeat_receipt", "/selected_todo", "/interaction_contract/agent_channel/required_reads"):
+            row = next(row for row in rows
+                if field == row["pointer"] or field.startswith(row["pointer"] + "/"))
+            assert json.dumps(row, ensure_ascii=False, separators=(",", ":")) in content[0]
     cli_path = "/interaction_contract/cli_channel"
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
