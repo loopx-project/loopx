@@ -90,6 +90,8 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [before, setBefore] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [bindingReadRejected, setBindingReadRejected] = useState(false);
+  const rejectedRead = useRef(false);
   const [recoveryError, setRecoveryError] = useState("");
   const [sendNotice, setSendNotice] = useState("");
   const [draft, setDraft] = useState("");
@@ -136,6 +138,28 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   const liveActive = liveEnabled && !liveUnavailable && !readingHistory;
   const query = new URLSearchParams({goal_id: goalId, agent_id: binding.agent_id, binding_ref: binding.binding_ref});
 
+  function stopOnRejectedRead(failure: unknown): boolean {
+    if (!(failure instanceof ConversationRequestError) || ![401, 403, 409].includes(failure.httpStatus ?? 0)) return false;
+    // An access or binding rejection ends this reader. Fence late pages and
+    // live events while keeping this Session's draft and delivery receipt.
+    rejectedRead.current = true;
+    historyEpoch.current++;
+    history.current = null;
+    after.current = null;
+    paging.current = null;
+    position.current = null;
+    clearTimeout(pagingRetry.current);
+    latestLive.current = {identity: "", records: []};
+    setLiveView(latestLive.current);
+    setLiveUnavailable(false);
+    setMessages([]);
+    setBefore(null);
+    setLoadingOlder(false);
+    setSnapshot(null);
+    setBindingReadRejected(true);
+    return true;
+  }
+
   useLayoutEffect(() => {
     const element = transcript.current;
     const saved = position.current;
@@ -169,7 +193,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     const source = new EventSource(`/api/chat/codex-attached/live?${query}`);
     const unavailable = () => {latestLive.current = {identity: "", records: []}; setLiveView(latestLive.current); setLiveUnavailable(true);};
     source.addEventListener("observation", event => {
-      if (!active) return;
+      if (!active || rejectedRead.current) return;
       try {
         const value = JSON.parse((event as MessageEvent<string>).data) as LiveObservation;
         if (value.kind === "records" && Array.isArray(value.records)) {
@@ -185,7 +209,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
         } else {source.close(); unavailable();}
       } catch {source.close(); unavailable();}
     });
-    source.onerror = () => {if (active) unavailable();};
+    source.onerror = () => {if (active && !rejectedRead.current) unavailable();};
     return () => {active = false; source.close();};
   }, [liveIdentity, liveEnabled]);
 
@@ -193,6 +217,8 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     const current = ++generation.current;
     revision.current = "";
     history.current = null;
+    rejectedRead.current = false;
+    setBindingReadRejected(false);
     after.current = null; following.current = true; historyEpoch.current++;
     paging.current = null; pagingFailed.current = false; scrollDirection.current = 0; scrollTop.current = 0; position.current = null;
     setReadingHistory(false); setUnread(false);
@@ -212,6 +238,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     } catch {setRecoveryError(zh ? "浏览器回复恢复记录不可读，暂不能安全发送。请先在原 App 核对。" : "Reply recovery is unreadable; check the original App before clearing it.");}
     let timer: ReturnType<typeof setTimeout>;
     async function read() {
+      if (rejectedRead.current) return;
       if (paging.current !== null) {timer = setTimeout(read, 1000); return;}
       const epoch = historyEpoch.current;
       const params = new URLSearchParams(query);
@@ -240,12 +267,13 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
         if (!pagingFailed.current) setError("");
         if (follow && following.current) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
       } catch (failure) {
-        if (current === generation.current) {
-          setError(readFailureMessage(failure, readLocale.current));
-          setSnapshot(null);
-        }
+        if (current !== generation.current || rejectedRead.current) return;
+        // Paging supersedes history results, but a denial still applies to this binding.
+        if (stopOnRejectedRead(failure) || epoch !== historyEpoch.current) return;
+        setError(readFailureMessage(failure, readLocale.current));
+        setSnapshot(null);
       }
-      finally {if (current === generation.current) timer = setTimeout(read, 1000);}
+      finally {if (current === generation.current && !rejectedRead.current) timer = setTimeout(read, 1000);}
     }
     void read();
     return () => {generation.current++; clearTimeout(timer); clearTimeout(pagingRetry.current);};
@@ -263,7 +291,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   }
 
   async function readHistory(newer = false, fill = false) {
-    if ((!newer && before === null) || !query || paging.current !== null || pagingFailed.current) return;
+    if (rejectedRead.current || (!newer && before === null) || paging.current !== null || pagingFailed.current) return;
     const current = generation.current;
     const epoch = ++historyEpoch.current;
     paging.current = epoch;
@@ -300,14 +328,14 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
         setError("");
       }
     } catch (failure) {
-      if (current === generation.current) {
-        pagingFailed.current = true; setError(readFailureMessage(failure, zh));
-        if (retryableRead(failure)) pagingRetry.current = setTimeout(() => {
-          if (current !== generation.current) return;
-          pagingFailed.current = false;
-          void readHistory(newer, fill);
-        }, 1000);
-      }
+      if (current !== generation.current || epoch !== historyEpoch.current) return;
+      if (stopOnRejectedRead(failure)) return;
+      pagingFailed.current = true; setError(readFailureMessage(failure, zh));
+      if (retryableRead(failure)) pagingRetry.current = setTimeout(() => {
+        if (current !== generation.current) return;
+        pagingFailed.current = false;
+        void readHistory(newer, fill);
+      }, 1000);
     }
     finally {if (paging.current === epoch) {paging.current = null; setLoadingOlder(false);}}
   }
@@ -347,7 +375,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   }
 
   async function send() {
-    if (sendingInput.current || sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || awaitingReceipt) return;
+    if (rejectedRead.current || sendingInput.current || sending || error || recoveryError || !snapshot?.can_reply || !draft.trim() || awaitingReceipt) return;
     sendingInput.current = true;
     const current = generation.current;
     const pending = {operation_id: crypto.randomUUID(), text: draft, status: "pending"};
@@ -405,17 +433,20 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
     try {sessionStorage.removeItem(cacheKey); sessionStorage.removeItem(`${cacheKey}:draft`); receiptGeneration.current++; setSubmission(null); setDraft(""); setError(""); setRecoveryError("");}
     catch {setError(zh ? "无法清理回复回执。" : "Reply recovery could not be cleared.");}
   }
-  const connectionError = error ? <p role="alert">{error} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p> : null;
+  const connectionMessage = bindingReadRejected
+    ? (zh ? "无法验证原会话的绑定或访问权限。" : "This conversation's binding or access could not be verified.")
+    : error;
+  const connectionError = connectionMessage ? <p role="alert">{connectionMessage} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p> : null;
   return <div className="attached-conversation-content">
 
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
-        <div className="attached-connection-status"><div><div className="attached-conversation-source">Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}><p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p></ContextHelp></div><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
+        <div className="attached-connection-status"><div><div className="attached-conversation-source">Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}><p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p></ContextHelp></div>{!bindingReadRejected ? <p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p> : null}</div>
         <button type="button" className="attached-conversation-open" aria-label={zh ? "在 Codex App 中打开" : "Open in Codex App"}
           title={zh ? "在 Codex App 中打开" : "Open in Codex App"} aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}><ExternalLink size={18} aria-hidden="true" /></button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
         {openError ? <p role="alert">{openError}</p> : null}
-        <div className="attached-history-status" role="status">{loadingOlder ? (zh ? "正在加载消息…" : "Loading messages…") : readingHistory ? <span>{zh ? "正在回看历史" : "Reading history"}{unread ? (zh ? " · 有新活动" : " · new activity") : ""}</span> : null}</div>
+        {!bindingReadRejected ? <><div className="attached-history-status" role="status">{loadingOlder ? (zh ? "正在加载消息…" : "Loading messages…") : readingHistory ? <span>{zh ? "正在回看历史" : "Reading history"}{unread ? (zh ? " · 有新活动" : " · new activity") : ""}</span> : null}</div>
         <div className="attached-conversation-messages" ref={transcript} tabIndex={0} onScroll={scrolled} onPointerDown={event => {draggingScroll.current = event.target === event.currentTarget;}} onPointerUp={() => {draggingScroll.current = false;}} onPointerCancel={() => {draggingScroll.current = false;}} onWheel={event => {if (event.deltaY) scrollIntent(Math.sign(event.deltaY));}} onTouchStart={event => {touchY.current = event.touches.length === 1 ? event.touches[0].clientY : null;}} onTouchMove={event => {
           if (touchY.current === null || event.touches.length !== 1) return;
           const delta = touchY.current - event.touches[0].clientY;
@@ -427,7 +458,7 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
             <AttachedConversationTimeline records={liveRecords} agent={binding.agent_id} zh={zh} load={loadContent} live active={liveActive}/>
           </div> : null}
           {!messages.length && !liveRecords.length && snapshot ? <p>{zh ? "暂无可显示的消息。" : "No displayable messages yet."}</p> : null}
-        </div>
+        </div></> : null}
         {connectionError}
         {liveUnavailable ? <p role="status">{zh ? "实时观察暂不可用，已保存的消息与工具记录仍会自动更新。" : "Live observation is unavailable; saved messages and tools still update automatically."}</p> : null}
         {submission?.status ? <p role="status">{submission.status === "delivered" ? (zh ? "已由原 App 接纳；等待 Agent 结果。" : "Accepted by the original App; awaiting the Agent result.") : (zh ? "投递尚未确认，请先在原 App 核对，不会自动重发。" : "Delivery unconfirmed; check the original App. No automatic resend.")} {submission.status === "pending" ? <button type="button" disabled={sending} onClick={() => void readReceipt()}>{zh ? "重读投递回执" : "Recheck delivery receipt"}</button> : null}{awaitingReceipt ? <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已核对，写下一条" : "Checked; write another"}</button> : null}</p> : null}
