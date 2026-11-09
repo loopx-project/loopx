@@ -1185,3 +1185,140 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert Path(fallback[0]["reference_file"]) == ordinary
     assert {key: value for key, value in after.items() if key != body_pointer} == facts
     assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configuration = json.loads(registry.read_text())
+    configuration["goals"][0]["quota"]["allowed_slots"] = 6
+    registry.write_text(json.dumps(configuration))
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    if provider == "sqlite":
+        # Exercise the full canonical row when its text exceeds the selected
+        # summary's display limit. The File fixture covers the referenced row.
+        state.write_text(state.read_text().replace(
+            "[P1] Validate and settle the selected delivery.",
+            "[P1] " + "Validate and settle the selected delivery. " * 12,
+        ))
+    with state.open("a") as handle:
+        handle.write(f"- [ ] [P2] Validate the alternate delivery.\n"
+                     f"  <!-- loopx:todo todo_id={ALTERNATIVE_TODO_ID} status=open "
+                     "task_class=advancement_task action_kind=validate -->\n")
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal = tmp_path / "journal"
+    journal.mkdir()
+    event = setup(journal, monkeypatch)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+
+    def cli(*args):
+        code, payload = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    def update(todo_id, note, action):
+        key = f"lease-{todo_id}"
+        if action == "seed":
+            lease = cli("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", todo_id,
+                        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID,
+                        "--task-lease-idempotency-key", key)["lease"]
+        else:
+            lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", todo_id)["lease"]
+        cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", todo_id, "--agent-id", AGENT_ID,
+            "--note", note, "--task-lease-idempotency-key", key,
+            "--task-lease-expected-version", str(lease["version"]), "--update-operation-id", f"{action}-{todo_id}")
+
+    def binding(turn, todo_id=TODO_ID):
+        return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                "--todo-id", todo_id, "--turn-instance-id", turn)
+
+    def capture(turn, todo_id=TODO_ID):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+                   "--delta-delivery", "auto", *binding(turn, todo_id),
+                   "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
+
+    def settle(turn):
+        cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--no-global-sync", "--suppress-external-sinks")
+        spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
+        assert spent["appended"]
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            args = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint",
+                "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                *args[args.index("quota"):]], cwd=project)
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(p["content"] for p in pages)), size
+
+    note = "原始交付条件与验收材料。Keep the cited acceptance evidence. " * 260
+    update(TODO_ID, note.rstrip(), "seed")
+    first = capture("note-cold")
+    cold, cold_facts, _ = read(first["first_read_command"])
+    pointer = next(p for p in cold_facts if p.endswith("/content/todo/note"))
+    assert cold_facts[pointer] == note.rstrip()
+    deliver(journal, event, cold)
+    assert pointer in codex_context._state(journal)["consumed_pointers"]
+    settle("note-cold")
+    update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+
+    second = capture("note-warm")
+    _, original = read_context_read_reference(second["recovery"]["reference_file"])
+    source_path = Path(original["path"])
+    source = source_path.read_bytes()
+    context = json.loads(source)["interaction_contract"]["agent_channel"]["work_context"]
+    assert context["selected_todo_text_verified"]
+    assert context.get("selected_todo_ref") == ("selected_todo" if provider == "file" else None)
+    source_pointer = pointer.removesuffix("/todo/note")
+    _, current_source, _ = read(second["recovery"]["command"] + " --select " + source_pointer)
+    current_authority = current_source[source_pointer]["authority_read"]
+    cold_authority = cold_facts[source_pointer + "/authority_read"]
+    assert current_authority["provider_revision"] != cold_authority["provider_revision"]
+    warm, facts, warm_bytes = read(second["first_read_command"])
+    assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    recovered, restored, fallback_bytes = read(second["first_read_command"])
+    assert pointer not in recovered[0].get("previously_delivered_fields", [])
+    assert restored[pointer] == note.rstrip() and source_path.read_bytes() == source
+
+    assert _spend_run_count(runtime) == 1
+    deliver(journal, event, recovered)
+    settle("note-warm")
+    revised = note + "Use the revised acceptance check before writing."
+    update(TODO_ID, revised, "revise")
+    update(ALTERNATIVE_TODO_ID, revised, "revise")
+    corrected, current, _ = read(capture("note-corrected")["first_read_command"])
+    assert current[pointer] == revised and pointer not in corrected[0].get("previously_delivered_fields", [])
+    deliver(journal, event, corrected)
+    settle("note-corrected")
+    alternate, other, _ = read(capture("note-alternate", ALTERNATIVE_TODO_ID)["first_read_command"])
+    assert other[pointer] == revised and other["/selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert pointer not in alternate[0].get("previously_delivered_fields", [])
+    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
+
+    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
+                      "warm_pages": len(warm), "recovery_pages": len(recovered)}))
+    assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
+    assert facts[source_pointer + "/authority_read"] == current_authority
+    assert {key: value for key, value in restored.items() if key != pointer} == facts
+    assert fallback_bytes - warm_bytes > 10_000

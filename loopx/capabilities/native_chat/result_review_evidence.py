@@ -1,7 +1,48 @@
 """Canonical result-review facts; eligibility remains in the typed Core owner."""
 from copy import deepcopy
 from datetime import datetime
+import json
 from typing import Any
+from urllib.parse import urlsplit
+
+
+def format_link_metadata_review(handoffs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Reclassify plain HTTPS references as original context, never as file inputs."""
+    from ...chat import normalize_agent_response
+    from ...control_plane.collaboration.inbox import normalize_handoff
+
+    if not handoffs:
+        return None
+    validation_handoffs = []
+    try:
+        for handoff in handoffs:
+            brief = json.loads(handoff["brief"])
+            inputs = brief.get("inputs") if isinstance(brief, dict) else None
+            if not isinstance(inputs, list) or not inputs:
+                return None
+            validation_inputs = []
+            for index, item in enumerate(inputs):
+                if (not isinstance(item, dict) or set(item) != {"ref", "description"}
+                        or not isinstance(item["ref"], str)
+                        or any(c.isspace() or ord(c) < 32 or c in "\x7f?#" for c in item["ref"])):
+                    return None
+                link = urlsplit(item["ref"])
+                if (link.scheme != "https" or not link.hostname or link.username is not None
+                        or link.password is not None):
+                    return None
+                # Substitute only the URL for validation; no placeholder is delivered.
+                validation_inputs.append({**item, "ref": f"reference-{index}"})
+            validation_handoffs.append({**handoff, "brief": {**brief, "inputs": validation_inputs}})
+        normalized = normalize_handoff(validation_handoffs)
+        if not isinstance(normalized, list) or len(normalized) != len(handoffs):
+            return None
+        # Keep the complete original brief verbatim, including every URL.
+        return normalize_agent_response({"context_handoff": [
+            {**item, "brief": {**item["brief"], "context": original["brief"], "inputs": []}}
+            for item, original in zip(normalized, handoffs)
+        ]})
+    except (KeyError, TypeError, ValueError):
+        return None  # Other malformed shapes retain the existing format review.
 
 
 def related_review_basis(value: dict[str, Any]) -> dict[str, Any]:

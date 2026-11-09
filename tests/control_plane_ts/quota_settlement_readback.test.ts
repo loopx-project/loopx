@@ -1641,6 +1641,36 @@ test(`${kind} no-spend closeout retains exact receipt identity and historical de
 });
 }
 
+test("a rolled calendar retry does not close the Turn without a spend", async () => {
+  const runtime = await fixture({
+    writeback: true,
+    writebackOutcome: "outcome_gap",
+    blockedRetry: {
+      schema_version: "quota_blocked_retry_v0",
+      source: "todo",
+      todo_id: todoId,
+      resume_when: "resume_at:2026-02-30T10:05:00Z",
+      observed_at: "2026-02-30T10:00:00Z",
+      due_at: "2026-02-30T10:05:00Z",
+    },
+    progressObservation: {
+      schema_version: "typed_progress_observation_v0",
+      result_class: "blocked",
+      work_item_id: todoId,
+      blocker_id: "blocker-runtime-boundary",
+      evidence_ids: ["evidence-runtime-boundary"],
+    },
+  });
+  try {
+    const result = await readQuotaSettlement(request(runtime));
+    assert.notEqual((result.progress as {closeout_kind?: string}).closeout_kind,
+      "typed_blocked_writeback_no_spend");
+    assert.notEqual(result.replay_phase, "settled");
+  } finally {
+    await rm(runtime, {recursive: true, force: true});
+  }
+});
+
 test("accepts only an attributable typed blocker as an outcome-gap writeback", async () => {
   const qualifiedRuntime = await fixture({
     writeback: true,

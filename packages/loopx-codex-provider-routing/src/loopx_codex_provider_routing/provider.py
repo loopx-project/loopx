@@ -14,15 +14,19 @@ SCHEMA = "loopx_native_account_provider_v1"
 
 
 def doctor(owner):
-    from .relay_lifecycle import status
+    from .relay_lifecycle import consumer_statuses, same_instance
     # Exercises the shipped TS bridge with a synthetic disabled policy; no
     # credential discovery, account switching or upstream inference is invoked.
     policy({"operation": "api-role", "consumer": "worker", "policy": {}})
-    relay = status(owner)
-    ready = relay["state"] in ("not_started", "ready")
+    consumers = consumer_statuses(owner)
+    worker, steward = consumers["worker"], consumers["steward"]
+    worker_runtime, steward_runtime = worker.get("runtime"), steward.get("runtime")
+    same = same_instance(worker_runtime, steward_runtime) if worker_runtime and steward_runtime else None
+    ready = worker["state"] in ("not_started", "ready") and (
+        steward["state"] == "not_configured" or (steward["ready"] and same is True))
     return {"ok": ready, "schema_version": SCHEMA, "provider_id": "loopx-native-account-provider",
-            "installation_ready": ready, "relay": relay,
-            "message_delivery_verified": False}
+            "installation_ready": ready, "relay": worker, "consumer_readiness": consumers,
+            "same_relay_instance": same, "message_delivery_verified": False}
 
 
 def main():
@@ -44,7 +48,9 @@ def main():
                 from .openai_relay import route
                 from .relay_lifecycle import reconcile
                 with owner._lock(name="api-relay-state.lock", wait_seconds=5):
-                    reconcile(owner, route(owner), legacy_pid=request.get("legacy_pid"))
+                    value = route(owner)
+                    consumer = "steward" if "steward_token" in value else "worker"
+                    reconcile(owner, value, consumer=consumer, legacy_pid=request.get("legacy_pid"))
             elif operation not in ("status", "reconcile"):
                 raise HostError("invalid_request")
             result = doctor(owner)

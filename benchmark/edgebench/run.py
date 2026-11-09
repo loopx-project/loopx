@@ -481,9 +481,9 @@ def main(argv=None):
                                      docker_host_bridge=args.docker_host_bridge,
                                      research_sidecar=research_sidecar,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
-    for image in (task.work_image_key, task.judge_image_key):
-        if not backend.image_exists(image):
-            raise RuntimeError(f"Missing native image: {image}")
+    local_docker_images = backend.observe_local_images(
+        work_key=task.work_image_key, judge_key=task.judge_image_key,
+    )
     if warm_start is not None:
         activated = restore(args.checkpoint_controller_file, root=capsule,
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
@@ -509,6 +509,7 @@ def main(argv=None):
         **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
+        "local_docker_images": local_docker_images,
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
@@ -562,8 +563,7 @@ def main(argv=None):
             **({"restored_registration": restored_registration} if restored_registration is not None else {}),
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
             max_submissions=0 if args.feedback != "native" else None,
-            **(backend.registration_options(run_agent)
-               if feedback is not None or checkpoint is not None else {}),
+            **backend.registration_options(run_agent),
         ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)

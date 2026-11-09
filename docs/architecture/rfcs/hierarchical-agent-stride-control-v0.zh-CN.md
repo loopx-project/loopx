@@ -479,6 +479,13 @@ readback 属于 partial slice。科学效用遵循
 
 ### 7.6 研究范围与证据驱动控制
 
+剩余预算与多步选择使用
+[联合决策 §5.8](target-yardstick-stride-decisions-v0.zh-CN.md#budgeted-planning)。
+`next_probe` 是可修订接续的首个有界切片，其价值可包含前置工作、信息和后续确认，
+不能只按即时涨分排序。这一解释保留 v2 契约、到期复盘和既有决策 owner；
+[EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)
+先验证增量收益，再考虑扩大策略采用。
+
 [执行、探索与纠偏集成指南](../long-running-execution-exploration-and-correction.zh-CN.md)
 将此边界连接到 Host 接续、Explore 回写、恢复和产品回读，提供源码对照与一次
 连贯验收场景；合同与里程碑的权威仍属于本 RFC。
@@ -743,6 +750,8 @@ promotion 资格。需要相应结论时，再执行匹配接续与重复验证�
 原上下文／证据基础身份；来源变化要求在原 Turn 内重新读取和评估。页面坐标随
 决策进入后续复盘，不新增回执库。按节点筛选和 planner 详情仍不属于此引用入口，
 来源核验也不证明模型采用或研究收益。
+
+<a id="matched-research-continuation"></a>
 
 ### 7.7 研究状态分支与匹配接续
 
