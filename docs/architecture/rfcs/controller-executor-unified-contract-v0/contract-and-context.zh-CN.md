@@ -442,6 +442,15 @@ Reward Memory 在原生 quota 与完整 Host 路径注册召回与反思时，�
 恢复。共享能力命名空间保护将 `work_contract` 与 `source_decision_hash` 保留给核心，
 覆盖注册、上下文及可选结果字段；贡献被拒绝后，原 Host 来源仍可用。
 
+可选 Host 投影提案也把有序合并、冲突拒绝和逐贡献隔离收敛到该 TypeScript owner。
+Python 只提取一次当前来源并发送一个批次，provider 结果及历史 capture／journal reader
+保留记录版本。[独立 main 切片](https://github.com/loopx-project/loopx/pull/8451)
+按 File／SQLite 对照零／一／两个 provider、当前／历史来源及接近大小上限的输入，
+投影建议保持一致。在这一有界步骤中，两个 provider 的完整来源 RPC 从四次降为两次。
+大批次复用现有私有快照运输，增加临时 IO，且实测在接近上限时变慢；仅扩展运输可接受
+范围，不提高 provider 预算。这不构成模型 token、整任务成本或已验收成果收益结论。
+原生 quota 签名退役、installed 采用和相对原 quota 的资格验证仍未完成。
+
 失败会话重试也是活跃 reader。本提案中的
 `session_recovery.py::assess_failed_turn_retry_request` 为 v1 请求向绑定回调交付
 校验后的完整决定；已记录的 v0 请求仍交付原 envelope，即使同时携带完整来源副本。

@@ -603,6 +603,19 @@ shared capability namespace guard reserves `work_contract` and
 `source_decision_hash` across registration, context and optional result fields;
 rejected contributions leave the original Host source usable.
 
+The optional Host projection proposal also moves ordered merge, collision
+rejection and per-contribution isolation into that existing TypeScript owner.
+Python extracts the governing source once and sends one batch; provider results
+and historical capture/journal readers keep their recorded format. The
+[independent main slice](https://github.com/loopx-project/loopx/pull/8451) compares
+File/SQLite empty, one/two-provider, current/historical and near-limit cases with
+unchanged projected advice. Two-provider complete-source RPC falls from four to
+two in that bounded stage. Large batches reuse the existing private snapshot
+transport, adding temporary IO and a measured near-limit latency penalty;
+transport acceptance is extended without raising provider budgets. This is no
+model-token, whole-task cost or accepted-outcome claim. Native quota signature
+retirement, installed adoption and original-quota qualification remain open.
+
 Failed-session retry is also a live reader. In this proposal,
 `session_recovery.py::assess_failed_turn_retry_request` gives the binding callback
 the checked complete decision for a v1 request. A recorded v0 request retains its
