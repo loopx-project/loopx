@@ -84,21 +84,23 @@ and an independent validator:
 
 1. Run `loopx turn plan` to inspect the live typed decision without launching
    the host or changing state.
-2. The host adapter reads one `loopx_turn_host_request_v1` JSON object from
-   stdin, invokes the selected agent CLI in the governed workspace, and writes
-   exactly one `loopx_turn_result_v0` JSON object to stdout.
+2. A new Turn sends one `loopx_turn_host_request_v1` object with a complete
+   `work_contract`. The adapter reads it on stdin, invokes the selected agent
+   CLI in the governed workspace, and writes one `loopx_turn_result_v0` object
+   to stdout.
 3. The validator reads the normalized host result from stdin and independently
    checks the claimed postcondition. Exit zero means passed; non-zero means the
    result is rejected. A timeout or unavailable validator is inconclusive.
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
-Default `turn plan` output is an inspection projection. Current plans retain
-their one complete `work_contract`, including selected work, portfolio, required
-reads and writeback rules, and omit session/transaction metadata. There is no
-second adapter body. Its `boundary.inspection_only=true` prevents execution even
-if a caller restores that metadata. `--include-transaction-detail` retains the
-session/transaction input; it does not select another decision format.
+Default `turn plan` output is an inspection projection. It retains current work,
+permissions, stops and executable authoring guidance; supporting facts remain
+readable from the same complete, immutable `work_contract` capture. It falls
+back to the complete source when private capture is unavailable. Its
+`boundary.inspection_only=true` prevents execution even if a caller restores
+session metadata or reads the complete source. `--include-transaction-detail`
+retains the full source and session/transaction input.
 `turn run-once` retains and validates the original complete contract before
 dispatch; an inspection does not authorize that operation.
 
@@ -134,9 +136,9 @@ admission, but outstanding v1 plans must retain a compatible reader until their
 pending effects and supported recovery window are reconciled. An older binary
 alone cannot resume a v1 journal; do not strip its version or recreate its input.
 
-The adapter and validator executable names below are placeholders supplied by
-the integration. They are separate programs because the executor must not
-validate its own completion claim.
+The example uses the repository's TraeX adapter and an integration-supplied
+validator. The two programs separate the executor's completion claim from
+validation of its artifact.
 
 ```bash
 loopx turn plan \
@@ -151,7 +153,8 @@ loopx turn run-once \
   --host generic-cli \
   --execution-mode isolated-headless \
   --project "$PWD" \
-  --host-adapter-command-json '["./tools/turn-host-adapter","--agent-cli","trae","chat"]' \
+  --host-adapter-request-schema loopx_turn_host_request_v1 \
+  --host-adapter-command-json '["python3","./scripts/traex_turn_host_adapter.py"]' \
   --validation-command-json '["./tools/verify-turn-postcondition"]' \
   --execute
 ```
@@ -164,10 +167,17 @@ Turn request/result objects and that CLI's prompt, session, and output model.
 Raw transcript text, process exit zero, and the host's own completion claim are
 never sufficient validation.
 
-A reference headless adapter for TraeX (`traex exec`) lives at
-`scripts/traex_turn_host_adapter.py`; it reads the bounded action text from the
-Turn envelope and writes one typed result, leaving goal/todo authority and
-validation to LoopX.
+The TraeX reference adapter (`traex exec`) renders the checked complete
+request and accepts the shared typed result fields. LoopX owns Goal and Todo
+authority, independent validation, writeback and quota. For another generic
+adapter, verify that the installed version accepts v1 before declaring it with
+`--host-adapter-request-schema`. A missing or incompatible declaration stops
+a v1 invocation before the adapter process starts.
+
+A recorded v0 Turn keeps its original wire version. If recovery still needs
+the adapter, use a v0-compatible adapter and omit the declaration or pass
+`loopx_turn_host_request_v0`. Recovery with a saved typed result continues
+without launching an adapter.
 
 A DeepSeek Harness adapter lives in the `loopx.dsh_goal_mode` subpackage
 (run with `python -m loopx.dsh_goal_mode`; the legacy

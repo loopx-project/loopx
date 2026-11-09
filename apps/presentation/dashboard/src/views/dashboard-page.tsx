@@ -1129,6 +1129,7 @@ function buildPersonalHomeModel(
           agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
+          turnStartedAt: thread.turn_started_at ?? null,
           state: thread.state,
           reason: thread.reason ?? null,
           deliveryWindow: thread.delivery_window ? {

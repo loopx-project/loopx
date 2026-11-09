@@ -13,6 +13,7 @@ from loopx.chat.machine_configuration_api import MachineConfigurationRequestMixi
 from loopx.chat.monitor_actions import ChatMonitorActionMixin
 from loopx.chat.session_open import open_chat_session
 from loopx.chat.ssh_source_api import SshSourceRequestMixin
+from loopx.chat.status_api import ChatStatusRequestMixin, goal_read_runtime_root
 from loopx.chat.todo_actions import ChatTodoActionMixin
 from loopx.chat.todo_detail import TodoDetailRequestMixin
 from loopx.chat.usage_statistics_api import UsageStatisticsRequestMixin
@@ -43,6 +44,7 @@ def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
 
 def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
     for old_module in (
+        "loopx.chat_status_api",
         "loopx.chat_event_cache",
         "loopx.chat_automation_cadence_api",
         "loopx.chat_goal_configuration_api",
@@ -56,3 +58,9 @@ def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
         "loopx.chat_workspace_directory",
     ):
         assert importlib.util.find_spec(old_module) is None
+
+
+def test_public_status_owner_is_nested_without_a_top_level_shim() -> None:
+    assert ChatStatusRequestMixin.__module__ == "loopx.chat.status_api"
+    assert goal_read_runtime_root.__module__ == "loopx.chat.status_api"
+    assert importlib.util.find_spec("loopx.chat_status_api") is None

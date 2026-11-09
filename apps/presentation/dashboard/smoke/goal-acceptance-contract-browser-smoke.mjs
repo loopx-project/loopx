@@ -22,30 +22,15 @@ const payload = writeAuthorityOnly ? null : JSON.parse(execFileSync(python, ["-c
 import runpy, tempfile, json
 from pathlib import Path
 from pytest import MonkeyPatch
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import restart_effect_runtime
-from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
-from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
 from loopx.status import collect_status
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 fixture = runpy.run_path('tests/test_delivery_review.py')
-refresh = fixture['make_project'].__globals__['refresh_state_run']
-def initialize_and_refresh(**kwargs):
-    # The standalone caller has no pytest setup: initialize the same real
-    # canonical provider before the shared fixture's first operational read.
-    groups, _, _ = parse_todo_source(kwargs['state_file'].read_text())
-    records = [canonical_todo_read_record(structured_todo_item(item, role=role,
-        source_section=item['source_section'])) for role, rows in groups.items() for item in rows]
-    initialize_canonical_authority(Path(kwargs['runtime_root_override']), kwargs['goal_id'],
-        build_todo_runtime_shadow_projection(goal_id=kwargs['goal_id'], todos=records,
-            handoff_mode='soft_claim'), state_path=kwargs['state_file'], provider='sqlite')
-    return refresh(**kwargs)
-fixture['make_project'].__globals__['refresh_state_run'] = initialize_and_refresh
 with tempfile.TemporaryDirectory() as directory:
     with MonkeyPatch.context() as patch:
         isolate_sqlite_runtime(Path(directory), patch)
         try:
-            registry, runtime = fixture['make_project'](Path(directory))
+            registry, runtime = fixture['make_project'](Path(directory), provider='sqlite')
             print(json.dumps(collect_status(registry_path=registry, runtime_root_override=str(runtime), limit=20, goal_id='release-demo')))
         finally:
             restart_effect_runtime(wait_for_exit=True)
@@ -312,7 +297,9 @@ try {
     for (const [status, en, zh] of [["unverified", "Artifact checks not verified", "产物检查未验证"], ["failed", "Artifact checks failed", "产物检查失败"], ["stale", "Artifact checks stale", "产物检查已过期"], ["partial", "Task checks passed; Goal-wide verification unknown", "任务检查通过；Goal 整体验证未知"], ["accepted", "Artifact checks passed", "产物检查通过"]]) {
       await refreshSnapshot(verifiedContract(status));
       await section.getByText(locale === "en" ? en : zh, { exact: true }).first().waitFor();
-      assert.ok((await section.innerText()).includes(locale === "en" ? "independent review" : "独立复核"));
+      await section.getByRole("button", {name: locale === "en" ? "Delivery check scope" : "交付检查范围"}).focus();
+      await section.getByRole("tooltip").getByText(locale === "en" ? /independent review/ : /独立复核/).waitFor();
+      await page.keyboard.press("Escape");
     }
     await refreshSnapshot({ ...contract, scope: { kind: "selected_work", todo_ids: contract.tasks.map(task => task.todo_id) } });
     await section.getByText(locale === "en" ? "Only explicitly selected tasks" : "仅明确选定的任务", { exact: true }).waitFor();

@@ -63,7 +63,12 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
 
 
 @pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
-def test_enabled_cache_preparation_failure_returns_error_with_original_reference(tmp_path, monkeypatch, root_kind):
+@pytest.mark.parametrize(("opening_args", "recovery_limit"), [
+    ([], 64000), (["--initial-read"], 64000),
+    (["--initial-read", "--max-page-output-bytes", "12000"], 12000),
+], ids=["linked", "attached", "explicit"])
+def test_enabled_cache_preparation_failure_returns_error_with_original_reference(
+        tmp_path, monkeypatch, root_kind, opening_args, recovery_limit):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
 
@@ -90,10 +95,13 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context)])
+        "--decision-output-root", str(root), "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(context), *opening_args])
     result = project_saved_context_capture(args)
     assert result["ok"] is False and result["error_code"] == "quota_decision_transport_failed"
     assert result["recovery"]["path"] == str(path) and result["recovery"]["sha256"] == digest
+    recovery = shlex.split(result["recovery"]["command"])
+    assert int(recovery[recovery.index("--max-page-output-bytes") + 1]) == recovery_limit
     assert "prior.json" not in json.dumps(result)
     assert path.read_bytes() == raw and stale.read_bytes() == stale_bytes
 
@@ -413,9 +421,12 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("enabled,compacted", [(False, False), (True, False), (True, True)],
-    ids=["off", "on", "on-after-compaction"])
-def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted):
+@pytest.mark.parametrize("enabled,compacted,placement", [
+    (False, False, "physical"), (True, False, "physical"), (True, True, "physical"),
+    (True, False, "alias-before-session"), (True, False, "explicit-before-session"),
+    (True, False, "explicit-root"),
+], ids=["off", "on", "on-after-compaction", "alias-before-session", "explicit-before-session", "explicit-root"])
+def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted, placement):
     """The saved guard is presented after SessionStart, then really bound once."""
     from benchmark.runtime.checkpoint import capture_before_replan
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
@@ -426,6 +437,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         _heartbeat_receipt_count, _spend_run_count, _write_fixture,
     )
 
+    import subprocess
+
+    tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path / "authority")
     _configure_selectable_alternative(project)
@@ -454,7 +468,26 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         "LOOPX_CONTEXT_DELIVERY": "on" if enabled else "off", "LOOPX_CODEX_CONTEXT_DIR": str(native)}
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
-    body = capture_before_replan(env, receipt, "Current work.")
+    alias = tmp_path / "capture parent alias"
+    if placement != "physical":
+        run = subprocess.run
+
+        def through_alias(argv, **kwargs):
+            if "--prepared-capture-reference" in argv:
+                argv = list(argv)
+                i = argv.index("--decision-output-dir") + 1
+                requested = Path(argv[i])
+                alias.symlink_to(requested.parent, target_is_directory=True)
+                argv[i] = str(alias / requested.name)
+            return run(argv, **kwargs)
+
+        # Change only how the CLI reaches the directory already allocated by
+        # the checkpoint runner. Guard, capture, projection and selection are real.
+        with monkeypatch.context() as scoped:
+            scoped.setattr("benchmark.runtime.checkpoint.subprocess.run", through_alias)
+            body = capture_before_replan(env, receipt, "Current work.")
+    else:
+        body = capture_before_replan(env, receipt, "Current work.")
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
     if enabled:
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
@@ -462,6 +495,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         assert source.parent != wake and source.is_relative_to(wake)
         assert source.read_bytes() == original_guard
         assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(original_guard).hexdigest()
+        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(source.read_bytes()).hexdigest()
+        if placement != "physical":
+            command[command.index("--capture-file") + 1] = str(alias / source.relative_to(source.parent.parent))
     else:
         source = wake / "checkpoint-start-view.json"
     raw = source.read_bytes()
@@ -469,10 +505,13 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
     event = {"session_id": "native-session", "cwd": str(project), "hook_event_name": "SessionStart", "source": "startup"}
-    monkeypatch.setenv("CODEX_THREAD_ID", event["session_id"])
+    lifecycle = enabled and placement not in {"alias-before-session", "explicit-before-session"}
     monkeypatch.chdir(project)
-    if enabled:
+    if lifecycle:
+        monkeypatch.setenv("CODEX_THREAD_ID", event["session_id"])
         codex_context_hook(str(native), event)
+    else:
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
 
     def consume(wire):
         data = bytearray()
@@ -482,7 +521,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         while True:
             assert page["ok"] and page["offset"] == len(data)
             data.extend(page["content"].encode())
-            codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
+            if lifecycle:
+                codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
             if page["eof"]:
                 assert hashlib.sha256(data).hexdigest() == machine_reference_oracle(wire)["sha256"]
                 return json.loads(data)
@@ -490,11 +530,17 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             rc, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=project)
             assert rc == 0, page
 
+    page_limit = 8000 if placement == "explicit-before-session" else 32000
     if enabled:
-        command.extend(("--max-page-output-bytes", "32000"))
+        command.extend(("--max-page-output-bytes", str(page_limit)))
+        expected_root = source.parent.parent
+        if placement in {"explicit-root", "explicit-before-session"}:
+            expected_root = tmp_path / "explicit capture root"
+            expected_root.mkdir(mode=0o700)
+            command.extend(("--decision-output-root", str(expected_root)))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
         assert rc == 0 and cold["navigation"]["mode"] == "full" and cold["offset"] == 0, cold
-        assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+        assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
         presented = consume(cold["navigation"])
         if compacted:
             codex_context_hook(str(native), {**event, "hook_event_name": "PreCompact"})
@@ -506,16 +552,47 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     parsed = build_parser().parse_args(argv[1:])
     assert (parsed.context_delivery == "on") is enabled
     assert parsed.codex_context_dir == (str(native) if enabled else None)
-    assert parsed.max_page_output_bytes == (32000 if enabled else None)
+    assert parsed.max_page_output_bytes == (page_limit if enabled else None)
     assert argv.count("--decision-output-root") == 1
+    if placement == "alias-before-session":
+        rejected_argv = argv.copy()
+        rejected_argv[rejected_argv.index("--decision-output-root") + 1] = str(alias)
+        rc, rejected = _run_cli(registry, runtime, *rejected_argv[1:], cwd=project)
+        assert rc == 1 and "no guard was run" in rejected["reason"], rejected
+        assert list(expected_root.glob("*/decision.json")) == [source]
+        assert _heartbeat_receipt_count(runtime, turn) == 1
     rc, bound = _run_cli(registry, runtime, *argv[1:], cwd=project)
     assert rc == 0, bound
     if enabled:
-        assert bound["mode"] == ("full" if compacted else "delta"), bound
-        assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
-        delivered = consume(bound)
-        if not compacted:
-            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
+        assert Path(parsed.decision_output_root) == expected_root
+        assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
+        [selected_capture] = set(expected_root.glob("*/decision.json")) - {source}
+        digest = machine_reference_oracle(bound)["capture_sha256"]
+        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(selected_capture),
+            "--capture-sha256", digest, "--select", "/heartbeat_receipt/settlement_identity", cwd=project)
+        assert rc == 0 and page["eof"], page
+        [identity] = json.loads(page["content"])["selections"]
+        selected_receipt = identity["value"]
+        assert (selected_receipt["goal_id"], selected_receipt["agent_id"], selected_receipt["turn_instance_id"],
+                selected_receipt["todo_id"]) == (GOAL_ID, AGENT_ID, turn, TODO_ID)
+        if placement in {"explicit-root", "explicit-before-session"}:
+            assert list(source.parent.parent.glob("*/decision.json")) == [source]
+        if placement == "explicit-before-session":
+            assert bound["mode"] == "full", bound
+            assert machine_reference_oracle(cold)["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+            for key in ("first_read_command", "command"):
+                rc, first_page = _run_cli(registry, runtime, *shlex.split(bound[key])[1:], cwd=project)
+                assert rc == 0 and first_page["ok"], first_page
+                assert len(json.dumps(first_page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= page_limit
+        if lifecycle:
+            assert bound["mode"] == ("full" if compacted else "delta"), bound
+            current = Path(machine_reference_oracle(bound)["recovery"]["path"])
+            captured = json.loads(current.with_name("decision.json").read_bytes())
+            required = json.loads(current.read_bytes())
+            assert json.dumps(required["quota"], sort_keys=True) == json.dumps(captured["quota"], sort_keys=True)
+            delivered = consume(bound)
+            if not compacted:
+                assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
@@ -947,11 +1024,18 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
-            for option in ("--context-delivery", "--codex-context-dir", "--max-page-output-bytes"):
-                for command_words in (words, original_words):
-                    if option in command_words:
-                        index = command_words.index(option)
-                        del command_words[index:index + 2]
+            transport = {
+                "--decision-output-root": str(home / "loopx-context"),
+                "--context-delivery": "on",
+                "--delta-delivery": "auto",
+                "--codex-context-dir": str(home / "loopx-context"),
+                "--max-page-output-bytes": "32000",
+            }
+            for option, value in transport.items():
+                assert option not in original_words and words.count(option) == 1
+                index = words.index(option)
+                assert words[index + 1] == value
+                del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
             # Main already deduplicates identical Todo rows within this exact
@@ -1257,6 +1341,49 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     assert not registry.exists() and not runtime.exists()
 
 
+def test_attached_selected_page_uses_the_same_window_as_its_reader(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    context = tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
+        "session_id": "session", "cwd": str(tmp_path)})
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    source = tmp_path / "decision.json"
+    work = {"constraint": "Keep this source verbatim. 保留原文🙂" * 75}
+    raw = json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}, "work": work}, ensure_ascii=False).encode()
+    source.write_bytes(raw)
+    project = ["quota", "context-project", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
+        "--turn-instance-id", "t", "--codex-app", "--context-delivery", "on",
+        "--codex-context-dir", str(context), "--select", "/work", "--max-page-output-bytes", "12000"]
+    before = {path: path.read_bytes() for path in context.rglob("*") if path.is_file()}
+    for invalid in ("255", "12001"):
+        code, rejected = _run_cli(registry, runtime, *project, "--page-bytes", invalid, cwd=tmp_path)
+        assert code and not rejected["ok"] and "--page-bytes" in rejected["reason"]
+    assert {path: path.read_bytes() for path in context.rglob("*") if path.is_file()} == before
+
+    code, page = _run_cli(registry, runtime, *project, "--page-bytes", "800", cwd=tmp_path)
+    assert code == 0 and not page["eof"]
+    content = bytearray()
+    while True:
+        assert page["ok"] and page["offset"] == len(content)
+        data = page["content"].encode()
+        assert 0 < len(data) <= 800
+        content.extend(data)
+        if page["eof"]:
+            assert len(content) == page["total_bytes"]
+            break
+        args = shlex.split(page["next_command"])
+        assert args[args.index("--page-bytes") + 1] == "800"
+        code, page = _run_cli(registry, runtime, *args[args.index("quota"):], cwd=tmp_path)
+        assert code == 0
+    assert json.loads(content)["selections"] == [{"pointer": "/work", "value": work}]
+    assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.parametrize(("tool_tokens", "history_tokens", "byte_limit", "code_mode"), [
     (6000, 20000, None, False), (22000, 3000, 6400, False), (6000, 20000, None, True),
@@ -1388,31 +1515,46 @@ def test_saved_page_continues_and_replays_after_compaction_without_republication
         return _run_cli(registry, runtime, *args, cwd=tmp_path)
     initial_files = set(context.rglob("*"))
     for invalid in (["--initial-read", "--select", "/instructions"], ["--offset", "1", "--select", "/instructions"],
-                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"]):
+                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"],
+                    ["--delta-delivery", "off", "--initial-read", "--page-bytes", "3200"]):
         code, error = cli(*project, *invalid)
         assert code and not error["ok"] and "content" not in error
+    code, error = cli(*project, "--select", "/instructions", "--page-bytes", "255")
+    assert code and not error["ok"] and "--page-bytes must be between 256 and" in error["reason"]
     assert set(context.rglob("*")) == initial_files
-    code, first = cli(*project, "--select", "/instructions")
+    window = 3200
+    code, first = cli(*project, "--select", "/instructions", "--page-bytes", str(window))
     assert code == 0 and first["offset"] == 0 and not first["eof"]
     assert first["navigation"]["mode"] == "full"
     codex_context_hook(str(context), {**event, "hook_event_name": "PreCompact"})
     journal = (context / "session.json").read_bytes()
     files = set(context.rglob("*"))
-    def read_reference():
-        ref = first["reference_file"]
+    def read_selection(*, resume):
         result = bytearray()
-        args = ["quota", "context-read", "--reference-file", ref, "--max-page-output-bytes", "6400"]
+        if resume:
+            result.extend(first["content"].encode())
+            assert len(result) <= window
+            words = shlex.split(first["next_command"])
+            args = words[words.index("quota"):]
+        else:
+            args = ["quota", "context-read", "--reference-file", first["reference_file"],
+                    "--max-page-output-bytes", "6400"]
         while True:
             code, page = cli(*args)
             assert code == 0 and page["offset"] == len(result)
-            result.extend(page["content"].encode())
+            content = page["content"].encode()
+            if resume:
+                assert len(content) <= window
+            result.extend(content)
             if page["eof"]:
                 assert len(result) == page["total_bytes"]
                 return json.loads(result)["selections"][0]["value"]
             words = shlex.split(page["next_command"])
             args = words[words.index("quota"):]
     with ThreadPoolExecutor(2) as pool:
-        assert list(pool.map(lambda _: read_reference(), range(2))) == [value, value]
+        replay = pool.submit(read_selection, resume=False)
+        continuation = pool.submit(read_selection, resume=True)
+        assert replay.result() == continuation.result() == value
     assert (context / "session.json").read_bytes() == journal and set(context.rglob("*")) == files
     assert hashlib.sha256(original.read_bytes()).hexdigest() == digest
     assert not registry.exists() and not runtime.exists()

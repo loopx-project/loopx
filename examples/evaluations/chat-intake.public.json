@@ -402,6 +402,7 @@
           "status": "accepted",
           "covers": "Microsoft cash flow FY2023–2025 with annual-report citations",
           "content_read": true,
+          "content": "# report-v2 — Microsoft cash-flow comparison, FY2023–2025\n\nPublic synthetic test artifact; the following index units are fixture data, not Microsoft's actual financial figures.\n\n| Fixture year | Operating cash flow | Capital expenditure | Difference |\n| --- | ---: | ---: | ---: |\n| FY2023 | 100 | 40 | 60 |\n| FY2024 | 110 | 50 | 60 |\n| FY2025 | 120 | 60 | 60 |\n\nIn this synthetic comparison, both series rise and operating cash flow exceeds capital expenditure in every year. Sources in this fixture: annual-report-FY2023, annual-report-FY2024, annual-report-FY2025. This is the complete accepted fixture report, ready to return with its report-v2 reference.",
           "observed_at": "2026-09-01T12:05:00Z"
         }
       ],

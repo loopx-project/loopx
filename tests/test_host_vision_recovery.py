@@ -159,20 +159,19 @@ def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
 ):
     control, project, runtime = control_at(tmp_path)
     monkeypatch.chdir(project)
-    if machine_enabled:
-        from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
-        from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
 
-        owner = build_builtin_machine_configuration_registry()
-        configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-            "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
-                "count_unit": "completed_todos", "count": 1,
-                "stride_strategy": "evidence_conditioned_v1"}}}
-        preview = configure_machine_configuration(
-            runtime_root=runtime, registry=owner, configuration=configuration)
-        configure_machine_configuration(
-            runtime_root=runtime, registry=owner, configuration=configuration,
-            execute=True, expected_plan_revision=preview["plan_revision"])
+    owner = build_builtin_machine_configuration_registry()
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "completed_todos", "count": 1,
+            "stride_strategy": "evidence_conditioned_v1" if machine_enabled else "off"}}}
+    preview = configure_machine_configuration(
+        runtime_root=runtime, registry=owner, configuration=configuration)
+    configure_machine_configuration(
+        runtime_root=runtime, registry=owner, configuration=configuration,
+        execute=True, expected_plan_revision=preview["plan_revision"])
     authored = vision("vision_patch_proposed")
     authored["path_delta"].update(outcome="stop", stopped=["Stop this route until provenance is checked."])
     authored["path_delta"].pop("retained")

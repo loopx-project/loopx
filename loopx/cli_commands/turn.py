@@ -12,7 +12,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import compose_turn_decision
+from ..control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
@@ -24,6 +24,7 @@ from .turn_decision import build_fresh_turn_decision_owner
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
+    project_turn_plan_inspection,
     build_turn_error_payload,
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
@@ -49,6 +50,7 @@ def handle_turn_command(
     print_payload: PrintPayload,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_execution_preparer: Callable[[Mapping[str, Any], Mapping[str, Any]], str | None] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> int | None:
@@ -81,6 +83,8 @@ def handle_turn_command(
             raise ValueError("a native completion lease requires its original host connection")
         if native_task_validator is not None and native_host_runner is None:
             raise ValueError("a native task validator requires its original host connection")
+        if native_execution_preparer is not None and native_host_runner is None:
+            raise ValueError("native task preparation requires its original host connection")
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
             or any(getattr(args, key, None) for key in ("resume_goal_id", "resume_agent_id", "resume_todo_id"))
@@ -232,22 +236,48 @@ def handle_turn_command(
             # from the shared decision owner instead of rebuilding them per command.
             from ..capabilities.explore.turn_context import turn_context_projector
 
-            decision_owner = build_fresh_turn_decision_owner(
-                args,
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                runtime_root_arg=runtime_root_arg,
-                turn_start_hook_dispatch=turn_start_hook_dispatch,
-                turn_context_projector=turn_context_projector(registry_path=registry_path,
-                    runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
-                    todo_id=getattr(args, "todo_id", None)),
-                goal_ref=goal_ref,
-                request_subject=delegated_context.get("request_subject") if delegated_context else None,
-            )
+            def read_decision_owner():
+                return build_fresh_turn_decision_owner(
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    runtime_root_arg=runtime_root_arg,
+                    turn_start_hook_dispatch=turn_start_hook_dispatch,
+                    turn_context_projector=turn_context_projector(
+                        registry_path=registry_path,
+                        runtime_root=runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.agent_id,
+                        todo_id=getattr(args, "todo_id", None),
+                    ),
+                    goal_ref=goal_ref,
+                    request_subject=delegated_context.get("request_subject") if delegated_context else None,
+                )
+
+            decision_owner = read_decision_owner()
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
+            turn_envelope = build_turn_envelope(
+                decision,
+                scheduler_execution_context=scheduler_context,
+            )
+            if native_execution_preparer is not None and args.turn_command == "run-once" and args.execute:
+                prepared_todo = native_execution_preparer(decision, turn_envelope)
+                if prepared_todo is not None:
+                    # Host preparation changes canonical lease state. Plan and
+                    # settle against a fresh read of the same Turn and Todo.
+                    decision_owner = read_decision_owner()
+                    operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
+                    scheduler_context = decision_owner.scheduler_execution_context
+                    decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
+                    preparation = decision.get("execution_preparation") or {}
+                    if (preparation.get("state") != "ready" or preparation.get("todo_id") != prepared_todo
+                            or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
+                            or decision.get("normal_delivery_allowed") is not True):
+                        raise ValueError("native task preparation did not make the same Todo ready")
+                    turn_envelope = build_turn_envelope(decision, scheduler_execution_context=scheduler_context)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
@@ -281,6 +311,8 @@ def handle_turn_command(
                 iteration_context_policy=args.iteration_context,
                 session_scope=session_scope,
                 goal_ref=goal_ref,
+                inspect_plan=(args.turn_command == "plan" and not args.include_transaction_detail
+                              and output_format(args) == "json"),
             )
             if delegated_context and delegated_context.get("request_subject") is not None:
                 import json
@@ -329,6 +361,7 @@ def handle_turn_command(
                 boundary = payload.get("boundary")
                 if isinstance(boundary, dict):
                     boundary.pop("opaque_session_handle_omitted", None)
+                project_turn_plan_inspection(payload, runtime_root)
             else:
                 # The typed settlement plan is used by validation and
                 # execution, but is not part of the agent-facing CLI contract.

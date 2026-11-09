@@ -46,11 +46,17 @@ export const conversationActivityScenario = {
       const turn = await send("请检查当前任务状态，并说明下一步。");
       await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
-      await page.clock.install();
+      // Pin Date to a fixed instant first, then advance timers without a
+      // running wall clock, and pause. Any finite future pause target leaves a
+      // scheduling race — the clock keeps running between commands, so a
+      // delayed pause can again aim into the past. With the Date pinned the
+      // comparisons use one deterministic instant regardless of command
+      // latency; the system time is restored before the scenario continues.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.setFixedTime(clockStart);
       await page.clock.fastForward(25000);
-      // Compare the same instant across views; clock.install alone keeps
-      // advancing and can cross a second boundary while navigation completes.
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      await page.clock.pauseAt(clockStart);
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
@@ -60,6 +66,7 @@ export const conversationActivityScenario = {
       assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1, "Activity stays on the Chat entry");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
+      await page.clock.setSystemTime(Date.now());
       await page.clock.resume();
       const adjustments = [];
       let legacyMigrationAttempts = 0;
@@ -216,7 +223,10 @@ export const conversationActivityScenario = {
         const answer = "检查完成，下一步已列出。";
         const runtime = page.__loopxRuntime;
         runtime.sessions.set(next.sessionId, { ...runtime.sessions.get(next.sessionId), active_turn_id: null, status: "ready" });
-        runtime.messages.get(next.sessionId).push({ message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer });
+        runtime.messages.get(next.sessionId).push({
+          message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer,
+          created_at: await page.evaluate(() => new Date().toISOString()),
+        });
         response.end(event(5, "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, proposals: [], gate: null } }));
         await route.fulfill({ json: { ok: true, session_id: next.sessionId, turn_id: next.turnId, status: "completed" } });
       });
@@ -246,7 +256,10 @@ export const conversationActivityScenario = {
         const runtime = page.__loopxRuntime;
         runtime.turnMessages.set(turnId, body.message);
         runtime.sessions.set(sessionId, {...runtime.sessions.get(sessionId), active_turn_id: turnId, status: "busy"});
-        runtime.messages.get(sessionId).push({message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message});
+        runtime.messages.get(sessionId).push({
+          message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message,
+          created_at: await page.evaluate(() => new Date().toISOString()),
+        });
         api.turnRequests.push({message: body.message, sessionId, turnId});
         let holdFirstRead = true;
         await page.route(`**/api/chat/sessions/${sessionId}`, snapshot => {

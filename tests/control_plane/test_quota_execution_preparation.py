@@ -89,6 +89,7 @@ def _run(
     todos: list[dict[str, object]] | None = None,
     context_delivery: str = "off",
     goal_suffix: str = "",
+    write_scopes: list[str] | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -113,6 +114,7 @@ def _run(
         extra_goal_fields={"coordination": {
             "registered_agents": [AGENT, "agent-b"],
             "handoff_mode": "hard_lease",
+            **({"write_scope": write_scopes, "requires_parent_approval": ["publish"]} if write_scopes else {}),
         }},
     )
     projection = build_todo_runtime_shadow_projection(
@@ -329,6 +331,31 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert len(guards) == 2
     assert [item["details"]["delivery_allowed"] for item in guards] == [False, True]
     source, _ = codex_context.read_codex_context_reference(str(native), goal_id=GOAL, agent_id=AGENT)
+    # Simulate a Host losing the successful Hook output and presenting its
+    # original pre-claim capture again in the same session.
+    assert _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn") == digest
+    lost_output = subprocess.run(hook, input=json.dumps(hook_event), env=hook_env, cwd=tmp_path,
+        capture_output=True, text=True, timeout=30)
+    assert lost_output.returncode == 0, lost_output.stderr
+    lost_response = json.loads(lost_output.stdout)
+    replay_context = lost_response.get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "host_execution_preparation_readback_required" in replay_context, lost_response
+    readback = json.loads(replay_context.rsplit("Receipt: ", 1)[1])
+    assert readback["claim_operation_id"] == claim_reference
+    assert (readback["todo_id"], readback["turn_instance_id"]) == (TODO, "preparation-turn")
+    readback_command = shlex.split(readback["context"]["recovery_command"])
+    observed = subprocess.run(readback_command, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert observed.returncode == 0, observed.stderr
+    ready_page = json.loads(observed.stdout)
+    assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
+    forged = {**ready_page, "content": "x" + ready_page["content"][1:]}
+    for observation, should_repeat in ((forged, True), (ready_page, False)):
+        shown = subprocess.run(hook, input=json.dumps({**hook_event, "tool_response": observation}),
+            env=hook_env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        assert shown.returncode == 0, shown.stderr
+        assert ("host_execution_preparation_readback_required" in shown.stdout) is should_repeat, shown.stdout
+    assert log.read_bytes() == events
+
     source = Path(source)
     source.write_bytes(source.read_bytes() + b" ")
     corrupted = subprocess.run(read, cwd=tmp_path, capture_output=True, text=True, timeout=30)
@@ -386,8 +413,9 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     command = ["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
                "--format", "json", "quota", "context-hook", "--codex-app", "--context-delivery", "on",
                "--codex-context-dir", str(native)]
-    def hook():
-        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+    def hook(tool_response=None):
+        data = json.dumps({**event, "hook_event_name": "PostToolUse",
+                           "tool_response": tool_response}).encode()
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         capsys.readouterr()
         assert main(command) == 0
@@ -409,17 +437,26 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     assert recovery[recovery.index("--capture-sha256") + 1] == digest
     log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
     after_claim = log.read_bytes()
-    assert hook() == {}
+    retry = json.loads(hook()["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+    assert retry["claim_operation_id"] == receipt["claim_operation_id"]
+    assert retry["event"] == "host_execution_preparation_readback_required"
+    assert "context" not in retry
     verified["path"].write_bytes(verified["bytes"])
+    restored = json.loads(hook()["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+    assert restored["capture_sha256"] == digest
+    assert restored["claim_operation_id"] == receipt["claim_operation_id"]
     read = subprocess.run([*recovery, "--select", "/execution_preparation/state"], cwd=tmp_path,
                           check=True, text=True, capture_output=True)
     assert json.loads(json.loads(read.stdout)["content"])["selections"][0]["value"] == "ready"
+    observed = subprocess.run(recovery, cwd=tmp_path, check=True, text=True, capture_output=True)
+    assert hook(json.loads(observed.stdout)) == {}
     assert log.read_bytes() == after_claim
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("case", [
-    "same-execution", "released-execution", "legacy-released-execution",
+    "same-execution", "released-execution", "after-ready-same-execution",
+    "after-ready-released-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
@@ -440,7 +477,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     assert codex_context.codex_context_hook(str(native), event) == {}
     capture = tmp_path / "before-claim"
     legacy = case.startswith("legacy-")
-    released = case != "same-execution"
+    after_ready = case.startswith("after-ready-")
+    released = not case.endswith("same-execution")
     native_args = () if legacy else ("--defer-context-presentation", "--codex-context-dir", str(native))
     before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
         "--turn-instance-id", turn, "--todo-id", TODO, "--decision-output-dir", str(capture),
@@ -451,26 +489,33 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     digest = _present_saved_guard(tmp_path, native, capture, "codex_app_heartbeat", turn)
 
     run = codex_execution_preparation._default_runner
+    record_ready = codex_context.record_native_execution_preparation
     claims, guards = [], []
 
     def interrupt_first_guard(command, **kwargs):
         if "--prepared-capture-reference" in command:
             guards.append(command[command.index("--turn-instance-id") + 1])
-            if len(guards) == 1:
+            if not after_ready and len(guards) == 1:
                 raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         result = run(command, **kwargs)
         if "claim" in command:
             claims.append(json.loads(result.stdout))
         return result
 
+    def interrupt_after_ready(*args, **kwargs):
+        record_ready(*args, **kwargs)
+        if after_ready:
+            raise RuntimeError("interrupted after ready receipt")
+
     monkeypatch.setattr(codex_execution_preparation, "_default_runner", interrupt_first_guard)
+    monkeypatch.setattr(codex_context, "record_native_execution_preparation", interrupt_after_ready)
     registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
     command = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                "quota", "context-hook", "--codex-app", "--context-delivery", "on",
                "--codex-context-dir", str(native)]
 
-    def hook():
-        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+    def hook(name="PostToolUse"):
+        data = json.dumps({**event, "hook_event_name": name}).encode()
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         capsys.readouterr()
         assert main(command) == 0
@@ -487,9 +532,12 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         legacy_claim = read(*before["execution_preparation"]["claim"]["cli_args"])
         original_id = legacy_claim["claim_operation_id"]
     else:
-        assert hook() == {}
+        first_context = hook()["hookSpecificOutput"]["additionalContext"]
+        first_request = json.loads(first_context.rsplit("Receipt: ", 1)[1])
+        assert first_request["event"] == "host_execution_preparation_readback_required"
         original_id = claims[0]["claim_operation_id"]
         assert original_id == f"todo-claim:codex-capture:{digest}"
+        assert first_request["claim_operation_id"] == original_id
     original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     lease = original["receipts"][0]["result"]["lease"]
     if released:
@@ -513,10 +561,12 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
     modified_policy = case == "legacy-marked-released-execution"
     log = runtime / "goals" / GOAL / "rollout-event-log.jsonl"
     before_project = log.read_bytes()
-    presented_digest = _present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn,
+    presented_digest = (_present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn,
         expected_error="complete Turn decision content integrity mismatch" if modified_policy else None)
+        if legacy or unverified_copy else digest)
     assert (presented_digest != digest) == unverified_copy
     result = {} if modified_policy else hook()
+    resume = {} if modified_policy else hook("SessionStart")
     current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
     assert source.read_bytes() == original_bytes
     if modified_policy:
@@ -529,19 +579,31 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
         assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
-    elif released:
-        assert len(claims) == 2
-        assert result == {} and not claims[1]["ok"]
-        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
-        assert guards == [turn]
     else:
-        assert len(claims) == 2
-        context = result["hookSpecificOutput"]["additionalContext"]
-        receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
-        assert receipt["claim_operation_id"] == claims[1]["claim_operation_id"] == original_id
-        assert receipt["turn_instance_id"] == turn and receipt["execution_preparation"]["state"] == "ready"
-        assert current["active"] and current["lease"] == lease
-        assert guards == [turn, turn]
+        assert len(claims) == 1 and guards == [turn]
+        for observed in (result, resume):
+            context = observed["hookSpecificOutput"]["additionalContext"]
+            receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
+            assert receipt["event"] == "host_execution_preparation_readback_required"
+            assert receipt["claim_operation_id"] == original_id
+            assert (receipt["goal_id"], receipt["agent_id"], receipt["todo_id"], receipt["turn_instance_id"]) == (
+                GOAL, AGENT, TODO, turn,
+            )
+            if after_ready:
+                assert receipt["context"]["recovery_command"]
+        for command_key in ("receipt_command", "lease_command"):
+            proc = subprocess.run(
+                shlex.split(receipt[command_key]), cwd=tmp_path, capture_output=True, text=True, check=True,
+            )
+            assert json.loads(proc.stdout)["ok"]
+        if released:
+            assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        else:
+            assert current["active"] and current["lease"] == lease
+            ready = read("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                "--context-delivery", "off", "--codex-app", "--turn-instance-id", turn, "--todo-id", TODO)
+            assert ready["execution_preparation"]["state"] == "ready"
+            assert ready["heartbeat_receipt"]["turn_instance_id"] == turn
     readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]
 
@@ -551,6 +613,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
 def test_projected_claim_prepares_the_same_receipt_bound_turn(
     tmp_path, monkeypatch, provider, multiple_candidates,
 ):
+    scopes = [f"src/synthetic-area-{index:03d}/**" for index in range(220)]
     unbound = _run(
         tmp_path,
         monkeypatch,
@@ -561,6 +624,7 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         "--begin-turn",
         todos=[_todo(), {**_todo(), "todo_id": "todo_other_candidate", "index": 2}]
         if multiple_candidates else None,
+        write_scopes=scopes,
     )
     assert "heartbeat_receipt" in unbound, json.dumps(
         unbound, ensure_ascii=False, indent=2,
@@ -595,6 +659,59 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         runtime_root=tmp_path / "runtime", goal_id=GOAL, include_leases=True,
     )["leases"]
 
+    def read_model_view(packet, stage, *, deferred):
+        source = tmp_path / f"{stage}.json"
+        raw = json.dumps(packet, ensure_ascii=False, separators=(",", ":")).encode()
+        source.write_bytes(raw)
+        registry, runtime = tmp_path / "absent-registry.json", tmp_path / "reader-runtime"
+        args = ["quota", "context-project", "--capture-file", str(source),
+            "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--context-delivery", "on",
+            "--delta-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", turn]
+
+        def read(*argv):
+            code, result = run_json_cli_result(*argv, registry_path=registry, runtime_root=runtime)
+            assert code == 0 and result["ok"], result
+            return result
+
+        navigation = read(*args)
+        command = shlex.split(navigation["first_read_command"])
+        selected = bytearray()
+        while True:
+            page = read(*command[command.index("quota"):])
+            assert page["offset"] == len(selected)
+            selected.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(selected) == page["total_bytes"]
+                break
+            command = shlex.split(page["next_command"])
+        values = {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
+        boundary = packet["goal_boundary"]
+        assert boundary["write_scope"] == scopes and boundary["requires_parent_approval"] == ["publish"]
+        assert values["/heartbeat_receipt"] == packet["heartbeat_receipt"]
+        if deferred:
+            marker = "/goal_boundary/write_scope"
+            assert values["/goal_boundary"] == {
+                **{key: value for key, value in boundary.items() if key != "write_scope"},
+                "write_scope_pointer": marker,
+            }
+            detail = values["/context_details/unread_context_index/source"]
+            restored = read("quota", "context-read", "--capture-file", detail["path"],
+                "--capture-sha256", detail["sha256"], "--select", marker)
+            assert restored["eof"]
+            assert json.loads(restored["content"])["selections"] == [{"pointer": marker, "value": scopes}]
+            if stage == "claim":
+                args[args.index("--context-delivery") + 1] = "off"
+                plain = read(*args)
+                assert plain["mode"] == "full" and plain["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+                assert plain["recovery"]["path"] == str(source)
+        else:
+            assert values["/goal_boundary"] == boundary
+        assert source.read_bytes() == raw and not registry.exists()
+
+    if multiple_candidates:
+        read_model_view(unbound, "selection", deferred=True)
+        read_model_view(before, "claim", deferred=True)
+
     claim_code, claim = run_json_cli_result(
         *before["execution_preparation"]["claim"]["cli_args"],
         registry_path=tmp_path / "registry.json",
@@ -618,6 +735,8 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
     assert after["selected_todo"]["todo_id"] == TODO
     assert after["execution_preparation"]["state"] == "ready"
     assert after["normal_delivery_allowed"] is True
+    if multiple_candidates:
+        read_model_view(after, "ready", deferred=False)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

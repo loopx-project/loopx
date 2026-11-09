@@ -2,7 +2,6 @@
 import hashlib
 from html import escape
 import json
-from pathlib import Path
 import shlex
 
 import pytest
@@ -65,17 +64,29 @@ def test_saved_goal_narrative_presentation_replays_and_preserves_literal_source(
 
     pointer = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
     first = cli(*project, "--initial-read")
-    assert not first["eof"], "the 6000-byte response must exercise continuation"
+    remainder = first["navigation"].get("remaining_read_command")
+    assert not first["eof"] or remainder, "the 6000-byte response must exercise continuation"
     selection = finish(first)
     assert finish(follow(first["navigation"]["first_read_command"])) == selection
-    rows = {row["pointer"]: row for row in json.loads(selection)["selections"]}
+    pages = [first]
+    sections = json.loads(selection)["selections"]
+    if remainder:
+        next_section = follow(remainder)
+        pages.append(next_section)
+        sections += json.loads(finish(next_section))["selections"]
+    rows = {row["pointer"]: row for row in sections}
+    assert len(rows) == len(sections)
     assert rows["/heartbeat_receipt"]["value"] == receipt
     assert rows[pointer]["value"] == (original_text if conflict else expected_text)
     assert ("presentation" in rows[pointer]) is not conflict
 
-    observed = verified_context_selection(_state(journal), first)
-    assert observed is not None and observed["read_sections"]["/heartbeat_receipt"]
-    assert (pointer in observed["read_sections"]) is conflict
+    read_sections = {}
+    for page in pages:
+        observed = verified_context_selection(_state(journal), page)
+        assert observed is not None
+        read_sections.update(observed["read_sections"])
+    assert read_sections["/heartbeat_receipt"]
+    assert (pointer in read_sections) is conflict
     literal = [{"pointer": pointer, "value": original_text}]
     for page in [cli("quota", "context-read", *source, "--select", pointer), cli(*project, "--select", pointer)]:
         assert json.loads(finish(page))["selections"] == literal

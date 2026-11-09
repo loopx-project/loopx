@@ -2,7 +2,7 @@
 
 <a id="rfc-controller--executor-sessions-and-one-governed-work-contract-v0"></a>
 
-- **RFC status:** Existing design accepted; router / binding-unit extension proposed
+- **RFC status:** Accepted, existing contract. Router and binding-unit extensions are proposed.
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
@@ -168,9 +168,9 @@ intentionally have no LoopX Core and must remain uncontaminated controls.
 
 <a id="current-delivery-audit"></a>
 
-### 2026-11-06 audit: reusable foundations and remaining gaps
+### Current delivery audit
 
-This audit is pinned to main `f91e26d91d3e4e1b28b69f5881a059ea78891082`.
+The 2026-11-06 audit is pinned to main `f91e26d91d3e4e1b28b69f5881a059ea78891082`.
 A mechanism present in source establishes an implementation boundary, not a
 qualified dual-session journey or benefit.
 

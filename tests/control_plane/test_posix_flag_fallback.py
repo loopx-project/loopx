@@ -39,9 +39,10 @@ def _symlink(path, target) -> None:
 def test_native_trace_read_survives_a_host_without_the_posix_flags(tmp_path, monkeypatch):
     trace = tmp_path / "trace.jsonl"
     trace.write_bytes(b'{"seq": 1}\n')
-    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
-    monkeypatch.delattr(os, "O_NONBLOCK", raising=False)
-    assert read_native_trace_file(trace) == b'{"seq": 1}\n'
+    with monkeypatch.context() as flags:
+        flags.delattr(os, "O_NOFOLLOW", raising=False)
+        flags.delattr(os, "O_NONBLOCK", raising=False)
+        assert read_native_trace_file(trace) == b'{"seq": 1}\n'
 
 
 def test_native_trace_read_refuses_a_symlink_without_the_flag(tmp_path, monkeypatch):

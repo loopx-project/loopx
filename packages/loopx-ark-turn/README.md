@@ -27,7 +27,8 @@ requests; it never selects the model or grants a tool permission. Set
 
 Select this command through the existing
 `loopx turn run-once --host generic-cli --iteration-context fresh` interface,
-with `--host-command-json` containing the adapter argv above without `--doctor`.
+with `--host-adapter-request-schema loopx_turn_host_request_v1` and
+`--host-command-json` containing the adapter argv above without `--doctor`.
 Supply the normal Goal, Agent, project, Todo and independent validation command.
 The caller must use a registered LoopX Agent and current work admission. The
 adapter's cloud Agent definition and session are execution resources, not new

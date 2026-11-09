@@ -452,16 +452,33 @@ def test_turn_context_hook_lifecycle_all_states(tmp_path: Path) -> None:
     assert any("anti-entropy" in inst.lower() for inst in projected.get("capability_instructions", []))
 
 
-def test_attach_turn_context_integration(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("intent", "status"), [
+    ({}, None),
+    ({"anti_entropy_enabled": True}, "inapplicable"),
+    ({"retirement_basis": {"target_symbols": ["old_api"], "rationale": "replaced"}}, "active"),
+    ({"retirement_basis": {"target_symbols": ["old_api"]}, "anti_entropy_progress_fact": True}, "recovering"),
+], ids=["disabled", "enabled", "active", "recovery"])
+def test_attach_turn_context_integration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, intent: dict[str, object], status: str | None,
+) -> None:
     """Verify loopx.capabilities.turn_context.attach_turn_context wires anti-entropy with memory."""
     from loopx.capabilities.turn_context import attach_turn_context
+    from loopx.control_plane import capability_hooks
 
-    basis_data = {"target_symbols": ["old_api"], "rationale": "replaced"}
+    invoke = capability_hooks.effect_runtime_result
+    methods = []
+
+    def observe(method, params, **kwargs):
+        if (params.get("registration") or {}).get("hook_id") == "anti-entropy.turn-context":
+            methods.append(method)
+        return invoke(method, params, **kwargs)
+
+    monkeypatch.setattr(capability_hooks, "effect_runtime_result", observe)
     payload = {
         "goal_id": "g-1",
         "agent_id": "a-1",
-        "retirement_basis": basis_data,
         "workspace": str(tmp_path),
+        **intent,
     }
 
     attach_turn_context(
@@ -473,9 +490,17 @@ def test_attach_turn_context_integration(tmp_path: Path) -> None:
         turn_instance_id="turn-42",
     )
 
-    assert "anti_entropy_guidance" in payload
-    assert payload["anti_entropy_guidance"]["status"] == "active"
-    assert payload["anti_entropy_guidance"]["target_symbols"] == ["old_api"]
+    if status is None:
+        assert "anti_entropy_guidance" not in payload
+        assert methods == []
+    else:
+        assert methods == ["capability_hook.turn_context.validate_registration", "capability_hook.turn_context.validate"]
+        guidance = payload["anti_entropy_guidance"]
+        if status == "inapplicable":
+            assert guidance == {"enabled": True, "applicable": False}
+        else:
+            assert guidance["status"] == status
+            assert guidance["target_symbols"] == ["old_api"]
 
 
 def test_feedback_cycle_pure_path_delivery_ready(tmp_path: Path) -> None:
@@ -860,7 +885,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
         captured["payload"] = payload
         captured["kwargs"] = kwargs
 
-    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    monkeypatch.setattr("loopx.capabilities.turn_context.attach_turn_context", fake_attach)
     payload = {
         "ok": True,
         "should_run": True,
@@ -897,7 +922,7 @@ def test_heartbeat_without_should_run_does_not_route(
         nonlocal called
         called = True
 
-    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    monkeypatch.setattr("loopx.capabilities.turn_context.attach_turn_context", fake_attach)
     quota_reward_memory.attach_reward_memory_recall_after_should_run(
         {"ok": True, "should_run": False, "heartbeat_receipt": {"status": "committed"}},
         quota_command="should-run",

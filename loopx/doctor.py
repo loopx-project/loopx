@@ -147,12 +147,18 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
     expected = module_path.resolve()
-    owns_module = any(
-        item.as_posix().endswith("loopx/doctor.py")
-        and Path(item.locate()).resolve() == expected
-        for item in installed.files or ()
-    )
-    if not owns_module:
+    module_suffix = os.path.join("loopx", "doctor.py")
+    for item in installed.files or ():
+        entry = item.as_posix()
+        if not os.path.normcase(entry).endswith(module_suffix):
+            continue
+        # A PackagePath uses POSIX components, so locating a drive-qualified
+        # RECORD entry can lose its Windows root on Python 3.11.
+        record_path = Path(entry)
+        located = record_path if record_path.is_absolute() else Path(item.locate())
+        if located.resolve() == expected:
+            break
+    else:
         return {"available": False}
     owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {

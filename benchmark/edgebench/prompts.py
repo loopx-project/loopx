@@ -33,7 +33,7 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
         "When a decision depends on comparing a local probe with a native result, "
         "and sforge-submit --help lists --retain-archive and --json, retain the exact archive "
         "with the planned submission. Use loopx-bind-native-candidate --help with the sealed "
-        "file manifest, original probe and native result. Use its verified candidate_ref for "
+        "file manifest, original probe and native result. Use its verified submitted_file_set_ref for "
         "both measurements and keep each measurement's original evaluation and input revision. "
         "If source evidence is unavailable, keep the measurements separate. Do not resubmit "
         "to recover source evidence.\n\n"
@@ -41,10 +41,12 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
     )
     if native_result_comparison:
         binding += (
-            "For an existing submission and an applicable recorded finding, the same tool's "
-            "--submission-id, --todo-id and --local-finding-id options return the native "
-            "feedback, native score and matching recorded local measurements together. "
-            "It only reads. The native result is available even when a comparison is missing.\n\n"
+            "For an existing submission, use the same tool with --submission-id to read feedback and its "
+            "verified native_measurement. Use task:<task_sha256> from /etc/loopx-benchmark/native-result-scope.json "
+            "as the probe and snapshot input revision. Record the measurement on the current Todo with "
+            "loopx explore finding --result-json FILE, using the current Goal, Agent, Todo and Turn. "
+            "Reuse the same question and submitted candidate reference for local and native findings. "
+            "Use the receipt's comparison to decide the next probe while its conditions still apply.\n\n"
         )
     return (
         "### Research Artifacts\n\n"

@@ -144,11 +144,11 @@ def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, mon
 @pytest.mark.parametrize("limit,fmt", [(0, "json"), (-1, "json"), (True, "json"), (1.2, "json"), (7000, "markdown")])
 def test_reader_rejects_invalid_output_budget_before_capture_io(monkeypatch, limit, fmt):
     import argparse
-    from loopx.cli_commands import quota_capture
+    from loopx.cli_commands import quota_context_reader
     def unexpected(*args, **kwargs):
         pytest.fail("invalid output budget must fail before capture IO")
-    monkeypatch.setattr(quota_capture, "_read_capture", unexpected)
-    result = quota_capture.read_context_capture(argparse.Namespace(capture_file="missing", capture_sha256="0" * 64,
+    monkeypatch.setattr(quota_context_reader, "_read_capture", unexpected)
+    result = quota_context_reader.read_context_capture(argparse.Namespace(capture_file="missing", capture_sha256="0" * 64,
         offset=0, page_bytes=8192, max_page_output_bytes=limit, format=fmt))
     assert not result["ok"] and "positive integer" in result["reason"]
 
@@ -680,7 +680,7 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
 @pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota, quota_capture
+    from loopx.cli_commands import quota, quota_context_reader
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
@@ -712,7 +712,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
     elif native_failure == "reader_reference":
-        monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable_reference)
+        monkeypatch.setattr(quota_context_reader, "write_context_read_reference", unavailable_reference)
     printed = []
     assert quota._emit_quota_result(original, args, context=None, registry_path=tmp_path / "absent.json",
         heartbeat_turn_id=None, usage_quota_started=0, capture_directory=tmp_path,

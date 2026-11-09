@@ -43,7 +43,7 @@ from .chat.goal_subagent_api import (
 )
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
-from .chat_status_api import ChatStatusRequestMixin
+from .chat.status_api import ChatStatusRequestMixin
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
@@ -1727,7 +1727,8 @@ class ChatRequestHandler(
             SSH_HOST_CATALOG_PATH: self._ssh_hosts,
         }
         if path in get_dispatch:
-            return get_dispatch[path]()
+            with effect_runtime_request_scope():
+                return get_dispatch[path]()
         if self._dispatch_goal_result_read(path):
             return
         setup_parts = path.strip("/").split("/")

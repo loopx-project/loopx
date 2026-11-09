@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import shlex
+import subprocess
 
 import pytest
 from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
@@ -32,7 +33,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     if initial_replan:
-        _configure_selected_todo_replan_fixture(project, registry)
+        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -50,10 +51,10 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
             trigger["kind"] for trigger in first["autonomous_replan_obligation"]["triggers"]
         }
     if binding == "todo":
-        _configure_selected_todo_replan_fixture(project, registry)
+        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
         selected_id = SELECTED_REPLAN_TODO_ID
     else:
-        _configure_autonomous_replan_fixture(project, runtime, registry)
+        _configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
         selected_id = TODO_ID
     _advance_frontier(project, runtime, "fixture-frontier-after-selection")
     rc, selected = _run_cli(registry, runtime, *guard, "--todo-id", selected_id)
@@ -79,7 +80,9 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
         assert argv[argv.index("--turn-instance-id") + 1] == turn
         assert "--todo-id" not in argv and "--replan-obligation-id" not in argv
         assert _heartbeat_receipt_count(runtime, turn) == 1
-        rc, resumed = _run_generated_cli(command, registry_path=registry)
+        rc, resumed = _run_generated_cli(
+            shlex.join([*argv, "--context-delivery", "off"]), registry_path=registry,
+        )
         assert rc == 0, resumed
     receipt = resumed["heartbeat_receipt"]
     assert receipt["status"] == "upgraded"
@@ -183,7 +186,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     if initial_replan:
-        _configure_selected_todo_replan_fixture(project, registry)
+        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -202,7 +205,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
 
     # The original explicit choice leaves the refreshed frontier while a
     # different recommended Todo becomes visible under a hard replan.
-    _configure_selected_todo_replan_fixture(project, registry)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
     _advance_frontier(project, runtime, "fixture-recommendation-drift")
     retained_todo_id = "todo_chain_000000000001"
     rc, resumed = _run_cli(
@@ -350,7 +353,7 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
     _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-reentry-new-gate"
-    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+    guard = ("quota", "should-run", "--context-delivery", "off", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
              )
     if discovery:
@@ -500,21 +503,22 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert _spend_run_count(runtime) == 0
     # The bounded reference reaches the original receipt without another
     # admission. Reading a selected section does not certify the whole input.
-    from loopx.cli import build_parser
-    from loopx.cli_commands.quota_capture import read_context_capture
     from loopx.control_plane.turn_driver.decision_capture import (
         CONTEXT_CAPTURE_PAGE_GUIDANCE,
         read_context_read_reference,
     )
 
-    reader = shlex.split(presented["recovery"]["command"])[1:]
-    first = read_context_capture(build_parser().parse_args(reader))
+    reader = shlex.split(presented["recovery"]["command"])
+    result = subprocess.run(reader, cwd=project, capture_output=True, text=True, check=True, timeout=60)
+    first = json.loads(result.stdout)
     assert first["ok"] and first["offset"] == 0
     assert first["read_instruction"] == CONTEXT_CAPTURE_PAGE_GUIDANCE
     assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
-    args = build_parser().parse_args(reader
-        + ["--select", "/heartbeat_receipt"])
-    read = read_context_capture(args)
+    result = subprocess.run(
+        [*reader, "--select", "/heartbeat_receipt"],
+        cwd=project, capture_output=True, text=True, check=True, timeout=60,
+    )
+    read = json.loads(result.stdout)
     assert read["ok"] and read["eof"]
     # Native model output uses opaque reader references. Compare their complete
     # machine-owned source identity, not a digest omitted from the model view.
@@ -528,7 +532,10 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     # Identical JSON semantics with different original bytes still fail closed;
     # a reader failure cannot allocate another admission or spend.
     saved_capture.write_bytes(saved_capture.read_bytes() + b" ")
-    rejected = read_context_capture(args)
+    rejected_run = subprocess.run([*reader, "--select", "/heartbeat_receipt"],
+        cwd=project, capture_output=True, text=True, timeout=60)
+    assert rejected_run.returncode != 0
+    rejected = json.loads(rejected_run.stdout)
     assert rejected["ok"] is False and "content" not in rejected
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0

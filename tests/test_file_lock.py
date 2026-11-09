@@ -17,6 +17,7 @@ from loopx.file_lock import (
     _safe_label,
     exclusive_cross_runtime_file_lock,
     exclusive_file_lock,
+    exclusive_mutation_file_lock,
     fcntl,
     lock_holder_path,
     lock_incident_path,
@@ -206,6 +207,46 @@ def test_stalled_holder_times_out_and_records_independent_incident(tmp_path: Pat
         _stop(process)
 
     assert target.with_name(f"{target.name}.lock").exists()
+
+
+def test_marker_timeout_keeps_a_live_kernel_holder_out_of_operator_action(tmp_path: Path) -> None:
+    target = tmp_path / "state.json"
+    process, holder_pid, _ = _start_stalled_holder(target)
+    try:
+        with exclusive_mutation_file_lock(target) as marker:
+            token = json.loads(marker.read_text(encoding="utf-8"))["token"]
+            with pytest.raises(LockAcquireTimeoutError) as raised:
+                with exclusive_mutation_file_lock(target, timeout_seconds=0):
+                    pytest.fail("waiter entered while the mutation marker was owned")
+        payload = raised.value.to_payload()
+        incident = payload["lock_timeout"]
+        assert incident["holder"] == {}
+        assert incident["last_kernel_holder"]["pid"] == holder_pid
+        assert payload["operator_action"]["holder_pid"] is None
+        assert "mutation marker" in payload["operator_action"]["steps"][0]
+        assert "current holder unknown" in str(raised.value)
+        assert token not in json.dumps(payload)
+        assert process.poll() is None
+    finally:
+        _stop(process)
+
+
+def test_kernel_timeout_ignores_an_out_of_range_pid_in_the_record(tmp_path: Path) -> None:
+    target = tmp_path / "state.json"
+    process, _, _ = _start_stalled_holder(target)
+    try:
+        holder_path = lock_holder_path(target)
+        holder = json.loads(holder_path.read_text(encoding="utf-8"))
+        holder["pid"] = 1 << 64
+        holder_path.write_text(json.dumps(holder), encoding="utf-8")
+        with pytest.raises(LockAcquireTimeoutError) as raised:
+            with exclusive_file_lock(target, timeout_seconds=0):
+                pytest.fail("waiter entered while the kernel lock was owned")
+        assert raised.value.incident["holder"] == {}
+        assert raised.value.incident["last_kernel_holder"] == holder
+        assert "current holder unknown" in str(raised.value)
+    finally:
+        _stop(process)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink creation requires privileges")

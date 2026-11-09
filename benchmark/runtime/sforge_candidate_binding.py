@@ -180,23 +180,18 @@ def main(argv: list[str] | None = None) -> int:
     result_source = parser.add_mutually_exclusive_group(required=True)
     result_source.add_argument("--result", type=Path, help="Retained native result JSON for offline verification")
     result_source.add_argument("--submission-id", help="Read one existing result from the installed native relay")
-    parser.add_argument("--todo-id", help="Current Todo for an installed result read")
-    parser.add_argument("--local-finding-id", help="Existing measured finding linked to that Todo")
     parser.add_argument("--generated-file", dest="generated_files", type=_generated_file,
                         action="append", default=[], metavar="SUBMITTED_PATH=PROBE_OUTPUT_PATH")
     args = parser.parse_args(argv)
     if args.submission_id is not None:
-        if not args.todo_id or not args.local_finding_id:
-            parser.error("--submission-id requires --todo-id and --local-finding-id")
         from http.client import HTTPException
 
-        from benchmark.runtime.sforge_native_result import read_candidate_comparison, read_installed_scope
+        from benchmark.runtime.sforge_native_result import read_candidate_measurement, read_installed_scope
 
         try:
-            result = read_candidate_comparison(
+            result = read_candidate_measurement(
                 read_installed_scope(), args.submission_id, observation=args.observation,
                 snapshot=args.snapshot, archive=args.archive, generated_files=args.generated_files,
-                todo_id=args.todo_id, local_finding_id=args.local_finding_id,
             )
         except (OSError, ValueError, EOFError, HTTPException):
             print("Scoped native result unavailable; use sforge-submit --result ID --json for ordinary feedback.",
@@ -209,8 +204,6 @@ def main(argv: list[str] | None = None) -> int:
             status in ("queued", "running")
             or (status == "completed" and isinstance(native.get("report"), dict))
         ) else 1
-    if args.todo_id is not None or args.local_finding_id is not None:
-        parser.error("Todo and finding options require an installed native result read")
     try:
         result = verify_binding(args.observation, args.snapshot, args.result, args.archive, args.generated_files)
     except (OSError, ValueError, EOFError, tarfile.TarError, zlib.error) as error:

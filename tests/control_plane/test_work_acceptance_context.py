@@ -17,7 +17,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
-from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file, prepare_turn_decision_capture
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
@@ -109,8 +109,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = read_cli_policy_payload(json.dumps(cli(
-        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
+    capture = tmp_path / "selected-source"
+    cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+        "--todo-id", selected, "--turn-instance-id", "export-context-turn",
+        "--context-delivery", "auto", "--decision-output-dir", str(capture))
+    # Compare the admitted original, independently of native display aliases.
+    packet = json.loads((capture / "decision.json").read_bytes())
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -172,8 +176,17 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def unavailable(**_kwargs):
         raise OSError("acceptance source unavailable")
 
+    planner_sources = []
+    runtime_result = context_readback.effect_runtime_result
+
+    def observe_planner_source(method, params, **options):
+        if method == "work_item.context.plan":
+            planner_sources.append(params["packet"])
+        return runtime_result(method, params, **options)
+
     with monkeypatch.context() as fault:
         fault.setattr(context_readback, "inspect_goal_acceptance", unavailable)
+        fault.setattr(context_readback, "effect_runtime_result", observe_planner_source)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
@@ -182,6 +195,11 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
+    assert planner_sources
+    for source in planner_sources:
+        assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
+        assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
+        assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
     recovered = read_cli_policy_payload(json.dumps(cli(
         "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
@@ -241,7 +259,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
-        "--turn-envelope", "--decision-output-dir", str(capture))
+        "--turn-envelope", "--decision-output-dir", str(capture), "--context-delivery", "auto")
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
@@ -254,8 +272,11 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(first_envelope, work_contract=first,
-        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
+    plan = build_loopx_turn_plan(first, host="codex-cli", execution_mode="isolated-headless",
+        turn_instance_id="original-delivery")
+    plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "host-capture" / "journal.json",
+        decision=first, existing_journal=False)
+    request = build_loopx_turn_host_request(plan)
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -297,7 +318,9 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
 
     # A capture is an immutable observation. Reading its detail cannot admit
     # changed work, remove a wait or silently rebind the owner's checks.
-    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
+    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery",
+                        "--decision-output-dir", str(tmp_path / "current-decision"),
+                        "--context-delivery", "on", "--delta-delivery", "auto")
     assert code == (0 if change == "checks_removed" else 1), current
     if code == 0:
         current = read_cli_policy_payload(json.dumps(current), returncode=0)

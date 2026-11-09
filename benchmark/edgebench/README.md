@@ -455,17 +455,20 @@ new pairs based on retained upload bytes,
 input revision, evaluator and evidence; earlier measurements stay as recorded.
 
 For an explicit native Explore trial with `local_probe`, opt in with
-`--native-result-comparison`. Once an existing submission has a retained archive
-and a matching recorded local finding, pass `--submission-id ID` instead of
-`--result FILE`, and provide `--todo-id TODO` and `--local-finding-id FINDING`.
-The helper queries that trial's runner-installed relay once and returns the
-native response. For a current claimed Todo and its linked measured finding,
-the comparison includes the native score and matching local measurements with
-their own units, input revisions, evaluators, and evidence. Pending or invalid
-results and unmatched evidence still return the original public feedback.
-The helper never submits, waits for grading, or writes findings; record any
-decision through the ordinary Todo and Explore path. Other arms keep their
-existing tool instructions and behavior.
+`--native-result-comparison`. Use `task:<task_sha256>` from the installed
+`/etc/loopx-benchmark/native-result-scope.json` for the probe and snapshot input
+revision. With the retained archive, pass `--submission-id ID` instead of
+`--result FILE`. One read returns the public feedback and, when the source
+checks pass, `native_measurement` with the full verified submission file-set
+reference and its own evaluator and evidence. Pending or unverified results
+retain the original feedback and an unavailable measurement.
+
+Record local and native measurements on the same claimed Todo with
+[`loopx explore finding --result-json`](../../loopx/capabilities/explore/README.md#quantitative-findings).
+Reuse the exact question and submitted candidate reference. Explore returns
+the comparable change in the write receipt. With a declared Yardstick, the
+receipt can show that the two evaluators prefer different candidates. The
+native read creates no finding and spends no submission opportunity.
 
 For offline diagnosis with the same retained artifacts, use
 `python -m benchmark.runtime.sforge_candidate_binding` from the pinned runner.

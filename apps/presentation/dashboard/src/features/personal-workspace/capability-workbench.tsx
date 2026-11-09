@@ -1,5 +1,6 @@
+import {useRef, useState} from "react";
 import {ContextHelp} from "./context-help";
-import { AlertTriangle, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ShieldCheck, SlidersHorizontal, Search, X } from "lucide-react";
 
 import type { CapabilityConfigurationCatalog } from "../../data/chat";
 import { useWorkspaceI18n, type WorkspaceLocale, type WorkspaceTranslate } from "./i18n";
@@ -91,12 +92,35 @@ export function CapabilityCatalogNavigation({
   showScope?: boolean;
   t: WorkspaceTranslate;
 }>) {
-  const memory = scope === "goal" ? memoryCapabilities(capabilities) : [];
+  const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement>(null);
+  const terms = query.trim().toLocaleLowerCase(locale).split(/\s+/u).filter(Boolean);
+  const visible = capabilities.filter(capability => {
+    const localized = localizeCapability(capability, locale);
+    const text = [capability.capability_id, capability.display_name, capability.description,
+      localized.display_name, localized.description,
+      isMemoryCapability(capability.capability_id) ? memorySettingsTitle(locale) : ""].join(" ").toLocaleLowerCase(locale);
+    return terms.every(term => text.includes(term));
+  });
+  const memory = scope === "goal" ? memoryCapabilities(visible) : [];
   const memorySelected = memory.some(item => item.capability_id === selectedCapabilityId);
   let memoryRendered = false;
   return (
+    <div className="personal-capability-navigation">
+      <div className="personal-capability-search">
+        <Search size={16} aria-hidden />
+        <input ref={search} type="search" value={query} aria-label={locale === "zh-CN" ? "搜索能力" : "Search capabilities"}
+          placeholder={locale === "zh-CN" ? "搜索能力" : "Search capabilities"}
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {if (event.key === "Escape" && query) {event.preventDefault(); event.stopPropagation(); setQuery("");}}}/>
+        {query ? <button type="button" aria-label={locale === "zh-CN" ? "清除能力搜索" : "Clear capability search"}
+          onClick={() => {setQuery(""); search.current?.focus();}}><X size={16} aria-hidden /></button> : null}
+      </div>
+      {terms.length ? <p className="personal-capability-search-result" role="status">{visible.length
+        ? (locale === "zh-CN" ? `${visible.length} 项匹配` : `${visible.length} matching capabilities`)
+        : (locale === "zh-CN" ? "没有匹配的能力，请尝试其他关键词。" : "No matching capabilities. Try another search.")}</p> : null}
     <nav aria-label={t(scope === "goal" ? "capabilities.catalog" : "machine.capabilityCatalog")} className="personal-capability-list" tabIndex={0}>
-      {orderCapabilitiesForPresentation(capabilities, locale).map((rawCapability) => {
+      {orderCapabilitiesForPresentation(visible, locale).map((rawCapability) => {
         if (memory.length && isMemoryCapability(rawCapability.capability_id)) {
           if (memoryRendered) return null;
           memoryRendered = true;
@@ -123,6 +147,7 @@ export function CapabilityCatalogNavigation({
         );
       })}
     </nav>
+    </div>
   );
 }
 

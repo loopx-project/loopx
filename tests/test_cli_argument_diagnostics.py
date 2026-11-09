@@ -214,8 +214,8 @@ def test_todo_list_validation_preserves_exact_unsupported_diagnostic() -> None:
 
     assert str(exc_info.value) == (
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
-        "--format; "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and --format; "
         "unsupported: --note, --evidence"
     )
 

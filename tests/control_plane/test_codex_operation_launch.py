@@ -247,11 +247,12 @@ def test_native_turn_dispatch_failure_drains_before_stop_writer_is_released(
     ))
     arguments[arguments.index("--timeout-seconds") + 1] = "1"
     original_input = codex_operation_host.prepare_codex_cli_input
-    def supplemented_input(request):
-        prompt, schema = original_input(request)
-        return prompt + "\n" + "x" * (8 * 1024 * 1024), schema
 
-    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", supplemented_input)
+    def oversized_input(request):
+        text, schema = original_input(request)
+        return text + "\n" + "x" * (8 * 1024 * 1024), schema
+
+    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", oversized_input)
     sessions, drained_before_release = [], []
     entered = threading.Event()
     original_start = CodexChatAgentSession.start
@@ -319,9 +320,10 @@ def test_guarded_native_dispatch_preserves_large_unicode_input(tmp_path, monkeyp
     monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(observed))
     original_input = codex_operation_host.prepare_codex_cli_input
     supplement = "完整输入☃" * (1024 * 1024)
+
     def supplemented_input(request):
-        prompt, schema = original_input(request)
-        return prompt + "\n" + supplement, schema
+        text, schema = original_input(request)
+        return text + "\n" + supplement, schema
 
     monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", supplemented_input)
     code, payload = _cli([*arguments, "--execute"])

@@ -11,7 +11,7 @@ import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
 import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
 import {fetchExploreResults} from "../src/data/chat.ts";
-import {ResearchGoalNavigation} from "../src/features/personal-workspace/goal-research-workbench.tsx";
+import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-research-workbench.tsx";
 
 // The persisted directory can organize explicitly linked physical sources.
 // Navigation must not turn organization into shared evidence or execution.
@@ -23,15 +23,17 @@ const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
 assert.ok(renderedStudy.includes(study.title));
 assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
 assert.ok(renderedStudy.includes('not current results'));
-assert.ok(renderedStudy.includes('unknown'), 'Missing values do not become zero');
+assert.match(renderedStudy, /候选 A<.*?>7<.*?候选 B<.*?>Not recorded<.*?候选 C<.*?>3</,
+  'Saved chart observations stay in author order, with numbers and the unrecorded value visible together');
 for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
 const goals = [
   {goalId:'parent',title:'Benchmark'},
   {goalId:'child',parentGoalId:'parent',title:'Local case'},
   {goalId:'foreign',parentGoalId:'parent',title:'Foreign case',sourceAccess:{namespace:'other',label:'Other',readOnly:true}},
 ];
-const navigate = goalId => renderToStaticMarkup(createElement(ResearchGoalNavigation, {
-  goalId, goals, zh:false, onSelect: () => {throw Error('read navigated');},
+const navigate = goalId => renderToStaticMarkup(createElement(GoalResearchWorkbench, {
+  goalId, goals, zh: false, active: true, refreshRevision: 0,
+  statusNotice: createElement("p", null, "Loading status"), onSelectGoal: () => {throw Error('read navigated');},
 }));
 assert.ok(navigate('parent').includes('Local case'));
 assert.ok(navigate('parent').includes('Foreign case'));

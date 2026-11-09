@@ -1,12 +1,14 @@
 import type {JsonObject} from "../effect_program.ts";
+import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
 const RESERVED = new Set([
-  "schema_version", "turn_key", "turn_envelope", "session", "goal_ref", "route",
+  "schema_version", "turn_key", "turn_envelope", "work_contract", "source_decision_hash",
+  "session", "goal_ref", "route",
   "result_contract", "capability_context_fields", "capability_instructions",
   "capability_result_fields", "result_kind", "completed_phases", "classification",
   "next_action", "recommended_action", "summary", "agent_vision_json",
@@ -19,13 +21,25 @@ const RESERVED = new Set([
 ]);
 const FIELD = /^[a-z][a-z0-9_]{2,95}$/;
 
-function contextSource(value: unknown): JsonObject {
+function contextSource(value: unknown, bindReaderLocation = false): JsonObject {
   const source = requireJsonObject(value, "context source");
-  // Reuse the governing owner. Binding the original observation adds detail
-  // locations/measurements without changing the authorized decision.
+  if (source.schema_version === "loopx_turn_host_request_v1") {
+    // These identities come from the complete-source validator. The basis
+    // does not include the reader location or regenerate a legacy signature.
+    const turnKey = requireNonEmptyString(source.turn_key, "context Turn key");
+    const sourceHash = requireNonEmptyString(source.source_decision_hash, "context source hash");
+    if (!ENVELOPED_SHA256_PATTERN.test(turnKey) || !ENVELOPED_SHA256_PATTERN.test(sourceHash)) {
+      throw new Error("invalid complete context binding");
+    }
+    return {turn_key: turnKey, source_decision_hash: sourceHash};
+  }
+  // The replan reader generates commands that carry the capture's own hash.
+  // Bind the governing action and settlement rather than these read addresses.
+  const {replan_read_path: _readerPath, ...beforeReaderBinding} = source;
   return {goal_id: source.goal_id, agent_id: source.agent_id,
     governing: "heartbeat_receipt" in source
-      ? quotaActionSignatureDocument(source) : turnEnvelopeActionSignatureDocument(source)};
+      ? quotaActionSignatureDocument(bindReaderLocation ? source : beforeReaderBinding)
+      : turnEnvelopeActionSignatureDocument(source)};
 }
 
 function fields(value: unknown, label: string): JsonObject {
@@ -69,6 +83,15 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   }
   const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
+  if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
+    // A status-only result is returned to the guard and is never a reusable
+    // context contribution. Keep its registration, slot and budget checks.
+    if (Object.hasOwn(input, "source") || Object.keys(context).length ||
+        instructions.length || Object.keys(resultFields).length) {
+      throw new Error("readback-only context validation cannot carry a source or a contribution");
+    }
+    return normalized;
+  }
   return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(input.source), ...normalized})};
 }
 
@@ -82,6 +105,24 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
     result: {context_fields: contribution.context_fields, instructions: contribution.instructions,
       result_fields: contribution.result_fields, readback}});
   if (contribution.basis_digest !== normalized.basis_digest) {
+    const source = requireJsonObject(input.source, "context source");
+    const {basis_digest: _currentBasis, ...value} = normalized;
+    if (source.schema_version === "loopx_turn_host_request_v1" && Object.hasOwn(source, "recorded_projection")) {
+      const legacyBasis = canonicalAuthoritySha256({source: contextSource(source.recorded_projection), ...value});
+      if (contribution.basis_digest === legacyBasis) {
+        // An already validated result can recover its original bounded slots.
+        // The historical basis is insufficient to deliver advice to a Host.
+        return {...normalized, context_fields: {}, instructions: [], basis_digest: legacyBasis};
+      }
+    }
+    // An existing unversioned quota observation may already have been bound
+    // to its exact reader. Preserve that basis only on an exact legacy match.
+    if (source.schema_version !== "loopx_turn_host_request_v1" &&
+        "heartbeat_receipt" in source && !Object.hasOwn(source, "contract_binding") &&
+        typeof source.replan_read_path === "string") {
+      const legacyBasis = canonicalAuthoritySha256({source: contextSource(source, true), ...value});
+      if (contribution.basis_digest === legacyBasis) return {...normalized, basis_digest: legacyBasis};
+    }
     throw new Error("context source or contribution changed after registration");
   }
   return normalized;

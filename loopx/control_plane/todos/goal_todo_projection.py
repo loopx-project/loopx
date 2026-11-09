@@ -74,7 +74,9 @@ def observe_todo_acceptance(
         canonical, registry_path=registry_path, goal_id=goal_id)
     summary = fields.get("agent_todos")
     if isinstance(summary, dict) and "goal_acceptance_contract" in summary:
-        return {**fields, "agent_todos": {**summary, "goal_acceptance_contract": acceptance}}
+        from .summary_item import preserve_canonical_todo_source
+        return {**fields, "agent_todos": preserve_canonical_todo_source(summary,
+            {**summary, "goal_acceptance_contract": acceptance})}
     return fields
 
 
@@ -248,7 +250,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
     from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
     from ..runtime.private_permissions import protect_private_path
 
-    request = {"schema_version": "todo_read_request_v0", **params}
+    native_read = None
+    if params.get("kind") == "select":
+        from .summary_item import canonical_todo_select_read
+        native_read = canonical_todo_select_read(params)
+    request = {"schema_version": "todo_read_request_v0", **(native_read or params)}
     encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     chunks: list[bytes] = []
     identity = None
@@ -277,7 +283,8 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     break
                 if not isinstance(piece, dict) or piece.get("offset") != consumed:
                     raise ValueError("invalid Todo read result page")
-                current = (piece.get("sha256"), piece.get("byte_count"))
+                current = (piece.get("sha256"), piece.get("byte_count"),
+                           piece.get("content_encoding"), piece.get("decoded_byte_count"))
                 if identity is None:
                     identity = current
                 if identity != current or type(current[1]) is not int or current[1] <= consumed:
@@ -294,7 +301,7 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     complete = b"".join(chunks)
                     if consumed != current[1] or hashlib.sha256(complete).hexdigest() != current[0]:
                         raise ValueError("Todo read result digest mismatch")
-                    result = json.loads(complete)
+                    result = _decode_todo_result_bytes(complete, current[2], current[3])
                     break
                 if not isinstance(after, dict) or after.get("offset") != consumed or after.get("sha256") != current[0]:
                     raise ValueError("invalid Todo read result continuation")
@@ -305,6 +312,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid typed Todo read result")
     if result.get("rejection"):
         raise EffectRuntimeRejected(result["rejection"]["message"])
+    if result.get("canonical") is not None and (native_read is not None or params.get("kind") == "quota_projection"):
+        from ..coordination.local_authority import validate_canonical_todo_read
+        read = native_read or next(request["summary_request"]["source_reference"]["read"]
+            for request in params["requests"] if "source_reference" in request["summary_request"])
+        validate_canonical_todo_read(result["canonical"], goal_id=read["source"]["goal_id"])
     if params.get("kind") == "group":
         summary = result.get("summary")
         if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":
@@ -313,7 +325,48 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
             frontier = summary.get("advancement_frontier_revision_index")
             if not isinstance(frontier, dict) or frontier.get("schema_version") != "todo_frontier_revision_index_v0":
                 raise ValueError("invalid typed Todo summary frontier index")
+    if params.get("kind") in {"canonical_fields", "query"} or native_read is not None:
+        _bind_todo_read_sources(result, native_read or params, native_selection=native_read is not None)
     return result
+
+
+def _decode_todo_result_bytes(data: bytes, encoding: Any, size: Any) -> dict[str, Any]:
+    import json
+    from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+
+    if encoding is None:
+        if size is not None:
+            raise ValueError("invalid Todo read result encoding")
+    elif encoding == "gzip" and type(size) is int and 0 < size <= MAX_LOCAL_SNAPSHOT_BYTES:
+        import zlib
+        try:
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            decoded = decoder.decompress(data, size + 1)
+        except zlib.error as error:
+            raise ValueError("invalid compressed Todo read result") from error
+        if len(decoded) != size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise ValueError("invalid compressed Todo read result")
+        data = decoded
+    else:
+        raise ValueError("invalid Todo read result encoding")
+    result = json.loads(data)
+    if not isinstance(result, dict):
+        raise ValueError("invalid typed Todo read result")
+    return result
+
+
+def _bind_todo_read_sources(result: dict[str, Any], read: dict[str, Any], *, native_selection: bool) -> None:
+    from .summary_item import bind_canonical_todo_sources
+
+    bind_canonical_todo_sources(result, read)
+    if native_selection and result.get("projection"):
+        from .succession_warning import _EvaluatedTodo
+        projection = result["projection"]
+        for field, decisions in result["field_evaluations"].items():
+            summary = projection["summaries"][field]
+            summary["items"] = [_EvaluatedTodo(item, decision)
+                for item, decision in zip(summary["items"], decisions, strict=True)]
+        projection["todos"] = [item for summary in projection["summaries"].values() for item in summary["items"]]
 
 
 def restore_todo_field_evaluations(result: dict[str, Any]) -> dict[str, Any]:

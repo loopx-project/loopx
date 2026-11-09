@@ -339,6 +339,7 @@ def build_goal_portfolio(
     include_goal_lifecycle: bool = False,
     include_goal_attention: bool = False,
     include_goal_instance_id: bool = False,
+    read_status: bool = True,
 ) -> dict[str, Any]:
     """Read only the requested registry scope; never derive inventory from chat."""
     if not 1 <= limit <= 128 or not 0 < max_age_hours <= 8760:
@@ -393,7 +394,8 @@ def build_goal_portfolio(
     shared_status = None
     before = {}
     if (
-        goal_ids is None
+        read_status
+        and goal_ids is None
         and 1 < len(inspected) <= limit
         and all(counts[g] == 1 for g in inspected)
     ):
@@ -421,6 +423,9 @@ def build_goal_portfolio(
                     "warnings": ["duplicate_registry_identity"],
                 }
             )
+        elif not read_status:
+            rows.append({"goal_id": goal_id, "quality": SourceQuality.OMITTED.value,
+                         "progress": "unknown", "warnings": ["goal_not_read"]})
         elif positions[goal_id] >= limit:
             rows.append(
                 {
@@ -464,7 +469,7 @@ def build_goal_portfolio(
         changed = True
     if changed:
         for row in rows:
-            if row["quality"] != "omitted" or row["goal_id"] in stopped:
+            if not read_status or row["quality"] != "omitted" or row["goal_id"] in stopped:
                 row.update(quality="conflicting", progress="unknown", activation_state="unknown")
                 row["warnings"].append("inventory_changed_during_collection")
                 if row.get("goal_lifecycle", {}).get("status") != "unavailable":

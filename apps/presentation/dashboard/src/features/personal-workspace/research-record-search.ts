@@ -1,4 +1,4 @@
-import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
+import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import type {ExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.ts";
 
 /** The history reader supplies its already qualified, current-language projection.
@@ -7,6 +7,29 @@ export type ResearchRecordDisplay = {
   events?: ReadonlyMap<string, ExploreHistoryEvent>;
   sections?: ReadonlyMap<string, ExploreFindingSections | null>;
 };
+
+/** A node and its sole linked finding may describe the same research entry.
+ * Multiple finding identities or conflicting runs leave the records separate.
+ * Keep original records, including revisions, in their recorded order. */
+export function researchRecordGroups(matches: readonly ExploreHistoryEvent[], nodes: readonly ExploreHistoryNode[]) {
+  const linked = new Map<string, ExploreHistoryNode>();
+  for (const node of nodes) {
+    const members = [...node.revisions, ...node.findings];
+    const findingIds = new Set(members.filter(event => event.event_kind === "finding").map(event => event.result_id));
+    const runs = new Set(members.map(event => event.run_id).filter(Boolean));
+    if (findingIds.size !== 1 || runs.size > 1) continue;
+    for (const event of members) linked.set(event.event_id, node);
+  }
+  const groups = new Map<string, {id: string; node?: ExploreHistoryNode; events: ExploreHistoryEvent[]}>();
+  for (const event of matches) {
+    const node = linked.get(event.event_id);
+    const id = node ? `node:${node.id}` : `event:${event.event_id}`;
+    const group = groups.get(id);
+    if (group) group.events.push(event);
+    else groups.set(id, {id, node, events: [event]});
+  }
+  return [...groups.values()];
+}
 
 /** Search source records, including superseded revisions, before display paging.
  * Optional display text broadens matching; results remain the original records.

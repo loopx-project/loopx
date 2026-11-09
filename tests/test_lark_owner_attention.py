@@ -129,7 +129,7 @@ def test_disabled_notifications_preserve_all_four_existing_delivery_slots(owner,
             all_started.set()
         release.wait(5)
         return 0
-    monkeypatch.setattr(o.transport, "pending_delivery_paths", lambda: [Path(str(i)) for i in range(4)])
+    monkeypatch.setattr(o.transport, "pending_body_paths", lambda: [Path(str(i)) for i in range(4)])
     monkeypatch.setattr(o.transport, "reconcile_request", existing_reply)
     monkeypatch.setattr(o.attention, "reconcile", lambda: pytest.fail("disabled notifications must not schedule a job"))
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=o.store.root.parent,

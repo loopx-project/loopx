@@ -211,6 +211,7 @@ def _base_argv(
         "isolated-headless",
         "--project",
         str(workspace),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--host-command-json",
         host_command,
         "--validation-command-json",

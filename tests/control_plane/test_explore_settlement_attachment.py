@@ -109,7 +109,9 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
 def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path, mode):
     import subprocess
     import sys
-    from tests.test_loopx_turn_driver import _write_live_fixture
+    from tests.test_loopx_turn_driver import (
+        _write_live_fixture, _completion_host_and_validation_scripts, _turn_run_once_completion_argv,
+    )
     from loopx.configure_goal import configure_goal
 
     project, runtime, path = _write_live_fixture(tmp_path)
@@ -124,10 +126,23 @@ def test_driver_owned_turn_plan_does_not_invent_cli_attachment_command(tmp_path,
     assert packet["schema_version"] == "loopx_turn_plan_v1"
     assert "turn_envelope" not in packet
     assert "settlement_plan" not in packet["work_contract"]["interaction_contract"]["cli_channel"]
-    # This host owns writeback through callbacks, not an agent refresh command.
-    # Its read hook still exposes Explore, without promising a CLI attachment
-    # transport in the callback plan.
-    hooks = packet.get("turn_start_capability_hook_dispatch", {}).get("results", [])
+    # Inspection is pure. Execute the original driver-owned path to observe its
+    # activation-bound hook and the exact input actually received by the Host.
+    assert "turn_start_capability_hook_dispatch" not in packet["work_contract"]
+    workspace = project / "host-workspace"
+    workspace.mkdir()
+    host, validate = _completion_host_and_validation_scripts()
+    host = host.replace('request = json.load(sys.stdin)',
+        'request = json.load(sys.stdin)\npathlib.Path("received.json").write_text(json.dumps(request))')
+    executed = subprocess.run([
+        sys.executable, "-m", "loopx.cli",
+        *_turn_run_once_completion_argv(workspace, runtime, path, host, validate),
+    ], capture_output=True, text=True, timeout=90)
+    assert executed.returncode == 0, executed.stdout + executed.stderr
+    request = json.loads((workspace / "received.json").read_text())
+    source = request["work_contract"]
+    assert "settlement_plan" not in source["interaction_contract"]["cli_channel"]
+    hooks = source.get("turn_start_capability_hook_dispatch", {}).get("results", [])
     assert any(h.get("capability_id") == "explore" for h in hooks) == (mode != "off")
 
 

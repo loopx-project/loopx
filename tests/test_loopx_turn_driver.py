@@ -1902,9 +1902,16 @@ def test_turn_cli_inspection_cannot_become_execution(
     assert code == 0, inspection
     assert inspection["route"] == original_plans[0]["route"]
     assert inspection["schema_version"] == "loopx_turn_plan_v1" and "turn_envelope" not in inspection
-    assert json.dumps(inspection["work_contract"], sort_keys=True) == json.dumps(
+    recovered = inspection["work_contract"]
+    if not transaction_detail and recovered.get("schema_version") != "loopx_turn_envelope_v1":
+        from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+        body, _, _ = read_pinned_cli_body(inspection["detail_ref"]["command"])
+        recovered = json.loads(body)
+        assert "future_fixture_observation" not in inspection["work_contract"]
+    assert json.dumps(recovered, sort_keys=True) == json.dumps(
         original_plans[0]["work_contract"], sort_keys=True)
-    assert inspection["work_contract"]["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
+    assert recovered["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
     if transaction_detail:
         # Explicit detail retains transport metadata, never a second source.
         detailed = build_loopx_turn_host_request(inspection)
@@ -1913,6 +1920,10 @@ def test_turn_cli_inspection_cannot_become_execution(
         # Even restoring valid transaction detail cannot promote inspection.
         inspection["transaction"] = original_plans[0]["transaction"]
         inspection["session"] = original_plans[0]["session"]
+        with pytest.raises(ValueError, match="CLI inspection"):
+            build_loopx_turn_host_request(inspection)
+        # Reading the exact complete source grants no execution authority.
+        inspection["work_contract"] = recovered
         with pytest.raises(ValueError, match="CLI inspection"):
             build_loopx_turn_host_request(inspection)
     request = build_loopx_turn_host_request(original_plans[0])
@@ -1966,7 +1977,13 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
 
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
-    assert payload["work_contract"]["schema_version"] == "loopx_turn_envelope_v1"
+    source = payload["work_contract"]
+    if source.get("schema_version") != "loopx_turn_envelope_v1":
+        from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+        body, _, _ = read_pinned_cli_body(payload["detail_ref"]["command"])
+        source = json.loads(body)
+    assert source["schema_version"] == "loopx_turn_envelope_v1"
     assert "turn_envelope" not in payload
     assert len(status_reads) == 1, (
         "`turn` must read its live status through the shared Turn decision "
@@ -2285,6 +2302,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "codex-fixture",
             "--project",
             str(host_project),
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
             "--host-adapter-command-json",
             json.dumps([sys.executable, "-c", host_script]),
             "--validation-command-json",
@@ -2383,6 +2401,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 "codex-fixture",
                 "--project",
                 str(host_project),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-command-json",
                 json.dumps([sys.executable, "-c", host_script]),
                 "--validation-command-json",
@@ -2418,7 +2437,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--host", "generic-cli", "--goal-id", "loopx-turn-fixture",
             "--agent-id", "codex-fixture", "--turn-instance-id", "next-cadence-fixture",
-            "--project", str(host_project), "--host-command-json",
+            "--project", str(host_project), "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
             json.dumps([sys.executable, "-c", host_script]), "--validation-command-json",
             json.dumps([sys.executable, "-c", validation_script]),
             "--no-global-sync", "--execute",
@@ -2467,6 +2486,7 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
             "--format", "json", "turn", "run-once", "--host", "generic-cli",
             "--goal-id", scope["goal_id"], "--agent-id", scope["agent_id"],
             "--turn-instance-id", "start-checkpoint-fixture", "--project", str(project),
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
             "--host-adapter-command-json", json.dumps([sys.executable, "-c", host_script]),
             "--no-global-sync", "--execute"]
     persist, make_cadence = executor._write_journal, turn_cadence.managed_cadence_start
@@ -2838,6 +2858,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
         "codex-fixture",
         "--project",
         str(host_project),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--host-adapter-command-json",
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
@@ -3096,6 +3117,7 @@ def _turn_run_once_completion_argv(
         "codex-fixture",
         "--project",
         str(project),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--host-adapter-command-json",
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
@@ -3755,6 +3777,7 @@ raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
                 "codex-fixture",
                 "--project",
                 str(host_project),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-command-json",
                 json.dumps([sys.executable, "-c", host_script]),
                 "--validation-command-json",
@@ -4107,7 +4130,8 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
             "json.dump(result, sys.stdout)\n",
             encoding="utf-8",
         )
-        host_args += ["--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
+        host_args += ["--host-adapter-request-schema", "loopx_turn_host_request_v1",
+                      "--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
     args = [
         "--registry",
         str(registry),

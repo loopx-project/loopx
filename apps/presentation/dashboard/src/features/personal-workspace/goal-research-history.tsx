@@ -11,7 +11,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import type {WorkspaceGoal} from "./personal-workspace-model";
-import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
+import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
@@ -196,7 +196,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     const controller = new AbortController();
     setBusy(true); setError(""); setLoaded(0);
     void (async () => {
-      const events: ExploreHistoryEvent[] = [];
+      const events = new Map<string, ExploreHistoryEvent>();
+      // The server counts stored rows, including identical persisted replays.
+      // Keep their order for snapshot identity, independently of display deduplication.
+      let sourceRows: ExploreHistoryEvent[] | null = [];
       const cursors = new Set<string>();
       let total = -1;
       try {
@@ -205,21 +208,29 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
           const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), originalGoalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
-          total = page.total; events.push(...page.items);
-          if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
-          if (current) setLoaded(events.length);
+          total = page.total;
+          mergeExploreHistoryEvents(events, page.items, originalGoalId);
+          if (events.size > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
+          if (sourceRows) {
+            if (sourceRows.length + page.items.length <= total) sourceRows.push(...page.items);
+            else sourceRows = null;
+          }
+          if (current) setLoaded(sourceRows?.length ?? events.size);
           cursor = page.next_cursor ?? "";
           if (cursor) cursors.add(cursor);
           // The owning HTTP snapshot bounds size; never silently cap history here.
         } while (cursor && current);
         if (current) {
-          if (cursor || events.length !== total) throw new Error("Explore history coverage mismatch");
-          projectExploreHistory(events, originalGoalId); // Verify replay identities before replacing a valid snapshot.
-          setRead({events, total, complete: true});
+          // An overfull delivery is usable only if the excess consists entirely
+          // of exact replays and we still received every reported row as a distinct event.
+          if (cursor || (sourceRows ? sourceRows.length !== total : events.size !== total)) {
+            throw new Error("Explore history coverage mismatch");
+          }
+          setRead({events: sourceRows ?? [...events.values()], total, complete: true});
         }
       } catch (failure) {
         if (current) {
-          if (events.length) setRead(previous => previous.complete ? previous : {events, total: Math.max(total, events.length), complete: false});
+          if (events.size) setRead(previous => previous.complete ? previous : {events: [...events.values()], total: Math.max(total, events.size), complete: false});
           setError(failure instanceof Error ? failure.message : String(failure));
         }
       } finally {if (current) setBusy(false);}
@@ -327,9 +338,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const clusterY = layout.length ? Math.max(...layout.map(item => item.y + 124)) + 24 : 24;
   const width = Math.max(600, grouped.groups.length ? 944 : 0, ...layout.map(item => item.x + 230));
   const height = Math.max(230, ...layout.map(item => item.y + 124), grouped.groups.length ? clusterY + Math.ceil(grouped.groups.length / 4) * 124 : 0);
-  const select = (next: Selection, focus = true) => {
+  const select = (next: Selection, focus = true, openingControl?: HTMLButtonElement) => {
     if (focus && (next.nodes.length || next.day !== null)) {
-      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      opener.current = openingControl ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       focusPending.current = true;
     }
     next = {...next, question: next.question ?? !next.finding,
@@ -415,7 +426,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </ContextHelp>
     </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups}
+          onGroupSelect={(day, button) => select({nodes: [], day}, true, button)} phase={phase} onPhase={next => chooseView(lens, next)}
+          onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={(nodes, button) => select({nodes, day: null}, true, button)} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">
@@ -447,7 +460,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
             </span> : <span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${findingCopy.count(node.findings.length)}` : ""}</span>}
           </button>})}
           {grouped.groups.map((group, index) => <button type="button" key={`day:${group.day}`} className={`research-history-node research-history-group${selectedGroup === group ? " is-selected" : ""}`} style={{left: (index % 4) * 230 + 24, top: clusterY + Math.floor(index / 4) * 124}}
-            data-research-day={group.day} aria-pressed={selectedGroup === group} onClick={() => select({nodes: [], day: group.day})}>
+            data-research-day={group.day} aria-pressed={selectedGroup === group} onClick={event => select({nodes: [], day: group.day}, true, event.currentTarget)}>
             <span className="research-node-meta"><Circle size={12} aria-hidden/>{zh ? "未关联问题" : "Unlinked questions"}</span>
             <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions} · {zh ? "展开全部" : "read all"}</span>
           </button>)}
@@ -468,6 +481,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   };
   const readFailure = error || history.error;
   const emptyHistory = !busy && !readFailure && read.complete && read.total === 0;
+  const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
+    ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = preferHistory && emptyHistory;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
@@ -513,7 +528,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         <p>{zh ? "已保存的分析、原生测量与 Explore 历程分别读取。这个 Goal 没有已记录的 Explore 历程；已保存的结果仍可在下方阅读。" : "Saved analysis, native measurements and Explore history are read separately. This Goal has no recorded Explore history; its saved results remain readable below."}</p>
       </ContextHelp></> : <>{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
+          : `${read.events.length} / ${read.total} ${recordUnit}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
       {!readingSelection ? displayControl : null}
     </div> : null}
     {readFailure ? <div className="research-history-read-error" role="alert">
@@ -623,7 +638,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
         <button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{copy.all}</button>
-        <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
+        <h3>{selectedGroup ? `${selectedGroup.day ? `${selectedGroup.day} UTC` : copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
         {displayControl}
         <ol className="research-question-index">{selectedMembers.map(node => <li key={node.id} data-research-node={node.id}>
           <button type="button" onClick={() => {collectionOpener.current = opener.current; chooseQuestion(node, {nodes: selection.nodes, day: selection.day});}}>
@@ -647,6 +662,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
+        nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={findingBody}

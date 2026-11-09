@@ -193,6 +193,15 @@ findings by the same agent on the linked question. Each profile keeps its own
 input and evaluator revisions, and cross-profile comparison still requires the
 same candidate pair. Findings with their own Yardstick decision retain their
 original work and target scope.
+The primary settlement records a server-owned canonical event-prefix count and
+content-bound event-id digest for these citations. Attachment recovery verifies
+that original prefix; later ingestion order cannot expand its evidence. Old
+captures without this source snapshot remain readable, but plain cited
+measurements stay unknown rather than acquiring the recovery-time graph.
+Readback replays that prefix through the existing Explore projection, so a later
+update to the same finding cannot rewrite its cited measurement.
+The server-only source snapshot stays out of presentation capture payloads;
+independently installed readers retain the existing decision/binding wire shape.
 
 ### 5.3 Co-discovery: invest in a pair
 
@@ -560,6 +569,14 @@ guidance adds no required comparison, evaluator call, decision attachment or
 review, and does not infer a profile from metric names or recent presentation
 order. A larger measurement index remains on demand rather than enlarging every
 opening read. Actual model adoption and outcome benefit remain unqualified.
+
+During an open Turn, an explicit Explore finding can use the ordinary result
+attachment and the same canonical Todo question as refresh-state. Its write
+receipt includes the changed measurement groups and an advisory comparison
+when the confirmed evidence covers the same two candidates on both declared
+profiles. The native adapter verifies the submission and supplies measurement
+facts. Explore and Yardstick own the association, comparison and readback.
+
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

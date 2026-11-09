@@ -32,12 +32,16 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
     log = explore_result_log_path(runtime, "evidence-goal")
     append_explore_result_event(log, build_explore_node_event(
         goal_id="evidence-goal", node_id="question", title="Bounded input hypothesis",
-        node_kind="question", summary="Inputs with a finite prefix",
+        node_kind="question", summary="Inputs with a finite prefix", recorded_at="2026-01-02T08:00:00+08:00",
     ))
     for index in range(41):
         append_explore_result_event(log, build_explore_finding_event(
             goal_id="evidence-goal", node_id="question", finding_id=f"finding_{index}",
             title=f"Observation {index}", status="refuted",
+            recorded_at=(
+                "2026-02-01T12:00:00" if index == 0
+                else "2026-01-03T00:45:00Z" if index == 40 else "2026-01-02T00:30:00Z"
+            ),
             summary="Counterexample at input revision A " + "c" * 1700 + "; do not transfer beyond the tested scope.",
             evidence_refs=["artifact:counterexample"], agent_id="worker",
         ))
@@ -103,6 +107,22 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
         assert page["total"] == 41 and len(page["items"]) == 40
         history = read(base + "evidence-goal&view=history")
         assert history["total"] == 42 and len(history["items"]) == 40
+        timing_url = base + "evidence-goal&view=history-timing"
+        assert read(timing_url) == {
+            "ok": True, "goal_id": "evidence-goal", "source_namespace": None,
+            "first_recorded_at": "2026-01-02T00:00:00Z",
+            "last_recorded_at": "2026-01-03T00:45:00Z",
+            "untimed_record_count": 1, "strategy_recorded_at": None,
+        }
+        empty = read(base + "other-goal&view=history-timing")
+        assert empty["first_recorded_at"] is None and empty["last_recorded_at"] is None
+        assert empty["untimed_record_count"] == 0
+        with pytest.raises(HTTPError) as no_pages:
+            read(timing_url + "&cursor=stale")
+        assert no_pages.value.code == 400
+        with pytest.raises(HTTPError) as denied_timing:
+            read(Request(timing_url, headers={"Origin": "https://unrelated.example"}))
+        assert denied_timing.value.code == 403
         item = page["items"][0]
         assert item["scope"] == "Inputs with a finite prefix"
         assert item["status"] == "refuted"
@@ -129,8 +149,12 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
             read(base + "evidence-goal")
         assert corrupt.value.code == 409
         assert str(tmp_path).encode() not in corrupt.value.read()
+        with pytest.raises(HTTPError) as corrupt_timing:
+            read(timing_url)
+        assert corrupt_timing.value.code == 409
         log.write_bytes(before)
         assert read(base + "evidence-goal")["total"] == 41
+        assert read(timing_url)["last_recorded_at"] == "2026-01-03T00:45:00Z"
         state.unlink()
         assert len(read(base + "evidence-goal")["items"][0]["linked_todos"]) == 2
     finally:
@@ -223,3 +247,57 @@ def test_saved_findings_survive_unavailable_task_associations(tmp_path, monkeypa
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provider, monkeypatch):
+    from tests.control_plane.test_work_yardstick_cli import (
+        setup, attachment, refresh, GOAL_ID, AGENT_ID, TODO_ID,
+    )
+    project, runtime, registry = setup(tmp_path, active=True, provider=provider)
+    source = tmp_path / "capture.json"
+    source.write_text(json.dumps(attachment()))
+    receipt = refresh(project, runtime, registry, "presentation-source", source)
+    assert receipt["explore_result_delivery"]["ok"]
+    log = explore_result_log_path(runtime, GOAL_ID)
+    original = log.read_bytes()
+    records = [json.loads(line) for line in original.splitlines()]
+    capture = next(row["work_yardstick"] for row in records if "work_yardstick" in row)
+    assert "source_snapshot" in capture
+    append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL_ID, agent_id=AGENT_ID,
+        node_id=receipt["explore_result_delivery"]["node_id"], finding_id="finding-presentation-2",
+        title="Another captured declaration", evidence_refs=attachment()["evidence_refs"], work_yardstick=capture))
+    original = log.read_bytes()
+    import loopx.control_plane.work_items.yardstick_decision as transport
+    invoke, batches = transport.effect_runtime_result, []
+    def observe(operation, params):
+        if operation == "work_item.yardstick.presentation":
+            batches.append(len(params["captures"]))
+        return invoke(operation, params)
+    monkeypatch.setattr(transport, "effect_runtime_result", observe)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.runtime_root = registry, str(runtime), runtime
+    server.verbose = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
+    try:
+        for suffix in ("", "&view=history"):
+            previous = len(batches)
+            with urlopen(base + suffix) as response:
+                page = json.load(response)
+            assert batches[previous:] == [2]
+            public = next(row for row in page["items"] if "work_yardstick" in row)
+            assert all(set(row["work_yardstick"]) == {"decision", "binding"}
+                for row in page["items"] if "work_yardstick" in row)
+            # Installed readers decode precisely these two capture fields.
+            assert set(public["work_yardstick"]) == {"decision", "binding"}
+            assert public["work_yardstick"] == {key: capture[key] for key in ("decision", "binding")}
+            assert public["work_yardstick"]["binding"]["todo_id"] == TODO_ID
+            assert public["work_yardstick"]["binding"]["agent_id"] == AGENT_ID
+            assert public["evidence_refs"] == attachment()["evidence_refs"]
+        assert log.read_bytes() == original
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()

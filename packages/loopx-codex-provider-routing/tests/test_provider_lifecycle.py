@@ -2,7 +2,6 @@
 import importlib
 import io
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -128,10 +127,19 @@ def test_real_detached_old_build_replaced_once_with_same_routes_and_private_stat
         value["steward_token"] = "replacement-steward-" + "q" * 32
         native.atomic(owner.root / "api-relay.json", value)
         assert not life.status(owner, consumer="steward")["ready"]
-        with owner._lock(name="api-relay-state.lock"):
-            life.reconcile(owner, value, consumer="steward")
-        assert life.status(owner, consumer="steward")["ready"]
+        staged_route = (owner.root / "api-relay.json").read_bytes()
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx_codex_provider_routing.provider",
+             "--runtime-root", str(owner.root.parents[1])],
+            input=json.dumps({"schema_version": "loopx_native_account_provider_v1",
+                              "operation": "reconcile", "execute": True}),
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, result.stdout
+        outcome = json.loads(result.stdout)
+        assert outcome["effect_performed"] and outcome["same_relay_instance"]
+        assert outcome["consumer_readiness"]["steward"]["ready"]
         assert life.status(owner)["runtime"]["pid"] != current["runtime"]["pid"]
+        assert (owner.root / "api-relay.json").read_bytes() == staged_route
     finally:
         live = life.runtime(value)
         if live:
@@ -178,10 +186,89 @@ def test_provider_doctor_checks_real_dependencies_and_does_not_start_unconfigure
     before = list(owner.root.iterdir())
     result = provider.doctor(owner)
     assert result["installation_ready"] and result["relay"]["state"] == "not_started"
+    assert result["consumer_readiness"]["steward"]["state"] == "not_configured"
+    assert result["same_relay_instance"] is None
     assert result["message_delivery_verified"] is False and list(owner.root.iterdir()) == before
     monkeypatch.setenv("PATH", "")
     with pytest.raises(Exception, match="node_unavailable"):
         provider.doctor(owner)
+
+
+def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, monkeypatch):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    worker_token, steward_token = "worker-" + "w" * 32, "steward-" + "s" * 32
+    monkeypatch.setenv("PYTHONPATH", str(SRC))
+    server = relay.RelayServer(owner, {"port": 0, "token": worker_token, "steward_token": steward_token})
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    route_file = owner.root / "api-relay.json"
+    base = {"schema_version": relay.SCHEMA, "port": server.server_port, "token": worker_token}
+    def doctor(credentials):
+        native.atomic(route_file, {**base, **credentials})
+        before = route_file.read_bytes()
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx_codex_provider_routing.provider",
+             "--runtime-root", str(owner.root.parents[1]), "--doctor"],
+            capture_output=True, text=True, timeout=8)
+        assert route_file.read_bytes() == before
+        assert worker_token not in result.stdout and steward_token not in result.stdout
+        return result.returncode, json.loads(result.stdout)
+    try:
+        code, both = doctor({"steward_token": steward_token})
+        assert code == 0
+        code, stale = doctor({"steward_token": "stale-steward-" + "x" * 32})
+        # Extension installation uses the process status, not the JSON output.
+        assert code == 1
+        assert stale["installation_ready"] is False
+        assert stale["consumer_readiness"]["worker"]["ready"] is True
+        assert stale["consumer_readiness"]["steward"]["state"] == "unavailable"
+        assert stale["same_relay_instance"] is None
+        assert request(server, "/health", worker_token)[0] == 200
+        assert both["same_relay_instance"] is True
+        assert all(row["ready"] for row in both["consumer_readiness"].values())
+        assert both["relay"] == both["consumer_readiness"]["worker"]
+        assert both["message_delivery_verified"] is False
+        for invalid in (worker_token, "invalid\r\nheader"):
+            code, unusable = doctor({"steward_token": invalid})
+            assert code == 1
+            assert unusable["consumer_readiness"]["steward"]["state"] == "unavailable"
+            assert unusable["consumer_readiness"]["worker"]["ready"]
+        code, optional = doctor({})
+        assert code == 0 and optional["consumer_readiness"]["steward"]["state"] == "not_configured"
+        with server._admission_lock:
+            server.draining = True
+        code, draining = doctor({"steward_token": steward_token})
+        assert code == 1
+        assert {v["state"] for v in draining["consumer_readiness"].values()} == {"draining"}
+        assert draining["same_relay_instance"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+@pytest.mark.parametrize("invalid", ["shared", "", "invalid\r\nheader"])
+def test_reconcile_refuses_invalid_steward_credential_before_drain(owner, monkeypatch, invalid):
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    monkeypatch.setattr(life, "runtime", lambda *_: pytest.fail("No relay may be drained"))
+    with pytest.raises(life.HostError, match="api_relay_upgrade_required"):
+        life.reconcile(owner, {"token": "shared", "steward_token": invalid}, consumer="steward")
+
+
+def test_installed_doctor_does_not_combine_different_relay_instances(owner, monkeypatch):
+    provider = importlib.import_module("loopx_codex_provider_routing.provider")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    monkeypatch.setattr(relay, "route", lambda _: {"steward_token": "configured"})
+    monkeypatch.setattr(life, "runtime", lambda _value, *, consumer: {
+        "build": relay.BUILD, "accepting": True, "pid": 17,
+        "instance_id": ("a" if consumer == "worker" else "b") * 32,
+    })
+    result = provider.doctor(owner)
+    assert all(row["ready"] for row in result["consumer_readiness"].values())
+    assert result["same_relay_instance"] is False
+    assert result["installation_ready"] is False
 
 
 def test_existing_healthy_legacy_is_not_silently_adopted(owner):

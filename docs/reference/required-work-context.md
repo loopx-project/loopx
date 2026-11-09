@@ -134,6 +134,13 @@ related source, note and evidence fields without replaying the outcome's inline
 requirements. An unmet or stale review stays visible before its explanation
 is opened. Agent review still does not establish independent acceptance.
 
+In the first read, an unexpanded outcome can use the parent of its selected
+`id` JSON pointer to locate supporting material. The planner omits a separate
+address only when it exactly matches that parent and the pinned instructions
+are included. The required view and explicit selectors retain the address.
+Older captures, different addresses and unavailable guidance keep the original
+first-read address.
+
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge full model retention of the required
@@ -267,13 +274,26 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+The generated `first_read_command` and its paging cursor default to a 12,000-byte
+serialized UTF-8 output limit when the caller supplied no tool budget. This
+applies after explicit Todo selection as well. An explicit output limit still
+controls the opening, and the ordinary bulk and recovery commands keep their
+existing budgets.
+
+中文：调用方未指定工具预算时，生成的 `first_read_command` 与续页默认每次最多
+返回 12,000 个序列化 UTF-8 字节。显式选择 Todo 后的首读也适用。调用方可以显式
+指定首读预算，完整读取与恢复命令继续使用原有预算。
+
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the
 saved decision and reads it in one call. Replace `--initial-read` with repeated
 `--select` for known fields. The opening defaults to 12,000 serialized UTF-8
 bytes including navigation. With a known tool and retained-history budget,
 set `--max-page-output-bytes` to a compatible byte limit, up to 64,000. A byte
-limit is not a model-token or retention guarantee.
+limit is not a model-token or retention guarantee. An optional `--page-bytes`
+also bounds UTF-8 content on the attached page and its cursor, using the same
+window rules as `context-read`. The output budget still applies to the complete
+serialized response.
 
 Read the top-level `content` and follow its `next_command` until that selection's
 `eof`. If the whole initial selection would need paging and its decision and
@@ -290,7 +310,9 @@ decision and its original receipt.
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
 已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
-64,000。字节数不能保证模型实际收到的 token 数或历史保留。
+64,000。字节数不能保证模型实际收到的 token 数或历史保留。附带页及续读也可用
+`--page-bytes` 限制正文的 UTF-8 字节数，沿用 `context-read` 的窗口规则。
+输出预算仍约束整个序列化响应。
 
 阅读顶层 `content`，按 `next_command` 续读到当前选区的 `eof`。首读内容需要分页且决策
 和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
@@ -408,6 +430,32 @@ returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
 bytes before work can continue.
+The private native journal reserves automatic preparation before claiming a
+bound capture and records the verified ready capture before projecting it. If
+readiness or hook delivery is interrupted, the hook repeatably surfaces
+readback for the original claim receipt, current lease and any verified ready
+capture without repeating the claim or guard. A Hook response alone does not
+prove delivery. For this session the repeat hint is suppressed after a tool
+read is verified against the recorded ready capture.
+Follow the captured readiness check for the same Todo and Turn once the active
+lease matches. An authorized retry of the same bound capture reuses its
+managed claim operation, and the authority owner checks the original lease on
+replay. The native session keeps the latest eligible live guard digest
+separately from the capture. Presenting the exact saved decision preserves
+that binding. Older captures and copies with different bytes remain readable.
+Preserve any original claim receipt and use `quota should-run` with the same
+Goal, Agent, Todo and Turn and a fresh capture if preparation is still
+required. A retired lease requires a fresh eligible preparation capture.
+
+中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
+ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
+及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
+观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。活动租约匹配后，
+沿同一 Todo 与 Turn 完成就绪检查。对同一绑定 capture 的授权重试复用原受管领取操作，
+由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
+快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
+Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
+结果准备。已退役的租约需要新的合格 capture。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the

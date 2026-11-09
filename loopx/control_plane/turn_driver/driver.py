@@ -430,6 +430,7 @@ def build_loopx_turn_plan(
     session_scope: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
     work_contract: object = _ABSENT_WORK_CONTRACT,
+    inspect_plan: bool = False,
 ) -> dict[str, Any]:
     """Plan from one complete source; retain the recorded v0 input codec.
 
@@ -481,6 +482,7 @@ def build_loopx_turn_plan(
     if current:
         projection = _turn_envelope_result("planning_facts", payload=work_contract,
             turn_instance_id=turn_instance_id,
+            **({"inspect_plan": True} if inspect_plan else {}),
             **({} if source_only_input else {"envelope": supplied}))
         envelope = _mapping(projection["work"])
     else:
@@ -609,6 +611,8 @@ def build_loopx_turn_plan(
     if current:
         payload["work_contract"] = work_contract
         payload["source_decision_hash"] = projection["source_decision_hash"]
+        if "inspection_paths" in projection:
+            payload["_inspection_paths"] = projection["inspection_paths"]
         if not source_only_input:
             # Older callers may already carry an original quota capture. Keep
             # its exact header without retaining that caller's second source.

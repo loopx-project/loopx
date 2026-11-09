@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from copy import deepcopy
+import json
+from dataclasses import dataclass
+from typing import Any, cast
 
 from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
@@ -27,6 +30,70 @@ ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0
 PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref"
 
 
+@dataclass(frozen=True, init=False, repr=False, slots=True)
+class TurnControllerInput:
+    """Local producer result; never an agent wire or a retained authority cache.
+
+    The envelope and its typed route originate in one projection. Store the
+    envelope as immutable bytes so a caller cannot mutate it after routing;
+    each consumer receives its own decoded object. Ordinary wire dictionaries
+    cannot supply this qualification through an extra JSON field.
+    """
+
+    envelope_json: str
+    route: str
+
+    def __init__(self) -> None:
+        raise TypeError("Use build_turn_controller_input with the original quota source")
+
+    def envelope(self) -> dict[str, Any]:
+        envelope: dict[str, Any] = json.loads(self.envelope_json)
+        return envelope
+
+
+def _apply_context_projection_changes(
+    source: dict[str, Any], result: dict[str, Any], *, base: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply typed display edits to the original Python facts, without policy."""
+    if set(result) != {"changes"} or not isinstance(result["changes"], list):
+        raise RuntimeError("TypeScript context projection must return changes")
+    # JSON transport has no aliasing. Keep Python's exact numeric values while
+    # separating repeated caller-owned objects before applying path edits.
+    projected = json.loads(json.dumps(source if base is None else base, allow_nan=False))
+    try:
+        for change in result["changes"]:
+            path = change["path"]
+            if not isinstance(path, list):
+                raise ValueError("projection path must be a list")
+            if not path and "remove" in change:
+                raise ValueError("projection root cannot be removed")
+            parent: Any = projected
+            for key in path[:-1]:
+                parent = parent[key]
+            if "remove" in change:
+                del parent[path[-1]]
+                continue
+            if "from" in change:
+                value: Any = source
+                for part in change["from"]:
+                    value = value[part]
+            else:
+                value = change["value"]
+            if not path:
+                if not isinstance(value, dict):
+                    raise ValueError("projection root must be an object")
+                projected = deepcopy(value)
+                continue
+            key = path[-1]
+            if isinstance(parent, list) and key == len(parent):
+                parent.append(deepcopy(value))
+            else:
+                parent[key] = deepcopy(value)
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise RuntimeError("Invalid TypeScript context projection changes") from error
+    return cast(dict[str, Any], projected)
+
+
 def _turn_envelope_result(
     operation: str,
     **params: object,
@@ -35,17 +102,28 @@ def _turn_envelope_result(
 
     request = {"operation": operation, **params}
     payload = params.get("payload")
-    complete = isinstance(payload, Mapping) and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
-    token_source = payload if isinstance(payload, Mapping) else params
-    if complete or operation in {"reference_context",
-            "compose_complete", "context_delivery", "context_recovery",
-            "progressive_context_delivery", "context_read_sections"}:
-        tokens = source_number_tokens(token_source)
+    complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
+    staged_replan = (
+        operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture"}
+        and isinstance(payload, Mapping)
+        and (
+            (operation == "replan_cli_view" and params.get("source_edits") is True)
+            or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv")))
+        )
+    )
+    if complete or operation == "compose_complete" or operation == "replan_view" or staged_replan or operation == "reference_context":
+        tokens = source_number_tokens(payload)
+        if tokens:
+            request["source_number_tokens"] = tokens
+    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
+        tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
+    if operation == "replan_view" and "source_number_tokens" in request:
+        return _apply_context_projection_changes(cast(dict[str, Any], payload), dict(result), base={})
     return dict(result)
 
 
@@ -108,6 +186,7 @@ def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
 def complete_turn_host_source(
     request: Mapping[str, Any], *, operation: str = "host_context",
     include_session_lineage: bool = False,
+    recorded_capability_result: bool = False,
 ) -> dict[str, Any] | None:
     if "schema_version" in request:
         assert_turn_host_request_version(request)
@@ -118,6 +197,7 @@ def complete_turn_host_source(
     ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
     return _turn_envelope_result(operation, payload=request["work_contract"],
                                  envelope=_wire_mapping(request.get("turn_envelope")), **header,
+                                 **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
 
 
@@ -127,8 +207,6 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
     Only Python's original scalar codec remains here. Pure source edits retain
     unknown fields and exact numbers without another JSON value decoder.
     """
-    from ..quota.cli_projection import _apply_context_projection_changes
-
     orchestration = _wire_mapping(envelope.get("task_orchestration_contract"))
     source = {"selected_todo": _wire_mapping(_wire_mapping(envelope.get("action")).get("selected_todo")),
               "task_orchestration_contract": orchestration}
@@ -206,8 +284,6 @@ def compose_turn_decision(
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
-    from .cli_projection import _apply_context_projection_changes
-
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
@@ -290,6 +366,17 @@ def bind_turn_decision_capture(
     )
 
 
+def project_captured_replan_cli_view(
+    payload: dict[str, Any], *, captured_decision_path: str | None = None,
+) -> dict[str, Any]:
+    """Stage replan reads against the verified capture without rewriting its source."""
+    if not isinstance(payload.get("replan_read_path"), str):
+        return payload
+    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True,
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}))
+    return _apply_context_projection_changes(payload, result)
+
+
 def prepare_context_delivery(
     context: Mapping[str, Any], *, scope: Mapping[str, str], capture_id: str,
     baseline: Mapping[str, Any] | None = None,
@@ -306,8 +393,6 @@ def prepare_context_delivery(
     Unsupported hosts omit retention and keep complete delivery. A candidate is
     not an ACK. Confirmed input and native delivery assumptions stay distinct.
     """
-    from .cli_projection import _apply_context_projection_changes
-
     source: dict[str, Any] = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
         baseline=dict(baseline) if baseline is not None else None,
         retained=dict(retained) if retained is not None else None,
@@ -321,14 +406,18 @@ def prepare_context_delivery(
         if consumed_pointers and observe_first_read:
             source["observe_first_read"] = True
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)
-    return _apply_context_projection_changes(source, result)
+    transaction = _apply_context_projection_changes(source, result)
+    if native_projection is not None:
+        delivery = transaction["delivery"]
+        if delivery["mode"] == "full" and "context" not in delivery:
+            # Preserve the separately owned delivery body for callers.
+            delivery["context"] = deepcopy(transaction["context"])
+    return transaction
 
 
 def prepare_progressive_context(context: Mapping[str, Any], *, source_reference: Mapping[str, Any],
                                 surface: str = "quota_packet") -> dict[str, Any]:
     """Stateless IO adapter to the same typed presentation owner; no Delta identity."""
-    from .cli_projection import _apply_context_projection_changes
-
     source = dict(context=dict(context), native_projection=dict(source_reference), surface=surface)
     return _apply_context_projection_changes(source,
         _turn_envelope_result("progressive_context_delivery", **source, source_edits=True))
@@ -349,8 +438,6 @@ def restore_context_delivery(
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Validate/reconstruct or return the same-capture full body without effects."""
-    from .cli_projection import _apply_context_projection_changes
-
     source = dict(delivery=dict(delivery), baseline=dict(baseline) if baseline is not None else None,
         current=dict(current))
     result = _turn_envelope_result("context_recovery", **source, source_edits=True)

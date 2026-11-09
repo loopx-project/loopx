@@ -514,11 +514,13 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
 
 def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 surface: str = "quota_packet",
-                                selection_command_args_template: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+                                selection_command_args_template: str | None = None,
+                                captured_decision_path: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
     journal nor requires/adopts an execution Turn. All recovery is same-capture.
+    A caller may supply the exact decision it just verified for staged reads.
     """
     from ..quota.turn_envelope import prepare_progressive_context
 
@@ -527,6 +529,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         **{key: source[key] for key in ("path", "sha256")},
         **({"selection_command_args_template": selection_command_args_template}
             if selection_command_args_template is not None else {}),
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })
@@ -640,13 +643,14 @@ def context_selection_transport(payload: dict[str, Any], select: list[str] | Non
             if isinstance(value, (dict, list)):
                 subtree = branch.get(token, {})
                 # Length matters when validating array indices or listing children.
-                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                child: Any = {} if isinstance(value, dict) else [0] * len(value)
                 target[key] = child
                 pending.append((value, child, subtree, depth - 1))
             else:
-                # Every scalar has the same address behavior. Keep original scalar
-                # types, precision, and byte counts at the file rendering boundary.
-                target[key] = None
+                # Every scalar has the same address behavior. A one-byte marker
+                # also prevents short scalar arrays growing during transport.
+                # Original types, precision and byte counts stay at the renderer.
+                target[key] = 0
     return result
 
 
@@ -741,7 +745,8 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     if plan.get("rejected_selection"):
         return plan, None, None
     presentation = initial_read if present_goal_narrative is None else present_goal_narrative
-    def render(plan: dict[str, Any], present: bool):
+
+    def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
             list_depth=list_depth, present_goal_narrative=present)
         return raw, hashlib.sha256(raw).hexdigest(), displayed

@@ -26,6 +26,8 @@ test("initial work measurement feedback preserves linked scopes without choosing
     ]}};
   const original = structuredClone(request);
   const graph = projectExploreTurnContext(request).graph as JsonObject;
+  assert.match(String(graph.result_writeback_guidance), /loopx explore finding --result-json FILE/);
+  assert.equal(projectExploreTurnContext({...request, graph_enabled: false}).graph, null);
   const card = graph.work_measurements[0];
   assert.equal(card.todo_id, todo.todo_id);
   assert.equal(card.measurement_feedback.length, 3);

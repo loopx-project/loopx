@@ -2103,3 +2103,37 @@ def test_inherited_stride_projection_growth_is_one_time_and_bounded(surface, roo
         for missing in review_paths:
             partial = {**complete, "json_shape_paths": [p for p in complete["json_shape_paths"] if p != missing]}
             assert _compare_row(base, partial)["failures"], missing
+
+
+@pytest.mark.parametrize("damage", ["none", "same-version", "changed-controls", "missing-controls", "other-row", "wrong-format", "wrong-declaration", "excess-growth"])
+def test_complete_plan_migration_is_scoped_to_matching_current_controls(damage):
+    from loopx.control_plane.testing.cli_output_differential import compare_cli_output_receipts
+
+    controls = {"plan_version": "loopx_turn_plan_v0", "controls_sha256": "a" * 64,
+                "field_sha256": {"required_reads": "b" * 64}}
+    base = _row(row_id="surface/loopx_turn_plan/small/json", surface_id="loopx_turn_plan",
+                chars=10_000, utf8_bytes=10_000, compact_payload_chars=10_000,
+                semantic_json_keys=["route", "turn_envelope", "effects", "boundary"],
+                turn_plan_controls=controls)
+    head = copy.deepcopy(base)
+    head.update(chars=11_800, utf8_bytes=11_800, compact_payload_chars=11_800,
+                semantic_json_keys=["route", "work_contract", "effects", "boundary"],
+                action_signature_sha256=None)
+    head["turn_plan_controls"]["plan_version"] = "loopx_turn_plan_v1"
+    if damage == "same-version":
+        base["turn_plan_controls"]["plan_version"] = "loopx_turn_plan_v1"
+    elif damage == "changed-controls":
+        head["turn_plan_controls"]["controls_sha256"] = "c" * 64
+        head["turn_plan_controls"]["field_sha256"]["required_reads"] = "d" * 64
+    elif damage == "missing-controls":
+        head.pop("turn_plan_controls")
+    elif damage == "other-row":
+        base["row_id"] = head["row_id"] = "surface/status/small/json"
+    elif damage == "wrong-format":
+        base["format"] = head["format"] = "markdown"
+    elif damage == "wrong-declaration":
+        head["output_contract_version"] = "unsupported"
+    elif damage == "excess-growth":
+        head["chars"] = head["utf8_bytes"] = head["compact_payload_chars"] = 12_001
+    result = compare_cli_output_receipts(_receipt(base), _receipt(head))
+    assert result["ok"] is (damage == "none")

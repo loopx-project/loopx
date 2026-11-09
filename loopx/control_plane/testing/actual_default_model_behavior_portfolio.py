@@ -1194,17 +1194,22 @@ def _tool_repeat_diagnostic(receipt: Mapping[str, Any], repeat: int) -> dict[str
     steps = receipt.get("tool_call_receipts")
     entries = steps if isinstance(steps, list) else []
     errors: dict[str, int] = {}
+    observed_tool_sequence: list[str] = []
     for entry in entries[:64]:
-        if not isinstance(entry, Mapping) or not entry.get("error_code"):
+        if not isinstance(entry, Mapping):
             continue
-        error = code(entry["error_code"]) or "unclassified"
-        errors[error] = errors.get(error, 0) + 1
+        if (kind := code(entry.get("kind"))) is not None:
+            observed_tool_sequence.append(kind)
+        if entry.get("error_code"):
+            error = code(entry["error_code"]) or "unclassified"
+            errors[error] = errors.get(error, 0) + 1
     return {
         "repeat": repeat,
         "actor_passed": receipt.get("qualification_passed") is True,
         "failure_code": code(receipt.get("failure_code")),
         "tool_call_count": count(receipt.get("tool_call_count")),
         "tool_call_limit": count(receipt.get("tool_call_limit")),
+        "observed_tool_sequence": observed_tool_sequence,
         "tool_error_counts": dict(sorted(errors.items())),
         "tool_errors_truncated": len(entries) > 64,
     }

@@ -51,6 +51,8 @@ def prepare_turn_host_request(
     else:
         if args.host_command_json:
             raise ValueError(f"{args.host} does not accept --host-command-json")
+        if getattr(args, "host_adapter_request_schema", None):
+            raise ValueError("--host-adapter-request-schema is only for generic-cli")
         raw_argv = None
     if native_task_validator is not None and args.host != "codex-app-server":
         raise ValueError("a native task validator cannot replace a selected CLI validator")

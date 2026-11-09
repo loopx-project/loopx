@@ -3,8 +3,14 @@
 .research-goal-navigation h2 { font-size: 22px; font-weight: 600; margin-block: 16px; }
 .research-goal-navigation button { font: inherit; color: var(--pw-text); background: none; text-align: start; cursor: pointer; min-height: 44px; }
 .research-parent-goal { border: 0; padding: 8px 0; }
+.research-child-heading { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 12px; }
+.research-child-heading > span, .research-child-timing { color: var(--pw-muted); font-size: var(--text-caption); }
 .research-child-goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px,100%), 1fr)); gap: 16px; }
-.research-child-goals button { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--pw-line); border-radius: 8px; padding: 20px; overflow-wrap: anywhere; }
+.research-child-goals button { display: flex; align-items: start; justify-content: space-between; gap: 12px; border: 1px solid var(--pw-line); border-radius: 8px; padding: 16px; overflow-wrap: anywhere; }
+.research-child-body, .research-child-timing { display: grid; min-width: 0; }
+.research-child-body { gap: 6px; }
+.research-child-timing { gap: 2px; font-variant-numeric: tabular-nums; }
+.research-child-timing time { white-space: nowrap; }
 .research-goal-navigation button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
 .case-reader-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--pw-line); padding-block: 8px 16px; }
 .case-reader-toolbar label { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: var(--text-body); }
@@ -38,8 +44,32 @@
 .case-timeline li > div { padding-left: 20px; border-left: 2px solid var(--pw-line); }.case-event-label { color: var(--pw-muted); font-size: var(--text-body); padding-top: 2px; }
 .research-case-study .case-timeline h4 { margin: 0 0 8px; font-size: inherit; font-weight: 600; }.case-timeline p { margin-block: 0; }
 .case-series { margin: 26px 0; }.case-series figcaption { font-size: var(--text-body); font-weight: 500; }.case-series figcaption span { color: var(--pw-muted); font-weight: 400; }
-.case-chart-scroll { overflow-x: auto; }.case-series svg { width: 100%; min-width: 480px; fill: var(--pw-text); font: 15px system-ui; }.case-chart-axis { stroke: var(--pw-line); }.case-chart-stem { stroke: var(--pw-text); stroke-width: 2; }.case-series .case-chart-label { fill: var(--pw-muted); font-size: 12px; }
-.case-series dl > div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--pw-line); font-size: var(--text-body); }.case-series dd { margin: 0; }
+.case-series-points { list-style: none; margin: 8px 0 0; padding: 0; }
+.case-series-points > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(8ch, 1fr);
+  grid-template-areas: "label plot value";
+  align-items: center;
+  gap: 8px 14px;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--pw-line);
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+.case-chart-label { grid-area: label; }
+.case-chart-value { grid-area: value; text-align: end; font-variant-numeric: tabular-nums; }
+.case-chart-track { grid-area: plot; position: relative; block-size: 12px; margin-inline: 4px; }
+.case-chart-track > span { position: absolute; }
+.case-chart-zero { inset-block: 0; border-inline-start: 1px solid var(--pw-muted); }
+.case-chart-bar { inset-block: 5px; background: var(--pw-text); }
+.case-chart-mark { inset-block-start: 3px; inline-size: 6px; block-size: 6px; margin-inline-start: -3px; border-radius: 50%; background: var(--pw-text); }
+@container (max-width: 520px) {
+  .case-series-points > li {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas: "label value" "plot plot";
+    row-gap: 2px;
+  }
+}
 .case-limitations { color: var(--pw-muted); }.case-limitations li { margin-block: 10px; }.case-read-warning { border-left: 3px solid currentColor; padding-left: 14px; }
 .research-case-reader :is(button,select,summary,[tabindex]):focus-visible, .case-return-reader:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
 @container (max-width: 760px) { .case-reading-layout { grid-template-columns: 1fr; gap: 18px; }.case-outline { position: static; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px 20px; }.case-opening { margin-block: 24px; } }

@@ -38,6 +38,9 @@ from loopx.control_plane.turn_driver.host_candidate import build_result
 from loopx.control_plane.quota.turn_envelope import turn_host_lineage
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import return_result
+# The generic Host protocol sends UTF-8 over a pipe, whose Python 3.11
+# Windows default is a locale codec rather than the console's UTF-8 mode.
+sys.stdin.reconfigure(encoding='utf-8')
 request = json.load(sys.stdin)
 workspace = Path.cwd()
 root = Path(sys.argv[1])
@@ -85,7 +88,7 @@ def service(tmp_path, request, monkeypatch):
     config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [{
         "id": "analysis", "agent_id": "analyst", "todo_id": "todo_analyst-initial", "requesters": ["lead"],
         "workspace": str(root / "analyst" / "initial"), "timeout_seconds": 60, "output_refs": ["output.json"],
-        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-command-json",
+        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
                       json.dumps([sys.executable, str(host), str(root)])],
     }]}))
     return root, Delegations(root / "runtime", root / "registry.json", demo.GOAL, "lead", config)
@@ -96,6 +99,35 @@ def brief():
             "context": "Use the initial filing and preserve the period distinction.",
             "constraints": ["No external actions"], "inputs": [], "acceptance": ["Pinned task validation"],
             "return_requirement": "Return the independently checked artifact"}
+
+
+def test_fixture_host_revalidates_utf8_input_under_a_non_utf8_pipe(service):
+    """The fixture must reach task validation with the original UTF-8 identity."""
+    root, runner = service
+    host = root / "fixture-host.py"
+    # Model the Windows Python 3.11 pipe default without changing the parent
+    # transport or requiring a platform-dependent locale on the test runner.
+    host.write_text("import sys; sys.stdin.reconfigure(encoding='cp1252')\n"
+                    + host.read_text(encoding="utf-8"), encoding="utf-8")
+    output = root / "analyst/initial/output.json"
+    saved = output.read_bytes()
+    output.write_text("{}", encoding="utf-8")
+    request = {**brief(), "context": "Read the synthetic résumé: 报告 € → evidence."}
+    runner.start("analysis", "analysis-1", request)
+    rejected = wait(runner)
+    assert rejected["status"] == "rejected", rejected
+    assert "task_failure" in rejected, rejected
+    assert rejected["task_failure"]["resume_mode"] == "revalidate_cached_result"
+    turn_key = rejected["task_failure"]["turn_key"]
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
+
+    output.write_bytes(saved)
+    runner.revalidate("analysis-1")
+    accepted = wait(runner)
+    assert accepted["status"] == "accepted", accepted
+    assert "task_failure" not in accepted
+    assert json.loads(runner.path("analysis-1").read_text())["turn_key"] == turn_key
+    assert (root / "analyst/initial/host-invocations").read_text() == "1"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -8,7 +8,8 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+from loopx.control_plane.testing.canary_harness import write_fixture_registry
+from test_quota_settlement_cli import _run_cli
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 from loopx.cli_commands.quota_capture import read_context_capture
@@ -20,6 +21,7 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("marked_goal", [True, False])
 def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited, legacy_spelling):
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     alias = ("--turn-envelope",) if legacy_spelling else ()
     goal, agent = "scope-cli", "author"
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -38,7 +40,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         build_todo_runtime_shadow_projection(goal_id=goal, todos=todos, handoff_mode="soft_claim"), state_path=state, provider=provider)
 
     def cli(*args):
-        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+        code, payload = _run_cli(registry, runtime, *args, cwd=tmp_path, raw_guard=False)
         assert code == 0, json.dumps(payload)
         return payload
 
@@ -55,7 +57,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
             "--expected-provider-revision", before["provider_revision"], "--operation-id", f"outcome-{owner}", "--execute")
     if inherited:
         from tests.control_plane.test_context_machine_configuration import configure
-        code, applied = configure(registry, runtime, tmp_path, "on")
+        code, applied = configure(registry, runtime, tmp_path, "on", delta="auto")
         assert code == 0 and applied["readback_verified"], applied
     off = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
     source = next(row["content"] for row in off["interaction_contract"]["agent_channel"]["work_context"]["sources"]
@@ -66,13 +68,11 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
     native.mkdir(mode=0o700)
     (tmp_path / "captures").mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "scope-session")
-    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
-    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
     codex_context_hook(str(native), {"hook_event_name": "SessionStart", "session_id": "scope-session",
         "cwd": str(tmp_path), "source": "startup"})
     first = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent,
-        *([] if inherited else ["--context-delivery", "on"]),
-        "--runtime-profile", "generic_cli", "--codex-context-dir", str(native),
+        *([] if inherited else ["--context-delivery", "on", "--delta-delivery", "auto"]),
+        "--codex-app", "--codex-context-dir", str(native),
         "--decision-output-root", str(tmp_path / "captures"), "--turn-instance-id", "scope-turn")
     first = reference_metadata_oracle(first)
     page = read_context_capture(argparse.Namespace(capture_file=first["recovery"]["path"],

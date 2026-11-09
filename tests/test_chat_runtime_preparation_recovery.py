@@ -7,6 +7,7 @@ from test_chat_ordinary_project import ordinary  # noqa: F401
 from test_chat_queue_preparation import session_runtime
 from test_lark_private_conversations import connect
 from test_manager_preparation_recovery import advance_recovery_clock
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_agent import CodexChatAgentError
 from loopx.chat_store import _read_json
 
@@ -59,7 +60,8 @@ def test_restart_adopts_claimed_unstarted_queue_without_duplicate_dispatch(tmp_p
             return
         result = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=3)
         assert result["status"] == "completed"
-        assert len(sent) == 1 and sent[0]["input"][0]["text"].endswith(original["message"])
+        assert len(sent) == 1
+        assert sent[0]["input"][0]["text"].endswith(original["message"] + CHAT_RESPONSE_EXAMPLE_SUFFIX)
         assert reopened.turn_for_client(sid, original["client_turn_id"])["turn_id"] == original["turn_id"]
         assert len([e for e in reopened.events_after(sid, original["turn_id"], None)
                     if e["kind"] == "turn.started"]) == 1

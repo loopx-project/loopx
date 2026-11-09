@@ -351,6 +351,30 @@ test("Explore evidence and previous adoption are bound without inferring gain or
   assert.match(String(strideReviewMismatch({...decision, explore_review: {...reviewed.explore_review,
     considered_refs: ["finding-foreign"]}}, context)), /foreign/);
   assert.equal(basis.result_page.remaining, 4); // Omitted evidence is not an empty graph.
+  const measuredBasis = projectStrideExploreBasis({ok: true, goal_id: "goal-a", agent_id: "agent-a",
+    graph_enabled: true, harness_enabled: true,
+    graph: {writeback_results: [{finding_id: "finding-negative", node_id: "question-route", status: "refuted"}],
+      measurement_feedback: [{node_id: "question-route", metric: "quality", unit: "points", higher_is_better: true,
+        best: {finding_id: "finding-negative", candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20},
+        latest: {finding_id: "finding-negative", measurement: {metric: "quality", unit: "points", higher_is_better: true,
+          candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20}}, improvement: 10}],
+      omitted_measurement_feedback: 1,
+      measurement_feedback_page: {total: 4, offset: 0, limit: 3, remaining: 1, revision: "b".repeat(64),
+        next_command: ["loopx", "explore", "turn-context", "--result-offset", "3", "--result-revision", "b".repeat(64)]},
+      work_yardsticks: [{todo_id: "todo-route", node_id: "question-route", source_finding_id: "finding-negative",
+        comparison_candidate_ref: "candidate:b", proxy_order_reversed: true}],
+      omitted_work_yardsticks: 2,
+      result_page: {remaining: 4, revision: "b".repeat(64)}},
+    harness: {selected_branches: [{todo_id: "todo-route", selection_status: "selected", actionable_open: true}]}}, "goal-a", "agent-a")!;
+  assert.equal(measuredBasis.revision, basis.revision);
+  assert.equal((measuredBasis.measurement_feedback as Record<string, unknown>[])[0].improvement, 10);
+  assert.deepEqual(measuredBasis.measurement_feedback[0].latest, {candidate_ref: "candidate:b", value: 20});
+  assert.deepEqual(measuredBasis.measurement_feedback[0].best, {candidate_ref: "candidate:b", value: 20});
+  assert.equal(measuredBasis.measurement_feedback_page.remaining, 1);
+  assert.equal(measuredBasis.measurement_feedback_page.next_command.at(-1), "b".repeat(64));
+  assert.equal(measuredBasis.omitted_measurement_feedback, 1);
+  assert.equal((measuredBasis.work_yardsticks as Record<string, unknown>[])[0].proxy_order_reversed, true);
+  assert.equal(measuredBasis.omitted_work_yardsticks, 2);
   assert.throws(() => projectStrideExploreBasis({ok: true, goal_id: "foreign", agent_id: "agent-a"}, "goal-a", "agent-a"), /scope/);
   const unavailable = projectStrideExploreBasis({ok: false, goal_id: "goal-a", agent_id: "agent-a"}, "goal-a", "agent-a")!;
   const unknown = normalizeStrideDecision({...proposal, explore_review: {revision: null, disposition: "unavailable",
@@ -445,6 +469,23 @@ test("shared replan guidance retains stride-off isolation and bounded enabled au
   assert.equal(normalizeStrideDecision(example)[0]!.action, "verify");
   const prepared = buildVisionCheckpoint({...request, agent_vision_packet: {...packet, stride_decision: example}});
   assert.ok(Number(((prepared.agent_vision as Record<string, unknown>).vision_budget as Record<string, unknown>).total_usage) < 1800);
+});
+
+test("fresh Vision authoring advertises the stride decision its validator requires", () => {
+  for (const kind of ["required_agent_vision_missing", "vision_acceptance_gap"]) {
+    for (const strategy of ["off", "evidence_conditioned_v1"]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+        replan_context: {stride_strategy: strategy, context_id: contextId}};
+      const requirements = projectReplanSemantics({operation: "requirements", obligation});
+      const fields = (requirements.writeback_contract as {required_fields: string[]}).required_fields;
+      const {stride_decision, ...vision} = packet;
+      const without = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+      const withDecision = projectReplanSemantics({operation: "qualify", obligation,
+        agent_vision: {...vision, stride_decision}});
+      assert.equal(fields.includes("agent_vision.stride_decision"), without.reason_code === "stride_decision_required", kind);
+      assert.equal(withDecision.accepted, true, kind);
+    }
+  }
 });
 
 test("all decision codecs reject non-string reference identities without coercion", () => {

@@ -158,8 +158,15 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('declaration', ['source_version', 'hash_codec', 'read_order'])
-def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, monkeypatch, provider, declaration):
+@pytest.mark.parametrize(('declaration', 'diagnostic'), [
+    ('version', 'unsupported complete Turn decision version'),
+    ('hash_codec', 'unsupported complete Turn decision hash codec'),
+    ('content_hash', 'complete Turn decision content integrity mismatch'),
+    ('read_order', 'required read ordering'),
+])
+def test_real_turn_refuses_unsupported_consumer_version_before_launch(
+    tmp_path, monkeypatch, provider, declaration, diagnostic,
+):
     import contextlib
     import io
     import sys
@@ -169,26 +176,28 @@ def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, mo
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
-    from tests.control_plane.test_complete_turn_decision import _resign_contract
-
-    original_builder = turn.compose_turn_decision
+    original_builder = turn.build_loopx_turn_plan
     observed = []
 
-    def incompatible_writer(*args, **kwargs):
-        packet = original_builder(*args, **kwargs)
-        if declaration == 'source_version':
+    def incompatible_writer(decision, **kwargs):
+        packet = copy.deepcopy(decision)
+        assert packet['schema_version'] == 'loopx_turn_envelope_v1'
+        if declaration == 'version':
             packet['schema_version'] = 'unsupported_work_contract'
         elif declaration == 'hash_codec':
             packet['contract_binding']['hash_codec'] = 'unsupported_source_codec'
-        else:
+        elif declaration == 'read_order':
+            from tests.control_plane.test_complete_turn_decision import _resign_contract
+
             packet['interaction_contract']['agent_channel'].setdefault('required_reads', []).append(
                 {'command': "cat -- 'required material.md'", 'ordering': 'after_spend'})
-            # Reach semantic validation with independently correct source hashes.
             packet, _ = _resign_contract(packet)
-        observed.append(copy.deepcopy(packet))
-        return packet
+        else:
+            packet['contract_binding'][declaration] = 'unsupported_required_semantics'
+        observed.append(packet)
+        return original_builder(packet, **kwargs)
 
-    monkeypatch.setattr(turn, 'compose_turn_decision', incompatible_writer)
+    monkeypatch.setattr(turn, 'build_loopx_turn_plan', incompatible_writer)
     marker = project / 'host-started'
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -200,10 +209,7 @@ def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, mo
     result = json.loads(output.getvalue())
     assert observed and code != 0, result
     assert not marker.exists()
-    expected = {'source_version': 'unsupported complete Turn decision version',
-                'hash_codec': 'unsupported complete Turn decision hash codec',
-                'read_order': 'required read ordering'}[declaration]
-    assert expected in result['error'], result
+    assert diagnostic in result['error'], result
     # Generic CLI error effects are unknown; the marker and ledger independently
     # prove this pre-dispatch refusal, without interpreting null as false.
     assert _spend_run_count(runtime) == 0
