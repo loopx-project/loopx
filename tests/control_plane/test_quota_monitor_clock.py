@@ -189,7 +189,7 @@ def test_codex_cli_replan_streak_respects_canonical_monitor_expiry(
         sys.executable, "-c", entrypoint, "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--codex-app", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--turn-instance-id", "expiry-fixture-turn",
+        "--turn-instance-id", "expiry-fixture-turn", "--context-delivery", "off",
     ], capture_output=True, text=True, encoding="utf-8", check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     guard = json.loads(result.stdout)

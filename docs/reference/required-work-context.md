@@ -134,6 +134,13 @@ related source, note and evidence fields without replaying the outcome's inline
 requirements. An unmet or stale review stays visible before its explanation
 is opened. Agent review still does not establish independent acceptance.
 
+In the first read, an unexpanded outcome can use the parent of its selected
+`id` JSON pointer to locate supporting material. The planner omits a separate
+address only when it exactly matches that parent and the pinned instructions
+are included. The required view and explicit selectors retain the address.
+Older captures, different addresses and unavailable guidance keep the original
+first-read address.
+
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge full model retention of the required
@@ -418,21 +425,33 @@ After a Host claim, the ready guard uses the private
 returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
-bytes before work can continue. If readiness is interrupted, retrying the
-same original decision capture reuses its managed claim operation. The
-authority owner checks the original lease on replay. The native session
-keeps the latest eligible live guard digest separately from the capture.
-Presenting the exact saved decision preserves that binding. Older captures
-and copies with different bytes remain readable. Preserve any original claim receipt and use
-`quota should-run` with the same Goal, Agent, Todo and Turn and a fresh
-capture if preparation is still required. A retired lease requires a fresh
-eligible preparation capture.
+bytes before work can continue.
+The private native journal reserves automatic preparation before claiming a
+bound capture and records the verified ready capture before projecting it. If
+readiness or hook delivery is interrupted, the hook repeatably surfaces
+readback for the original claim receipt, current lease and any verified ready
+capture without repeating the claim or guard. A Hook response alone does not
+prove delivery. For this session the repeat hint is suppressed after a tool
+read is verified against the recorded ready capture.
+Follow the captured readiness check for the same Todo and Turn once the active
+lease matches. An authorized retry of the same bound capture reuses its
+managed claim operation, and the authority owner checks the original lease on
+replay. The native session keeps the latest eligible live guard digest
+separately from the capture. Presenting the exact saved decision preserves
+that binding. Older captures and copies with different bytes remain readable.
+Preserve any original claim receipt and use `quota should-run` with the same
+Goal, Agent, Todo and Turn and a fresh capture if preparation is still
+required. A retired lease requires a fresh eligible preparation capture.
 
-中文：Host 重试绑定原始决策 capture 的领取操作，由权威 owner 验证原租约。
-原生会话独立保存最新合格准入的摘要。重新展示逐字节一致的快照会保留绑定。
-旧快照和字节不同的副本仍可读，保留已有领取回执。
-仍需准备时，用原 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，
-生成新的 capture，再按当前准入结果准备。已退役的租约需要新的合格 capture。
+中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
+ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
+及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
+观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。活动租约匹配后，
+沿同一 Todo 与 Turn 完成就绪检查。对同一绑定 capture 的授权重试复用原受管领取操作，
+由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
+快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
+Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
+结果准备。已退役的租约需要新的合格 capture。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the

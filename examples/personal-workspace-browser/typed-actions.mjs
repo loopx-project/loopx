@@ -421,6 +421,7 @@ export const typedActionsScenario = {
 
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, checkpointCoverage, errors: pageErrors, page } = context;
+    const interruptedCorrectionStream = Promise.withResolvers();
     const failures = [];
     const notes = [];
     const pass = (criterion, note) => notes.push(`${criterion}: ${note}`);
@@ -2105,8 +2106,19 @@ export const typedActionsScenario = {
       if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
       await currentRuntimeRun.click();
       await page.getByRole("tab", { name: "详情与操作" }).click();
+      const interruptionQuestion = "保持运行，等我检查中断控制。";
+      // This assertion needs a running correction, independent of how long
+      // drawer navigation takes. Hold only its exact Session/Turn stream;
+      // completion races remain covered by conversation-activity.
+      await page.route("**/api/chat/sessions/*/turns/*/events", async (route) => {
+        const path = new URL(route.request().url()).pathname.split("/");
+        const correction = api.turnRequests.find((turn) => turn.message === interruptionQuestion
+          && turn.sessionId === path[4] && turn.turnId === path[6]);
+        if (correction) await interruptedCorrectionStream.promise;
+        return route.fallback();
+      });
       const runningCorrection = page.getByLabel("输入纠偏信息");
-      await runningCorrection.fill("保持运行，等我检查中断控制。 ");
+      await runningCorrection.fill(interruptionQuestion);
       await page.getByRole("button", { name: "发送纠偏" }).click();
       await page.getByText("更多运行操作").click();
       const interruptButton = page.getByRole("button", { name: "中断本次运行" });
@@ -2116,11 +2128,19 @@ export const typedActionsScenario = {
         await page.screenshot({ path: resolve(outputDir, "interrupt-state-failed.png"), fullPage: true, animations: "disabled" });
         throw new Error(`${error.message}; body=${(await page.locator("body").innerText()).slice(-4000)}`);
       }
-      await interruptButton.click();
       const secondCorrection = api.turnRequests.find((turn) => turn.message.includes("中断控制"));
       if (!secondCorrection || secondCorrection.sessionId === firstCorrection.sessionId) {
         throw new Error("Agent change reused the earlier Agent Session or failed to start the second correction");
       }
+      assert.equal(page.__loopxRuntime.sessions.get(secondCorrection.sessionId)?.active_turn_id,
+        secondCorrection.turnId, "The correction must still be running before interruption");
+      const interruptPath = `/api/chat/sessions/${secondCorrection.sessionId}/turns/${secondCorrection.turnId}/interrupt`;
+      // A click starts the async operation; it does not prove receipt delivery.
+      await Promise.all([
+        page.waitForResponse((response) =>
+          new URL(response.url()).pathname === interruptPath && response.request().method() === "POST"),
+        interruptButton.click(),
+      ]);
       if (!api.interrupts.some((turn) => turn.sessionId === secondCorrection.sessionId && turn.turnId === secondCorrection.turnId)) {
         throw new Error("Interrupt did not target the active Session and Turn");
       }
@@ -2183,6 +2203,7 @@ export const typedActionsScenario = {
 
       if (failures.length) throw new Error(failures.join(" | "));
     } finally {
+      interruptedCorrectionStream.resolve();
       await context.close();
     }
     return {

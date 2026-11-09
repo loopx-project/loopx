@@ -52,9 +52,12 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     if observer_entry == "heartbeat":
         # Native capture is a thin-host transport. Keep its full-mode refusal
         # separate from the explicitly supported compatibility presentation.
+        capture_root = tmp_path / "heartbeat-captures"
+        capture_root.mkdir(mode=0o700)
         code, refused = _invoke_turn([
             *prefix, "heartbeat-prompt", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
             "--codex-app", "--available-capability", "external_evidence_poll", "--full",
+            "--decision-output-root", str(capture_root), "--turn-instance-id", "full-capture-refused",
         ])
         assert code == 1 and refused["ok"] is False, refused
         assert "requires thin mode" in refused["error"] and calls == []
@@ -91,7 +94,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    root = Path(kwargs['workspace'])\n"
         "    prompt = kwargs['prompt']\n"
         "    (root / 'consumer-input.txt').write_text(prompt)\n"
-        "    authority = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\\n', 1)[1])[0]\n"
+        "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])[0]\n"
+        "    authority = request['work_contract']\n"
         "    selected = authority['selected_todo']\n"
         f"    assert selected['todo_id'] == {todo_id!r}\n"
         "    assert selected['resume_when'] == 'pr_merged:owner/repo#42'\n"
@@ -100,7 +104,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    assert condition['satisfied'] is True\n"
         "    assert condition['matched_pr_ref'] == 'owner/repo#42'\n"
         "    assert condition['matched_event_at'] == '2026-10-01T00:00:00Z'\n"
-        "    task = next(s['content']['todo'] for s in authority['work_context']['sources']\n"
+        "    context = authority['interaction_contract']['agent_channel']['work_context']\n"
+        "    task = next(s['content']['todo'] for s in context['sources']\n"
         "                if s.get('source') == 'selected_todo')\n"
         f"    assert task['text'] == {before['text']!r}\n"
         "    counter = root / 'consumer-count'\n"
@@ -134,7 +139,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     assert expected["resume_condition"]["matched_event_at"] == "2026-10-01T00:00:00Z"
     assert envelope["action_signature"]["matches"] is True
     prompt = (project / "consumer-input.txt").read_text()
-    consumed = json.JSONDecoder().raw_decode(prompt.split("Turn authority JSON:\n", 1)[1])[0]
+    consumed = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]["work_contract"]
     assert consumed["selected_todo"]["resume_condition"] == expected["resume_condition"]
     assert "Require the terminal independent artifact marker." in prompt
 

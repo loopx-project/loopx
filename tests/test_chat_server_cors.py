@@ -478,7 +478,7 @@ def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
         calls.append(kwargs)
         return {"ok": True, "scope": kwargs.get("activation_state_filter")}
 
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fake_collect_status)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fake_collect_status)
     server, thread = _start_server()
     server.goal_subagent_configuration_enabled = True
     try:
@@ -506,7 +506,7 @@ def test_chat_status_forwards_valid_goal_activation_scope(monkeypatch) -> None:
 
 def test_chat_status_rejects_invalid_goal_activation_scope(monkeypatch) -> None:
     monkeypatch.setattr(
-        "loopx.chat_status_api.collect_status",
+        "loopx.chat.status_api.collect_status",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must fail before collection")),
     )
     server, thread = _start_server()
@@ -574,8 +574,8 @@ def test_workspace_directory_still_fails_on_an_unreadable_registry(tmp_path) -> 
 
 def test_workspace_directory_skips_expensive_projection_and_respects_scope(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha", "display_name": "Alpha"}, {"id": "beta"}]}
-    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", lambda _: registry)
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **_: (_ for _ in ()).throw(AssertionError("directory must not collect status")))
+    monkeypatch.setattr("loopx.chat.status_api.load_project_registry", lambda _: registry)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **_: (_ for _ in ()).throw(AssertionError("directory must not collect status")))
     server, thread = _start_server()
     server.selected_goal_id = "alpha"
     try:
@@ -596,12 +596,12 @@ def test_workspace_directory_skips_expensive_projection_and_respects_scope(monke
 
 def test_workspace_scoped_status_revision_and_membership_fences(monkeypatch) -> None:
     registry = {"goals": [{"id": "alpha"}, {"id": "beta"}]}
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", lambda _: registry)
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", lambda _: registry)
     calls = []
     def collect(**kwargs):
         calls.append(kwargs["goal_id"])
         return {"ok": True}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
@@ -616,7 +616,7 @@ def test_workspace_scoped_status_revision_and_membership_fences(monkeypatch) -> 
         def racing_collect(**kwargs):
             registry["goals"].pop()
             return {"ok": True}
-        monkeypatch.setattr("loopx.chat_status_api.collect_status", racing_collect)
+        monkeypatch.setattr("loopx.chat.status_api.collect_status", racing_collect)
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
         response.read()
         assert response.status == 409
@@ -689,13 +689,13 @@ def _status_failure(kind: str) -> BaseException:
     )],
 )
 def test_workspace_status_access_error_contract(monkeypatch, kind: str, access: bool) -> None:
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", lambda _: {"goals": [{"id": "alpha"}]})
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", lambda _: {"goals": [{"id": "alpha"}]})
     failure = _status_failure(kind)
 
     def fail(**_kwargs):
         raise failure
 
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json?goal_id=alpha")
@@ -715,9 +715,9 @@ def test_workspace_access_code_does_not_change_other_status_routes(monkeypatch, 
     def fail(*_args, **_kwargs):
         raise PermissionError("synthetic confidential diagnostic")
 
-    monkeypatch.setattr("loopx.chat_status_api.load_registry", fail)
-    monkeypatch.setattr("loopx.chat_status_api.load_project_registry", fail)
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.load_registry", fail)
+    monkeypatch.setattr("loopx.chat.status_api.load_project_registry", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     server, thread = _start_server()
     try:
         response = _request(server.server_address[1], method="GET", origin=None, path="/status.json" + query)

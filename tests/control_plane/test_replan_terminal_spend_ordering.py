@@ -160,7 +160,7 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
     tmp_path: Path,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
     _write_terminal_frontier_state(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
@@ -241,7 +241,7 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
     """The terminal guard keeps rejecting a spend that owns no settlement."""
 
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry_path, stride_strategy="off")
     _write_terminal_frontier_state(project)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
