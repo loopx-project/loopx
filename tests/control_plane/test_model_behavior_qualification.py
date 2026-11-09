@@ -1028,3 +1028,30 @@ def test_complete_candidate_scans_actual_scheduler_source_paths(operation: str, 
         request = build_model_behavior_actor_request(packet, qualification_id="complete-wire", arm="candidate_packet")
         assert json.dumps(request["packet"], sort_keys=True) == before
     assert json.dumps(packet, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_cli_private_source_is_refused_before_provider_io(tmp_path, monkeypatch, provider) -> None:
+    from loopx.control_plane.testing.model_behavior_qualification import ModelBehaviorPairValidationError
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, _run_cli, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    rc, source = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--codex-app", "--context-delivery", "off",
+        "--turn-instance-id", "qualification-private-source", cwd=project)
+    assert rc == 0 and source["ok"] is True
+    candidate = source if source.get("schema_version") == "loopx_turn_envelope_v1" else compose_turn_decision(source)
+    before = json.dumps(candidate, sort_keys=True)
+    calls = []
+    # Real CLI context includes private runtime routing. Complete-source
+    # support must not authorize sending it to the shadow-model provider.
+    with pytest.raises(ModelBehaviorPairValidationError, match="local absolute path"):
+        run_model_behavior_qualification_pair(source, candidate,
+            qualification_id="private-cli-source", actor=lambda request: calls.append(request))
+    assert calls == []
+    assert json.dumps(candidate, sort_keys=True) == before
+    assert _spend_run_count(runtime) == 0

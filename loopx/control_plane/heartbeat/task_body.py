@@ -73,17 +73,14 @@ def bind_exact_turn_settlement_task_body(
         # and separate guard still carry the original identity on retries;
         # only reusable wake templates need the substitution instruction.
         bound = bound.replace(f"{HEARTBEAT_TURN_BOOTSTRAP_RULE}\n", "", 1)
-    # This literal belongs to the shared rendered dispatch rule. Qualify its
-    # existing locator instead of appending the same settlement source again.
-    # Other templates keep the explicit locator below; no saved body is edited.
+    # The same admitted plan is visible through the complete CLI channel or
+    # the supported bounded view's writeback. Preserve the version-neutral
+    # dispatch; fixing a timestamp must not silently choose another layout.
     dispatch = "Settle current settlement_plan.ordered_steps"
     if dispatch in bound:
-        return bound.replace(
-            dispatch,
-            "Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps",
-            1,
-        )
-    return f"{bound}\n\nSettlement source: `interaction_contract.cli_channel.settlement_plan.ordered_steps`."
+        return bound
+    return (f"{bound}\n\nSettlement source: current `settlement_plan.ordered_steps` "
+            "in `interaction_contract.cli_channel` (bounded Turn: `writeback`).")
 
 
 def render_heartbeat_task_body(
@@ -683,6 +680,7 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
+Controls: interaction_contract (agent_channel/user_channel/cli_channel); bounded v0: action/user/writeback + root work_context/required_reads.
 Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
 Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs.
 Recover execution/lost context from needed original sections/identity; never re-admit.

@@ -919,7 +919,7 @@ def run_model_behavior_qualification_pair(
             # complete composition; never infer another binding from a candidate.
             expected = (dict(full_packet) if full_schema == COMPLETE_TURN_DECISION_VERSION
                         else compose_turn_decision(full_packet))
-            if dict(candidate_packet) != expected:
+            if _digest(dict(candidate_packet)) != _digest(expected):
                 raise ModelBehaviorPairValidationError(
                     "candidate_packet does not derive from the paired full packet"
                 )

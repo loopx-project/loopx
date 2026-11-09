@@ -282,7 +282,8 @@ def test_exact_turn_binding_keeps_the_rendered_settlement_instruction_once() -> 
 
     assert render_turn_bootstrap(value=turn) in bound
     assert bound.count("settlement_plan.ordered_steps") == 1
-    assert "interaction_contract.cli_channel.settlement_plan.ordered_steps" in bound
+    assert "Settle current settlement_plan.ordered_steps in order" in bound
+    assert "Settlement source:" not in bound
     assert "else next_cli_actions" in bound
     assert "preserve exact identities/effect ids and actual outcomes" in bound
     assert "ambiguous effects need readback/recovery, not blind retry" in bound

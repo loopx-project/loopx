@@ -291,7 +291,12 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert writeback["owner"] == spend["owner"] == "agent"
+    assert "--settle-turn" not in writeback["command_template"]
+    assert "command_template" in spend
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.

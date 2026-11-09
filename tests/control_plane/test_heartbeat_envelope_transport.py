@@ -15,7 +15,10 @@ import pytest
 from benchmark.runtime.codex import Execution
 from benchmark.runtime.worker import heartbeat_body
 from loopx.heartbeat_prompt import build_heartbeat_prompt
-from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+from loopx.control_plane.quota.turn_envelope import (
+    assert_complete_turn_decision, assert_turn_envelope_consumer_version,
+    quota_action_signature_document, turn_envelope_action_signature_document,
+)
 from tests.control_plane.cli_output_fixture import stable_budget_fixture_root
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
@@ -57,6 +60,19 @@ def assert_original_read_and_recovery_duties(body):
         'Settle current settlement_plan.ordered_steps in order, else next_cli_actions',
         'Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps in order, else next_cli_actions',
     ))
+
+
+def assert_original_contract_view(view, source):
+    """Both supported displays retain the one captured decision and controls."""
+    assert_complete_turn_decision(source)
+    if view.get('schema_version') == 'loopx_turn_envelope_v0':
+        assert_turn_envelope_consumer_version(view)
+        assert view['action_signature']['matches'] is True
+        assert view['action_signature']['source_decision_hash'] == source['contract_binding']['content_hash']
+        assert turn_envelope_action_signature_document(view) == quota_action_signature_document(source)
+    else:
+        assert_complete_turn_decision(view)
+        assert view['contract_binding'] == source['contract_binding']
 
 
 def read_original_capture(path, *, registry, runtime):
@@ -164,12 +180,15 @@ def test_captured_scheduler_ack_is_inline_and_failure_detail_stays_on_original_s
         '--decision-output-dir', str(capture), cwd=project)
     assert code == 0, envelope
     original = (capture / 'decision.json').read_bytes()
-    source = json.loads(original)['scheduler_hint']['app_automation']
-    assert_complete_turn_decision(envelope)
-    projected = envelope['scheduler_hint']['app_automation']
-    assert projected['ack_hint']['cli_args'] == source['ack_hint']['cli_args']
-    assert projected['failure_hint']['cli_args'] == source['failure_hint']['cli_args']
-    assert projected == source
+    captured = json.loads(original)
+    source = captured['scheduler_hint']['app_automation']
+    assert_original_contract_view(envelope, captured)
+    # This observer helper explicitly selects off. Its supported bounded
+    # display keeps executable ACK argv and original-capture failure details.
+    assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
+    projected = envelope['scheduler']['app_automation']
+    assert projected['ack_cli_args'] == source['ack_hint']['cli_args']
+    assert projected['failure_cli_args_detail_ref']['detail_ref'] == 'full_decision.scheduler_hint.app_automation.failure_hint.cli_args'
     before = _heartbeat_receipt_count(runtime, TURN_ID)
     read = read_original_capture(capture / 'decision.json', registry=registry, runtime=runtime)
     assert read == original
@@ -337,7 +356,12 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
         if enabled:
-            assert_complete_turn_decision(first)
+            assert_original_contract_view(first, full)
+            if not context_delivery and private_handoff is None:
+                assert first['schema_version'] == 'loopx_turn_envelope_v0'
+                assert 'bounded v0: action/user/writeback' in body
+            else:
+                assert first['schema_version'] == 'loopx_turn_envelope_v1'
             receipts = _heartbeat_receipt_count(runtime, TURN_ID)
             readback = read_original_capture(captures[0], registry=registry, runtime=runtime)
             assert json.loads(readback) == full
@@ -362,8 +386,10 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
         if enabled:
-            assert_complete_turn_decision(selected)
-            assert selected['interaction_contract']['cli_channel']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
+            assert_original_contract_view(selected, selected_full)
+            cli = (selected['writeback'] if selected['schema_version'] == 'loopx_turn_envelope_v0'
+                else selected['interaction_contract']['cli_channel'])
+            assert cli['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
         else:
             assert selected['interaction_contract'] == selected_full['interaction_contract']
             assert 'action_signature' not in selected

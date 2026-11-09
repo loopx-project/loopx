@@ -916,6 +916,21 @@ retain their own delivery contracts. This is a display adapter, not a second
 writer or decision owner. Retire it only with a named consumer migration and
 qualified replacement/recovery; a passing carrier allowance is insufficient.
 
+Model-behavior qualification reads an explicitly supplied complete source with
+its existing version/integrity owner; an experimental arm label does not select
+v0 field instructions. Both schema and confidentiality boundaries finish before
+either actor call. Retained-capture loading preserves the original binding and
+numeric representation, while invalid new sources never fall back to historical
+readers. The [independent mainline slice #8468](https://github.com/loopx-project/loopx/pull/8468) retains main's raw/v0 corpus and
+actual-default portfolio; C1's candidate default remains part of this proposal.
+Local API and scripted-provider validation do not qualify model adoption or
+original-quota outcome/full-cost benefit.
+
+Thin prompts also name the complete and bounded control locations; binding a
+Turn timestamp preserves the common settlement dispatch instead of forcing the
+complete-source path onto the supported v0 display. Neither view owns a second
+settlement recipe.
+
 Thin recovery now explicitly asks for needed sections of the original source
 and its identity, while retaining current work context before action, explicit
 full-read duties and capture/handoff flags. Complete-source availability does

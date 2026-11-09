@@ -194,7 +194,8 @@ def test_bound_prompt_keeps_original_turn_without_wake_time_substitution(mode, w
     # Binding does not replace the dynamic shell read with an unscoped guard.
     assert "--turn-instance-id" in bound["quota_guard_command"]
     assert "LOOPX_TURN" in bound["quota_guard_command"]
-    assert "interaction_contract.cli_channel.settlement_plan.ordered_steps" in bound["task_body"]
+    assert "Settle current settlement_plan.ordered_steps in order, else next_cli_actions" in bound["task_body"]
+    assert bound["task_body"].count("settlement_plan.ordered_steps") == 1
 
 
 def test_thin_agent_input_error_is_actionable_without_generator_diagnostics() -> None:
