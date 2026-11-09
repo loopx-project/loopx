@@ -39,6 +39,7 @@ def enabled_reward_memory_automation(
     if not eligible:
         return eligible
     envelope = payload.get("turn_envelope")
+    source: Mapping[str, Any] | None
     if "work_contract" in payload:
         from .quota.turn_envelope import complete_turn_host_source, turn_plan_host_source
 
