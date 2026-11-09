@@ -1556,14 +1556,23 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
                 ["", "## Rollback Command", "", "```bash", str(rollback_command), "```"]
             )
         if execution:
-            lines.extend(
-                [
-                    "",
-                    "## Execution",
-                    "",
-                    f"- Doctor return code: `{execution.get('doctor_returncode')}`",
-                ]
-            )
+            lines.extend(["", "## Execution", ""])
+            for stage, label in (
+                ("compatibility", "Authority compatibility"),
+                ("doctor", "Doctor"),
+                ("extension_doctor", "Extension doctor"),
+            ):
+                returncode = execution.get(f"{stage}_returncode")
+                if returncode is None:
+                    continue
+                lines.append(f"- {label} return code: `{returncode}`")
+                if returncode != 0:
+                    for stream in ("stdout", "stderr"):
+                        output = execution.get(f"{stage}_{stream}_tail")
+                        if output:
+                            lines.extend(["", f"### {label} {stream}", "", "```text", str(output), "```"])
+            if execution.get("error"):
+                lines.extend(["", f"Error: {execution['error']}"])
         return "\n".join(lines) + "\n"
 
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}

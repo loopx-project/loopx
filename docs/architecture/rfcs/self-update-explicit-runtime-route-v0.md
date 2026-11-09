@@ -24,6 +24,7 @@ This adds no state, provider, migration, permission, scheduler or executor.
 Authority compatibility remains a read-only `--require-current` check before
 the launcher changes. Its exit status and bounded output remain in the existing
 execution readback, and failure is reported without guessing its cause. A
+failed check also exposes its bounded stdout/stderr in the default CLI output. A
 failed core doctor still restores the previous launcher; an extension failure
 still reports the activated runtime with its provider unavailable.
 

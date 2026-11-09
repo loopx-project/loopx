@@ -985,6 +985,7 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
     tmp_path, monkeypatch, capsys, failed_stage,
 ):
     from loopx.cli import main
+    from loopx.self_update import render_update_plan_markdown
 
     runtime = tmp_path / "selected runtime"
     runtime.mkdir()
@@ -1043,6 +1044,13 @@ def test_rollback_cli_preserves_selected_route_and_failure_boundaries(
     assert result["execution"]["compatibility_returncode"] == (1 if failed_stage == "compatibility" else 0)
     if failed_stage == "compatibility":
         assert "synthetic refusal" in result["execution"]["compatibility_stdout_tail"]
+    rendered = render_update_plan_markdown(result)
+    if failed_stage:
+        assert "synthetic refusal" in rendered
+        assert "synthetic diagnostic" in rendered
+    if failed_stage == "compatibility":
+        assert "Rollback target authority check failed" in rendered
+        assert "cannot read current authority formats" not in rendered
     expected_release = current if failed_stage in {"compatibility", "doctor"} else target
     assert launcher.resolve() == expected_release / "scripts/loopx"
 
