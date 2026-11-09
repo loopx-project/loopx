@@ -263,7 +263,11 @@ def _token_pattern(field: str) -> re.Pattern[str]:
 def lexical_module_count(field: str, suffix: str, sources: Iterable[SourceFile]) -> int:
     """The pre-B3 metric: modules whose text contains the standalone token."""
     token = _token_pattern(field)
-    return sum(1 for source in sources if source.suffix == suffix and token.search(source.text))
+    # Literal containment is a prerequisite of the same boundary regex.
+    return sum(
+        1 for source in sources
+        if source.suffix == suffix and field in source.text and token.search(source.text)
+    )
 
 
 def scan_field_uses(

@@ -16,6 +16,7 @@ from loopx.semantics.field_use import (
     FACTS,
     ROLES,
     field_use_summary,
+    lexical_module_count,
     python_module_scan,
     scan_field_uses,
 )
@@ -23,6 +24,20 @@ from loopx.semantics.inventory import SourceFile
 
 FIELD = "goal_boundary"
 FIELDS = frozenset({FIELD})
+
+
+@pytest.mark.parametrize("suffix, expected", [(".py", 3), (".ts", 1)])
+def test_lexical_modules_preserve_boundaries_and_raw_source_text(suffix: str, expected: int) -> None:
+    sources = [
+        SourceFile("comment.py", ".py", "# goal_boundary goal_boundary"),
+        SourceFile("prefix.py", ".py", "goal_boundary_repair repair_goal_boundary"),
+        SourceFile("unicode.py", ".py", "汉goal_boundary字"),
+        SourceFile("escaped.py", ".py", r'"goal_\u0062oundary"'),
+        SourceFile("broken.py", ".py", "def broken(:\n# goal_boundary"),
+        SourceFile("other.ts", ".ts", "// goal_boundary"),
+        SourceFile("absent.py", ".py", "payload.get(dynamic_key)"),
+    ]
+    assert lexical_module_count(FIELD, suffix, iter(sources)) == expected
 
 
 def python(text: str) -> dict[str, set[str]]:
