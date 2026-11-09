@@ -429,49 +429,38 @@ resource policy in the study manifest before launching a new comparison.
 Use explicit `--feedback best-only` to retain strict-improvement publication, or
 `--feedback blind` as an evaluator-feedback-free control. Harbor is unchanged.
 
-### Match a local probe to an accepted native submission
+### Native artifact evidence and independent measurements
 
 Native heartbeat workers with `--execution-observation local_probe` expose
-`loopx-bind-native-candidate`. When the comparison could change the next
-decision, retain the exact submission archive in the research directory.
-Use `sforge-submit --retain-archive DIR --json` only if the installed client
-advertises both options. On those clients, an accepted result can also be
-read with `sforge-submit --result ID --json --no-wait`.
+`loopx-bind-native-candidate` as an artifact reader. Native results do not need
+a preceding successful local execution:
 
 ```sh
-loopx-bind-native-candidate --observation probe.json --snapshot candidate/manifest.json \
-  --result native-result.json --archive submission.tar.gz \
-  --generated-file 'result.json=probe-results/result.json'
+loopx-bind-native-candidate --result native-result.json
 ```
 
-The snapshot manifest records `input_revision`, the relative
-`execution_observation` path and a `files` list of submitted relative paths
-and SHA-256 digests. Each file must match a pin in the original probe's
-adjacent `.candidate.json` or a separately retained output of that probe.
-Name each such output explicitly with `--generated-file`, omitting that
-option when the probe already pins every submitted file. Keep the probe's
-additional validation fixtures in its own manifest.
+The original receipt names the accepted upload as `archive:<sha256>` and records
+its size. This offline command checks the receipt shape, not service identity.
+For additional file-content evidence, pass `--archive submission.tar.gz`. It
+checks the original receipt against the bytes and safely reads the complete
+ordinary gzip tar without extracting files, bounded to 256 members and 64 MiB
+compressed/expanded. The returned `submitted_file_set_ref` uses the shared
+Explore `candidate_content` path-and-byte manifest. File mode, packing, build
+lineage and execution conditions remain separate; equal content refs alone do
+not prove equivalent execution. Generated outputs belong to the full file set,
+and a probe's selected subset or extra fixtures are a different subject.
 
-Supply the original completed native response with its source receipt. The
-command checks the uploaded archive hash and compares the complete set of
-file paths and bytes without unpacking files onto disk. It supports up to 32
-submitted files in an ordinary gzip tar, with compressed and expanded limits
-of 64 MiB each. An absent receipt, unsupported archive or disagreement gives
-a nonzero exit without a candidate reference. The command performs no
-network request or evaluation.
+Local and native producers each retain their own actual workload, evaluator,
+subject and evidence through ordinary Explore measurements. There is no
+required local-to-native work order. Missing content evidence limits pairing,
+not retention of an otherwise valid result. Never rewrite an earlier
+measurement or resubmit merely to force a candidate match. When the installed
+native client advertises `--retain-archive` and `--json`, it can retain bytes of
+a planned upload; this is optional evidence, not an extra evaluation.
 
-When a pre-submit measurement already used the fingerprint of the exact
-submitted file set, match it to `submitted_file_set_ref` and use that reference
-on the native measurement. It uses the same ordered path-and-SHA-256 digest as
-the probe pins, over every submitted file, including generated outputs. A probe
-that pins exactly those files can use its `candidate_sha256` with the
-`candidate:` prefix before the upload exists. A probe-only fingerprint
-covering extra fixtures or omitting generated output is not interchangeable
-with the submitted fingerprint. This reference covers file paths and contents;
-keep packaging or runtime conditions separate if they affect the result. For
-new pairs based on retained upload bytes,
-`candidate_ref` still names the exact archive. Keep each measurement's own
-input revision, evaluator and evidence; earlier measurements stay as recorded.
+The old `--observation`, `--snapshot` and `--generated-file` options remain an
+explicit offline diagnostic for sealed probe artifacts. They keep their strict
+original correspondence checks and do not gate ordinary native facts.
 
 For an explicit native Explore trial with `local_probe`, opt in with
 `--native-result-comparison`. Use `task:<task_sha256>` from the installed
@@ -501,8 +490,13 @@ the comparable change in the write receipt. With a declared Yardstick, the
 receipt can show that the two evaluators prefer different candidates. The
 native read creates no finding and spends no submission opportunity.
 
-For offline diagnosis with the same retained artifacts, use
-`python -m benchmark.runtime.sforge_candidate_binding` from the pinned runner.
+
+The common content capture lives in the product's existing Explore producer
+neighborhood; benchmark runtime only adapts native receipt/archive fields. A
+split product/runner install selecting capture must pin a product revision with
+`loopx.capabilities.explore.candidate_content`. Preflight rejects an older
+product before worker staging; it never overlays product code or falls back to
+a benchmark copy. Omitted capture preserves the historical source-pin behavior.
 
 
 For native archive submission, start `python -m benchmark.edgebench.serve` and use the runner

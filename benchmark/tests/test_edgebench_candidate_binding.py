@@ -397,3 +397,42 @@ def test_refuses_to_emit_a_candidate_ref_for_unproven_sources(case, defect, diag
     assert checked.returncode == 1
     assert checked.stdout == ""
     assert diagnostic in checked.stderr
+
+
+def test_native_archive_facts_do_not_require_a_local_probe(case):
+    from benchmark.runtime.sforge_candidate_binding import native_archive_references
+
+    observation, snapshot, _, _, archive, result = case
+    native = _native_response(archive)
+    for path in (observation, snapshot, observation.with_suffix(observation.suffix + ".candidate.json")):
+        path.unlink()
+    receipt_only = native_archive_references(native)
+    assert receipt_only["archive_ref"] == "archive:" + _digest(archive.read_bytes())
+    assert "submitted_file_set_ref" not in receipt_only
+    with_content = native_archive_references(native, archive)
+    assert all(with_content[key] == value for key, value in receipt_only.items())
+    assert set(with_content["files"]) == {"solver.py", "result.json"}
+    _write(result, native)
+    completed = subprocess.run([sys.executable, "-m", "benchmark.runtime.sforge_candidate_binding",
+        "--result", str(result)], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == receipt_only
+
+
+def test_content_refs_do_not_erase_archive_mode_or_packaging(tmp_path):
+    from benchmark.runtime.sforge_candidate_binding import native_archive_references
+
+    refs = []
+    for mode in (0o644, 0o755):
+        archive = tmp_path / f"mode-{mode}.tar.gz"
+        with tarfile.open(archive, "w:gz") as stream:
+            member = tarfile.TarInfo("solver.sh")
+            body = b"#!/bin/sh\nexit 0\n"
+            member.mode, member.size = mode, len(body)
+            stream.addfile(member, io.BytesIO(body))
+        refs.append(native_archive_references(_native_response(archive), archive))
+    assert refs[0]["archive_ref"] != refs[1]["archive_ref"]
+    assert refs[0]["submitted_file_set_ref"] == refs[1]["submitted_file_set_ref"]
+    # Content identity claims only path/bytes; neither record claims execution equivalence.
+    assert set(refs[0]) == {"archive_ref", "archive_bytes", "submitted_file_set_ref", "files",
+                            "submission_id", "task_id", "round_id"}

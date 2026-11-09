@@ -30,18 +30,13 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
         "that alone does not provide a resumable checkpoint. "
     )
     binding = (
-        "When a decision depends on comparing a local probe with a native result, "
-        "and sforge-submit --help lists --retain-archive and --json, retain the exact archive "
-        "with the planned submission. Use loopx-bind-native-candidate --help with the sealed "
-        "file manifest, original probe and native result. Record the native measurement with its verified "
-        "submitted_file_set_ref. Reuse an existing local measurement as the same candidate only when the "
-        "existing measurement's candidate reference already equals that complete file-set reference, "
-        "including generated outputs. Keep candidate_ref for the exact archive and probe_candidate_ref "
-        "for the probe's selected files; a subset or extra fixtures do not prove the same submitted file set. "
-        "Do not rewrite earlier measurements to force a match. "
-        "Keep each measurement's original evaluation and input revision. "
-        "If source evidence is unavailable, keep the measurements separate. Do not resubmit "
-        "to recover source evidence.\n\n"
+        "For native artifact evidence, retain the planned upload with sforge-submit --retain-archive "
+        "when the installed client advertises it, then read the receipt and archive using "
+        "loopx-bind-native-candidate --help. This does not require a local probe or a new submission. "
+        "Keep archive identity and file-content identity distinct: content refs do not cover modes, "
+        "packaging or execution conditions. Record available measurements through ordinary Explore "
+        "writeback with each producer's actual workload and evaluator; missing or non-equivalent "
+        "candidate evidence limits pairing, not retention of either result. Preserve earlier refs.\n\n"
         if native_probe else ""
     )
     if native_result_comparison:

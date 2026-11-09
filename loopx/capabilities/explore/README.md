@@ -110,6 +110,15 @@ Changed or unknown evaluation conditions must stay separate. Do not invent a
 shared revision merely to obtain a comparison. A growing local corpus does not
 change the input revision for an unchanged evaluated subset; changed samples do.
 
+File-based producers may use `candidate_content.candidate_snapshot` and
+`candidate_manifest_sha256` from this capability's host I/O neighborhood to
+capture selected relative paths and byte digests. This preserves one content
+encoding for execution probes and artifact adapters. It does not cover modes,
+packaging, transitive inputs or execution conditions, certify an execution, or
+require every measurement subject to use a content hash. Keep each producer's
+actual subject, workload and evaluator; extra content evidence does not rewrite
+earlier records or count as another evaluation.
+
 A paired comparison may instead record both candidates in **one finding** under
 the same verified comparison conditions. Keep both `candidate_ref` and
 `evidence_ref` values, and list both results in the finding's `evidence_refs`.
@@ -121,8 +130,11 @@ finding cannot claim two separate receipts as one execution observation's result
 
 Comparisons require the same node, metric, unit, direction, comparison scope,
 input revision and evaluator. Producers must change the scope when task,
-model/resource budget or evaluation conditions change, and separate native
-evaluation from local proxies. Explore validates the declared comparison keys,
+model/resource budget or evaluation conditions change, and keep distinct workloads
+or evaluation conditions in their own profiles.
+A producer's location does not decide whether its measurement is an outcome or a
+proxy; that role remains an explicit decision declaration. Explore validates the
+declared comparison keys,
 not their truth. It computes the latest recorded measurement, historical best
 candidate/source and direction-adjusted improvement against the prior best,
 before applying the context's display limit. Latest follows source-log append

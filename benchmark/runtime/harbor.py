@@ -228,6 +228,10 @@ class BenchmarkCodex(CodexOffline):
             source, runner, os.environ.get("LOOPX_EXPECTED_COMMIT"),
             os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"),
         )
+        if self.execution_observation is not None:
+            from .source import require_candidate_content
+
+            require_candidate_content(source, head)
         self._runner_commit = runner_head
         with tempfile.TemporaryDirectory(prefix="benchmark-source-") as directory:
             archive = Path(directory) / "source.tar"

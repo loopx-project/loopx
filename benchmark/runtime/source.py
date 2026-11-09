@@ -71,3 +71,18 @@ def source_pins(source: Path, runner: Path, expected: str | None,
         raise ValueError("Separate product and runner sources require both revision pins")
     head = checked_revision(source, expected)
     return head, head if source == runner else checked_revision(runner, expected_runner)
+
+
+def require_candidate_content(source: Path, revision: str) -> None:
+    """Qualify the product API before staging a runner that captures candidates."""
+    import ast
+
+    module = "loopx/capabilities/explore/candidate_content.py"
+    result = subprocess.run(["git", "-C", str(source), "show", f"{revision}:{module}"],
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise ValueError("Candidate capture requires a product pin containing Explore candidate_content; "
+                         "update the product revision explicitly")
+    names = {node.name for node in ast.parse(result.stdout).body if isinstance(node, ast.FunctionDef)}
+    if not {"candidate_snapshot", "candidate_manifest_sha256"} <= names:
+        raise ValueError("The product pin lacks the required Explore candidate content API")

@@ -218,17 +218,11 @@ def test_worker_delivers_exact_file_set_guidance_only_with_native_probe(
     if feedback == "native":
         assert agents.read_text().endswith(instructions)
         for text in [prompt, agents.read_text(), delivered[0]]:
-            assert "existing measurement's candidate reference already equals" in text
-            assert "submitted_file_set_ref" in text
-            assert "candidate_ref for the exact archive" in text
-            assert "probe_candidate_ref for the probe's selected files" in text
-            assert "Do not rewrite earlier measurements" in text
-            assert "Record the native measurement with its verified submitted_file_set_ref" in text
-            assert "Use its verified submitted_file_set_ref for both measurements" not in text
-            if compare:
-                assert "when their recorded complete file-set references already match" in text
-                assert "Reuse the same question and submitted candidate reference" not in text
-            assert "If source evidence is unavailable, keep the measurements separate" in text
+            assert "does not require a local probe or a new submission" in text
+            assert "content refs do not cover modes" in text
+            assert "each producer's actual workload and evaluator" in text
+            assert "limits pairing, not retention of either result" in text
+            assert "Preserve earlier refs" in text
             assert "Use its verified candidate_ref for both measurements" not in text
     else:
         assert agents.read_text() == "Preserve the original task contract.\n"

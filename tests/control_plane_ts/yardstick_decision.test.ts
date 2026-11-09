@@ -288,3 +288,30 @@ test("history readback preserves scoped declarations and rejects foreign source 
     "Independently installed presentation readers retain the original v0 capture fields");
   assert.throws(() => projectWorkYardstickPresentation({capture: internal, goal_id: "foreign"}), /cross Goal/);
 });
+
+
+test("different proxy workloads retain their revisions and compare the same declared subjects", () => {
+  const outcome = {...authoritative, input_revision: "task:full-v2"};
+  const screening = {...proxy, input_revision: "dataset:small-proxy-v3"};
+  const choice = {...decision, authoritative: outcome, proxy: screening};
+  const measured = {...finding, work_yardstick: {binding, decision: choice}, measurements: [
+    {...outcome, value: 7, candidate_ref: "archive:a", evidence_ref: "result:formal-a"},
+    {...outcome, value: 4, candidate_ref: "archive:b", evidence_ref: "result:formal-b"},
+    {...screening, value: 9, candidate_ref: "archive:a", evidence_ref: "result:proxy-a"},
+    {...screening, value: 12, candidate_ref: "archive:b", evidence_ref: "result:proxy-b"},
+  ]};
+  const project = (row = measured) => projectWorkYardstickCue({...binding, enabled: true, findings: [row],
+    measurement_feedback: projectExploreMeasurementFeedback([row])})!;
+  const cue = project();
+  assert.equal(cue.search_comparison.goal.preferred_candidate_ref, "archive:a");
+  assert.equal(cue.search_comparison.proxy.preferred_candidate_ref, "archive:b");
+  assert.equal(cue.search_comparison.proxy_order_reversed, true);
+  assert.equal(cue.authoritative.input_revision, "task:full-v2");
+  assert.equal(cue.proxy.input_revision, "dataset:small-proxy-v3");
+  // Different granularity is retained as evidence and is never automatically aliased.
+  const unpaired = {...measured, measurements: measured.measurements.map((row, index) =>
+    index > 1 ? {...row, candidate_ref: row.candidate_ref.replace("archive:", "candidate:")} : row)};
+  assert.equal(project(unpaired).search_comparison.proxy, undefined);
+  assert.equal(projectExploreMeasurementFeedback([unpaired]).length, 2);
+  assert.equal(projectWorkYardstickCue({...binding, enabled: false, findings: [measured]}), null);
+});
