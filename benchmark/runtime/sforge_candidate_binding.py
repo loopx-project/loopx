@@ -103,7 +103,7 @@ def _archive_file_hashes(raw: bytes) -> dict[str, str]:
     return files
 
 
-def verify_binding(observation: Path, snapshot: Path, result: Path, archive: Path,
+def verify_binding(observation: Path, snapshot: Path, result: Path | dict, archive: Path,
                    generated_files: list[tuple[str, Path]]) -> dict:
     probe = _object(observation)
     pins = _object(observation.with_suffix(observation.suffix + ".candidate.json"))
@@ -137,7 +137,7 @@ def verify_binding(observation: Path, snapshot: Path, result: Path, archive: Pat
         if hashlib.sha256(_read(path, _ARCHIVE_LIMIT)).hexdigest() != expected[name]:
             raise ValueError("generated output bytes differ from the sealed snapshot")
 
-    native = _object(result, _RESULT_LIMIT)
+    native = result if isinstance(result, dict) else _object(result, _RESULT_LIMIT)
     receipt = native.get("receipt")
     if (native.get("status") != "completed" or not isinstance(receipt, dict)
             or receipt.get("schema_version") != "sforge_submission_receipt_v1"
@@ -175,13 +175,44 @@ def _generated_file(value: str) -> tuple[str, Path]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ("observation", "snapshot", "result", "archive"):
+    for flag in ("observation", "snapshot", "archive"):
         parser.add_argument("--" + flag, type=Path, required=True)
+    result_source = parser.add_mutually_exclusive_group(required=True)
+    result_source.add_argument("--result", type=Path, help="Retained native result JSON for offline verification")
+    result_source.add_argument("--submission-id", help="Read one existing result from the installed native relay")
+    parser.add_argument("--todo-id", help="Current Todo for an installed result read")
+    parser.add_argument("--local-finding-id", help="Existing measured finding linked to that Todo")
     parser.add_argument("--generated-file", dest="generated_files", type=_generated_file,
                         action="append", default=[], metavar="SUBMITTED_PATH=PROBE_OUTPUT_PATH")
     args = parser.parse_args(argv)
+    if args.submission_id is not None:
+        if not args.todo_id or not args.local_finding_id:
+            parser.error("--submission-id requires --todo-id and --local-finding-id")
+        from http.client import HTTPException
+
+        from benchmark.runtime.sforge_native_result import read_candidate_comparison, read_installed_scope
+
+        try:
+            result = read_candidate_comparison(
+                read_installed_scope(), args.submission_id, observation=args.observation,
+                snapshot=args.snapshot, archive=args.archive, generated_files=args.generated_files,
+                todo_id=args.todo_id, local_finding_id=args.local_finding_id,
+            )
+        except (OSError, ValueError, EOFError, HTTPException):
+            print("Scoped native result unavailable; use sforge-submit --result ID --json for ordinary feedback.",
+                  file=sys.stderr)
+            return 1
+        print(json.dumps(result))
+        native = result["native"]
+        status = native.get("status")
+        return 0 if result["native_http_status"] == 200 and (
+            status in ("queued", "running")
+            or (status == "completed" and isinstance(native.get("report"), dict))
+        ) else 1
+    if args.todo_id is not None or args.local_finding_id is not None:
+        parser.error("Todo and finding options require an installed native result read")
     try:
-        result = verify_binding(**vars(args))
+        result = verify_binding(args.observation, args.snapshot, args.result, args.archive, args.generated_files)
     except (OSError, ValueError, EOFError, tarfile.TarError, zlib.error) as error:
         print(f"Candidate binding unavailable: {error}", file=sys.stderr)
         return 1

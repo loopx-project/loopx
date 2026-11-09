@@ -442,6 +442,19 @@ new pairs based on retained upload bytes,
 `candidate_ref` still names the exact archive. Keep each measurement's own
 input revision, evaluator and evidence; earlier measurements stay as recorded.
 
+For an explicit native Explore trial with `local_probe`, opt in with
+`--native-result-comparison`. Once an existing submission has a retained archive
+and a matching recorded local finding, pass `--submission-id ID` instead of
+`--result FILE`, and provide `--todo-id TODO` and `--local-finding-id FINDING`.
+The helper queries that trial's runner-installed relay once and returns the
+native response. For a current claimed Todo and its linked measured finding,
+the comparison includes the native score and matching local measurements with
+their own units, input revisions, evaluators, and evidence. Pending or invalid
+results and unmatched evidence still return the original public feedback.
+The helper never submits, waits for grading, or writes findings; record any
+decision through the ordinary Todo and Explore path. Other arms keep their
+existing tool instructions and behavior.
+
 For offline diagnosis with the same retained artifacts, use
 `python -m benchmark.runtime.sforge_candidate_binding` from the pinned runner.
 
