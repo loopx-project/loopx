@@ -310,6 +310,31 @@ def test_stop_does_not_fallback_for_non_global_registry(tmp_path: Path) -> None:
     )
 
 
+def test_resume_retry_rejects_shared_legacy_status_mismatch(
+    connected_registries: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_registry, global_registry = connected_registries
+    source = load_registry(source_registry)
+    registry_goals(source)[0]["status"] = "active"
+    _write_json(source_registry, source)
+    real_sync = activation_service.sync_project_registry_to_global
+
+    def corrupt_shared_status(**kwargs):
+        result = real_sync(**kwargs)
+        shared = load_registry(global_registry)
+        registry_goals(shared)[0]["status"] = "paused"
+        _write_json(global_registry, shared)
+        return result
+
+    monkeypatch.setattr(activation_service, "sync_project_registry_to_global", corrupt_shared_status)
+    result = set_goal_activation_state(registry_path=source_registry, goal_id="goal-one",
+        state="active", actor_kind="owner", execute=True)
+    assert not result["ok"] and not result["readback"]["verified"], result
+    assert not result["written"], "An already active source needs no new source mutation"
+    assert _goal(source_registry)["status"] == "active"
+    assert _goal(global_registry)["status"] == "paused"
+
+
 def test_stop_and_resume_sync_source_global_and_quota(
     connected_registries: tuple[Path, Path],
 ) -> None:

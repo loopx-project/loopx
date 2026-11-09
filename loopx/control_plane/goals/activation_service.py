@@ -225,18 +225,16 @@ def _readback(
     target_registry: Path,
     goal_id: str,
     expected_state: GoalActivationState,
-    expected_goal_status: str | None = None,
 ) -> dict[str, Any]:
     source_goal = _goal(load_registry(source_registry), goal_id)
     target_goal = _goal(load_registry(target_registry), goal_id)
     source_state = goal_activation_state(source_goal)
     target_state = goal_activation_state(target_goal)
     verified = source_state is expected_state and target_state is expected_state
-    if expected_goal_status is not None:
-        verified = verified and all(
-            goal.get("status") == expected_goal_status
-            for goal in (source_goal, target_goal)
-        )
+    # Resume retries must also verify the legacy field after the source pause
+    # was cleared. Omitted legacy status retains its existing default semantics.
+    if source_goal.get("status") is not None:
+        verified = verified and target_goal.get("status") == source_goal["status"]
     return {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
         "status": "verified" if verified else "mismatch",
@@ -499,7 +497,6 @@ def set_goal_activation_state(
                     target_registry=target_registry,
                     goal_id=normalized_goal_id,
                     expected_state=target_state,
-                    expected_goal_status="active" if resume_legacy_pause else None,
                 )
             )
     payload["readback"] = readback
