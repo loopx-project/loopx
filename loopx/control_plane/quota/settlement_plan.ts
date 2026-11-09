@@ -58,7 +58,9 @@ export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
   if (!cli || cli.selection_required === true || cli.spend_after_validation !== true
       || preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION || preparation.state !== "ready"
       || preparation.delivery_allowed !== true || receipt?.closeout_required !== true
-      || (receipt.status !== "committed" && receipt.status !== "replayed")
+      || receipt.settlement_binding_owed === true
+      // Claiming within the original Turn can requalify its receipt.
+      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
       || !identity || typeof params.todo_id !== "string" || !params.todo_id || params.todo_id !== identity.todo_id
       || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
       || preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id

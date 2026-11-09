@@ -25,10 +25,11 @@ test("native settlement only replaces matching executable steps on the original 
     todo_id: "todo", agent_id: "agent", delivery_allowed: true};
   const cli = {settlement_plan: plan, execution_preparation: preparation, spend_after_validation: true,
     next_cli_actions: ["supporting action", "writeback", "spend"]};
-  const receipt = {status: "committed", closeout_required: true, turn_instance_id: "turn",
+  const receipt = {status: "upgraded", closeout_required: true, turn_instance_id: "turn",
     settlement_identity: plan.identity};
   const request = {cli, receipt, todo_id: "todo"};
-  assert.ok(Array.isArray(nativeCliSettlementProjection(request).changes));
+  for (const status of ["committed", "upgraded", "replayed"])
+    assert.ok(Array.isArray(nativeCliSettlementProjection({...request, receipt: {...receipt, status}}).changes));
   const projected = composedCliSettlementChannel(cli);
   assert.deepEqual(projected.next_cli_actions, ["supporting action", "writeback --settle-turn --settlement-receipt"]);
   assert.equal((projected.settlement_plan as typeof plan).identity, plan.identity);
@@ -36,6 +37,9 @@ test("native settlement only replaces matching executable steps on the original 
     {todo_id: "other"},
     {receipt: {...receipt, turn_instance_id: "other"}},
     {receipt: {...receipt, settlement_identity: {...plan.identity as object, effect_id: "changed"}}},
+    {receipt: {...receipt, settlement_binding_owed: true}},
+    {receipt: {...receipt, closeout_required: false}},
+    {receipt: {...receipt, status: "pending"}},
     {cli: {...cli, execution_preparation: {...preparation, state: "claim_required"}}},
     {cli: {...cli, spend_after_validation: false}},
     {cli: {...cli, next_cli_actions: ["spend", "writeback"]}},
