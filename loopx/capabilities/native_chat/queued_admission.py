@@ -1,5 +1,6 @@
 """IO admission to the existing same-Session queue; Core owns source authority."""
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -138,6 +139,32 @@ def record_steering_delivery(
     store.update_ingress_receipt(
         session_id, ingress_id, status="delivered", active_turn_id=turn_id, error_code=None,
     )
+
+
+def send_native_steering(controller, adapter, *, session_id: str, active_turn_id: str,
+                         upstream_turn_id: str, client_ingress_id: str, message: str,
+                         queued_turn_id: str | None, origin: str | None) -> dict[str, Any]:
+    """Persist native identity before IO and settle its original receipt afterward."""
+    native = {
+        "local_turn_id": active_turn_id, "thread_id": adapter.upstream_thread_id,
+        "turn_id": upstream_turn_id, "client_message_id": "loopx-steer-" + hashlib.sha256(
+            json.dumps([session_id, client_ingress_id]).encode()
+        ).hexdigest(),
+        "queued_turn_id": queued_turn_id, "origin": origin,
+    }
+    controller.store.update_ingress_receipt(session_id, client_ingress_id, native_steering=native)
+    try:
+        adapter.steer_turn(message, upstream_turn_id, native["client_message_id"])
+    except Exception:
+        controller.store.update_ingress_receipt(session_id, client_ingress_id,
+            status="failed", error_code="live_steering_rejected")
+        raise
+    record_steering_delivery(controller.store, session_id=session_id, turn_id=active_turn_id,
+        ingress_id=client_ingress_id, message=message, queued_turn_id=queued_turn_id, origin=origin)
+    turn = controller.store.load_turn(session_id, active_turn_id)
+    if turn is None:
+        raise RuntimeError("live_steering_turn_missing")
+    return turn
 
 
 def reconcile_steering_delivery(controller, session, receipt) -> dict[str, Any] | None:

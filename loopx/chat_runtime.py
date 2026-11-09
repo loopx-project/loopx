@@ -1392,9 +1392,9 @@ class ChatRuntimeController:
                 _queued_turn_id=_queued_turn_id, origin=origin)
 
     def _steer_active_turn(
-        self, *, session: dict[str, Any], session_id: str, client_ingress_id: str,
+        self, *, session: Mapping[str, object], session_id: str, client_ingress_id: str,
         message: str, expected_turn_id: str | None, _queued_turn_id: str | None, origin: str | None,
-    ) -> tuple[dict[str, Any], bool]:
+    ) -> tuple[dict[str, object], bool]:
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1477,32 +1477,10 @@ class ChatRuntimeController:
                 error_code="live_steering_turn_not_started",
             )
             raise RuntimeError("live_steering_turn_not_started")
-        native = {
-            "local_turn_id": active_turn_id, "thread_id": adapter.upstream_thread_id,
-            "turn_id": upstream_turn_id, "client_message_id": "loopx-steer-" + hashlib.sha256(
-                json.dumps([session_id, client_ingress_id]).encode()
-            ).hexdigest(),
-            "queued_turn_id": _queued_turn_id, "origin": origin,
-        }
-        self.store.update_ingress_receipt(session_id, client_ingress_id, native_steering=native)
-        try:
-            adapter.steer_turn(message, upstream_turn_id, native["client_message_id"])
-        except Exception:
-            self.store.update_ingress_receipt(
-                session_id,
-                client_ingress_id,
-                status="failed",
-                error_code="live_steering_rejected",
-            )
-            raise
-        from .capabilities.native_chat.queued_admission import record_steering_delivery
-        record_steering_delivery(
-            self.store, session_id=session_id, turn_id=active_turn_id, ingress_id=client_ingress_id,
-            message=message, queued_turn_id=_queued_turn_id, origin=origin,
-        )
-        turn = self.store.load_turn(session_id, active_turn_id)
-        if turn is None:
-            raise RuntimeError("live_steering_turn_missing")
+        from .capabilities.native_chat.queued_admission import send_native_steering
+        turn = send_native_steering(self, adapter, session_id=session_id, active_turn_id=active_turn_id,
+            upstream_turn_id=upstream_turn_id, client_ingress_id=client_ingress_id,
+            message=message, queued_turn_id=_queued_turn_id, origin=origin)
         return turn, True
 
     def enqueue_turn(
