@@ -13,12 +13,26 @@ def observed_first_read_reference(directory: str, target: dict[str, Any], recove
                                   context: dict[str, Any], plan: dict[str, Any],
                                   initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Pin the reduced view and its ordinary fallback from the same capture."""
+    initial = initial_read_plan if initial_read_plan and initial_read_plan.get("initial") is True else {}
+    reference = _pin_observed_selection(directory, target, recovery, context, plan, initial.get("plan"))
+    if reference is not None and "linked_remaining" in plan and "remaining" in initial:
+        # Invalidation restores the ordinary remainder, not a second opening.
+        linked = _pin_observed_selection(directory, target, recovery, context,
+            {**plan["linked_remaining"], "reused": plan["reused"]}, initial["remaining"])
+        if linked is not None:
+            reference["linked_remaining"] = linked["path"]
+    return reference
+
+
+def _pin_observed_selection(directory: str, target: dict[str, Any], recovery: dict[str, Any],
+                            context: dict[str, Any], plan: dict[str, Any],
+                            ordinary_plan: dict[str, Any] | None) -> dict[str, Any] | None:
     try:
         path, digest = Path(recovery["path"]), recovery["sha256"]
         observation = {"directory": directory, "target": target, "fields": plan["reused"]}
         selections = plan.get("selections")
-        if initial_read_plan is not None and initial_read_plan.get("initial") is True:
-            ordinary = initial_read_plan["plan"]["selections"]
+        if ordinary_plan is not None:
+            ordinary = ordinary_plan["selections"]
             if splice := plan.get("selection_splice"):
                 start, end = splice["start"], splice["end"]
                 if type(start) is not int or type(end) is not int or not 0 <= start <= end <= len(ordinary):

@@ -19,7 +19,9 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string};
+type ReadSelection = {pointer: string; path: Path};
+type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
+export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
@@ -29,10 +31,12 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
-function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
+function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactBody): ReusableReadField[] {
+  const exactFields = exactBody && at(context, exactBody.path) !== undefined
+    ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
   const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
   const work = jsonObject(at(context, workPath));
-  if (!work || !Array.isArray(work.sources)) return [];
+  if (!work || !Array.isArray(work.sources)) return exactFields;
   const base = [...workPath, "sources"];
   const fields = work.sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
@@ -99,7 +103,7 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
         selected.todo.updated_at,
       ])});
   }
-  return fields;
+  return [...exactFields, ...fields];
 }
 
 function knownVisionAuthoring(step: JsonObject): boolean {
@@ -144,11 +148,11 @@ function observedSectionDigest(body: string, field?: ReusableReadField): string 
 
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
-export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
+export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
-  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
   const authoring = reusableVisionAuthoring(context);
   if (authoring) fields.set(pointer(authoring.path), authoring);
   const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
@@ -187,11 +191,11 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
 
 /** Only registered, previously delivered bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
-function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
+function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: ReusableExactBody): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
   if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
-  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const fields = new Map(reusableFirstReadFields(context, exactBody).map(field => [pointer(field.path), field]));
   const parents = new Set([...fields.values()].flatMap(({path}) => path.map((_, i) => pointer(path.slice(0, i)))));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
@@ -213,7 +217,7 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   // Match semantic fields before the reader groups complete parents. Otherwise
   // selecting every outcome hides the individual unchanged bodies from reuse.
   const selections = capturedContextSelection({context, select: pointers,
-    preserve_selection_order: true}).selections as {pointer: string; path: Path}[];
+    preserve_selection_order: true}).selections as ReadSelection[];
   const visit = (row: {pointer: string; path: Path}): typeof selections => {
     const {path, pointer: address} = row;
     const field = fields.get(address);
@@ -245,23 +249,44 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
       + MIN_REUSABLE_BODY_BYTES >= bytes(original)) return authoringOnly();
   Object.assign(reused, retainedAuthoring);
-  if (request.include_initial_read_plan === true) {
-    // The IO adapter already receives the ordinary plan. Send the changed
-    // middle of that list, keeping its exact order and coalescing decisions.
-    let start = 0, end = original.length, stop = grouped.length;
-    while (start < end && start < stop && original[start].pointer === grouped[start].pointer) start++;
-    while (end > start && stop > start && original[end - 1].pointer === grouped[stop - 1].pointer) {
-      end--;
-      stop--;
-    }
-    const selection_splice = {start, end, selections: grouped.slice(start, stop)};
-    if (Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(grouped)))
-      return {selection_splice, reused};
-  }
-  return {selections: grouped, reused};
+  return {...(request.include_initial_read_plan === true
+    ? compactObservedSelection(original, grouped) : {selections: grouped}), reused};
 }
 
-function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
+function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
+  // The IO adapter already has the ordinary plan. Keep its exact ordering
+  // and send only the changed middle when it is cheaper than the whole list.
+  let start = 0, end = ordinary.length, stop = selected.length;
+  while (start < end && start < stop && ordinary[start].pointer === selected[start].pointer) start++;
+  while (end > start && stop > start && ordinary[end - 1].pointer === selected[stop - 1].pointer) {
+    end--;
+    stop--;
+  }
+  const selection_splice = {start, end, selections: selected.slice(start, stop)};
+  return Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(selected))
+    ? {selection_splice} : {selections: selected};
+}
+
+/** Compose the ready opening with the same observation, without comparing
+ * bodies again. A coalesced parent can span both parts; keep only the coverage
+ * shared by the verified reduced selection and the ordinary remainder. */
+function withLinkedObservedRemainder(observed: JsonObject | undefined,
+    initial: ReturnType<typeof nativeContextReadPlan> | undefined): JsonObject | undefined {
+  if (!observed || !initial?.linked_opening_detail || !initial.remaining
+      || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
+  const ordinary = initial.plan.selections as ReadSelection[];
+  const splice = observed.selection_splice as {start: number; end: number; selections: ReadSelection[]} | undefined;
+  const selected = splice
+    ? [...ordinary.slice(0, splice.start), ...splice.selections, ...ordinary.slice(splice.end)]
+    : observed.selections as ReadSelection[];
+  const addresses = new Set(selected.map(row => row.pointer));
+  const remaining = initial.remaining.selections as ReadSelection[];
+  const scoped = remaining.flatMap(row => addresses.has(row.pointer) || selected.some(item => pathStartsWith(row.path, item.path))
+    ? [row] : selected.filter(item => pathStartsWith(item.path, row.path)));
+  return {...observed, linked_remaining: compactObservedSelection(remaining, scoped)};
+}
+
+function inlineReadSections(request: JsonObject, required: JsonObject, exactBody?: ReusableExactBody): JsonObject {
   const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {
     if (source === shown) { paths.push(path); return; }
@@ -270,7 +295,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject): JsonObje
       (source as JsonObject)[key], (shown as JsonObject)[key], [...path, Array.isArray(source) ? Number(key) : key]);
   };
   visit(original, required, []);
-  return contextReadSectionDigests(request, paths);
+  return contextReadSectionDigests(request, paths, exactBody);
 }
 
 /** Return paths instead of round-tripping the caller's JSON numeric values
@@ -528,7 +553,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -543,13 +568,15 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
-  const observed = observe && pointers.length ? observedFirstRead(codec, pointers) : undefined;
+  const initial = request.include_initial_read_plan === true && groups
+    ? nativeContextReadPlan(required.context, pointers, groups, exactBody?.path) : undefined;
+  const observed = observe && pointers.length
+    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
-    read_sections: inlineReadSections(request, required.context),
-    ...(request.include_initial_read_plan === true && groups
-      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, undefined, true);
+    read_sections: inlineReadSections(request, required.context, exactBody),
+    ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -564,7 +591,10 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>): JsonObject {
+    groups: ReturnType<typeof initialContextReadGroups>, openingDetail?: Path): {
+      initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
+      replan_review?: JsonObject;
+    } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
@@ -577,8 +607,27 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
     return {selections: (review.selections as {pointer: string; path: Path}[])
       .map(row => positions.get(row.pointer) ?? row)};
   })();
-  return {initial: true, plan: ordinary, ...(groups.opening.length && groups.remaining.length
-    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {}),
+  let {opening, remaining} = groups;
+  let linkedDetail: string | undefined;
+  if (openingDetail) {
+    const parent = openingDetail.slice(0, -1), detail = openingDetail.at(-1)!;
+    const body = jsonObject(at(context, parent)), address = pointer(parent);
+    // Small lists stay in the ordinary opening. The IO adapter also checks
+    // the serialized size against the actual tool window before linking.
+    if (opening.includes(address) && body && Object.hasOwn(body, detail)
+        && Buffer.byteLength(JSON.stringify(body[detail])) >= 8192) {
+      const preparation = "/interaction_contract/cli_channel/execution_preparation";
+      opening = opening.flatMap(field => field === address
+        ? Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key])) : [field]);
+      if (remaining.includes(preparation)) opening.push(preparation);
+      remaining = [pointer(openingDetail), ...remaining.filter(field => field !== preparation)];
+      linkedDetail = pointer(openingDetail);
+    }
+  }
+  // Keep the ordinary selection (and historical raw cursors) byte-compatible.
+  return {initial: true, plan: ordinary, ...(opening.length && remaining.length
+    ? {opening: select(opening), remaining: select(remaining)} : {}),
+    ...(linkedDetail ? {linked_opening_detail: linkedDetail} : {}),
     ...(relativeReview ? {replan_review: relativeReview} : {})};
 }
 
