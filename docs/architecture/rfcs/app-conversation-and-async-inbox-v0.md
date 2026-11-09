@@ -1386,10 +1386,13 @@ snapshot, then rechecks an exact connection/Goal source. Interrupted, repeated,
 mis-scoped or inconsistent cursors remain unreadable and retry through the
 existing recovery path, without model replay. Unpaged v1 callers remain
 compatible. This is a stateless read hint, not a new store, consumer, execution
-state or grant. Response row count is bounded; server-side journal reads and
-prefix hashing still scale with full history and no latency improvement is
-claimed. HTTP/store and source/packaged browser checks qualify this bounded
-history path; installed native input, reply threading and live App/Lark media
+state or grant. Response row count is bounded. The File Chat reader can reuse one strict journal parse
+when its file is still readable and unchanged. A changed, unverifiable or
+oversized journal uses the original strict read. Each page still verifies the
+frozen prefix and reads its provider overlays afresh. Cold journal reads and
+prefix hashing still scale with full history. HTTP/store and source/packaged
+browser checks qualify this bounded history path; installed native input,
+reply threading and live App/Lark media
 remain separate acceptance. Earlier baseline and `--pagination-only` runs did
 not qualify the default return scenario's background wait. That historical
 timeout is retained; the default return journey now reads background revisions

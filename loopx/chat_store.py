@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from contextlib import suppress
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -19,6 +21,7 @@ from .chat import (
     resolve_attached_completion_replay,
 )
 from .capabilities.steward_executor.allocation import normalize_manager_executor_allocation
+from .capabilities.native_chat.file_discovery import file_change_fingerprint
 from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
@@ -215,6 +218,7 @@ class ChatSessionStore(ChatIngressStore):
         self._event_cache = ChatEventCache(self._event_lock)
         self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
+        self._paged_history: tuple[str, tuple[int, ...], list[dict[str, Any]]] | None = None
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
@@ -893,6 +897,29 @@ class ChatSessionStore(ChatIngressStore):
     def messages(self, session_id: str, *, strict: bool = False) -> list[dict[str, Any]]:
         return _read_jsonl(self._session_dir(session_id) / "messages.jsonl",
                           raise_on_error=strict, strict=strict)
+
+    def _paged_history_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Reuse one bounded strict parse; cursors and provider overlays still verify live."""
+        path = self._session_dir(session_id) / "messages.jsonl"
+
+        def revision() -> tuple[int, ...] | None:
+            with suppress(OSError), path.open("rb"):
+                if (stamp := file_change_fingerprint(path)) and stamp[-1] <= 64 * 1024 * 1024:
+                    return stamp
+            return None
+
+        stamp, cached = revision(), self._paged_history
+        if cached is not None and cached[:2] == (session_id, stamp):
+            with suppress(RecursionError):
+                rows = deepcopy(cached[2])
+                if stamp == revision():
+                    return rows
+        self._paged_history = None
+        rows = self.messages(session_id, strict=True)
+        if stamp is not None and len(rows) <= 8192 and stamp == revision():
+            with suppress(RecursionError):
+                self._paged_history = (session_id, stamp, deepcopy(rows))
+        return rows
 
     def prepared_managed_turn_request(
         self,
@@ -2109,7 +2136,6 @@ class ChatSessionStore(ChatIngressStore):
             "ok": True,
             "schema_version": CHAT_STORE_SCHEMA_VERSION,
             "session": self.public_session(payload),
-            "messages": (self.messages(session_id, strict=True) if strict_messages
-                         else self.messages(session_id)),
+            "messages": self._paged_history_messages(session_id) if strict_messages else self.messages(session_id),
             "active_turn": active_turn,
         }

@@ -1,6 +1,8 @@
 """One delegation automatically returns a conclusion without a second question."""
 
 import json
+import os
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -94,13 +96,13 @@ def private_snapshot(frozen_private_reply, tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(**query):
+    def read(*, expected_status=200, **query):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
             connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
             response = connection.getresponse()
             payload = json.loads(response.read())
-            assert response.status == 200, payload
+            assert response.status == expected_status, payload
             return payload
         finally:
             connection.close()
@@ -129,6 +131,77 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert message["reply_context"]["parent"]["complete"] is True
     assert [row["content"] for row in message["reply_context"]["thread"]["messages"]] == ["Earlier topic introduction"]
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps the fresh journal reader")
+def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
+        frozen_private_reply, private_snapshot, monkeypatch):
+    store, session, turn, request, *_ = frozen_private_reply
+    sid = session["session_id"]
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    journal_reads = []
+    read_messages = store.messages
+
+    def observe(session_id, *, strict=False):
+        journal_reads.append((session_id, strict))
+        return read_messages(session_id, strict=strict)
+
+    monkeypatch.setattr(store, "messages", observe)
+    first = private_snapshot(message_limit=1)
+    assert "reply_context" in first["messages"][0]
+    cursor = first["message_page"]["next_cursor"]
+    assert private_snapshot(message_limit=1, message_cursor=cursor)["messages"] == [answer]
+    # Cached parsing must not keep a deleted provider receipt visible.
+    (store.root / "lark-private-deliveries" / f"{request}.json").unlink()
+    fresh = private_snapshot(message_limit=1)
+    assert "reply_context" not in fresh["messages"][0]
+    assert fresh["message_page"] == first["message_page"]
+    assert journal_reads == [(sid, True)]
+
+    journal = store.sessions_root / sid / "messages.jsonl"
+    open_path = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == journal:
+            raise PermissionError("journal no longer readable")
+        return open_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=503)
+    assert "history is temporarily unavailable" in rejected["error"]
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_warm_history_keeps_frozen_prefix_and_rejects_same_stamp_rewrite(
+        frozen_private_reply, private_snapshot, replace):
+    store, session, turn, *_ = frozen_private_reply
+    sid = session["session_id"]
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    first = private_snapshot(message_limit=1)
+    cursor = first["message_page"]["next_cursor"]
+    extra = store.append_message(sid, role="agent", text="Later result")
+    second = private_snapshot(message_limit=1, message_cursor=cursor)
+    assert second["messages"] == [answer] and second["message_page"]["next_cursor"] is None
+    assert private_snapshot(message_limit=3)["messages"][-1] == extra
+
+    path = store.sessions_root / sid / "messages.jsonl"
+    stat = path.stat()
+    original = path.read_bytes()
+    rewritten = original.replace(b"Original answer", b"Modified answer", 1)
+    assert len(rewritten) == len(original) and rewritten != original
+    target = path.with_suffix(".replacement") if replace else path
+    target.write_bytes(rewritten)
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    if replace:
+        target.replace(path)
+    rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=400)
+    assert "history cursor source changed" in rejected["error"]
+    assert private_snapshot(message_limit=3)["messages"][1]["text"] == "Modified answer"
+    path.write_bytes(rewritten + b"{invalid record}\n")
+    rejected = private_snapshot(message_limit=3, expected_status=400)
+    assert "invalid Chat journal record" in rejected["error"]
+    path.write_bytes(rewritten)
+    assert private_snapshot(message_limit=3)["messages"][-1] == extra
 
 
 def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path, private_snapshot):
