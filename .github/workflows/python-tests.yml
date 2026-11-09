@@ -476,7 +476,7 @@ jobs:
           LOOPX_DASHBOARD_COVERAGE: "1"
           LOOPX_PLAYWRIGHT_PACKAGE: ${{ github.workspace }}/apps/presentation/dashboard/node_modules/playwright
         run: |
-          node --test examples/personal-workspace-browser/shard.test.mjs
+          node --test examples/personal-workspace-browser/shard.test.mjs examples/personal-workspace-browser/goal-workspace-m2.test.mjs
           cd apps/presentation/dashboard
           npx playwright install --with-deps chromium --only-shell
           node ../../../examples/personal-workspace-browser-smoke.mjs
