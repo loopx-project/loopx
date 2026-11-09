@@ -162,6 +162,15 @@ M1 在既有 `explore_result_attachment_v0` 中添加可选 `work_yardstick_deci
 replan 沿用既有 v2 契约。省略附件保留当前决策；显式 `proxy: null` 选择直接评测，
 历史 profile 仍可读取。
 
+当前决策可以复用同一 Agent 在关联问题中已记录、且本次明确引用的测量。
+各 profile 保留自己的输入和 evaluator 版本，跨 profile 比较仍须对应同一候选对。
+已附带 Yardstick 决策的 finding 继续遵循原工作与目标范围。
+主提交为这些引用记录服务端生成的 canonical event 前缀数量及绑定内容的 event-id
+摘要。附件恢复核对原前缀，后来的写入顺序不能扩大证据范围。缺少来源快照的旧
+capture 仍可读取，但普通引用测量保留未知，不把恢复时的新图当成原证据。
+回读用既有 Explore projection 重放原前缀，同一 finding 的后来更新不能改写原引用测量。
+服务端来源快照不进入展示用 capture payload，独立安装的 reader 继续收到原 decision/binding 结构。
+
 ### 5.3 Co-discovery：投资于组合
 
 模型比较当前组合、直接评测及少量相关替代方案，需要时才扩读有来源绑定的细节。它考虑：

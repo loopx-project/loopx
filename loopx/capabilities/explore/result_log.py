@@ -804,7 +804,10 @@ def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | 
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
         "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements", "work_yardstick",
     )
-    return [{key: event[key] for key in fields if key in event} for event in events]
+    from ...control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
+
+    return project_work_yardstick_presentations(
+        [{key: event[key] for key in fields if key in event} for event in events], goal_id=goal_id)
 
 
 def _fold_by_result_id(

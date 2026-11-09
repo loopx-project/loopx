@@ -554,6 +554,57 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert "work_yardsticks" not in disabled and disabled["measurement_feedback"] == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path, provider, monkeypatch):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=wide_write_scope())
+    refs = ["result:preview-a", "result:preview-b"]
+    plain = attachment()
+    chosen = plain.pop("work_yardstick_decision")
+    plain["evidence_refs"] = refs
+    plain["measurements"] = [
+        {**chosen["proxy"], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": ref, "value": value}
+        for candidate, ref, value in zip(("a", "b"), refs, (8, 6))
+    ]
+
+    def retain(turn_id, payload):
+        evidence = tmp_path / f"{turn_id}.json"
+        evidence.write_text(json.dumps(payload))
+        receipt = refresh(project, runtime, path, turn_id, evidence, "--delivery-boundary", "in_flight_continuation")
+        result = receipt["explore_result_delivery"]
+        assert result["ok"]
+        run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"],
+            turn_instance_id=turn_id))
+        return result
+
+    first = retain("previous-proxy", plain)
+    selected = attachment()
+    selected.update(node_id=first["node_id"], evidence_refs=[*refs, "result:outcome-a", "result:outcome-b"])
+    selected["work_yardstick_decision"]["counterevidence_refs"] = refs
+    selected["measurements"] = [
+        {**chosen["authoritative"], "candidate_ref": f"candidate:{candidate}",
+         "evidence_ref": f"result:outcome-{candidate}", "value": value}
+        for candidate, value in (("a", 20), ("b", 14))
+    ]
+    result = retain("current-decision", selected)
+    before = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert before["search_comparison"]["proxy_order_reversed"] is False
+
+    late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
+            "measurements": [{**plain["measurements"][1], "value": 99}]}
+    retain("later-duplicate-reference", late)
+    after = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert after["source_finding_id"] == result["finding_id"]
+    assert after["search_comparison"] == before["search_comparison"]
+    turn = binding("inspect-original-citation")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    page = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)
+    assert "proxy reverses the observed goal order" not in page["content"]
+    assert "candidate:a" in page["content"]
+
+
 def test_sqlite_current_work_to_ordinary_turn_to_concrete_action_and_readback(tmp_path):
     project, runtime, path = setup(tmp_path)
     source = tmp_path / "capture.json"
@@ -736,3 +787,106 @@ def test_predecessor_validation_and_append_cas_share_the_same_snapshot(tmp_path,
     assert "graph changed" in result["error"]
     events = load_explore_result_events(explore_result_log_path(args["runtime_root"], args["goal_id"]))
     assert len([row for row in events if row["event_kind"] == "finding"]) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("legacy_source", [False, True])
+def test_pending_cited_decision_keeps_original_evidence_after_recovery(tmp_path, provider, legacy_source, monkeypatch, capsys):
+    from loopx.cli import main
+    import loopx.capabilities.explore.result_writeback as writer
+    import loopx.state_refresh as refresh_owner
+    project, runtime, path = setup(tmp_path, active=True, provider=provider)
+    refs = ["result:preview-a", "result:preview-b"]
+    plain = attachment()
+    chosen = plain.pop("work_yardstick_decision")
+    plain["evidence_refs"] = refs
+    plain["measurements"] = [{**chosen["proxy"], "candidate_ref": f"candidate:{candidate}",
+        "evidence_ref": ref, "value": value} for candidate, ref, value in zip(("a", "b"), refs, (8, 6))]
+
+    def retain(turn, value):
+        source = tmp_path / f"{turn}.json"
+        source.write_text(json.dumps(value))
+        receipt = refresh(project, runtime, path, turn, source, "--delivery-boundary", "in_flight_continuation")
+        assert receipt["explore_result_delivery"]["ok"]
+        run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id=turn))
+        return receipt["explore_result_delivery"]
+
+    first = retain("preview-before-original-decision", plain)
+    selected = attachment()
+    selected.update(node_id=first["node_id"], evidence_refs=[*refs, "result:outcome-a", "result:outcome-b"])
+    selected["work_yardstick_decision"]["counterevidence_refs"] = refs
+    selected["measurements"] = [{**chosen["authoritative"], "candidate_ref": f"candidate:{candidate}",
+        "evidence_ref": f"result:outcome-{candidate}", "value": value} for candidate, value in (("a", 20), ("b", 14))]
+    source = tmp_path / "interrupted-decision.json"
+    source.write_text(json.dumps(selected))
+    turn = "original-decision"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
+    command = ["refresh-state", *binding(turn), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--explore-result-json", str(source),
+        "--no-global-sync", "--suppress-external-sinks"]
+    def unavailable(*args, **kwargs):
+        raise OSError("injected graph write interruption")
+    with monkeypatch.context() as patch:
+        patch.chdir(project)
+        patch.setattr(writer, "append_explore_result_events", unavailable)
+        if legacy_source:
+            build = refresh_owner.build_state_refresh_record
+            def legacy_record(*args, **kwargs):
+                record = build(*args, **kwargs)
+                record.pop("explore_result_source_snapshot", None)
+                return record
+            patch.setattr(refresh_owner, "build_state_refresh_record", legacy_record)
+        rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *command])
+        failed = json.loads(capsys.readouterr().out)
+    assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
+    assert ("explore_result_source_snapshot" in failed) is not legacy_source
+    run(project, runtime, path, *_projected_cli_args(failed["settlement_owed"]["command"], turn_instance_id=turn))
+    late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
+        "measurements": [{**plain["measurements"][1], "value": 99}]}
+    retain("duplicate-during-attachment-outage", late)
+    recovered = run(project, runtime, path, *command)
+    assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    comparison = cue["search_comparison"]
+    print(json.dumps({"provider": provider, "comparison": comparison}), flush=True)
+    assert comparison["goal"]["preferred_candidate_ref"] == "candidate:a"
+    if legacy_source:
+        assert "proxy" not in comparison and "source_snapshot" not in cue
+    else:
+        assert comparison["proxy"]["preferred_candidate_ref"] == "candidate:a"
+        assert comparison["proxy"]["latest"]["value"] == 6
+        assert comparison["proxy_order_reversed"] is False
+    inspect = binding("read-recovered-original-decision")
+    capture = tmp_path / "capture"
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *inspect,
+        "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    page = starting_page(project, runtime, path, inspect, capture / "decision.json", monkeypatch)
+    assert "proxy reverses the observed goal order" not in page["content"]
+    assert "candidate:a" in page["content"]
+    # Updating the same finding folds away its old row in the live graph. The
+    # citation still refers to the original captured prefix, not that fold.
+    updated = tmp_path / "updated-preview.json"
+    updated.write_text(json.dumps([{**row, "value": 99 if row["candidate_ref"] == "candidate:b" else 8}
+        for row in plain["measurements"]]))
+    run(project, runtime, path, "explore", "finding", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--finding-id", first["finding_id"], "--node", first["node_id"],
+        "--title", "Corrected live preview", "--measurements-json", str(updated),
+        "--evidence-ref", refs[0], "--evidence-ref", refs[1])
+    assert context(runtime, path)["graph"]["work_yardsticks"][0]["search_comparison"] == comparison
+    if not legacy_source:
+        # A different but individually valid event cannot replace an original
+        # prefix event. Native readback rejects it without changing the log.
+        log = explore_result_log_path(runtime, GOAL_ID)
+        events = load_explore_result_events(log)
+        index = next(i for i, row in enumerate(events) if row.get("result_id") == first["finding_id"])
+        original = events[index]
+        events[index] = build_explore_finding_event(goal_id=GOAL_ID, agent_id=AGENT_ID,
+            node_id=first["node_id"], finding_id=first["finding_id"], title="Changed original prefix",
+            evidence_refs=refs, measurements=json.loads(updated.read_text()), recorded_at=original["recorded_at"])
+        log.write_text("".join(json.dumps(row) + "\n" for row in events))
+        before = log.read_bytes()
+        rc, rejected = _run_cli(path, runtime, "explore", "turn-context", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+        assert rc == 1 and "source snapshot changed" in json.dumps(rejected)
+        assert log.read_bytes() == before
