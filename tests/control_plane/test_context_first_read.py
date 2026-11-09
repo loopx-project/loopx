@@ -1188,7 +1188,11 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("revision", ["unrelated", "selected_evidence"])
+@pytest.mark.parametrize("observation", ["complete", "partial"])
+def test_native_first_read_reuses_only_the_observed_selected_todo_note(
+    tmp_path, monkeypatch, provider, revision, observation,
+):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
         AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
@@ -1277,10 +1281,27 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     cold, cold_facts, _ = read(first["first_read_command"])
     pointer = next(p for p in cold_facts if p.endswith("/content/todo/note"))
     assert cold_facts[pointer] == note.rstrip()
-    deliver(journal, event, cold)
-    assert pointer in codex_context._state(journal)["consumed_pointers"]
+    updated_at_pointer = pointer.removesuffix("/note") + "/updated_at"
+    cold_updated_at = read(first["recovery"]["command"] + " --select " + updated_at_pointer)[1][updated_at_pointer]
+    complete = observation == "complete"
+    assert len(cold) > 1 and len(note.encode()) > len(cold[0]["content"].encode())
+    deliver(journal, event, cold if complete else cold[:1])
+    assert (pointer in codex_context._state(journal).get("consumed_pointers", {})) == complete
     settle("note-cold")
-    update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+    if revision == "unrelated":
+        update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+    else:
+        # Canonical timestamps use seconds. Exercise a distinct current-Todo
+        # revision while leaving the note itself byte-for-byte unchanged.
+        import time
+
+        time.sleep(1.05)
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["lease"]
+        cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+            "--evidence", "result:independent-verification", "--task-lease-idempotency-key", f"lease-{TODO_ID}",
+            "--task-lease-expected-version", str(lease["version"]), "--update-operation-id", "revise-evidence")
+        # The later task switch retains the same independent acceptance path.
+        update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
 
     second = capture("note-warm")
     _, original = read_context_read_reference(second["recovery"]["reference_file"])
@@ -1296,6 +1317,10 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     assert current_authority["provider_revision"] != cold_authority["provider_revision"]
     warm, facts, warm_bytes = read(second["first_read_command"])
     assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    if revision == "selected_evidence":
+        current_todo = current_source[source_pointer]["todo"]
+        assert current_todo["evidence"] == "result:independent-verification"
+        assert current_todo["updated_at"] != cold_updated_at
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     recovered, restored, fallback_bytes = read(second["first_read_command"])
     assert pointer not in recovered[0].get("previously_delivered_fields", [])
@@ -1316,9 +1341,13 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     assert pointer not in alternate[0].get("previously_delivered_fields", [])
     assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
 
-    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
+    print(json.dumps({"provider": provider, "revision": revision, "observation": observation, "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
                       "warm_pages": len(warm), "recovery_pages": len(recovered)}))
-    assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
     assert facts[source_pointer + "/authority_read"] == current_authority
-    assert {key: value for key, value in restored.items() if key != pointer} == facts
-    assert fallback_bytes - warm_bytes > 10_000
+    if complete:
+        assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
+        assert {key: value for key, value in restored.items() if key != pointer} == facts
+        assert fallback_bytes - warm_bytes > 10_000
+    else:
+        assert pointer not in warm[0].get("previously_delivered_fields", [])
+        assert facts[pointer] == restored[pointer] == note.rstrip()
