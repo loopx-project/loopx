@@ -154,9 +154,13 @@ def test_cli_failure_does_not_expose_private_paths_or_provider_details(owner, ca
     assert "/private" not in output.out and not output.err
 
 
-@pytest.mark.parametrize("selection", ["selected", "stale", "unselected"])
+@pytest.mark.parametrize("selection,late_change", [
+    ("selected", None), ("stale", None), ("unselected", None),
+    ("selected", "login"), ("selected", "recovery"), ("selected", "inventory"),
+])
 @pytest.mark.parametrize("execute", [False, True])
-def test_real_native_preparation_preserves_service_recovery_and_selection(tmp_path, monkeypatch, selection, execute):
+def test_real_native_preparation_preserves_service_recovery_and_selection(
+        tmp_path, monkeypatch, selection, late_change, execute):
     """A quota preview cannot repair desktop state, even when repair is possible."""
     package = Path(__file__).resolve().parents[1] / "packages/loopx-codex-provider-routing/src"
     monkeypatch.syspath_prepend(str(package))
@@ -193,22 +197,39 @@ def test_real_native_preparation_preserves_service_recovery_and_selection(tmp_pa
         accounts.atomic(store.active, accounts.encoded(dict(slot=slot, binding=store.binding,
             identity=accounts.identity(accounts.read_private(store.slot(slot))))))
     accounts.atomic(store.root / "chat-recovery.json", b'{"fixture":true}')
-    monkeypatch.setattr(native_host, "read_usage", lambda raw: {
-        "rateLimitsByLimitId": {"codex": {"primary": {
-            "usedPercent": 100 if raw == accounts.read_private(store.slot("source")) else 10,
-            "resetsAt": 5000}, "credits": {"hasCredits": False}}}})
-
     destination = home / "isolated"
 
     def snapshot():
         return {str(p.relative_to(home)): (p.stat().st_mode, p.read_bytes() if p.is_file() else None)
                 for p in home.rglob("*") if not p.is_relative_to(destination)}
 
-    before = snapshot()
+    expected_snapshot = [snapshot()]
+    source_raw = accounts.read_private(store.slot("source"))
+    observations = []
+
+    def usage(raw):
+        observations.append(raw)
+        if late_change and len(observations) == 2:
+            if late_change == "login":
+                # A non-cooperating desktop restore leaves the managed
+                # selection revision unchanged, but invalidates ownership.
+                accounts.atomic(store.auth, source_raw)
+            elif late_change == "recovery":
+                accounts.atomic(store.pending, b'{"fixture":true}')
+            else:
+                path = store.slot("source")
+                path.unlink()
+                path.parent.rmdir()
+            expected_snapshot[0] = snapshot()
+        return {"rateLimitsByLimitId": {"codex": {"primary": {
+            "usedPercent": 100 if raw == source_raw else 10,
+            "resetsAt": 5000}, "credits": {"hasCredits": False}}}}
+
+    monkeypatch.setattr(native_host, "read_usage", usage)
     args = dict(source_login=store.slot("source"), destination=destination,
         slots=["source", "large"], operation_id="preview", run_id="fixture-run",
         deadline_epoch=3000, clock=lambda: 1000, execute=execute)
-    if selection == "selected":
+    if selection == "selected" and late_change is None:
         result = prepare(**args)
         assert result["decision"]["target"] == "large"
         assert result["prepared"] is execute
@@ -220,7 +241,7 @@ def test_real_native_preparation_preserves_service_recovery_and_selection(tmp_pa
             prepare(**args)
         assert not destination.exists()
     assert not resumed
-    assert snapshot() == before
+    assert snapshot() == expected_snapshot[0]
     # Ordinary account-manager status retains its existing adoption behavior.
     if selection != "selected":
         assert store.status()["active_slot"] == "large"

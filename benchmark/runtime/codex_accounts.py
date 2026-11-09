@@ -24,6 +24,18 @@ def _private(path: Path) -> None:
         raise ValueError("Private login participant is not trusted")
 
 
+def _owned_status(native, slots: list[str], expected: str | None = None) -> dict:
+    # A passive read must observe drift without repairing it. In particular,
+    # an external auth restore need not change active.json or last.json.
+    status = native.status(adopt_current=False)
+    if (status["recovery_required"] or status["current_login_matches"] is not True
+            or not set(slots) <= set(status["slots"])):
+        raise ValueError("Native account ownership is unavailable")
+    if expected is not None and status["selection_revision"] != expected:
+        raise ValueError("Source login or native selection changed")
+    return status
+
+
 def prepare(*, source_login: Path, destination: Path, slots: list[str],
             operation_id: str, run_id: str, deadline_epoch: int,
             execute: bool = False, native=None, clock=time.time) -> dict:
@@ -61,11 +73,8 @@ def prepare(*, source_login: Path, destination: Path, slots: list[str],
 
     # Observing allowance is not authority to reconcile desktop services or
     # adopt a login restored outside the account manager, even in execute mode.
-    before = native.status(adopt_current=False)
+    before = _owned_status(native, slots)
     expected = before["selection_revision"]
-    if (before["recovery_required"] or before["current_login_matches"] is not True
-            or not set(slots) <= set(before["slots"])):
-        raise ValueError("Native account ownership is unavailable")
     identities, observations = {}, []
     for slot in slots:
         path = native.manager.auth if slot == before["active_slot"] else native.manager.slot(slot)
@@ -79,8 +88,9 @@ def prepare(*, source_login: Path, destination: Path, slots: list[str],
                 status="auth_required" if error.code == "auth_required" else "unavailable")
         observations.append(observation)
     source_slots = [slot for slot, value in identities.items() if value == identity]
-    if len(source_slots) != 1 or native.status(adopt_current=False)["selection_revision"] != expected:
+    if len(source_slots) != 1:
         raise ValueError("Source login or native selection changed")
+    _owned_status(native, slots, expected)
     decision = policy(dict(now=clock(), policy=dict(enabled=True, slots=slots, cooldown_seconds=300),
         active=source_slots[0], observations=observations, last_switch_at=None,
         recovery_required=False, login_matches=True))
@@ -91,8 +101,8 @@ def prepare(*, source_login: Path, destination: Path, slots: list[str],
     target = decision["target"]
     path = native.manager.auth if target == before["active_slot"] else native.manager.slot(target)
     raw = native.accounts.read_private(path)
+    _owned_status(native, slots, expected)
     if (native.accounts.identity(raw) != identities[target]
-            or native.status(adopt_current=False)["selection_revision"] != expected
             or clock() >= min(deadline_epoch, decision["valid_until"])):
         raise ValueError("Selected login or quota observation changed")
     # The existing native reader supplies the exact login; no token parser,
