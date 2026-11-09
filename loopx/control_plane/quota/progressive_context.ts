@@ -18,6 +18,7 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
+type ReadSelection = {pointer: string; path: Path};
 type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
@@ -138,7 +139,7 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
   // Match semantic fields before the reader groups complete parents. Otherwise
   // selecting every outcome hides the individual unchanged bodies from reuse.
   const selections = capturedContextSelection({context, select: pointers,
-    preserve_selection_order: true}).selections as {pointer: string; path: Path}[];
+    preserve_selection_order: true}).selections as ReadSelection[];
   const visit = (row: {pointer: string; path: Path}): typeof selections => {
     const {path, pointer: address} = row;
     const field = fields.get(address);
@@ -169,20 +170,41 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
   // retain a margin for the existing recovery guidance, or deliver it whole.
   if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES >= bytes(original))
     return undefined;
-  if (request.include_initial_read_plan === true) {
-    // The IO adapter already receives the ordinary plan. Send the changed
-    // middle of that list, keeping its exact order and coalescing decisions.
-    let start = 0, end = original.length, stop = grouped.length;
-    while (start < end && start < stop && original[start].pointer === grouped[start].pointer) start++;
-    while (end > start && stop > start && original[end - 1].pointer === grouped[stop - 1].pointer) {
-      end--;
-      stop--;
-    }
-    const selection_splice = {start, end, selections: grouped.slice(start, stop)};
-    if (Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(grouped)))
-      return {selection_splice, reused};
+  return {...(request.include_initial_read_plan === true
+    ? compactObservedSelection(original, grouped) : {selections: grouped}), reused};
+}
+
+function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
+  // The IO adapter already has the ordinary plan. Keep its exact ordering
+  // and send only the changed middle when it is cheaper than the whole list.
+  let start = 0, end = ordinary.length, stop = selected.length;
+  while (start < end && start < stop && ordinary[start].pointer === selected[start].pointer) start++;
+  while (end > start && stop > start && ordinary[end - 1].pointer === selected[stop - 1].pointer) {
+    end--;
+    stop--;
   }
-  return {selections: grouped, reused};
+  const selection_splice = {start, end, selections: selected.slice(start, stop)};
+  return Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(selected))
+    ? {selection_splice} : {selections: selected};
+}
+
+/** Compose the ready opening with the same observation, without comparing
+ * bodies again. A coalesced parent can span both parts; keep only the coverage
+ * shared by the verified reduced selection and the ordinary remainder. */
+function withLinkedObservedRemainder(observed: JsonObject | undefined,
+    initial: ReturnType<typeof nativeContextReadPlan> | undefined): JsonObject | undefined {
+  if (!observed || !initial?.linked_opening_detail || !initial.remaining
+      || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
+  const ordinary = initial.plan.selections as ReadSelection[];
+  const splice = observed.selection_splice as {start: number; end: number; selections: ReadSelection[]} | undefined;
+  const selected = splice
+    ? [...ordinary.slice(0, splice.start), ...splice.selections, ...ordinary.slice(splice.end)]
+    : observed.selections as ReadSelection[];
+  const addresses = new Set(selected.map(row => row.pointer));
+  const remaining = initial.remaining.selections as ReadSelection[];
+  const scoped = remaining.flatMap(row => addresses.has(row.pointer) || selected.some(item => pathStartsWith(row.path, item.path))
+    ? [row] : selected.filter(item => pathStartsWith(item.path, row.path)));
+  return {...observed, linked_remaining: compactObservedSelection(remaining, scoped)};
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject, exactBody?: ReusableExactBody): JsonObject {
@@ -467,13 +489,15 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
-  const observed = observe && pointers.length ? observedFirstRead(codec, pointers, exactBody) : undefined;
+  const initial = request.include_initial_read_plan === true && groups
+    ? nativeContextReadPlan(required.context, pointers, groups, exactBody?.path) : undefined;
+  const observed = observe && pointers.length
+    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context, exactBody),
-    ...(request.include_initial_read_plan === true && groups
-      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups, exactBody?.path)} : {})}, sourceValues, undefined, true);
+    ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -488,12 +512,14 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>, openingDetail?: Path): JsonObject {
+    groups: ReturnType<typeof initialContextReadGroups>, openingDetail?: Path): {
+      initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
+    } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
   let {opening, remaining} = groups;
-  let linkedOpening = false;
+  let linkedDetail: string | undefined;
   if (openingDetail) {
     const parent = openingDetail.slice(0, -1), detail = openingDetail.at(-1)!;
     const body = jsonObject(at(context, parent)), address = pointer(parent);
@@ -506,13 +532,13 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
         ? Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key])) : [field]);
       if (remaining.includes(preparation)) opening.push(preparation);
       remaining = [pointer(openingDetail), ...remaining.filter(field => field !== preparation)];
-      linkedOpening = true;
+      linkedDetail = pointer(openingDetail);
     }
   }
   // Keep the ordinary selection (and historical raw cursors) byte-compatible.
   return {initial: true, plan: select(pointers), ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(linkedOpening ? {prefer_linked_opening: true} : {})};
+    ...(linkedDetail ? {linked_opening_detail: linkedDetail} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {

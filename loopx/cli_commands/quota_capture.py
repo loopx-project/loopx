@@ -191,6 +191,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    observed_remaining = None
     if (progressive_enabled and observed and "first_read_command" in result
             and observed["pointer_bytes"] <= first_output_bytes // 4):
         first = Path(observed["path"])
@@ -198,10 +199,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
-    elif (not page_attached and initial_read_plan and initial_read_plan.get("prefer_linked_opening") is True
+        observed_remaining = observed.get("linked_remaining")
+        if observed_remaining is None:
+            return result
+    if (not page_attached and initial_read_plan and initial_read_plan.get("linked_opening_detail")
             and initial_read_size > first_page_bytes):
         result = _bounded_initial_read(result, initial_read_plan, page_bytes=first_page_bytes,
-            output_bytes=first_output_bytes, reader_argv=reader_argv, attach_page=False) or result
+            output_bytes=first_output_bytes, reader_argv=reader_argv, attach_page=False,
+            remaining_reference=Path(observed_remaining) if observed_remaining else None) or result
     return result
 
 

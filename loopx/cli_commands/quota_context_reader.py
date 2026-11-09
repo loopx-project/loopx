@@ -586,7 +586,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
 
 def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
                           page_bytes: int, output_bytes: int, reader_argv: list[str] | None,
-                          attach_page: bool = True) -> dict[str, Any] | None:
+                          attach_page: bool = True, remaining_reference: Path | None = None) -> dict[str, Any] | None:
     """Try the typed opening and keep the remainder pinned to the same capture."""
     if "opening" not in plan or "first_read_command" not in navigation:
         return None
@@ -596,7 +596,9 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
         opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
         if len(content) > page_bytes or len(content) >= output_bytes:
             return None
-        remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
+        remaining = remaining_reference
+        if remaining is None:
+            remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
 
         def command(reference: Path) -> str:
             return context_capture_read_command(path, digest, page_bytes=page_bytes,

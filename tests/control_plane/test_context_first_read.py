@@ -455,11 +455,12 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
     assert not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path, monkeypatch, provider):
-    from test_codex_context_lifecycle import setup
+def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path, monkeypatch, provider, warm):
+    from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
-        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _heartbeat_receipt_count, _initialize_fixture_authority,
         _run_cli, _spend_run_count, _write_fixture,
     )
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
@@ -467,15 +468,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    narrative = "Keep the current verification requirements visible. " * 130
+    state.write_text(state.read_text().replace("## Next Action", narrative + "\n\n## Next Action", 1))
     configuration = json.loads(registry.read_text())
     scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/published/**" for index in range(290)]
     configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
+    configuration["goals"][0]["quota"]["allowed_slots"] = 3
     registry.write_text(json.dumps(configuration))
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     journal, captures = tmp_path / "journal", tmp_path / "captures"
     journal.mkdir(mode=0o700)
     captures.mkdir(mode=0o700)
-    setup(journal, monkeypatch)
+    event = setup(journal, monkeypatch)
 
     def cli(*args):
         code, result = _run_cli(registry, runtime, *args, cwd=project)
@@ -484,9 +489,11 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
 
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
     cli("todo", "claim", *binding, "--claimed-by", AGENT_ID)
-    view = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
-        *binding, "--turn-instance-id", "wide-ready", "--decision-output-root", str(captures),
-        "--codex-context-dir", str(journal))
+
+    def capture(turn):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+            *binding, "--turn-instance-id", turn, "--decision-output-root", str(captures),
+            "--codex-context-dir", str(journal), "--max-page-output-bytes", "12000")
 
     def read(command):
         pages, body = [], bytearray()
@@ -500,6 +507,26 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
         assert pages[-1]["eof"] and len(body) == pages[-1]["total_bytes"]
         return pages, selected_context_values(body.decode())
 
+    body_pointer = None
+    if warm:
+        prior = capture("wide-prior")
+        _, prior_ref = read_context_read_reference(prior["recovery"]["reference_file"])
+        rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
+        body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
+        prior_pages, prior_facts = read(prior["recovery"]["command"] + " --select " + body_pointer)
+        assert narrative in prior_facts[body_pointer]
+        deliver(journal, event, prior_pages)
+        cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+        cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
+            "--slots", "1", "--source", "heartbeat", "--execute")
+        scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
+        configuration["goals"][0]["coordination"]["write_scope"] = scopes
+        registry.write_text(json.dumps(configuration))
+
+    view = capture("wide-ready")
     assert "Before work" in view["instruction"] and "remaining_read_command" in view
     _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
     path = Path(source_ref["path"])
@@ -507,6 +534,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
     source = json.loads(raw)
     pages, opening = read(view["first_read_command"])
     assert len(pages) == 1 and pages[0]["eof"]
+    assert not pages[0].get("previously_delivered_fields")
     _, opening_ref = read_context_read_reference(pages[0]["reference_file"])
     assert opening_ref["sha256"] == source_ref["sha256"]
     assert opening["/effective_action"] == "normal_run"
@@ -516,6 +544,8 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
     assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
     assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
     assert "/goal_boundary/write_scope" not in opening
+    if warm:
+        deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
     assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
@@ -527,10 +557,22 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(tmp_path
         return {pointer: value for pointer, value in values.items()
             if not isinstance(value, (dict, list)) or not value}
     assert not opening.keys() & remaining.keys()
-    assert leaves(opening | remaining) == leaves(ordinary)
+    if warm:
+        assert body_pointer in pages[0]["previously_delivered_fields"] and body_pointer not in remaining
+        assert "/goal_boundary/write_scope" not in pages[0]["previously_delivered_fields"]
+        assert leaves(opening | remaining) == {key: value for key, value in leaves(ordinary).items() if key != body_pointer}
+        deliver(journal, event, pages)
+        assert "/goal_boundary/write_scope" in codex_context._state(journal)["consumed_pointers"]
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+        recovery_pages, restored = read(view["remaining_read_command"])
+        assert "previously_delivered_fields" not in recovery_pages[0]
+        assert not opening.keys() & restored.keys()
+        assert leaves(opening | restored) == leaves(ordinary)
+    else:
+        assert leaves(opening | remaining) == leaves(ordinary)
     assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
     assert _heartbeat_receipt_count(runtime, "wide-ready") == 1
-    assert _spend_run_count(runtime) == 0
+    assert _spend_run_count(runtime) == int(warm)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

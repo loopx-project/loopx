@@ -308,6 +308,8 @@ decision has a large write scope. Read `first_read_command` for the decision,
 stop conditions and required reads. If `remaining_read_command` is present,
 follow it and its cursor before work, even when the opening reports EOF. It
 starts with the complete current write scope and uses the same capture.
+The remainder can refer to other fully observed, unchanged fields. If the
+observation is lost, its same-capture fallback restores the full remainder.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
@@ -327,6 +329,7 @@ starts with the complete current write scope and uses the same capture.
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
 续读从完整的当前写入范围开始，两段绑定同一份捕获。
+续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
