@@ -169,13 +169,28 @@ def _display_argv(argv: list[str], repo_root: Path | None = None) -> list[str]:
     return displayed
 
 
-def _tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str], str]:
+def _display_git_path(path: bytes | str) -> str:
+    """Render a Git pathname without collapsing undecodable bytes."""
+
+    if isinstance(path, str):
+        return path
+    try:
+        return path.decode("utf-8")
+    except UnicodeDecodeError:
+        return repr(path)
+
+
+def _display_git_paths(paths: list[bytes | str]) -> list[str]:
+    return [_display_git_path(path) for path in paths]
+
+
+def _tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[bytes], str]:
     repo_root = (repo_root or REPO_ROOT).resolve()
     git_ok, git_detail = _git_worktree_probe(repo_root)
     if not git_ok:
         return False, [], git_detail
 
-    paths: set[str] = set()
+    paths: set[bytes] = set()
     stderr_parts: list[str] = []
     ok = True
     for args in (
@@ -195,11 +210,7 @@ def _tracked_change_paths(repo_root: Path | None = None) -> tuple[bool, list[str
                 + completed.stderr.decode("utf-8", "replace")[-400:]
             )
             continue
-        paths.update(
-            record.decode("utf-8", "replace")
-            for record in completed.stdout.split(b"\0")
-            if record
-        )
+        paths.update(record for record in completed.stdout.split(b"\0") if record)
     return ok, sorted(paths), "\n".join(part for part in stderr_parts if part)
 
 
@@ -249,23 +260,91 @@ def _serial_smoke_reason(check: dict[str, Any], repo_root: Path | None = None) -
     return SERIAL_SMOKE_SCRIPTS.get(script_name, "")
 
 
-def _restore_tracked_paths(paths: list[str], repo_root: Path | None = None) -> dict[str, Any]:
+def _restore_tracked_paths(
+    paths: list[bytes],
+    repo_root: Path | None = None,
+    *,
+    expected_paths: list[bytes] | None = None,
+) -> dict[str, Any]:
     repo_root = (repo_root or REPO_ROOT).resolve()
+    expected_paths = list(expected_paths or [])
     if not paths:
-        return {"ok": True, "restored_paths": []}
+        readback_ok, remaining, readback_stderr = _tracked_change_paths(repo_root=repo_root)
+        verified = readback_ok and set(remaining) == set(expected_paths)
+        result = {
+            "ok": verified,
+            "returncode": 0,
+            "restored_paths": [],
+            "remaining_paths": _display_git_paths(remaining),
+            "git_readback_ok": readback_ok,
+            "verified_by_git": verified,
+        }
+        if readback_stderr:
+            result["git_readback_stderr_tail"] = readback_stderr[-800:]
+        if not readback_ok:
+            result["reason"] = "the tracked state could not be read back"
+        elif not verified:
+            result["reason"] = "the tracked state did not match the baseline"
+        return result
+    if os.name == "nt":
+        try:
+            command_paths = [path.decode("utf-8") for path in paths]
+        except UnicodeDecodeError:
+            return {
+                "ok": False,
+                "restored_paths": [],
+                "remaining_paths": _display_git_paths(paths),
+                "git_readback_ok": False,
+                "verified_by_git": False,
+                "reason": "non-UTF-8 path cannot be addressed on Windows",
+            }
+        command: list[str] | list[bytes] = [
+            "git",
+            "-C",
+            os.fspath(repo_root),
+            "restore",
+            "--staged",
+            "--worktree",
+            "--",
+            *command_paths,
+        ]
+    else:
+        command = [
+            b"git",
+            b"-C",
+            os.fsencode(str(repo_root)),
+            b"restore",
+            b"--staged",
+            b"--worktree",
+            b"--",
+            *paths,
+        ]
     completed = subprocess.run(
-        ["git", "-C", str(repo_root), "restore", "--staged", "--worktree", "--", *paths],
+        command,
         check=False,
-        text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    return {
-        "ok": completed.returncode == 0,
+    readback_ok, remaining, readback_stderr = _tracked_change_paths(repo_root=repo_root)
+    verified = readback_ok and set(remaining) == set(expected_paths)
+    result = {
+        "ok": completed.returncode == 0 and verified,
         "returncode": completed.returncode,
-        "restored_paths": paths if completed.returncode == 0 else [],
-        "stderr_tail": completed.stderr[-800:],
+        "restored_paths": _display_git_paths(paths) if verified else [],
+        "remaining_paths": _display_git_paths(remaining),
+        "git_readback_ok": readback_ok,
+        "verified_by_git": verified,
+        "stderr_tail": completed.stderr.decode("utf-8", "replace")[-800:],
     }
+    if readback_stderr:
+        result["git_readback_stderr_tail"] = readback_stderr[-800:]
+    if completed.returncode != 0:
+        result["reason"] = "git restore failed"
+    elif not readback_ok:
+        result["reason"] = "git restore completed but the tracked state could not be read back"
+    elif not verified:
+        result["reason"] = "git restore completed but the tracked state did not match the baseline"
+    return result
 
 
 def _retire_fixture_runtimes(root: Path, *, timeout: float = 15) -> None:
@@ -752,7 +831,7 @@ def build_canary_smoke_suite_run(
             {
                 "git_status_ok": git_ok,
                 "clean_start": clean_start,
-                "tracked_before": tracked_before,
+                "tracked_before": _display_git_paths(tracked_before),
                 "enforced": bool(git_ok and not allow_tracked_side_effects),
                 "enforcement_reason": enforcement_reason,
             }
@@ -786,11 +865,15 @@ def build_canary_smoke_suite_run(
                             {
                                 "ok": False,
                                 "status": "failed_tracked_side_effect",
-                                "tracked_side_effects": side_effects,
+                                "tracked_side_effects": _display_git_paths(side_effects),
                             }
                         )
                         if clean_start:
-                            restore = _restore_tracked_paths(side_effects, repo_root=repo_root)
+                            restore = _restore_tracked_paths(
+                                side_effects,
+                                repo_root=repo_root,
+                                expected_paths=tracked_before,
+                            )
                             result["tracked_side_effect_restore"] = restore
                             side_effect_guard["auto_restored"] = (
                                 bool(side_effect_guard.get("auto_restored"))
@@ -872,8 +955,8 @@ def build_canary_smoke_suite_run(
             side_effect_guard.update(
                 {
                     "git_status_final_ok": final_ok,
-                    "tracked_after": tracked_after,
-                    "tracked_side_effects": side_effects,
+                    "tracked_after": _display_git_paths(tracked_after),
+                    "tracked_side_effects": _display_git_paths(side_effects),
                 }
             )
             if final_stderr:
@@ -887,10 +970,14 @@ def build_canary_smoke_suite_run(
                         "parallel smoke-suite run produced tracked side effects; "
                         "rerun with --jobs 1 to attribute the script precisely"
                     ),
-                    "tracked_side_effects": side_effects,
+                    "tracked_side_effects": _display_git_paths(side_effects),
                 }
                 if clean_start:
-                    restore = _restore_tracked_paths(side_effects, repo_root=repo_root)
+                    restore = _restore_tracked_paths(
+                        side_effects,
+                        repo_root=repo_root,
+                        expected_paths=tracked_before,
+                    )
                     guard_failure["tracked_side_effect_restore"] = restore
                     side_effect_guard["auto_restored"] = (
                         bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
@@ -1182,7 +1269,7 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
         if check.get("tracked_side_effects"):
             lines.append(
                 "- tracked_side_effects: `"
-                + ", ".join(str(path) for path in check.get("tracked_side_effects") or [])
+                + ", ".join(_display_git_paths(check.get("tracked_side_effects") or []))
                 + "`"
             )
         restore = check.get("tracked_side_effect_restore")

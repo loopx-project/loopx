@@ -76,4 +76,4 @@ def test_tracked_change_paths_keeps_one_record_per_path(tmp_path: Path) -> None:
     ok, paths, detail = _tracked_change_paths(repo)
 
     assert ok is True, detail
-    assert paths == sorted([committed, staged])
+    assert paths == sorted([committed.encode("utf-8"), staged.encode("utf-8")])
