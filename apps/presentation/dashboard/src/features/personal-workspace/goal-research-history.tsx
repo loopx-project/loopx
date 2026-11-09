@@ -1,4 +1,5 @@
 import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
@@ -57,6 +58,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   goalId: string; originalGoalId?: string; preferHistory?: boolean; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string;
   sourceStrategy?: WorkspaceGoal["sourceStrategy"]; onOpenSourceTasks?: () => void;
 }) {
+  const strategies = useGoalStrategyLocation(goalId, readSourceUrl);
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
@@ -81,6 +83,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [originalDisplay, setOriginalDisplay] = useState(false);
   const [displayIdentity, setDisplayIdentity] = useState<{events: ExploreHistoryEvent[]; namespace: string; key: string} | null>(null);
   const displayNamespace = readSourceUrl ? new URL(readSourceUrl, window.location.href).searchParams.get("source_namespace") ?? "local" : "local";
+  const hasNativeSource = preferHistory || /^[a-f0-9]{64}$/.test(displayNamespace);
   const display = analysis.pack?.result?.display;
   const displayHashSupported = Boolean(globalThis.crypto?.subtle);
   useEffect(() => {
@@ -499,13 +502,18 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const emptyHistory = !busy && !readFailure && read.complete && read.total === 0;
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
-  const emptySourceHistory = preferHistory && emptyHistory;
+  const emptySourceHistory = hasNativeSource && emptyHistory;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
   // Keep an explicitly opened study in place during a read failure. A complete
   // catalogue with no study still uses the ordinary history view.
   const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
+  if (hasNativeSource && strategies.selection !== null) {
+    return <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
+      sourceUrl={readSourceUrl} zh={zh} selection={strategies.selection}
+      onSelect={strategies.choose} onClose={() => strategies.choose(null)}/>;
+  }
   if (caseReading && (hasCases || awaitingRequestedCase)) {
     return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
   }
@@ -528,7 +536,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
       {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
       <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
-    </ContextHelp></div>
+    </ContextHelp>{hasNativeSource ? <button type="button" className="research-strategy-entry" ref={element => {if (element) strategies.opener.current = element;}}
+      onClick={() => strategies.choose("all")}>{zh ? "策略历史" : "Strategy history"}</button> : null}</div>
       </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         {!emptySourceHistory ? <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {

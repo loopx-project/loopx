@@ -140,6 +140,19 @@ alongside any retained strategy and a route to the original Tasks. A failed
 read still offers recovery, and a linked reader never offers to enable research
 mode on the original Goal.
 
+The **Strategy history** action reads every retained `agent_vision` version
+through the original Goal's native history, including versions outside the
+status window. It preserves original language, negative results and unresolved
+questions. The focused reader supports exact-version links, reload, Back/Forward
+and unavailable-version recovery; missing versions never select the latest one
+silently. Plans and recorded adoption claims remain distinct from demonstrated
+subsequent action or benefit. Opening or switching records starts no analysis.
+The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
+prepared readers also expose `/api/goal-source/strategies` and the existing
+source-read CLI's `strategies` operation. These reads retain physical namespace
+and original Goal scope, recheck membership after native history IO, and fail
+explicitly when complete coverage exceeds the transport's existing bounds.
+
 Each linked Goal carries `source_access` in the workspace projection. Its
 original Goal id, tasks, explicit graph edges and native measurements remain
 intact; the local link owns parent organization and optional workspace routing. Source identity pins
