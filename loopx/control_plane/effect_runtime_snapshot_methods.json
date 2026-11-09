@@ -11,6 +11,7 @@
   "coordination.local_authority.todo_snapshot",
   "todo.context.page",
   "work_item.context.project",
+  "capability_hook.turn_context.project",
   "work_item.interaction_reads.project",
   "scheduler.hint.project",
   "work_item.task_graph.goal_topology",
