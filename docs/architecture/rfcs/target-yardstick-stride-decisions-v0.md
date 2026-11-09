@@ -200,6 +200,8 @@ captures without this source snapshot remain readable, but plain cited
 measurements stay unknown rather than acquiring the recovery-time graph.
 Readback replays that prefix through the existing Explore projection, so a later
 update to the same finding cannot rewrite its cited measurement.
+The server-only source snapshot stays out of presentation capture payloads;
+independently installed readers retain the existing decision/binding wire shape.
 
 ### 5.3 Co-discovery: invest in a pair
 

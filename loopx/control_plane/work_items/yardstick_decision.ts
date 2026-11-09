@@ -84,6 +84,12 @@ export function normalizeWorkYardstickCapture(params: JsonObject): WorkYardstick
   return {decision: normalizeWorkYardstickDecision(capture.decision, params.evidence_refs), binding: normalized as WorkYardstickCapture["binding"],
     ...(capture.source_snapshot === undefined ? {} : {source_snapshot: sourceSnapshot(capture.source_snapshot)})};
 }
+/** Presentation readers are independently deployed and retain their v0 shape.
+ * The canonical capture and policy cue keep server-owned source provenance. */
+export function projectWorkYardstickPresentation(params: JsonObject): Pick<WorkYardstickCapture, "decision" | "binding"> {
+  const {decision, binding} = normalizeWorkYardstickCapture(params);
+  return {decision, binding};
+}
 function sourceSnapshot(value: unknown): NonNullable<WorkYardstickCapture["source_snapshot"]> {
   const row = object(value, ["event_count", "event_ids_sha256"], "yardstick source snapshot");
   if (!Number.isSafeInteger(row.event_count) || Number(row.event_count) < 0

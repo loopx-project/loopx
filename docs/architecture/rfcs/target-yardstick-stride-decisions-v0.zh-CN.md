@@ -158,6 +158,7 @@ replan 沿用既有 v2 契约。省略附件保留当前决策；显式 `proxy: 
 摘要。附件恢复核对原前缀，后来的写入顺序不能扩大证据范围。缺少来源快照的旧
 capture 仍可读取，但普通引用测量保留未知，不把恢复时的新图当成原证据。
 回读用既有 Explore projection 重放原前缀，同一 finding 的后来更新不能改写原引用测量。
+服务端来源快照不进入展示用 capture payload，独立安装的 reader 继续收到原 decision/binding 结构。
 
 ### 5.3 Co-discovery：投资于组合
 
