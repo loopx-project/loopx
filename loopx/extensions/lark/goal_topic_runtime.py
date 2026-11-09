@@ -788,9 +788,15 @@ def stream_lark_goal_topic_profile(
         record_event_timing(profile, message_id, "dispatch_returned")
         report_result(result)
 
-    reserve_priority = capture_mention is not None and _profile_supports_mention_steering(
-        snapshot, profile, capture_mention
-    )
+    def can_steer(state: Mapping[str, object]) -> bool:
+        if capture_mention is None:
+            return False
+        config = _active_profile_configs(state).get(profile)
+        return config is not None and profile_can_reserve_mention_worker(
+            state, profile, bot_app_id=str(config.get("bot_app_id") or ""), capture_mention=capture_mention,
+        )
+
+    reserve_priority = can_steer(snapshot)
     root = Path(runtime_root).expanduser().resolve()
     provider_ref = _opaque_digest(profile_config.get("bot_app_id") or profile)
     intake = ProfileTopicIntake(root, provider_ref)
@@ -811,11 +817,8 @@ def stream_lark_goal_topic_profile(
         ingress_mode = route.route.get("ingress_mode", IngressMode.DIRECT_SESSION.value)
         # Previously captured compatibility input still belongs to its Topic
         # even if another connection no longer reserves a steering worker.
-        current_steering = capture_mention is not None and _profile_supports_mention_steering(
-            snapshot, profile, capture_mention
-        )
         return (
-            (current_steering or ingress_mode == IngressMode.DIRECT_SESSION.value)
+            (can_steer(snapshot) or ingress_mode == IngressMode.DIRECT_SESSION.value)
             and route.inbox_key == inbox_key
             and route.digest == packet["route_ref"] and lane == packet["lane"]
             and (
@@ -890,9 +893,7 @@ def stream_lark_goal_topic_profile(
                 # starts. Adopt its current eligibility on the same stream;
                 # unqualified profiles retain all ordinary worker capacity.
                 current_snapshot = snapshot_provider()
-                reserve_priority = capture_mention is not None and _profile_supports_mention_steering(
-                    current_snapshot, profile, capture_mention
-                )
+                reserve_priority = can_steer(current_snapshot)
                 dispatch.set_priority_reservation(reserve_priority)
                 lane, mention_capture, intake_route = _profile_event_lane(
                     profile=profile,
@@ -984,17 +985,6 @@ def stream_lark_goal_topic_profile(
         "event_count": event_count,
         "replied_count": replied_count,
     }
-
-
-def _profile_supports_mention_steering(
-    snapshot: Mapping[str, object],
-    profile: str,
-    capture_mention: MentionCapture | None = None,
-) -> bool:
-    config = _active_profile_configs(snapshot).get(profile)
-    return config is not None and profile_can_reserve_mention_worker(
-        snapshot, profile, bot_app_id=str(config.get("bot_app_id") or ""), capture_mention=capture_mention,
-    )
 
 
 def _bound_topic_session(
