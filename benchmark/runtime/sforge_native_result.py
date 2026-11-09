@@ -170,8 +170,8 @@ def _read_public_json(url: str, limit: int) -> tuple[int, dict]:
     return status, value
 
 
-def _measurement(scope, native, submission_id, *, observation, snapshot, archive, generated_files):
-    from benchmark.runtime.sforge_candidate_binding import verify_binding
+def _measurement(scope, native, submission_id, *, archive=None, **_legacy_local_evidence):
+    from benchmark.runtime.sforge_candidate_binding import native_archive_references
 
     receipt, report = native.get("receipt"), native.get("report")
     if not isinstance(receipt, dict) or not isinstance(report, dict):
@@ -183,16 +183,14 @@ def _measurement(scope, native, submission_id, *, observation, snapshot, archive
             or report.get("timed_out") is not False or type(score) not in (int, float)
             or not math.isfinite(score)):
         raise ValueError("The native result is not a valid outcome for this task")
-    binding = verify_binding(observation, snapshot, native, archive, generated_files)
     if normalize_evaluation_context(receipt.get("evaluation_context")) != scope.evaluation_context:
         raise ValueError("Native result conditions differ from the installed registration")
     input_revision = "task:" + scope.task_sha256
-    if binding["input_revision"] != input_revision:
-        raise ValueError("The candidate measurement uses a different task revision")
+    binding = native_archive_references(native)
     digest = hashlib.sha256(json.dumps([scope.run, scope.task, submission_id, native],
                                        sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     group = hashlib.sha256(json.dumps([scope.run, scope.task], separators=(",", ":")).encode()).hexdigest()
-    return {
+    result = {
         "candidate_binding": binding,
         "native_measurement": {
             "metric": "native_score",
@@ -202,24 +200,42 @@ def _measurement(scope, native, submission_id, *, observation, snapshot, archive
             "comparison_scope": "native:" + group,
             "input_revision": input_revision,
             "evaluation_ref": scope.evaluation_ref,
-            "candidate_ref": binding["submitted_file_set_ref"],
+            "candidate_ref": binding["archive_ref"],
             "evidence_ref": "result:" + digest,
         },
     }
 
+    if archive is not None:
+        try:
+            result["candidate_binding"] = native_archive_references(native, archive)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError, EOFError, OverflowError,
+                tarfile.TarError, zlib.error):
+            # Extra content evidence cannot erase the independently sourced measurement,
+            # change its subject, or turn the same result into another evaluation.
+            result["native_content_evidence_unavailable"] = True
+    return result
 
-def read_candidate_measurement(scope, submission_id, *, observation, snapshot, archive, generated_files) -> dict:
+
+def formal_measurement(scope, submission_id, *, archive=None) -> dict:
+    """Read one existing result; the original service receipt supplies its subject.
+
+    Local execution, retained upload bytes and content-level pairing are optional
+    evidence. The exact archive subject and original result reference stay stable.
+    """
     status, native = read_public_result(scope, submission_id)
     result = {"native": native, "native_http_status": status, "native_measurement": None}
     if status != 200 or native.get("status") != "completed":
         return result
     try:
-        result.update(_measurement(
-            scope, native, submission_id, observation=observation, snapshot=snapshot, archive=archive,
-            generated_files=generated_files,
-        ))
+        result.update(_measurement(scope, native, submission_id, archive=archive))
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, EOFError, OverflowError,
             tarfile.TarError, zlib.error):
         # Native feedback remains available when optional attribution fails.
         result["native_measurement_unavailable"] = True
     return result
+
+
+def read_candidate_measurement(scope, submission_id, *, archive=None,
+                               observation=None, snapshot=None, generated_files=()) -> dict:
+    """Compatibility entrypoint; legacy local artifacts no longer gate formal facts."""
+    return formal_measurement(scope, submission_id, archive=archive)

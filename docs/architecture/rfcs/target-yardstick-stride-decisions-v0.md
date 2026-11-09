@@ -552,6 +552,14 @@ missing producer/consumer fact, extend the existing versioned owner, and qualify
 readback/recovery/off behavior. Controller–Worker composition can later consume
 the same decision; it neither grants additional authority nor proves benefit.
 
+Native measurement adapters record service-owned result/receipt/conditions
+independently of local execution. An accepted archive digest is its stable
+subject even without retained upload bytes; optional file-content proof keeps
+its narrower coverage and does not relabel a prior measurement. Each outcome
+or proxy profile preserves its actual workload revision and evaluator. The
+existing typed comparison owner pairs only applicable declared subjects; producer
+location and equal path/byte content do not establish execution equivalence.
+
 ## 6. Alternatives and design choices
 
 | Alternative | Decision / trade-off |

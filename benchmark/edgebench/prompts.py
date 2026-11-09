@@ -41,15 +41,15 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
     )
     if native_result_comparison:
         binding += (
-            "For an existing submission, use the same tool with --submission-id to read feedback and its "
-            "verified native_measurement. Use task:<task_sha256> from /etc/loopx-benchmark/native-result-scope.json "
-            "as the probe and snapshot input revision; use its evaluation_ref for the native Yardstick. "
-            "Record the measurement on the current Todo with "
-            "loopx explore finding --result-json FILE, using the current Goal, Agent, Todo and Turn. "
-            "Reuse the same question for local and native findings. Pair them as the same candidate only "
-            "when their recorded complete file-set references already match; otherwise preserve both "
-            "original references and keep the measurements separate. "
-            "Use the receipt's comparison to decide the next probe while its conditions still apply.\n\n"
+            "Read an existing native result with loopx-bind-native-candidate --submission-id ID. "
+            "Its native_measurement uses the service's accepted archive and frozen evaluation conditions; "
+            "no local probe or retained archive is required. Optional --archive adds file-content evidence "
+            "without changing that measurement or counting another evaluation. Record available measurements "
+            "on the current work through loopx explore finding --result-json FILE using its Goal, Agent, "
+            "Todo and Turn. Keep each producer's actual input revision and evaluator. Existing Explore "
+            "comparison and Yardstick receipts apply only to matching declared subjects and conditions; "
+            "unknown or different subject granularity stays separate. Use that feedback for the next "
+            "authorized work choice within the original acceptance, budget and Stop conditions.\n\n"
         )
     return (
         "### Research Artifacts\n\n"

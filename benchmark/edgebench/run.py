@@ -129,7 +129,7 @@ def main(argv=None):
     parser.add_argument("--execution-observation", choices=("local_probe",),
                         help="Optional local execution probe for heartbeat workers")
     parser.add_argument("--native-result-comparison", action="store_true",
-                        help="Opt-in read-only native result comparison for native Explore with local_probe")
+                        help="Opt-in read-only native result comparison for native Explore")
     parser.add_argument("--native-child-limit", type=int,
                         help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
@@ -203,9 +203,8 @@ def main(argv=None):
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
     if args.native_result_comparison and (
-            args.worker != "heartbeat-explore" or args.feedback != "native"
-            or args.execution_observation != "local_probe"):
-        parser.error("--native-result-comparison requires native heartbeat-explore with local_probe")
+            args.worker != "heartbeat-explore" or args.feedback != "native"):
+        parser.error("--native-result-comparison requires native heartbeat-explore")
     if args.native_child_limit is not None and (
             args.native_child_limit < 1 or args.feedback != "native"):
         parser.error("--native-child-limit requires a positive limit and native feedback")
@@ -328,7 +327,7 @@ def main(argv=None):
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
-    if args.execution_observation is not None:
+    if args.execution_observation is not None or args.native_result_comparison:
         from benchmark.runtime.source import require_candidate_content
 
         require_candidate_content(product, pins[0])

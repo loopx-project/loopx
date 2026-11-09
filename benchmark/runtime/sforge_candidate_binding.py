@@ -195,8 +195,9 @@ def _generated_file(value: str) -> tuple[str, Path]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ("observation", "snapshot", "archive"):
-        parser.add_argument("--" + flag, type=Path, required=True)
+    parser.add_argument("--archive", type=Path, help="Optional retained upload for file-content evidence")
+    parser.add_argument("--observation", type=Path, help="Legacy offline local-probe diagnostic")
+    parser.add_argument("--snapshot", type=Path, help="Legacy offline sealed probe manifest")
     result_source = parser.add_mutually_exclusive_group(required=True)
     result_source.add_argument("--result", type=Path, help="Retained native result JSON for offline verification")
     result_source.add_argument("--submission-id", help="Read one existing result from the installed native relay")
@@ -206,13 +207,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.submission_id is not None:
         from http.client import HTTPException
 
-        from benchmark.runtime.sforge_native_result import read_candidate_measurement, read_installed_scope
+        from benchmark.runtime.sforge_native_result import formal_measurement, read_installed_scope
 
         try:
-            result = read_candidate_measurement(
-                read_installed_scope(), args.submission_id, observation=args.observation,
-                snapshot=args.snapshot, archive=args.archive, generated_files=args.generated_files,
-            )
+            result = formal_measurement(read_installed_scope(), args.submission_id, archive=args.archive)
         except (OSError, ValueError, EOFError, HTTPException):
             print("Scoped native result unavailable; use sforge-submit --result ID --json for ordinary feedback.",
                   file=sys.stderr)
@@ -224,8 +222,13 @@ def main(argv: list[str] | None = None) -> int:
             status in ("queued", "running")
             or (status == "completed" and isinstance(native.get("report"), dict))
         ) else 1
+    if ((args.observation is None) != (args.snapshot is None)
+            or args.observation is not None and args.archive is None
+            or args.generated_files and args.observation is None):
+        parser.error("Legacy probe diagnostics require --observation, --snapshot and --archive")
     try:
-        result = verify_binding(args.observation, args.snapshot, args.result, args.archive, args.generated_files)
+        result = (native_archive_references(args.result, args.archive) if args.observation is None
+                  else verify_binding(args.observation, args.snapshot, args.result, args.archive, args.generated_files))
     except (OSError, ValueError, EOFError, tarfile.TarError, zlib.error) as error:
         print(f"Candidate binding unavailable: {error}", file=sys.stderr)
         return 1

@@ -134,8 +134,8 @@ class SForgeWorker(CodexAgent):
         if self.execution_observation is not None and not profile.startswith("heartbeat-"):
             raise ValueError("execution_observation requires a heartbeat worker")
         if native_result_scope is not None and (
-                profile != "heartbeat-explore" or feedback != "native" or self.execution_observation != "local_probe"):
-            raise ValueError("Native result comparison requires native Explore with local_probe")
+                profile != "heartbeat-explore" or feedback != "native"):
+            raise ValueError("Native result comparison requires native Explore")
         self.native_result_scope = native_result_scope
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -422,7 +422,8 @@ class SForgeWorker(CodexAgent):
                     "defer_codex_home": True} if self.warm_start is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
-            if self.feedback == "native" and self.execution_observation is not None:
+            if self.feedback == "native" and (self.execution_observation is not None
+                                              or self.native_result_scope is not None):
                 asyncio.run(self.runtime._install_research_entrypoint(
                     self.environment, "loopx-bind-native-candidate", "sforge_candidate_binding.py",
                     "--generated-file", "Native candidate verification is unavailable to the benchmark worker",

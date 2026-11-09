@@ -1541,7 +1541,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert profile_receipt.get("native_result_comparison") is (True if compare else None)
         assert installed_tools == ([
             ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
-        ] if selected else [])
+        ] if selected or compare else [])
         assert ("does not require a local probe or a new submission" in worker.feedback_prompt) is selected
         assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
@@ -1554,12 +1554,6 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         args += ["--execution-observation", producer]
     if compare:
         args += ["--native-result-comparison"]
-        if not selected:
-            with pytest.raises(SystemExit, match="2"):
-                run.main(args)
-            assert "--native-result-comparison requires" in capsys.readouterr().err
-            assert not trial.exists()
-            return
     if profile == "native-goal":
         with pytest.raises(SystemExit, match="2"):
             run.main(args)
@@ -1571,7 +1565,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
     assert receipt.get("native_result_comparison") is (True if compare else None)
-    assert installed == (["loopx-bind-native-candidate"] if selected else [])
+    assert installed == (["loopx-bind-native-candidate"] if selected or compare else [])
     assert bool(scopes) is compare
     if compare:
         scope, = scopes

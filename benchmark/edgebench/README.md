@@ -462,14 +462,14 @@ The old `--observation`, `--snapshot` and `--generated-file` options remain an
 explicit offline diagnostic for sealed probe artifacts. They keep their strict
 original correspondence checks and do not gate ordinary native facts.
 
-For an explicit native Explore trial with `local_probe`, opt in with
-`--native-result-comparison`. Use `task:<task_sha256>` from the installed
-`/etc/loopx-benchmark/native-result-scope.json` for the probe and snapshot input
-revision. With the retained archive, pass `--submission-id ID` instead of
-`--result FILE`. One read returns the public feedback and, when the source
-checks pass, `native_measurement` with the full verified submission file-set
-reference and its own evaluator and evidence. Pending or unverified results
-retain the original feedback and an unavailable measurement.
+For an explicit native Explore trial, opt in with `--native-result-comparison`.
+`local_probe` is an independent option. Use `--submission-id ID` instead of
+`--result FILE` to read one existing result. A single GET supplies native feedback
+and, when its service receipt/context are valid, a formal `native_measurement`
+with the stable accepted `archive:<sha256>` subject. No local execution or local
+archive is required. Optional `--archive` adds file-content evidence; its absence
+or mismatch does not erase a valid formal measurement or change its subject.
+Pending or unverified service results retain raw feedback with no measurement.
 
 This opt-in requires the native service's run-scoped `/context` route. Before
 the solver starts, the runner checks the task and benchmark digests and score
@@ -485,7 +485,10 @@ claim to freeze external services or mutable external data.
 
 Record local and native measurements on the same claimed Todo with
 [`loopx explore finding --result-json`](../../loopx/capabilities/explore/README.md#quantitative-findings).
-Reuse the exact question and submitted candidate reference. Explore returns
+Reuse the applicable question; each producer keeps its original workload, evaluator
+and subject. Different profile revisions are valid. Pair only the same subject
+under applicable conditions; content equality alone does not alias an archive or
+prove execution equivalence. Explore returns
 the comparable change in the write receipt. With a declared Yardstick, the
 receipt can show that the two evaluators prefer different candidates. The
 native read creates no finding and spends no submission opportunity.

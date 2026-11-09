@@ -418,6 +418,12 @@ Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策
 验证读回、恢复和关闭状态。Controller–Worker 组合以后可消费同一决策，
 不因此获得更多权限，也不因此证明收益。
 
+原生 measurement adapter 独立记录服务自身的 result、receipt 与评测条件，不要求
+先有本地执行。没有保留上传字节时，已接受归档的摘要仍是稳定 subject；可选文件
+内容证明保留自身较窄的覆盖范围，不重标既有 measurement。各 outcome/proxy
+profile 保留真实 workload revision 与 evaluator。既有 typed 比较 owner 只配对
+适用的声明 subject；producer 所在位置及路径/字节内容相等不证明执行等价。
+
 ## 6. 替代方案与设计选择
 
 | 方案 | 选择 / 取舍 |

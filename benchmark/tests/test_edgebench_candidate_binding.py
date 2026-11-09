@@ -260,13 +260,13 @@ def test_native_read_uses_service_conditions_and_one_result_request(case, defect
             thread.join(timeout=5)
     assert requests == ["/api/v1/feedback/test/result/submission-2?include_receipt=true"]
     assert result["native"] == native
-    if defect is None:
+    if defect in (None, "input_revision"):
         measurement = result["native_measurement"]
         assert measurement["input_revision"] == "task:" + task_digest
         assert measurement["value"] == -2
         assert measurement["evaluation_ref"] == scope.evaluation_ref
-        assert measurement["candidate_ref"] == result["candidate_binding"]["submitted_file_set_ref"]
-        assert result["candidate_binding"]["candidate_ref"] == "archive:" + _digest(archive.read_bytes())
+        assert measurement["candidate_ref"] == result["candidate_binding"]["archive_ref"]
+        assert result["candidate_binding"]["archive_ref"] == "archive:" + _digest(archive.read_bytes())
     else:
         assert result["native_measurement"] is None
         assert result["native_measurement_unavailable"] is True
@@ -436,3 +436,39 @@ def test_content_refs_do_not_erase_archive_mode_or_packaging(tmp_path):
     # Content identity claims only path/bytes; neither record claims execution equivalence.
     assert set(refs[0]) == {"archive_ref", "archive_bytes", "submitted_file_set_ref", "files",
                             "submission_id", "task_id", "round_id"}
+
+
+@pytest.mark.parametrize("local_state", ["absent", "failed", "different-workload"])
+def test_formal_fact_is_stable_without_local_execution_or_retained_upload(case, local_state):
+    from benchmark.runtime.sforge_native_result import NativeResultScope, _measurement
+
+    observation, snapshot, _, _, archive, _ = case
+    scope = NativeResultScope(relay="http://127.0.0.1/api/v1/feedback/test", run="run", task="task",
+        goal="goal", agent="agent", task_sha256="a" * 64, benchmark_sha256="b" * 64,
+        higher_is_better=True, evaluation_context=_evaluation_context())
+    native = _native_response(archive)
+    native["receipt"]["evaluation_context"] = _evaluation_context()
+    native["report"] = dict(submission_id="submission-2", task_id="task", score=7, valid=True, timed_out=False)
+    if local_state == "absent":
+        observation.unlink()
+        snapshot.unlink()
+    else:
+        value = json.loads(observation.read_text())
+        value.update(input_revision="dataset:small-proxy-v3", exit_code=1 if local_state == "failed" else 0)
+        _write(observation, value)
+    first = _measurement(scope, native, "submission-2")
+    with_content = _measurement(scope, native, "submission-2", archive=archive,
+        observation=observation, snapshot=snapshot, generated_files=[])
+    assert first["native_measurement"] == with_content["native_measurement"]
+    assert first["native_measurement"]["candidate_ref"] == "archive:" + _digest(archive.read_bytes())
+    assert first["native_measurement"]["input_revision"] == "task:" + "a" * 64
+    assert "submitted_file_set_ref" not in first["candidate_binding"]
+    assert "submitted_file_set_ref" in with_content["candidate_binding"]
+    original = observation.read_bytes() if observation.exists() else None
+    archive.write_bytes(b"tampered local copy")
+    unproven_content = _measurement(scope, native, "submission-2", archive=archive)
+    assert unproven_content["native_measurement"] == first["native_measurement"]
+    assert unproven_content["native_content_evidence_unavailable"] is True
+    assert "submitted_file_set_ref" not in unproven_content["candidate_binding"]
+    if original is not None:
+        assert observation.read_bytes() == original
