@@ -560,7 +560,7 @@ export function createEffectRuntimeHandlers(
     ["capability_hook.turn_context.validate", lazyHandler(() => import("./turn_driver/capability_context.ts"),
       ({validateTurnContextContribution}) => validateTurnContextContribution)],
     ["capability_hook.turn_context.project", lazyHandler(() => import("./turn_driver/capability_context.ts"),
-      ({projectTurnContextContribution}) => projectTurnContextContribution)],
+      ({projectTurnContext}) => projectTurnContext)],
     [
       "capability_hook.turn_start.validate",
       lazyHandler(() => import("./capability_hooks.ts"), ({validateTurnStartHookInvocation}) => (params) => validateTurnStartHookInvocation({
@@ -802,7 +802,9 @@ export function createEffectRuntimeHandlers(
     ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
     ["work_item.replan_context.project_snapshot", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContextSnapshot}) => projectReplanContextSnapshot)],
     ["work_item.yardstick.capture", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({normalizeWorkYardstickCapture}) => normalizeWorkYardstickCapture)],
-    ["work_item.yardstick.continuation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({validateWorkYardstickContinuation}) => validateWorkYardstickContinuation)],
+    ["work_item.yardstick.presentation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectWorkYardstickPresentations}) => projectWorkYardstickPresentations)],
+    ["work_item.yardstick.sources", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({projectWorkYardstickSourceRequests}) => projectWorkYardstickSourceRequests)],
+    ["work_item.yardstick.continuation", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({validateWorkYardstickContinuation}) => validateWorkYardstickContinuation)],
     ["explore.configuration.resolve", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreConfiguration}) => resolveExploreConfiguration)],
     ["explore.configuration.goal", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreGoalConfiguration}) => resolveExploreGoalConfiguration)],
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],

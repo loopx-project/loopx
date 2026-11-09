@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import json
+import re
+from hashlib import sha256
 import threading
 from itertools import islice
 from contextlib import contextmanager, ExitStack
@@ -341,11 +343,15 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
 
 
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None, turn_id=None):
+                                  message_limit=None, message_cursor=None, turn_id=None,
+                                  resume_from=None):
     """Project return delivery state into one existing Chat snapshot."""
 
-    snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
+    strict = message_limit is not None or resume_from is not None
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
                 else store.session_snapshot(session_id))
+    if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
+        return None  # Only a small suffix can use the existing complete snapshot as a base.
     if turn_id is not None:
         if message_limit is None:
             raise ValueError("a selected original Turn requires paged history")
@@ -377,6 +383,75 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         snapshot["message_page"] = page["message_page"]
     return snapshot
 
+
+
+def parse_chat_history_selection(query):
+    """Validate one HTTP history selection before any recovery observation."""
+    if (set(query) - {"message_limit", "message_cursor", "turn_id", "known_history"}
+            or any(len(values) != 1 or not values[0] for values in query.values())
+            or ("message_limit" not in query and set(query) & {"message_cursor", "turn_id", "known_history"})):
+        raise ValueError("invalid history page arguments")
+    limit = int(query["message_limit"][0]) if "message_limit" in query else None
+    if limit is not None and not 1 <= limit <= 200:
+        raise ValueError("message_limit must be between 1 and 200")
+    basis = query.get("known_history", [None])[0]
+    parsed_basis = None
+    if basis is not None:
+        if limit != 200 or "turn_id" in query or "message_cursor" in query:
+            raise ValueError("invalid history resume arguments")
+        count_text, _, proof = basis.partition(":")
+        if not re.fullmatch(r"[1-9][0-9]{0,3}", count_text):
+            raise ValueError("invalid known history proof")
+        count = int(count_text)
+        if count > 5000 or len(proof) != ((count + 199) // 200) * 64 or not re.fullmatch(r"[a-f0-9]+", proof):
+            raise ValueError("invalid known history proof")
+        parsed_basis = (basis, count, proof)
+    return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
+            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis}
+
+
+def _visible_history_page_digest(session_id, offset, messages):
+    # Bind the displayed rows, including fresh provider projections, to the source.
+    body = json.dumps([session_id, offset, messages], sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    return sha256(body).hexdigest()
+
+
+def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider):
+    """Compose the same provider projections for page reads and suffix proof."""
+    basis = selection["known_history"]
+    if basis is None:
+        snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
+            **{key: value for key, value in selection.items() if key != "known_history"})
+        snapshot["messages"] = project_provider(snapshot["messages"])
+        if selection["message_limit"] == 200 and selection["turn_id"] is None:
+            page = snapshot["message_page"]
+            if 1 <= page["total"] <= 5000:
+                page["visible_page_sha256"] = _visible_history_page_digest(
+                    session_id, page["offset"], snapshot["messages"])
+        return snapshot
+
+    basis, count, proof = basis
+    resume = {"schema_version": "loopx_chat_history_resume_v1"}
+    restart = {"ok": True, **resume, "status": "restart"}
+    snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count)
+    if snapshot is None or len(snapshot["messages"]) > 5000:
+        return restart
+    messages = project_provider(snapshot["messages"])
+    current_prefix = "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:min(offset + 200, count)])
+        for offset in range(0, count, 200))
+    if current_prefix != proof:
+        return restart
+    total = len(messages)
+    # The old last page may have been short; earlier pages were just verified.
+    unchanged = count if total == count else count - count % 200
+    next_proof = proof[:((unchanged + 199) // 200) * 64] + "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:offset + 200])
+        for offset in range(unchanged, total, 200))
+    return {**snapshot, "messages": messages[count:], "history_resume": {
+        **resume, "base": basis, "next": f"{total}:{next_proof}",
+    }}
 
 
 RETURN_DELIVERY_TRANSACTION = "manager_return_delivery_transaction_v0"
@@ -527,6 +602,15 @@ def _deliver_return(host, path, sender, frozen_route):
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
     settled = transact("settle", outcome=outcome, message_id=plan["message_id"])
+    # The reply may already be visible while its provider receipt is queued.
+    # Invalidate the existing session read hint after settlement so cached
+    # conversations re-read the receipt without rewriting history or activity.
+    try:
+        store.update_session(source["route"]["session_id"])
+    except (OSError, ValueError):
+        # Publication is already committed. A presentation hint failure must
+        # never reclassify delivery or cause the original reply to be resent.
+        logging.getLogger(__name__).warning("Manager return session read hint unavailable")
     if settled.get("observe_verified"):
         from ...usage_ping import observe_verified_return
         observe_verified_return()

@@ -132,7 +132,7 @@ def test_edgebench_runner_passes_selected_setup_budget_before_model(tmp_path, mo
         cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
-    backend = SimpleNamespace(image_exists=lambda image: True,
+    backend = SimpleNamespace(observe_local_images=lambda **keys: {},
                               exec_run=lambda *a, **k: SimpleNamespace(exit_code=0))
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: backend)
 

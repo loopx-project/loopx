@@ -60,20 +60,22 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
-    if (query.get("research_goal") === goalId && query.has("research_reading")) return query.get("research_reading") === "case";
-    return !preferHistory;
+    const reading = query.get("research_goal") === goalId ? query.get("research_reading") : null;
+    return {goalId, requested: reading === null ? null : reading === "case"};
   };
-  const [caseReading, setCaseReading] = useState(readCaseMode);
+  const [caseMode, setCaseReading] = useState(readCaseMode);
+  const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
+  const caseReading = requestedCase ?? !preferHistory;
   useEffect(() => {
     const changed = () => setCaseReading(readCaseMode());
     changed(); window.addEventListener("popstate", changed);
     return () => window.removeEventListener("popstate", changed);
-  }, [goalId, preferHistory, readSourceUrl]);
+  }, [goalId, readSourceUrl]);
   const setCaseMode = (reading: boolean) => {
     const url = new URL(window.location.href);
     url.searchParams.set("research_goal", goalId);
     url.searchParams.set("research_reading", reading ? "case" : "history");
-    window.history.pushState({}, "", url); setCaseReading(reading);
+    window.history.pushState({}, "", url); setCaseReading({goalId, requested: reading});
   };
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
   const [originalDisplay, setOriginalDisplay] = useState(false);
@@ -487,7 +489,12 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
-  if (hasCases && caseReading) return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
+  // Keep an explicitly opened study in place during a read failure. A complete
+  // catalogue with no study still uses the ordinary history view.
+  const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
+  if (caseReading && (hasCases || awaitingRequestedCase)) {
+    return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
+  }
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {hasCases ? <button type="button" className="case-return-reader" onClick={() => setCaseMode(true)}>{zh ? "← Case 深度解读" : "← Case studies"}</button> : null}
     {progressiveOverview ? <>

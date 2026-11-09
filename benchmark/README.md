@@ -1503,6 +1503,12 @@ allowance before requesting another phase. This does not change the desktop
 login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
 into automatic timed retries.
 
+`benchmark.runtime.codex_accounts` observes the native account owner without
+resuming desktop service recovery or adopting an out-of-band login selection.
+A missing or mismatched active selection remains an ownership error for the
+native account manager to resolve. `--execute` only permits the explicitly
+requested private continuation-login copy; it does not expand desktop authority.
+
 For a retained complete worker, the same scheduler entrypoint accepts
 `--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.
 Supply the independently admitted finite remainder in

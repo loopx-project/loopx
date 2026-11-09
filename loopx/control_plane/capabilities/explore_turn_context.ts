@@ -9,7 +9,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
-import {projectWorkYardstickCue, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
+import {projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
@@ -338,12 +338,10 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ...(resultNode == null ? [] : ["--result-node", resultNode]),
   ) : null;
   const writeback = exploreResultWritebackAffordance();
-  const workTodos = params.yardstick_enabled === true ? rows(params.work_todos)
-    .filter(todo => todo.role === "agent" && !todo.done && todo.claimed_by === agent
-      && ["open", "pending", "in_progress", "blocked"].includes(String(todo.status))
-      && (todoId === null || todo.todo_id === todoId)) : [];
+  const workTodos = workYardstickTodos({...params, todo_id: todoId});
   const currentWorkCues = workTodos.map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
       findings: findings.filter(row => (todo.explore_result_node_refs as unknown[] ?? []).includes(row.node_id)),
+      cited_sources: params.yardstick_sources,
       measurement_feedback: measurementFeedback}))
     .filter((cue): cue is JsonObject => cue !== null);
   const workCues = currentWorkCues.filter(cue => resultNode === null || cue.node_id === resultNode);
