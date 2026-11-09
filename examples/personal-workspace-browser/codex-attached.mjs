@@ -764,18 +764,55 @@ async function runConversation(browser, uncertain) {
     await recoveryDraft.fill('Keep this draft with the original Session.');
     await longDialogue.waitFor();
     await page.setViewportSize({width:1200,height:900});
-    const rejectedRead = page.waitForResponse(response => {
-      const source = new URL(response.url());
-      return response.status() === 409 && source.pathname === '/api/chat/codex-attached'
-        && source.searchParams.get('agent_id') === 'worker' && !source.searchParams.has('operation_id');
-    });
-    await page.request.post(new URL('/fixture/rebind',url).href);
-    await rejectedRead;
-    await panel.getByRole('alert').waitFor();
+    const transcriptRecords = panel.locator('.attached-conversation-messages article');
+    const attachedPath = '/api/chat/codex-attached';
+    const workerRead = url => {
+      const {pathname,searchParams} = new URL(url);
+      return pathname === attachedPath && searchParams.get('agent_id') === 'worker' && !searchParams.has('operation_id') ? searchParams : null;
+    };
+    const heldPoll = Promise.withResolvers();
+    const heldOlder = Promise.withResolvers();
+    const olderChecked = Promise.withResolvers();
+    // Start a tail poll, then authorize an older page before rebinding. Deliver
+    // the poll's denial first, while the successful older page is still in flight.
+    const race = async route => {
+      const query = workerRead(route.request().url());
+      if (query?.has('revision')) await heldPoll.promise;
+      if (!query?.has('before')) return route.continue();
+      const response = await route.fetch({timeout:4000});
+      olderChecked.resolve(response);
+      await heldOlder.promise;
+      await route.fulfill({response});
+    };
+    const attachedRequests = '**/api/chat/codex-attached?*';
+    await page.route(attachedRequests,race);
+    try {
+      await page.waitForRequest(request => workerRead(request.url())?.has('revision'),{timeout:4000});
+      const olderRequest = page.waitForRequest(request => workerRead(request.url())?.has('before'),{timeout:4000});
+      await scrollHistory(page,panel,-1);
+      await olderRequest;
+      const older = await olderChecked.promise;
+      assert.equal(older.status(),200);
+      assert.ok((await older.json()).messages.length > 0,'The native owner authorized a nonempty page before rebinding');
+      const rejectedRead = page.waitForResponse(response => response.status() === 409 && workerRead(response.url())?.has('revision'),{timeout:4000});
+      assert.ok((await page.request.post(new URL('/fixture/rebind',url).href)).ok());
+      heldPoll.resolve();
+      await rejectedRead;
+      await panel.getByRole('button',{name:'重新连接',exact:true}).waitFor({timeout:2000});
+      assert.equal(await transcriptRecords.count(),0,'The denial withdraws existing history while paging');
+      const latePage = page.waitForResponse(response => response.status() === 200 && workerRead(response.url())?.has('before'),{timeout:4000});
+      heldOlder.resolve();
+      await (await latePage).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await transcriptRecords.count(),0,'A page authorized before rebinding cannot restore rejected history');
+    } finally {
+      heldPoll.resolve();
+      heldOlder.resolve();
+      await page.unroute(attachedRequests,race);
+    }
     await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-desktop.png'),animations:'disabled'});
     await page.setViewportSize({width:390,height:844});
     await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-narrow.png'),animations:'disabled'});
-    const transcriptRecords = panel.locator('.attached-conversation-messages article');
     assert.equal(await transcriptRecords.count(),0,'An explicitly rejected binding must withdraw the old transcript');
     assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
     assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).isDisabled(),true);

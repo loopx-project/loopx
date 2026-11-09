@@ -267,8 +267,9 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
         if (!pagingFailed.current) setError("");
         if (follow && following.current) requestAnimationFrame(() => transcript.current?.scrollTo({top: transcript.current.scrollHeight}));
       } catch (failure) {
-        if (current !== generation.current || epoch !== historyEpoch.current) return;
-        if (stopOnRejectedRead(failure)) return;
+        if (current !== generation.current || rejectedRead.current) return;
+        // Paging supersedes history results, but a denial still applies to this binding.
+        if (stopOnRejectedRead(failure) || epoch !== historyEpoch.current) return;
         setError(readFailureMessage(failure, readLocale.current));
         setSnapshot(null);
       }
