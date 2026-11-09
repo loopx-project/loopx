@@ -6,29 +6,41 @@ import './research-case-study.css';
 
 type Series = NonNullable<TrajectoryCaseStudy['sections'][number]['series']>;
 
-/** Categorical observations, not an interpolated time series or a ranking. Gaps remain gaps. */
+/** Plot the saved observations in order on a common scale that includes zero. */
 function CaseSeries({series, zh}: {series: Series; zh: boolean}) {
-  const values = series.points.flatMap(p => p.value === null ? [] : [p.value]);
-  const scale = Math.max(1, ...values.map(Math.abs));
-  const low = Math.min(0, ...values.map(v => v / scale)), high = Math.max(0, ...values.map(v => v / scale)), span = high - low || 1;
-  const width = Math.max(700, series.points.length * 100);
-  const x = (i: number) => 54 + i * (width - 110) / Math.max(1, series.points.length - 1);
-  const y = (v: number) => 186 - (v / scale - low) * 132 / span;
-  const format = (v: number) => v.toLocaleString(zh ? 'zh-CN' : 'en', {maximumFractionDigits: 6});
+  const values = series.points.flatMap(point => point.value === null ? [] : [point.value]);
+  const magnitude = Math.max(0, ...values.map(Math.abs)) || 1;
+  const scaled = values.map(value => value / magnitude);
+  const low = Math.min(0, ...scaled);
+  const span = Math.max(0, ...scaled) - low || 1;
+  const position = (value: number) => (value / magnitude - low) * 100 / span;
+  const zero = position(0);
+  const locale = zh ? 'zh-CN' : 'en';
+  const decimal = new Intl.NumberFormat(locale, {maximumSignificantDigits: 17});
+  const scientific = new Intl.NumberFormat(locale, {notation: 'scientific', maximumSignificantDigits: 17});
+  const format = (value: number) => {
+    const absolute = Math.abs(value);
+    return (absolute !== 0 && (absolute < 1e-6 || absolute >= 1e12) ? scientific : decimal).format(value);
+  };
+
   return <figure className="case-series">
     <figcaption>{series.label} <span>· {series.unit}</span></figcaption>
-    <div className="case-chart-scroll" tabIndex={0} role="region" aria-label={series.label}>
-      <svg viewBox={`0 0 ${width} 238`} style={{minWidth: width}} role="img" aria-label={series.points.map(p => `${p.label}: ${p.value === null ? (zh ? '未知' : 'unknown') : format(p.value)}`).join('; ')}>
-        <line x1="30" x2={width - 25} y1={y(0)} y2={y(0)} className="case-chart-axis"/>
-        {series.points.map((p, i) => <g key={i}>
-          {p.value !== null ? <><line x1={x(i)} x2={x(i)} y1={y(0)} y2={y(p.value)} className="case-chart-stem"/>
-            <circle cx={x(i)} cy={y(p.value)} r="4"/><text x={x(i)} y={y(p.value) - 14} textAnchor="middle">{format(p.value)}</text></>
-            : <text x={x(i)} y="172" textAnchor="middle">—</text>}
-          <text x={x(i)} y="218" textAnchor="middle" className="case-chart-label">{Array.from(p.label).length > 12 ? `${Array.from(p.label).slice(0, 11).join('')}…` : p.label}</text>
-        </g>)}
-      </svg>
-    </div>
-    <details><summary>{zh ? '查看数值' : 'Read values'}</summary><dl>{series.points.map((p, i) => <div key={i}><dt>{p.label}</dt><dd>{p.value === null ? (zh ? '未记录' : 'Not recorded') : `${format(p.value)} ${series.unit}`}</dd></div>)}</dl></details>
+    <ol className="case-series-points" role="list">
+      {series.points.map((point, i) => {
+        const end = point.value === null ? null : position(point.value);
+        return <li key={i}>
+          <span className="case-chart-label">{point.label}</span>
+          <span className="case-chart-value">{point.value === null ? (zh ? '未记录' : 'Not recorded') : format(point.value)}</span>
+          <span className="case-chart-track" aria-hidden="true">
+            <span className="case-chart-zero" style={{insetInlineStart: `${zero}%`}}/>
+            {end !== null ? <>
+              <span className="case-chart-bar" style={{insetInlineStart: `${Math.min(end, zero)}%`, inlineSize: `${Math.abs(end - zero)}%`}}/>
+              <span className="case-chart-mark" style={{insetInlineStart: `${end}%`}}/>
+            </> : null}
+          </span>
+        </li>;
+      })}
+    </ol>
   </figure>;
 }
 
