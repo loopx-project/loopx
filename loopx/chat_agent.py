@@ -1476,7 +1476,8 @@ class CodexChatAgentSession:
         from .capabilities.native_chat.codex_adapter import compact_native_history
         compact_native_history(self, check=check)
 
-    def steer(self, user_message: str, *, expected_turn_id: str) -> str:
+    def steer(self, user_message: str, *, expected_turn_id: str,
+              client_message_id: str | None = None) -> str:
         """Inject one user message into the exact active Codex Turn."""
 
         text = str(user_message or "").strip()
@@ -1488,6 +1489,7 @@ class CodexChatAgentSession:
             {
                 "threadId": self.thread_id,
                 "expectedTurnId": selected_turn_id,
+                **({"clientUserMessageId": client_message_id} if client_message_id is not None else {}),
                 # The native Turn already has its task and policy. Replaying
                 # the start prompt would reframe this update as a new task.
                 "input": [{"type": "text", "text": text}],

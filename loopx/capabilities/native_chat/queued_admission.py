@@ -1,4 +1,5 @@
 """IO admission to the existing same-Session queue; Core owns source authority."""
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -96,11 +97,14 @@ def deliver_native_mention(
             controller.store.create_ingress_receipt(
                 session_id, client_ingress_id=ingress_id, mode="session_queue", message=queued_text,
             )
-        elif decision["action"] == "steer":
+        elif decision["action"] in {"steer", "unresolved"}:
+            receipt = controller.store.steering_receipt(session_id, ingress_id)
+            if decision["action"] == "unresolved" and receipt is None:
+                return decision
             try:
                 controller.steer_active_turn(
                     session_id=session_id, client_ingress_id=ingress_id, message=steering_text,
-                    expected_turn_id=decision["target_turn_id"], origin=origin,
+                    expected_turn_id=decision.get("target_turn_id") or (receipt or {}).get("expected_turn_id"), origin=origin,
                 )
             except Exception:
                 # The native response can be lost after sending. The existing
@@ -123,13 +127,48 @@ def record_steering_delivery(
     if origin is not None:
         payload["origin"] = origin
     if queued_turn_id is None:
-        store.append_message(session_id, role="user", text=message, turn_id=turn_id, origin=origin)
+        message_id = "steer-" + hashlib.sha256(ingress_id.encode()).hexdigest()
+        store.append_message(session_id, role="user", text=message, turn_id=turn_id, origin=origin,
+                             message_id=message_id)
     else:
         payload["queued_turn_id"] = queued_turn_id
-    store.append_event(session_id, turn_id, kind="turn.steered", payload=payload)
+    if not any(event.get("kind") == "turn.steered" and event.get("payload") == payload
+               for event in store.events_after(session_id, turn_id, None)):
+        store.append_event(session_id, turn_id, kind="turn.steered", payload=payload)
     store.update_ingress_receipt(
         session_id, ingress_id, status="delivered", active_turn_id=turn_id, error_code=None,
     )
+
+
+def reconcile_steering_delivery(controller, session, receipt) -> dict[str, Any] | None:
+    """Read native evidence for the saved operation without sending its input."""
+    from .codex_adapter import CodexAppServerAdapter
+    from ...control_plane.effect_runtime import effect_runtime_result
+
+    with controller.lock:
+        adapter = controller.adapters.get(session["session_id"])
+    if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
+        return None
+    capture = receipt.get("native_steering")
+    if not isinstance(capture, dict) or not isinstance(capture.get("local_turn_id"), str):
+        return None
+    turn = controller.store.load_turn(session["session_id"], capture["local_turn_id"])
+    facts = {"receipt": receipt, "session_thread_id": session.get("upstream_thread_id"),
+             "adapter_thread_id": adapter.upstream_thread_id, "turn": turn or {}}
+    try:
+        decision = effect_runtime_result("chat.queue.steering_readback", facts)
+        if decision["action"] != "read":
+            return None
+        facts["items"] = adapter.steering_delivery_readback(decision["turn_id"])
+        facts["inventory_complete"] = True
+        if effect_runtime_result("chat.queue.steering_readback", facts)["action"] != "confirmed":
+            return None
+    except (OSError, RuntimeError, ValueError, KeyError):
+        return None
+    record_steering_delivery(controller.store, session_id=session["session_id"],
+        turn_id=turn["turn_id"], ingress_id=receipt["client_ingress_id"], message=receipt["message"],
+        queued_turn_id=capture.get("queued_turn_id"), origin=capture.get("origin"))
+    return turn
 
 
 def _enqueue_bound(controller: Any, session: dict[str, Any], client_turn_id: str, message: str,

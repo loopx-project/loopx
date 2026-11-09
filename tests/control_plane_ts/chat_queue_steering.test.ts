@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planNativeMentionIngress, planQueuedChatMutation, planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
+import {planChatSteeringReadback, planNativeMentionIngress, planQueuedChatMutation, planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
 
 function facts() {
   return {phase: "prepare", session: {status: "busy", active_turn_id: "active"}, active_status: "running",
@@ -10,6 +10,31 @@ function facts() {
 }
 const held = {schema_version: QUEUE_STEERING_SCHEMA, status: "pending", client_ingress_id: "native-op", operation_id: "op", target_turn_id: "active"};
 const receipt = {status: "delivered", expected_turn_id: "active", active_turn_id: "active", mode: "live_steering"};
+
+test("native readback requires the saved client ID and its original thread, Turn and full text", () => {
+  const native = {local_turn_id: "active", thread_id: "thread", turn_id: "native-turn", client_message_id: "message-id"};
+  const original = {...receipt, status: "failed", message: "Line one.\nLine two.", native_steering: native};
+  const input = {receipt: original, session_thread_id: "thread", adapter_thread_id: "thread",
+    turn: {turn_id: "active", upstream_turn_id: "native-turn"}};
+  const entry = {turnId: "native-turn", item: {type: "userMessage", clientId: "message-id",
+    content: [{type: "text", text: original.message}]}};
+  assert.equal(planChatSteeringReadback(input).action, "read");
+  assert.equal(planChatSteeringReadback({...input, items: [entry], inventory_complete: true}).action, "confirmed");
+  assert.equal(planChatSteeringReadback({...input, items: [entry], inventory_complete: false}).action, "unresolved");
+  for (const change of [
+    {session_thread_id: "new-thread"}, {adapter_thread_id: "new-thread"},
+    {turn: {...input.turn, turn_id: "new-turn"}},
+    {turn: {...input.turn, upstream_turn_id: "new-native-turn"}},
+    {receipt: {...original, expected_turn_id: "new-turn"}},
+    {receipt: {...original, native_steering: null}},
+    {receipt: {...original, native_steering: {...native, client_message_id: ""}}},
+  ]) assert.equal(planChatSteeringReadback({...input, ...change, items: [entry], inventory_complete: true}).action, "unresolved");
+  for (const items of [[], [entry, entry], [{...entry, turnId: "another-turn"}],
+    [{...entry, item: {...entry.item, clientId: "another-id"}}],
+    [{...entry, item: {...entry.item, content: [{type: "text", text: "Different input"}]}}],
+    [{...entry, item: {...entry.item, content: [...entry.item.content, {type: "text", text: "Extra"}]}}],
+  ]) assert.equal(planChatSteeringReadback({...input, items, inventory_complete: true}).action, "unresolved");
+});
 
 test("input changes require the exact unclaimed web input revision, without native steering", () => {
   const f = facts();

@@ -142,6 +142,36 @@ export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
   }};
 }
 
+/** Positive native evidence can settle an uncertain send, never authorize a retry. */
+export function planChatSteeringReadback(input: JsonObject): JsonObject {
+  const receipt = requireJsonObject(input.receipt, "steering receipt");
+  const capture = receipt.native_steering;
+  if (capture == null) return {action: "unresolved"};
+  const native = requireJsonObject(capture, "native steering capture");
+  const turn = requireJsonObject(input.turn, "original steering Turn");
+  const validIds = [native.local_turn_id, native.thread_id, native.turn_id, native.client_message_id]
+    .every(value => typeof value === "string" && value.length > 0);
+  if (!validIds || receipt.mode !== "live_steering" ||
+      !["pending", "failed"].includes(String(receipt.status)) ||
+      typeof receipt.message !== "string" || !receipt.message.trim() ||
+      turn.turn_id !== native.local_turn_id || turn.upstream_turn_id !== native.turn_id ||
+      (receipt.expected_turn_id != null && receipt.expected_turn_id !== native.local_turn_id) ||
+      input.session_thread_id !== native.thread_id || input.adapter_thread_id !== native.thread_id) {
+    return {action: "unresolved"};
+  }
+  if (input.items == null) return {action: "read", turn_id: native.turn_id};
+  if (input.inventory_complete !== true || !Array.isArray(input.items)) return {action: "unresolved"};
+  const items = input.items.map(value => requireJsonObject(value, "native Turn entry"));
+  if (items.some(entry => entry.turnId !== native.turn_id)) return {action: "unresolved"};
+  const matches = items.map(entry => requireJsonObject(entry.item, "native Turn item"))
+    .filter(item => item.type === "userMessage" && item.clientId === native.client_message_id);
+  if (matches.length !== 1 || !Array.isArray(matches[0].content) || matches[0].content.length !== 1) {
+    return {action: "unresolved"};
+  }
+  const text = requireJsonObject(matches[0].content[0], "native user text");
+  return {action: text.type === "text" && text.text === receipt.message.trim() ? "confirmed" : "unresolved"};
+}
+
 /** Pending input changes share the queue consumer's Session/Turn fence.
  * The pending receipt excludes dispatch until transcript/event IO is finished.
  * Retried operation identities describe the same request, even after a claim.
