@@ -210,6 +210,16 @@ test("one optional attachment reaches an ordinary task context without creating 
   assert.deepEqual(detail.graph.work_yardsticks[0].authoritative, authoritative);
   assert.deepEqual(on.harness, off.harness);
   assert.equal(on.graph.work_yardstick_capture.optional, true);
+  const measured = {...finding, measurements: [
+    {...authoritative, value: 10, candidate_ref: "candidate:a", evidence_ref: "result:goal-a"},
+    {...authoritative, value: 20, candidate_ref: "candidate:b", evidence_ref: "result:goal-b"},
+    {...proxy, value: 8, candidate_ref: "candidate:b", evidence_ref: "result:screen-b"},
+    {...proxy, value: 9, candidate_ref: "candidate:a", evidence_ref: "result:screen-a"},
+  ]};
+  const reversedCompact = projectExploreTurnContext({...params, projection: {nodes: [], findings: [measured]},
+    yardstick_enabled: true, work_todos: [todo]}).graph.work_yardsticks[0];
+  assert.equal(reversedCompact.comparison_candidate_ref, "candidate:b");
+  assert.equal(reversedCompact.proxy_order_reversed, true);
   // Unknown or unowned work cannot adopt a shared question's decision.
   assert.equal(Object.hasOwn(projectExploreTurnContext({...params, yardstick_enabled: true,
     work_todos: [{...todo, claimed_by: "peer"}]}).graph, "work_yardsticks"), false);
