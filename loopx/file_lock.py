@@ -852,7 +852,6 @@ def _read_effect_mutation_owner(path: Path) -> dict[str, object] | None:
 @dataclass(frozen=True)
 class _EffectMutationClaim:
     path: Path
-    token: str
     identity: tuple[int, int, int, int]
 
 
@@ -983,7 +982,7 @@ def _claim_effect_mutation_lock(
             raise
         if identity is None:
             return None
-        return _EffectMutationClaim(claim_path, token, identity)
+        return _EffectMutationClaim(claim_path, identity)
     return None
 
 
@@ -991,38 +990,17 @@ def _release_effect_mutation_claim(
     claim: _EffectMutationClaim | Path,
     token: str | None = None,
 ) -> None:
-    expected_token: str | None
-    identity: tuple[int, int, int, int] | None
     if isinstance(claim, _EffectMutationClaim):
-        path = claim.path
-        expected_token = claim.token
-        identity = claim.identity
-    else:
-        path = claim
-        expected_token = token
-        identity = _effect_file_identity(path)
-    if not expected_token:
+        # Remove only the file we created, even if its contents became unreadable.
+        _remove_created_effect_file(claim.path, claim.identity)
         return
-    owner = _read_effect_mutation_owner(path)
-    if isinstance(claim, _EffectMutationClaim):
-        if (
-            owner is None
-            or owner.get("pid") != os.getpid()
-            or owner.get("token") != expected_token
-        ):
-            # The pathname may have been corrupted or replaced after this
-            # caller created the claim.  Its captured identity still permits
-            # removing only its own inode, preventing claim leaks without
-            # touching a later claimant.
-            _remove_created_effect_file(path, identity)
-            return
-    elif (
-        owner is None
-        or owner.get("pid") != os.getpid()
-        or owner.get("token") != expected_token
-    ):
+    if not token:
         return
-    _remove_created_effect_file(path, identity)
+    identity = _effect_file_identity(claim)
+    owner = _read_effect_mutation_owner(claim)
+    if owner is None or owner.get("pid") != os.getpid() or owner.get("token") != token:
+        return
+    _remove_created_effect_file(claim, identity)
 
 
 def _reclaim_stale_effect_mutation_lock(path: Path) -> bool:
@@ -1101,6 +1079,7 @@ def _release_effect_mutation_lock(
         if claim is None:
             return False
         retired_path = path.with_name(f"{path.name}.released.{uuid4()}")
+        retired_cleaned = False
         try:
             current = _read_effect_mutation_owner(path)
             if current is None or current.get("token") != token:
@@ -1115,20 +1094,23 @@ def _release_effect_mutation_lock(
                 retired_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            else:
+                retired_cleaned = True
             return True
         finally:
-            if claim is not None:
-                _release_effect_mutation_claim(claim)
-            try:
-                retired_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            _release_effect_mutation_claim(claim)
+            if not retired_cleaned:
+                try:
+                    retired_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except OSError:
         if suppress_errors:
             return False
         raise
     finally:
         if claim is not None:
+            # Retry best-effort removal if the first attempt left our claim.
             _release_effect_mutation_claim(claim)
 
 

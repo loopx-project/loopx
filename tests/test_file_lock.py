@@ -405,17 +405,61 @@ def test_cross_runtime_identity_fails_closed_for_ambiguous_or_reused_files() -> 
     )
 
 
+@pytest.mark.parametrize("contents", [b"not-json", b"\xff"])
 def test_cross_runtime_claim_cleanup_removes_own_corrupted_claim(
     tmp_path: Path,
+    contents: bytes,
 ) -> None:
     target = tmp_path / ".task-leases"
     claim = file_lock._claim_effect_mutation_lock(target, "claim-token")
     assert claim is not None
-    claim.path.write_text("not-json", encoding="utf-8")
+    claim.path.write_bytes(contents)
 
     file_lock._release_effect_mutation_claim(claim)
 
     assert not claim.path.exists()
+
+
+def test_cross_runtime_claim_cleanup_keeps_a_replacement_inode(tmp_path: Path) -> None:
+    target = tmp_path / ".task-leases"
+    claim = file_lock._claim_effect_mutation_lock(target, "claim-token")
+    assert claim is not None
+    replacement = tmp_path / "replacement"
+    contents = claim.path.read_bytes()
+    replacement.write_bytes(contents)
+    replacement.replace(claim.path)
+
+    file_lock._release_effect_mutation_claim(claim)
+
+    assert claim.path.read_bytes() == contents
+
+
+@pytest.mark.parametrize("part", ["claim", "released"])
+def test_cross_runtime_release_retries_transient_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    part: str,
+) -> None:
+    target = tmp_path / ".task-leases"
+    effect_lock = Path(f"{target}.ts-effect.lock")
+    unlink = Path.unlink
+    attempts = 0
+
+    def unlink_with_one_failure(path: Path, missing_ok: bool = False) -> None:
+        nonlocal attempts
+        if path.name.startswith(f"{effect_lock.name}.{part}."):
+            attempts += 1
+            if attempts == 1:
+                raise OSError("simulated marker cleanup failure")
+        unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink_with_one_failure)
+    with exclusive_cross_runtime_file_lock(target):
+        assert effect_lock.exists()
+
+    assert attempts == 2
+    assert not effect_lock.exists()
+    assert not list(tmp_path.glob(f"{effect_lock.name}.{part}.*"))
 
 
 def test_cross_runtime_cleanup_failure_cannot_replace_success(
