@@ -490,10 +490,18 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
+  const ordinary = select(pointers);
   const review = successorReplanReadSelection(context, pointers);
-  return {initial: true, plan: select(pointers), ...(groups.opening.length && groups.remaining.length
+  // Both plans address this same capture. Reuse the ordinary addresses already
+  // in the response; only send typed paths that the review actually adds.
+  const relativeReview = review && (() => {
+    const positions = new Map((ordinary.selections as {pointer: string}[]).map((row, i) => [row.pointer, i]));
+    return {selections: (review.selections as {pointer: string; path: Path}[])
+      .map(row => positions.get(row.pointer) ?? row)};
+  })();
+  return {initial: true, plan: ordinary, ...(groups.opening.length && groups.remaining.length
     ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {}),
-    ...(review ? {replan_review: review} : {})};
+    ...(relativeReview ? {replan_review: relativeReview} : {})};
 }
 
 /** Address a review before choosing a successor. The ordinary reader and

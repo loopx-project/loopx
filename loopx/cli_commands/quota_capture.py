@@ -116,6 +116,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     initial_read_pointers = None
     initial_read_reference = None
     replan_review = None
+    ordinary_selections = []
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
@@ -137,6 +138,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
             replan_review = initial_read_plan.get("replan_review")
             if initial:
+                ordinary_selections = plan["selections"]
                 pin_initial_selection(plan)
             else:
                 field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
@@ -208,7 +210,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     if replan_review and not page_attached and "first_read_command" in result:
         try:
             path, digest = Path(current["path"]), current["sha256"]
-            reader, _ = write_initial_context_read_reference(path, digest, current_document, replan_review["selections"])
+            selections = []
+            for item in replan_review["selections"]:
+                if type(item) is int:
+                    if not 0 <= item < len(ordinary_selections):
+                        raise ValueError("Replan review address is outside the current read plan")
+                    item = ordinary_selections[item]
+                selections.append(item)
+            reader, _ = write_initial_context_read_reference(path, digest, current_document, selections)
             candidate = {**result, "replan_review_command": context_capture_read_command(path, digest,
                 reference_file=reader, page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes,
                 reader_argv=reader_argv),
@@ -219,7 +228,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                     "Ordinary context: " + result["instruction"])}
             if len(_native_output_bytes(candidate)) <= min(output_bytes, 7900):
                 result = candidate
-        except (OSError, ValueError, KeyError, TypeError, RecursionError):
+        except (OSError, ValueError, KeyError, IndexError, TypeError, RecursionError):
             pass  # The ordinary reader and original receipt are already published.
     return result
 
