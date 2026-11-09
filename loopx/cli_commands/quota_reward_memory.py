@@ -110,7 +110,6 @@ def attach_reward_memory_recall_after_should_run(
     registry_path: Path,
     goal_id: str,
     agent_id: str,
-    composed_settlement: bool = False,
 ) -> None:
     heartbeat_receipt = payload.get("heartbeat_receipt")
     if (
@@ -131,5 +130,4 @@ def attach_reward_memory_recall_after_should_run(
         agent_id=agent_id,
         decision=payload,
         turn_instance_id=heartbeat_turn_id,
-        **({"composed_settlement": True} if composed_settlement else {}),
     )

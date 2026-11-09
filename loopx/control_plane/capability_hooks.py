@@ -247,8 +247,6 @@ def _turn_context_binding_source(
 def dispatch_turn_context_hooks(
     payload: dict[str, Any],
     registrations: Sequence[TurnContextHookRegistration],
-    *,
-    composed_settlement: bool = False,
 ) -> None:
     contributions: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
@@ -281,8 +279,6 @@ def dispatch_turn_context_hooks(
                     "source": _turn_context_binding_source(payload),
                 }
             )
-            if not readback_only and composed_settlement:
-                binding["composed_settlement"] = True
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {

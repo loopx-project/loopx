@@ -464,7 +464,7 @@ def test_direct_actor_delivers_complete_source_with_matching_field_instructions(
     from loopx.control_plane.quota.turn_envelope import compose_turn_decision
     from tests.control_plane.test_model_behavior_qualification import _full_packet
 
-    packet = compose_turn_decision(_full_packet(), composed_settlement=True)
+    packet = compose_turn_decision(_full_packet())
     captured = []
     def transport(**kwargs):
         captured.append(json.loads(kwargs["body"]))

@@ -336,7 +336,6 @@ def _prepare_quota_result_context(
         attach_reward_memory_recall_after_should_run(
             payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
-            composed_settlement=activation["enabled"],
         )
     return payload, activation
 

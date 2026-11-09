@@ -1,8 +1,6 @@
 """Complete consumer costs and the explicit experimental hash transition."""
-import base64
 from copy import deepcopy
 import json
-import zlib
 
 import pytest
 
@@ -44,7 +42,7 @@ def test_checked_complete_progressive_projection_keeps_sparse_numeric_source(tmp
     turn.assert_complete_turn_decision(contract)
 
 
-def test_composed_source_uses_lossless_bounded_transport(tmp_path, monkeypatch):
+def test_composed_source_uses_one_lossless_literal_transport(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     source = _quota_payload()
     source["observations"] = [1.0, -0.0, 2**60 + 1, 1e-7]
@@ -59,21 +57,16 @@ def test_composed_source_uses_lossless_bounded_transport(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "effect_runtime_projection_result", capture)
     complete = turn.compose_turn_decision(source)
-    (method, packed), = observations
-    assert "payload" not in packed and len(_json(packed).encode()) < len(_json(source).encode())
-    transport = packed["source_transport"]
-    raw = {key: value for key, value in packed.items() if key != "source_transport"}
-    raw["payload"] = source
-    assert original_rpc(method, packed) == original_rpc(method, raw)
+    (method, request), = observations
+    assert _json(request["payload"]) == _json(source)
+    assert "source_transport" not in request and "composed_settlement" not in request
     assert _json(complete["observations"]) == _json(source["observations"])
     assert complete["fixture_material"] == source["fixture_material"]
     turn.assert_complete_turn_decision(complete)
-    with pytest.raises(RuntimeError, match="invalid Turn composition source transport"):
-        original_rpc(method, {**packed, "payload": source})
-    oversized = base64.b64encode(zlib.compress(b" " * (1024 * 1024 + 1))).decode("ascii")
-    for invalid in ("AAAA", oversized):
-        with pytest.raises(RuntimeError, match="valid compressed JSON within 1 MiB"):
-            original_rpc(method, {**packed, "source_transport": {**transport, "data": invalid}})
+    for retired in ("source_transport", "composed_settlement"):
+        # A stale live adapter must fail, not silently select another source or plan.
+        with pytest.raises(RuntimeError, match="literal source and canonical settlement plan"):
+            original_rpc(method, {**request, retired: None})
 
 
 def test_prior_complete_numeric_binding_needs_its_pinned_reader():

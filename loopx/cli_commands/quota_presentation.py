@@ -129,8 +129,7 @@ def compose_quota_cli_source(
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None
     if not raw_envelope:
-        return compose(payload, scheduler_execution_context=scheduler_context,
-            composed_settlement=activation["enabled"]), False, None
+        return compose(payload, scheduler_execution_context=scheduler_context), False, None
 
     from ..control_plane.quota.turn_envelope import compose_turn_decision_with_raw_envelope
 

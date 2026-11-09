@@ -90,9 +90,9 @@ def test_real_app_guard_delivers_scoped_memory_once(
     assert first["should_run"] is True
     assert_complete_turn_decision(first)
     plan = first["interaction_contract"]["cli_channel"]["settlement_plan"]
-    combined = delta == "auto"
-    assert plan["schema_version"] == ("quota_settlement_plan_v2" if combined else "quota_settlement_plan_v1")
-    assert plan["ordered_steps"][2]["owner"] == ("runtime" if combined else "agent")
+    # Memory binding and settlement ownership are independent of presentation.
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert plan["ordered_steps"][2]["owner"] == "agent"
     assert first["reward_memory_recall"]["status"] == "applied"
     assert memory.calls == 1
     # Participation stays small. The complete private input has one carrier.

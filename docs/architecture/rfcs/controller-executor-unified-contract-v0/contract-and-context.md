@@ -25,13 +25,12 @@ that source to the existing saved-capture presentation/reader owner, rather than
 discarding it and making the model evaluate another guard to obtain its current
 contract. Goal, Agent, Todo and Turn must match before publication. A qualified
 native recheck retains its enabled profile and uses the existing deferred
-presentation route; forcing it off would replace the complete composer's
-combined settlement with the older split plan. The saved-capture owner then
-presents the verified source once. Required material remains complete: consume
+presentation route. Context delivery does not select settlement ownership;
+the saved-capture owner presents the same canonical plan once. Required material remains complete: consume
 the complete inline Goal or execute its declared read when it is not inline;
 a ready receipt or saved file does not fulfill that consumption. Optional presentation failure
 retains the original digest-bound recovery. Explicit off is inert, and an
-unbound request keeps its original readiness route without inventing a Turn.
+unbound request remains readback-only and cannot invent a Turn or a claim.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or
 qualification of model cost and long-horizon benefit.
 
@@ -621,7 +620,7 @@ also reuses the existing source-free readback validator without first extracting
 an executable source that would be discarded. Registration, namespace, slot and
 budget checks remain. File/SQLite cases retain status observations under an invalid
 source while rejecting advice and Host construction; valid advice keeps its binding
-and C1 composed settlement. Removing this RPC does not reduce model-visible text
+and the canonical settlement plan. Removing this RPC does not reduce model-visible text
 or qualify complete-task cost.
 
 Selected Todo notes now adopt the [main field registry](https://github.com/loopx-project/loopx/pull/8386).
@@ -875,11 +874,26 @@ or the parent C1's original-quota complete-cost benefit.
 
 The progressive reader omits `next_cli_actions` only when it repeats the
 recognized ordered settlement plan for the ready Todo and original effect.
-The ordinary quota plan supplies separate writeback and spend templates; the
-complete C1 plan supplies one combined writeback and a runtime-owned spend
-receipt. Both retain the original commands, ordering and preconditions in
-the captured plan. A distinct fallback or unknown plan remains visible;
+New ordinary, progressive and native complete sources retain the same shared
+v1 plan, including its writeback and spend owners, original commands, ordering
+and preconditions. Delivery flags no longer select a second settlement policy.
+The explicit `refresh-state --settle-turn --settlement-receipt` operation remains
+available under its existing authority and recovery contract; a presentation
+switch does not add it to the plan. Recorded v2 captures retain their original
+recipe and identity through the checked historical reader, without being
+rewritten or regenerated. A distinct fallback or unknown plan remains visible;
 the exact original field is still readable, and direct output is unchanged.
+
+This cutover removes the candidate-only settlement switch and prediction
+parameters from capability binding, the unused native settlement-projection
+operation, and the unpublished compressed-source bridge. Composition uses its
+existing literal-source transport and typed settlement owner. Stale adapters
+that supply either retired switch fail explicitly; historical capture decoding
+is separate. The real File/SQLite regression compares off/on/auto and the bounded
+legacy display under one original Turn, then checks unchanged captures and no
+debit. Explicit combined-command success, partial failure and once-only replay
+remain independently exercised. The earlier one-call saving is withdrawn from
+the current candidate; model cost and full C1 acceptance remain unqualified.
 
 #### Complete quota consumer qualification and needed-section recovery
 

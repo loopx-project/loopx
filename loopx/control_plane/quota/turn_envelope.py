@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
 import json
-import zlib
 
-from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
+from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -97,15 +95,6 @@ def _turn_envelope_result(
         tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
-    if operation == "compose_complete" and request.get("source_edits") is True and isinstance(payload, Mapping):
-        # Pack only a bounded, useful wire reduction. Edits are still applied
-        # to the original source and larger inputs keep their snapshot route.
-        raw = _encode_rpc_json(payload)
-        if 16 * 1024 <= len(raw) <= 1024 * 1024:
-            data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
-            if len(data) + 128 < len(raw):
-                del request["payload"]
-                request["source_transport"] = {"encoding": "deflate-base64-json-v0", "data": data}
     result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
@@ -274,12 +263,10 @@ def compose_turn_decision(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
-    composed_settlement: bool = False,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     source, _ = _compose_turn_source(payload,
-        scheduler_execution_context=scheduler_execution_context,
-        composed_settlement=composed_settlement)
+        scheduler_execution_context=scheduler_execution_context)
     return source
 
 
@@ -301,7 +288,6 @@ def _compose_turn_source(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
-    composed_settlement: bool = False,
     legacy_output: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -309,7 +295,7 @@ def _compose_turn_source(
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
-        **({"composed_settlement": True} if composed_settlement else {}), **(legacy_output or {}))
+        **(legacy_output or {}))
     view = result.pop("legacy_envelope", None) if legacy_output is not None else None
     return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
 

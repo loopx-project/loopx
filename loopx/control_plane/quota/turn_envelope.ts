@@ -2,13 +2,11 @@ import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_prep
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan, successorReplanReadSelection, type ReusableExactBody} from "./progressive_context.ts";
-import {admittedCliSettlementChannel} from "./settlement_plan.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
-import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -45,20 +43,6 @@ export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3"
 // Single owner for the should-run artifact path a child brief points at, so the
 // legacy field token stays inside this module's retirement budget.
 export const QUOTA_GOAL_BOUNDARY_ARTIFACT = "quota_should_run.goal_boundary";
-
-/** Complete quota composition and capability binding share one settlement projection. */
-export function withComposedCliSettlement(source: JsonObject): JsonObject {
-  if (source.ok !== true || source.effective_action !== EffectiveAction.NORMAL_RUN
-      || source.normal_delivery_allowed !== true || jsonObject(source.replan_action_packet)?.obligation_id) return source;
-  const interaction = jsonObject(source.interaction_contract);
-  const cli = jsonObject(interaction?.cli_channel);
-  if (!interaction || !cli) return source;
-  const composed = admittedCliSettlementChannel(
-    cli, jsonObject(source.heartbeat_receipt), jsonObject(source.selected_todo)?.todo_id,
-    jsonObject(source.goal_boundary)?.handoff_mode === "soft_claim",
-  );
-  return composed === cli ? source : {...source, interaction_contract: {...interaction, cli_channel: composed}};
-}
 
 export const SCHEDULER_QUOTA_IDENTITY_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
 
@@ -1929,6 +1913,9 @@ function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string |
 
 export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const request = requireJsonObject(value, "complete Turn decision request");
+  if (Object.hasOwn(request, "source_transport") || Object.hasOwn(request, "composed_settlement")) {
+    throw new EffectRuntimeRequestError("complete composition requires its literal source and canonical settlement plan");
+  }
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
@@ -1952,11 +1939,9 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const interaction = object(payload.interaction_contract);
   const cli = object(interaction.cli_channel);
   const plan = object(cli.settlement_plan);
-  // The ordinary complete-contract consumer uses the existing combined owner.
-  // Replan successor creation retains its distinct original-Turn protocol.
-  const useComposedSettlement = request.composed_settlement === undefined ? false
-    : requireBoolean(request.composed_settlement, "composed_settlement");
-  let source = useComposedSettlement ? withComposedCliSettlement(payload) : payload;
+  // Presentation does not select execution or settlement ownership.
+  // Keep the shared plan unchanged in every complete-source producer.
+  let source = payload;
   if (packet.obligation_id && packet.settlement_only !== true &&
       payload.effective_action !== EffectiveAction.GOVERNED_CAPABILITY_INTENT &&
       packet.obligation_id === object(object(payload.autonomous_replan_obligation).replan_context).obligation_id &&
@@ -2388,30 +2373,6 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 
-function decodeCompositionSource(request: JsonObject): JsonObject {
-  const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
-  const {encoding, data} = transport;
-  const maxSourceBytes = 1024 * 1024;
-  if (Object.hasOwn(request, "payload") || encoding !== "deflate-base64-json-v0" ||
-      typeof data !== "string" || data.length > maxSourceBytes ||
-      data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
-    throw new EffectRuntimeRequestError("invalid Turn composition source transport");
-  }
-  let source: unknown;
-  try {
-    const compressed = Buffer.from(data, "base64");
-    // Inflate may stop at the first stream and silently leave input unread.
-    // The synchronous info result reports consumed bytes on supported Node versions.
-    const {buffer, engine} = inflateSync(compressed,
-      {info: true, maxOutputLength: maxSourceBytes}) as unknown as {buffer: Buffer; engine: {bytesWritten: number}};
-    if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
-    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(buffer));
-  } catch {
-    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
-  }
-  return requireJsonObject(source, "complete Turn decision source");
-}
-
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2461,21 +2422,19 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
   if (operation === "compose_complete") {
-    const input = request.source_transport === undefined ? request
-      : {...request, payload: decodeCompositionSource(request)};
     const legacy = request.include_legacy_envelope === undefined ? false
       : requireBoolean(request.include_legacy_envelope, "include_legacy_envelope");
-    if (legacy && (request.source_edits !== true || request.composed_settlement === true)) {
+    if (legacy && request.source_edits !== true) {
       throw new EffectRuntimeRequestError("legacy Turn view requires raw complete source edits");
     }
-    const result = composeCompleteTurnDecision(input);
+    const result = composeCompleteTurnDecision(request);
     if (request.source_edits !== true) return result;
-    const changes = contextProjectionChanges(requireJsonObject(input.payload, "complete Turn source"), result);
+    const changes = contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result);
     if (!legacy) return changes;
     // Compose already verified and bound this source. Return its display-only
     // compatibility view alongside edits, without a second transport or guard.
     try {
-      return {...changes, legacy_envelope: boundedTurnEnvelope(input, result, input.scheduler_execution_args as string)};
+      return {...changes, legacy_envelope: boundedTurnEnvelope(request, result, request.scheduler_execution_args as string)};
     } catch (error) {
       if (!(error instanceof EffectRuntimeRequestError)) throw error;
       // The caller still needs to save the original decision and report its

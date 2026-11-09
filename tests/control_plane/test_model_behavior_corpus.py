@@ -296,7 +296,7 @@ def test_fail_closed_expectation_does_not_hide_invalid_actor_output() -> None:
 
 
 def test_corpus_accepts_an_original_complete_capture_without_recomposition() -> None:
-    source = compose_turn_decision(_full_packet(), composed_settlement=True)
+    source = compose_turn_decision(_full_packet())
     corpus = build_model_behavior_corpus(source,
         retained_packets=[{"case_id": "current-capture", "packet": source}])
     assert corpus["cases"][0]["full_packet"] == source

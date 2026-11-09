@@ -950,10 +950,10 @@ def test_complete_source_reaches_actor_request_without_a_legacy_projection(arm: 
     assert semantics["peer_route"]["agent_id"] == "codex-fixture"
 
 
-@pytest.mark.parametrize("captured,composed_settlement", [(False, False), (True, False), (True, True)])
-def test_complete_pair_preserves_original_source_and_settlement(captured: bool, composed_settlement: bool) -> None:
+@pytest.mark.parametrize("captured", [False, True])
+def test_complete_pair_preserves_original_source_and_settlement(captured: bool) -> None:
     full = _full_packet()
-    candidate = compose_turn_decision(full, composed_settlement=composed_settlement)
+    candidate = compose_turn_decision(full)
     source = candidate if captured else full
     result = run_model_behavior_qualification_pair(source, candidate,
         qualification_id="complete-pair", actor=_actor)

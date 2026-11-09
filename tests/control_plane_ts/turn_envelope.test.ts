@@ -3,7 +3,6 @@ import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../../loopx/control_plane/agents/a
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import {deflateSync} from "node:zlib";
 
 import {
   TURN_ACTION_ROUTES,
@@ -19,24 +18,65 @@ import {
   turnEnvelopeScopedSettlementIdentity,
 } from "../../loopx/control_plane/quota/turn_envelope.ts";
 import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runtime_errors.ts";
-import {settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentityPayload, settlementPlanPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import { TURN_ENVELOPE_SECTION_TARGETS } from "../../loopx/control_plane/quota/turn_envelope_budget.ts";
 import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_orchestration.ts";
 import {projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes}
   from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_controller.ts";
+import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 
-test("complete composition accepts exactly one bounded compressed source", () => {
-  const source = payload();
-  const packed = deflateSync(Buffer.from(JSON.stringify(source)));
-  const request = {operation: "compose_complete", scheduler_execution_args: "", source_edits: true};
-  const packedRequest = (data: Buffer) => ({...request, source_transport: {
-    encoding: "deflate-base64-json-v0", data: data.toString("base64")}});
-  assert.deepEqual(evaluateTurnEnvelope(packedRequest(packed)),
-    evaluateTurnEnvelope({...request, payload: source}));
-  for (const suffix of [Buffer.from([0, 255]),
-    deflateSync(Buffer.from(JSON.stringify({...source, goal_boundary: {stop_condition: "A different stop"}})))]) {
-    assert.throws(() => evaluateTurnEnvelope(packedRequest(Buffer.concat([packed, suffix]))), /valid compressed JSON/);
+test("complete composition rejects retired source and settlement switches", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: "", source_edits: true};
+  for (const [name, value] of [
+    ["source_transport", {encoding: "deflate-base64-json-v0", data: "old private transport"}],
+    ["source_transport", null], ["composed_settlement", true], ["composed_settlement", false],
+  ]) {
+    assert.throws(() => evaluateTurnEnvelope({...request, [name as string]: value}),
+      /literal source and canonical settlement plan/);
+  }
+});
+
+test("complete composition retains the common settlement plan across readiness and recovery facts", () => {
+  const source = payload() as JsonObject;
+  const plan = settlementPlanPayload(turnScopedCliSettlementPlan({
+    identity: {goal_id: source.goal_id, agent_id: source.agent_id, todo_id: "todo-1", turn_instance_id: "turn"},
+    delivery_batch_scale_choices: ["implementation"], command_templates: {
+      todo_claim: "claim", todo_completion: "completion", durable_writeback: "writeback",
+      quota_spend: "spend", terminal_closeout: "terminal",
+    },
+  }));
+  const preparation = {schema_version: "execution_preparation_v0", state: "ready",
+    todo_id: "todo-1", agent_id: source.agent_id, delivery_allowed: true};
+  const cli = {settlement_plan: plan, execution_preparation: preparation, spend_after_validation: true,
+    next_cli_actions: ["supporting action", "writeback", "spend"]};
+  const receipt = {status: "committed", closeout_required: true, turn_instance_id: "turn",
+    settlement_identity: plan.identity};
+  Object.assign(source, {normal_delivery_allowed: true, heartbeat_receipt: receipt,
+    interaction_contract: {...source.interaction_contract as object, cli_channel: cli}});
+  const changed = [
+    {}, ...["committed", "upgraded", "replayed", "pending"].map(status => ({heartbeat_receipt: {...receipt, status}})),
+    {selected_todo: {...source.selected_todo as object, todo_id: "other"}},
+    {heartbeat_receipt: {...receipt, turn_instance_id: "other"}},
+    {heartbeat_receipt: {...receipt, settlement_identity: {...plan.identity as object, effect_id: "changed"}}},
+    {heartbeat_receipt: {...receipt, settlement_binding_owed: true}},
+    {heartbeat_receipt: {...receipt, closeout_required: false}},
+    {cli: {...cli, execution_preparation: {...preparation, state: "claim_required"}}},
+    {cli: {...cli, execution_preparation: null}},
+    {cli: {...cli, spend_after_validation: false}},
+    {cli: {...cli, next_cli_actions: ["spend", "writeback"]}},
+    {cli: {...cli, next_cli_actions: ["writeback", "spend", "spend"]}},
+    {ok: false}, {normal_delivery_allowed: false},
+    {goal_boundary: {...source.goal_boundary as object, handoff_mode: "soft_claim"}},
+  ];
+  for (const {cli: changedCli, ...patch} of changed) {
+    const input = {...source, ...patch, interaction_contract: {
+      ...source.interaction_contract as object, cli_channel: changedCli ?? cli}};
+    const before = structuredClone(input);
+    const result = evaluateTurnEnvelope({operation: "compose_complete", payload: input, scheduler_execution_args: ""});
+    assert.deepEqual((result.interaction_contract as JsonObject).cli_channel,
+      (input.interaction_contract as JsonObject).cli_channel);
+    assert.deepEqual(input, before);
   }
 });
 

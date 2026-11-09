@@ -659,14 +659,14 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     actions_path = cli_path + "/next_cli_actions"
     current_cli = source["interaction_contract"]["cli_channel"]
     plan = current_cli["settlement_plan"]
-    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
     writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
     spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert writeback["owner"] == "agent" and writeback["command_template"].endswith(" --settle-turn --settlement-receipt")
-    assert spend["owner"] == "runtime" and "command_template" not in spend
-    actual_commands = [writeback["command_template"]]
+    assert writeback["owner"] == "agent" and "--settle-turn" not in writeback["command_template"]
+    assert spend["owner"] == "agent" and "command_template" in spend
+    actual_commands = [writeback["command_template"], spend["command_template"]]
     assert current_cli["next_cli_actions"] == actual_commands
-    # The ordered plan carries the exact combined template and its conditions.
+    # The ordered plan carries both exact templates and their conditions.
     # A ready first read should not present a second apparent route for it.
     assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
     # Every distinct CLI leaf outside the authoring reference is still delivered.

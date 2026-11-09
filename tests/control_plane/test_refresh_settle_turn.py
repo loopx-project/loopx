@@ -21,7 +21,40 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_path, monkeypatch, provider):
+def test_context_delivery_preserves_the_canonical_settlement_contract(tmp_path, monkeypatch, provider):
+    """Presentation may change; the current Turn's executable owners must not."""
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    original_plan, captures = None, []
+    for mode, alias in [("off", False), ("on", False), ("auto", False), ("off", True)]:
+        capture = tmp_path / f"capture-{mode}-{alias}"
+        rc, result = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+            "--context-delivery", mode, "--decision-output-dir", str(capture),
+            *(["--turn-envelope"] if alias else []), cwd=project)
+        assert rc == 0, result
+        path = capture / "decision.json"
+        source = json.loads(path.read_bytes())
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
+        assert plan["identity"] == source["heartbeat_receipt"]["settlement_identity"]
+        spend, = (step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+        assert spend["owner"] == "agent" and "command_template" in spend
+        if original_plan is None:
+            original_plan = plan
+        assert plan == original_plan
+        captures.append((path, path.read_bytes()))
+        assert all(saved.read_bytes() == content for saved, content in captures)
+        assert _spend_run_count(runtime) == 0
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("recorded_v2", [False, True], ids=["current", "recorded-v2"])
+def test_explicit_combined_writeback_returns_the_original_turn_receipts(tmp_path, monkeypatch, provider, recorded_v2):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider)
@@ -41,20 +74,41 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
     full = json.loads((capture / "decision.json").read_text())
     cli = full["interaction_contract"]["cli_channel"]
     plan = cli["settlement_plan"]
-    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan == manual
     writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
     spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert spend["owner"] == "runtime" and "command_template" not in spend
-    assert writeback["command_template"] in cli["next_cli_actions"]
-    assert not any(" quota spend-slot " in action for action in cli["next_cli_actions"])
-    assert plan["identity"] == manual["identity"]
-    for before, after in zip(manual["ordered_steps"], plan["ordered_steps"], strict=True):
-        assert after["precondition"].startswith(before["precondition"])
-        assert after.get("vision_authoring") == before.get("vision_authoring")
-        assert after["expected_receipt"] == before["expected_receipt"]
-    assert plan["ordered_steps"][0] == manual["ordered_steps"][0]
-    assert plan["ordered_steps"][-1] == manual["ordered_steps"][-1]
+    assert spend["owner"] == "agent" and "command_template" in spend
+    assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
+    saved_captures = [(capture / "decision.json", (capture / "decision.json").read_bytes())]
+    if recorded_v2:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+        from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+        from tests.control_plane.test_complete_turn_decision import _resign_contract
+
+        # Decoder fixture for the retired candidate's recorded wire shape.
+        # It is not a second live producer and never overwrites the admission.
+        plan["schema_version"] = "quota_settlement_plan_v2"
+        for field in ("command_template", "semantic_closeout_command_template"):
+            writeback[field] += " --settle-turn --settlement-receipt"
+        spend.pop("command_template")
+        spend["owner"] = "runtime"
+        spend["precondition"] += (
+            ". The writeback command runs this step and returns its exact receipt. "
+            "After a partial failure follow only settlement_owed for this Turn. After settlement do not run another spend."
+        )
+        cli["next_cli_actions"] = [writeback["command_template"]]
+        _resign_contract(full)
+        assert_complete_turn_decision(full)
+        historical = tmp_path / "recorded-v2.json"
+        digest = write_decision_capture(historical, full)
+        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(historical),
+            "--capture-sha256", digest, "--select", "/interaction_contract/cli_channel/settlement_plan", cwd=project)
+        assert rc == 0 and page["ok"] and page["eof"], page
+        assert json.loads(page["content"])["selections"][0]["value"] == plan
+        saved_captures.append((historical, historical.read_bytes()))
     command = writeback["command_template"]
+    if not recorded_v2:
+        command += " --settle-turn --settlement-receipt"
     for key, value in {"<validated_progress>": "verified_native_slice", "<scale>": "implementation",
                        "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}.items():
         command = command.replace(key, value)
@@ -69,6 +123,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
             "validation", "durable_writeback", "quota_spend"}
         assert "settlement_owed" not in receipt
         assert _spend_run_count(runtime) == 1
+        assert all(path.read_bytes() == body for path, body in saved_captures)
         from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 
         scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
@@ -127,7 +182,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
               if key not in {"schema_version", "contract_binding"}}
     future_plan = future["interaction_contract"]["cli_channel"]["settlement_plan"]
     future_plan["schema_version"] = "future_plan_for_readback"
-    recomposed = compose_turn_decision(future, composed_settlement=True)
+    recomposed = compose_turn_decision(future)
     assert recomposed["interaction_contract"]["cli_channel"]["settlement_plan"] == future_plan
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, cwd=project)
     assert rc == 0 and todo["todo"]["status"] == "open"
@@ -147,12 +202,13 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
     full = json.loads((capture / "decision.json").read_text())
     assert full["schema_version"] == "loopx_turn_envelope_v1"
     plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
     command = next(step["command_template"] for step in plan["ordered_steps"]
                    if step["kind"] == "durable_writeback")
     for key, value in {"<validated_progress>": "verified_budget_recovery", "<scale>": "implementation",
                        "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}.items():
         command = command.replace(key, value)
+    command += " --settle-turn --settlement-receipt"
     assert "--settle-turn" in shlex.split(command)
     assert "--settlement-receipt" in shlex.split(command)
     document = tmp_path / "vision.json"
@@ -262,11 +318,11 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     validate, writeback, spend, terminal = plan["ordered_steps"]
     assert validate["command_condition"] == "todo_deliverable_complete"
     assert terminal["conditional"] is True and terminal["owner"] == "agent"
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
+    assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
+    assert spend["owner"] == "agent"
     if not off:
-        assert plan["schema_version"] == "quota_settlement_plan_v2"
-        assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
-        assert spend["owner"] == "runtime" and "command_template" not in spend
-        assert cli["next_cli_actions"] == [writeback["command_template"]]
         _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
         projected = json.loads(Path(recovery["path"]).read_bytes())
         assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
@@ -284,11 +340,6 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
             cli_path = "/interaction_contract/cli_channel"
             assert cli_path + "/next_cli_actions" not in values
             assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
-    else:
-        assert plan["schema_version"] == "quota_settlement_plan_v1"
-        assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
-        assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
-        assert spend["owner"] == "agent"
 
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({
@@ -303,6 +354,9 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
                        "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
         command = command.replace(key, value)
     command += " --no-global-sync --suppress-external-sinks"
+    if not off:
+        # Composition is an explicit operation, independent of context delivery.
+        command += " --settle-turn --settlement-receipt"
     if case == "interrupted":
         from contextlib import chdir, redirect_stdout
         from io import StringIO
