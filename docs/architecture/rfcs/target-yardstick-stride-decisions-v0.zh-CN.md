@@ -2,11 +2,11 @@
 
 - **RFC 状态：** Accepted
 - **替代 / 关闭：** none
-- **交付成熟度：** M1 实现提案；M2/M3 未资格确认
+- **交付成熟度：** M1 源码实现；预算内规划为提案；M2/M3 未资格确认
 - **作者 / 归属：** LoopX maintainers
 - **创建日期：** 2026-11-05
-- **最近规范修订：** 2026-11-07
-- **实现基线：** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
+- **最近规范修订：** 2026-11-09
+- **实现基线：** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
 - **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
 
@@ -21,7 +21,8 @@
 ## 1. 决策摘要
 
 扩展现有 Stride 决策归属，让它共同考虑：**研究哪个方向、如何测量、
-在下一次有用反馈前做多少工作**。同一套判断通过两个入口使用：
+在下一次有用反馈前做多少工作**。按剩余资源期限内的预期验收成果比较有界多步接续，
+包含前置建设、信息获取与最终确认。同一套判断通过两个入口使用：
 普通 Turn 的精简投影，以及现有完整 replan。不要把每个 Turn 都变成 replan。
 
 三种相关判断必须可以区分：
@@ -73,7 +74,7 @@ fidelity 检查比例分别为 58% / 21%，kernel 为 73% / 33%；尺子成本�
 replan 组合、决策采用追踪、失败/重放语义及资格验证。
 这是 Stride §§7.5–7.7 和 roadmap S3/S6/S11 的细化，不另建研究路线图。
 
-不包括新 scheduler、新全局 Goal 权威、学习型 controller、通用插件注册中心、
+不包括新 scheduler、新全局 Goal 权威、实现学习型 controller、通用插件注册中心、
 自动模型集群、修改冻结评测，或在 kernel 中实现数值 fidelity。
 非数值工作可以只用 Stride，不必发明分数或代理。首版服务现有单 Agent 的普通 Turn
 和 replan 两个调用方；共享证据不授予跨 Agent 修改权限。
@@ -91,11 +92,21 @@ replan 组合、决策采用追踪、失败/重放语义及资格验证。
 | [`replan_context.ts`](../../../loopx/control_plane/work_items/replan_context.ts)，`decisionFollowthrough` | 投影前次已接受决策和后续进展；实际执行/Goal gain 仍需判断。 | 扩展现有反馈路径，不新建决策 journal。 |
 | [`Explore 写回`](../../../loopx/capabilities/explore/result_writeback.py)、[`Turn context`](../../../loopx/capabilities/explore/turn_context.py) | 普通工作可附加 finding；附件可重试失败不抹掉主提交；有界视图保留被省略证据的读取入口。 | 复用附件/重放和来源绑定，不能把投影有界等同于总读源成本有界。 |
 
-核对的源码中没有已交付的 Yardstick capability。下文数值 fidelity 是提案，
-不是给既有产品能力改名。[整合说明](../long-running-execution-exploration-and-correction.zh-CN.md)
-已经区分来源交付、实际使用和结果收益。尚未合入的 controller composition
-工作如 [#7430](https://github.com/loopx-project/loopx/pull/7430) 属于相关传输改进，
-不是本 RFC 的实现前置依赖，也不构成本方案有效的证据。
+此基线已包含可选的
+[`yardstick_decision.ts`](../../../loopx/control_plane/work_items/yardstick_decision.ts)
+M1 owner：成果/代理 profile、引用反证、同候选排序比较、`proxy_order_reversed`、
+下一方法/理由/成本边界及前序 finding。`next_action.cost_bound` 是有界文本，
+不是已经计算出的数值行动价值。源码明确保留 proxy fidelity 未资格确认的边界；
+尚未实现已校准的状态转移模型、自动秩相关资格判断、全局代理黑名单或预算最优规划器。
+第 11 节保留 M1 的实际交付边界。
+
+[引用测量（#8382）](https://github.com/loopx-project/loopx/pull/8382)、
+[Stride 反馈投影（#8385）](https://github.com/loopx-project/loopx/pull/8385) 和
+[Controller/Worker 组合（#8378）](https://github.com/loopx-project/loopx/pull/8378)
+等相关工作需在试验前核对并固定版本；PR 提案不等于已交付行为或收益证据。
+预算策略试验可沿既有详情读取和单 Agent 路径开始，不必等待这些改动。
+[整合说明](../long-running-execution-exploration-and-correction.zh-CN.md)
+区分来源交付、实际使用与结果收益。
 
 ## 5. 提议架构
 
@@ -160,7 +171,8 @@ replan 沿用既有 v2 契约。省略附件保留当前决策；显式 `proxy: 
 - 扣掉构造、校准和真实确认后还剩多少搜索空间？剩余 horizon 是否值得这笔投入？
 - 改 target、改测量方法，还是同时改，最可能解除瓶颈？
 
-比较完整边际成本：构造＋搜索＋修复/校准＋真实确认＋模型/控制＋切换/机会成本。
+按真实资源单位统计构造、搜索、修复/校准、真实确认、模型/控制和实际切换成本。
+在 §5.8 的固定预算下比较放弃的其他机会，不再额外扣一次虚构的机会成本。
 不能只看单次小评测有多快。对于性能优化，已测成本占比 `w` 可在假设成立时提供
 `1/(1-w)` 的理想整体加速上界；它不是可实现 headroom，也不是其他领域的统一目标函数。
 优先使用有依据的比较与区间，不捏造通用 utility 标量。
@@ -288,13 +300,122 @@ Prompt 交付不能保证模型执行。到下一次有意义的证据边界，�
 C13 和 A–D 实验需要证明短提示有帮助，同时不压缩模型能力。
 复用已有产物/测量证据，不要求新增逐工具 tracing，也不每 Turn 重读整条轨迹。
 
+<a id="budgeted-planning"></a>
+
+### 5.8 预算内的多步研究规划
+
+这是既有组合/Stride 决策的扩展，不另建工作图或 scheduler owner。近期调用方是
+[研究计划 §8.7](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)
+中的 EdgeBench 策略试验。计划是跨有用证据边界的可修订接续，不承诺执行全部步骤，
+也不为每次工具调用新增必填记录。
+
+#### 目标与剩余资源
+
+固定起始研究状态 `s0`，令 `Y_B` 为资源期限 `B` 时，按冻结选择规则获得的原生验收成果。
+用预先声明的“越大越好”方向表达（如对越小越好的步数取负），只调整记号，不改变
+native 验收或跨题聚合。比较策略：
+
+$$
+J_\pi(B\mid s_0)=\mathbb E[Y_B^\pi\mid s_0],\qquad
+\Delta J(B\mid s_0)=\mathbb E[Y_B^\pi-Y_B^{\pi_0}\mid s_0].
+$$
+
+单次运行相对起始候选的增量，不等于相对持续改进的基线多带来的收益。
+共同起始值可以抵消，不必先精确估计绝对水平；但同分数不代表同研究状态。
+遵守既有“最好有效已评测提交”“最终产物”等成果选择规则，不能把未测试的最佳候选算作已获结果。
+
+`B` 可以分别约束墙钟、token 与评测资源。从现有 owner 读取剩余量、可用性、覆盖和未知项；
+等墙钟不等于等 token。规划、读源、失败探索、造尺/修尺与确认都计入真实资源；
+并行工作与等待不能通过相加重叠墙钟来计费。在固定资源、终局成果目标下，机会成本体现为
+放弃的其他工作，不能将 token 与分数直接相减，也不能重复扣除这份机会成本。
+另设货币惩罚需要明确效用换算和目标。
+
+假设行动的正资源消耗 `k(a)` 已知，一个简化规划模型是：
+
+$$
+V^*(s,b)=\max\left\{G(s),\ \max_{a:\,k(a)\le b}
+\mathbb E[V^*(S',b-k(a))\mid s,a]\right\}.
+$$
+
+`G` 是按验收选择规则结束研究的价值。状态包含 incumbent/frontier 证据、未完成前提、
+yardstick 适用范围、待返回结果和剩余资源。真实耗时可能随机且受可用性限制；
+此模型说明优化目标，不要求 kernel 求解 Bellman 方程。停止分支可以转移预算；
+如果未用预算没有其他价值，结束整场运行没有自动的节省收益。保留既有诚实完成、
+范围耗尽、权限和资源停止条件，不新增无限工作义务，也不套用固定成本 Bernoulli 停止次数。
+
+#### 比较接续计划，先执行有界切片
+
+以当前路线为对照，只展开与决策有关的替代方案。价值依赖竞争路线和剩余期限，
+不是每个候选独立的固定 index。即时增益/成本仅可粗筛：前置建设、互补证据和延迟收益
+可能使它错排计划。首个探针零增益不能否定多步计划；过去出现过后程突破也不支持任意坚持。
+
+以下含义应可从现有工作与证据恢复：
+
+| 含义 | 最小有用内容 |
+| --- | --- |
+| 比较 | 当前验收目标、incumbent/frontier、所比较的接续及同状态/预算范围。 |
+| 接续 | 必要依赖，以及通向有用信息或验收成果的简短条件路线；分支失败后保留什么。 |
+| 预测 | 可能结果、目标增益或范围、资源/耗时范围、依据与重要未知项。 |
+| 下一边界 | 可行首切片、区分性观察、继续/修订/停止条件，以及确认所需时间和资源。 |
+
+这是规划语义，不是四个新增 wire 字段或反复填报的表单。复用 Stride 的 plan/reason 轴、
+`next_probe`、普通 Yardstick 的 `next_action`，并用引用的 Explore finding 保存支持性推理。
+当前提示保持简短（§5.7）；不把完整计划塞入有界 `cost_bound`，也不向 v0 添加不支持的 key。
+真实新增交付物/依赖沿用 Todo owner；同一交付物中的计划步骤不必创建 Todo。
+先执行首个完整切片，在有用证据边界重估；保留正常结算与到期复盘，不强迫切换方法。
+
+例如，比较继续优化已有实现，与先建立必要正确性检查、再尝试新机制。
+检查失败就修订此前提，通过且剩余预算有价值就继续；若确认已赶不上期限，比较可行的已验证路线。
+这是有条件的研究计划，不是通用的强制工具顺序。
+
+预期来自机制/headroom 证据、可比历史和有界探针。允许未知、区间与决策门槛，
+不编造精确概率。预测在结果出现前记录，再与实际结果校准。模型自信度和
+`grow`/`verify`/`switch` 的观察成功率，不是动作的因果价值，因为选择发生在不同状态。
+Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策当时的特征。
+
+#### 进展证据与测量选择
+
+里程碑是带证据、适用范围且可能逆转的依赖状态谓词；替代路线不必完成同一组里程碑。
+不能把不同步骤当成同一 Bernoulli 分布的独立重复试验，也不能每完成一步就等额加奖励。
+验收目标增量、新成立的前提、信息与采用分开记录。incumbent 分数不变不自动证明学习有用或
+防住回归。固定标量成果规则下，分数差分可抵消中间项而得到最终增量；未来学习器的过程奖励
+应保留该目标，不能奖励活动数量或反复修复同一缺陷。
+
+本地测量同时存在噪声和系统偏差。更多本地样本不会自动修复 workload 错配或遗漏的硬正确性/
+尾部耗时限制。在真正发生选择的位置验证尺子：同父候选、精确评测/输入范围、相邻方案和
+原生反例。跨时间秩一致可能只反映共同的搜索进步。有助于发现漏选时，对不确定或被代理拒绝的
+候选做有界审计；代理不能单独否决有信息价值且已授权的评测。冲突促使重估有范围的方法，
+不生成整类方法的全局黑名单。
+
+评测冷却、队列可用性和待返回反馈是规划输入，不授予修改 benchmark 的权限。
+迟到反馈沿不可变候选/结果关联写回；等待时可做独立工作，但 pending 不是测得的收益。
+确认必须赶上冻结的终态协议；用于自适应开发的 Native 反馈不是未触碰的 holdout。
+
+### 5.9 沿同一 owner 演进策略
+
+| 阶段 | 下一项有用结果 | 保留的边界 |
+| --- | --- | --- |
+| 当前模型试验 | 固定版本的有界规划策略改变实际工作，并改善 §8.7 对照结果。 | 沿用 Stride/Yardstick/Explore owner 和普通响应；不以第二个 controller session 或数值 fidelity 引擎为前置。 |
+| 校准预期 | 将事前预测关联实际方法、耗时、后继状态与终局结果，在留出 episode 上改善预测/校准。 | 领域 provider 负责测量含义；估计不是验收、权限或编造的反事实标签。 |
+| 学习预算分配 | 学习型策略在匹配完整预算和迁移测试中胜过已资格确认的当前模型策略。 | 在同一工作决策边界替换策略实现；Core 保留准入、预算、身份与结算。 |
+
+通过已有 provenance/followthrough 记录决策当时可见的状态与证据、选择和实际方法、
+资源消耗、后继观察/状态及后续成果。已选动作日志可以训练预测，却不揭示未选动作的结果。
+策略价值主张使用前瞻匹配接续，或明确论证离线策略评估的假设。保留失败、取消和未知结果。
+原始任务数据留在研究边界内，不因记录轨迹就进入生产 memory 或训练语料。
+
+首个调用方不需要新策略 registry、计划库、scheduler 或通用标量排序。
+以后若修改 schema，先证明缺失的生产者/消费者事实，再扩展既有版本化 owner，
+验证读回、恢复和关闭状态。Controller–Worker 组合以后可消费同一决策，
+不因此获得更多权限，也不因此证明收益。
+
 ## 6. 替代方案与设计选择
 
 | 方案 | 选择 / 取舍 |
 | --- | --- |
 | Stride、Yardstick 各一个 planner | 首版不采用：两次复盘可能对哪个方向值得测产生冲突。保留专业 fidelity 计算，共享研究判断。 |
 | 每 Turn 完整 replan | 不采用：伪造义务、扩大上下文、造成无必要工作图变化。 |
-| 一个标量 action 或 utility | 不采用：混淆方向价值、尺子可靠性和工作形状，掩盖不确定性及不同成本单位。 |
+| 通用的预计算行动分数 | 不采用：混淆方向价值、尺子可靠性和工作形状，掩盖不确定性及不同成本单位。定义清楚的终局目标（§5.8）仍可支持依赖上下文的比较。 |
 | 固定方向，只校准尺子 | 不充分：可能把整个 horizon 用来修一个不划算方向的尺子。 |
 | 始终真实评测 | 保留为对照/回退；评测便宜或剩余 horizon 很短时尤其合理。造尺子并无必然收益。 |
 | 每次 writeback 强制填表 | 不采用：无变化工作无需重复解释；语义共享不要求最大 payload。 |
@@ -349,6 +470,9 @@ Provider 只暴露授权证据。原始任务、trace、凭据、私有 evaluato
 | C11 | 过期/外部 refs、部分 context、并发 writer、混合 schema | 拒绝不支持身份/effect；恢复有来源绑定的细节，不冒充读过省略证据。 |
 | C12 | Treatment off、旧配置、关闭再开启 | 保留既有行为/历史；不加默认、prompt、必需字段或调度效果。 |
 | C13 | 提示指出排序疑问，模型忽略、找到更好方法或收到相反用户指令 | 产物区分交付与解决问题；允许改进方案及有据修正。比较短提示/无提示的有效行动和开销，不强制工具脚本。 |
+| C14 | 同样证据、不同剩余时长 | 比较包含确认的可行终局结果，不要求选择同一路线或使用固定的候选自身分数。 |
+| C15 | 前置工作不立即涨分，但使后续改善成为可能 | 考虑条件序列与有界的首个判别切片；相互依赖的里程碑只作为状态证据，不当成独立奖励。 |
+| C16 | 确认仍在进行，或无法在终局协议内完成 | 保留不可变结果归属和真实 unknown；比较独立工作或可行的已验证路线，不重置 cooldown 或虚构收益。 |
 
 若涉及持久化，用合成证据在真实 File/SQLite owner 上重放 typed 场景。
 首次采用要覆盖实际 host/CLI settlement 和 packaged readback；schema 单测不足以验收。
@@ -379,6 +503,11 @@ C/D 共享初始 target 和候选信息，方向自由度是有意 treatment。
 不看过有利 case 后再选阈值。推广需语义合格、无权限/协议回归，以及可重复证据：
 同成本下更好验收结果，或同结果下更低完整成本。保留不确定/负结果；
 论文收益和合成 replay 成功都不能替 LoopX 通过资格验证。
+
+聚焦的 [EdgeBench 预算规划试验](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)
+先在已有 M1 路径上验证 §5.8，再考虑广泛 A–D 矩阵。不必等待通用 fidelity 引擎或双会话
+runtime，也不据此关闭全部 M2/M3 验收。冻结策略、配对 episode 与整场运行推广规则归研究计划，
+不复制为 Core 默认配置。
 
 ## 10. 运维契约
 
@@ -447,9 +576,13 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 | E1 | [DuoDiscover v1](https://arxiv.org/html/2610.17184v1)，§§2.2–2.4；附录 A.1、E.1、F.1–F.5 | 联合搜索、排序 fidelity、按 target 的消融和失败行为；作者报告，本地未独立复现。 |
 | E2 | 第 4 节基线源码；[Stride §7.6](hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control) | 当前 replan 身份、轴和 followthrough 接缝；源码核对，不是本机/新能力验收。 |
 | E3 | [研究测量模型](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model) | 公用效果/成本/采用比较归属；本 RFC 添加有界 treatment 矩阵。 |
-| E4 | C1–C13 场景 | 可证伪验收要求；实现前尚未执行。 |
+| E4 | C1–C16 场景 | 验收要求；第 11 节记录 M1 源码覆盖。预算规划场景仍为提案，尚未执行。 |
+| E5 | [Selecting Computations](https://aima.cs.berkeley.edu/~russell/papers/uai12-meta.pdf)，§§2–6 | 信念状态决策、互补信息、依赖上下文的优先级与固定预算采样；固定候选的保证不能直接认证会生成候选的研究。 |
+| E6 | [Multi-fidelity Bayesian Optimisation](https://proceedings.mlr.press/v70/kandasamy17a.html)，§§1–3 | 区分廉价近似与目标结果；GP/fidelity 假设用于程序搜索前需要验证。 |
+| E7 | [Policy invariance under reward transformations](https://people.eecs.berkeley.edu/~russell/papers/icml99-shaping.pdf)，§3 | 势函数 shaping 在其假设下保持目标；任意里程碑奖励没有这个保证。 |
+| E8 | [EdgeBench 适配器契约](../../../benchmark/edgebench/README.md)、[反馈与记忆分析](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)及第 4 节源码 owner | Native 协议、起点/接续的区分与当前 M1 接缝；说明 pilot 的动机，不是新的实测收益。 |
 
 论文中回退的有利观测不代表无后悔保证：失败造尺子已经消耗预算。
 每 target 与每 task 的通过率单位不同；候选选择和重复 fidelity 检验限制统计解释。
 这些边界要求完整成本及权威确认，不是否定 co-discovery。
-目前没有实现决策日志；本提案建议不等于 maintainer 批准。
+M1 决策/接续实现不能证明预算规划收益；本提案建议不等于 maintainer 批准新的运行时策略。
