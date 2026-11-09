@@ -148,7 +148,7 @@ test("short record span collapses thirds into one whole-history reading group", 
 });
 
 test("phase reading retains successive decisions for one question, including a late backfill", async () => {
-  const {buildExploreTimeline, exploreTimelinePhaseAt, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const {buildExploreTimeline, exploreTimelinePhaseAt, latestExploreFindingInPhase, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
   const finding = (id: string, at: string, outcome: string) => event({event_id: id, event_kind: "finding", result_id: id, node_id: "route", recorded_at: at, status: "tentative",
     summary: `Input revision: v1 Applicability: this input Observation: measured Interpretation: Outcome: ${outcome} changed: - ${id}`});
   const rows = [event(), finding("early", "2026-01-01T01:00:00Z", "continue"),
@@ -165,6 +165,9 @@ test("phase reading retains successive decisions for one question, including a l
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.phases[1]!.start), 1, "a boundary belongs to one reading group");
   assert.equal(exploreTimelinePhaseAt(timeline.phases, timeline.end), 2);
   assert.equal(exploreTimelinePhaseAt(timeline.phases, null), null, "missing record time remains unknown");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 0)?.event_id, "early-stop", "The default is the last recorded finding in this period, not the last append");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 1), undefined, "Do not infer a finding for an empty period");
+  assert.equal(latestExploreFindingInPhase(timeline, "route", 2)?.event_id, "late", "The last endpoint remains included");
   assert.equal(view.nodes[0]!.latest.status, "open", "display-time sorting cannot rewrite canonical node state");
 });
 

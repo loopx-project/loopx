@@ -5,13 +5,13 @@ import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} 
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ResearchRecordSearch} from "./research-record-browser";
 import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, ResearchCaseReading, useResearchAnalysis} from "./goal-research-analysis";
-import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
+import {buildExploreTimeline, latestExploreFindingInPhase, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import type {WorkspaceGoal} from "./personal-workspace-model";
-import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
+import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent, type ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
@@ -280,8 +280,12 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const positions = new Map(layout.map(item => [item.node.id, item]));
   const selectedId = selection.nodes.length === 1 ? selection.nodes[0]! : "";
   const selected = value?.nodes.find(node => node.id === selectedId);
-  const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
-    ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
+  const defaultFinding = (node: ExploreHistoryNode) => (
+    lens === "timeline" && phase !== null && timeline ? latestExploreFindingInPhase(timeline, node.id, phase) : undefined
+  ) ?? node.findings.at(-1);
+  const selectedFinding = selected && (selection.finding
+    ? selected.findings.find(finding => finding.result_id === selection.finding)
+    : defaultFinding(selected));
   const hasSeparateQuestion = Boolean(selected?.findings.length && selectedFinding?.title !== selected.latest.title);
   const selectedGroup = selection.day !== null ? grouped.groups.find(group => group.day === selection.day) : undefined;
   const selectedMembers = selectedGroup?.nodes ?? (selection.nodes.length > 1 ? value?.nodes.filter(node => selection.nodes.includes(node.id)) : undefined);
@@ -372,8 +376,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     collectionOpener.current = null;
     select(collection ?? {nodes: [], day: null}, false);
   };
-  const chooseQuestion = (node: NonNullable<typeof value>["nodes"][number], parent: CollectionSelection) => {
-    select({nodes: [node.id], day: null, finding: node.findings.at(-1)?.result_id, collection: parent});
+  const chooseQuestion = (node: ExploreHistoryNode, parent: CollectionSelection) => {
+    select({nodes: [node.id], day: null, finding: defaultFinding(node)?.result_id, collection: parent});
   };
   const resultsAnchor = useRef<HTMLDivElement>(null), reportAnchor = useRef<HTMLDivElement>(null), historyAnchor = useRef<HTMLElement>(null);
   const reportEntries = useRef(new Set<string>());

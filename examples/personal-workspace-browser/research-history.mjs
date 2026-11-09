@@ -184,6 +184,19 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       await late.press('Enter');
     };
     await readLatePhase('zh-CN', 'desktop');
+    const middle = history.getByRole('button', {name: /^中段 ·/});
+    await middle.press('Enter');
+    await history.locator('.research-timeline [data-research-nodes~="question-1"]').click();
+    const phaseDetail = history.locator('.research-history-detail');
+    await phaseDetail.locator('[data-research-node="question-1"] > button').click();
+    const phaseFinding = phaseDetail.getByRole('combobox', {name: '选择问题结论'});
+    assert.equal(await phaseFinding.inputValue(), 'decision-1-2', 'Opening a highlighted question starts with the last finding recorded in the selected period');
+    await page.screenshot({path: resolve(outputDir, 'recorded-phase-finding-desktop.png'), animations: 'disabled'});
+    await phaseFinding.selectOption('decision-1-4');
+    assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-1-4', 'An explicit finding outside the selected period remains readable');
+    await phaseDetail.press('Escape');
+    await phaseDetail.press('Escape');
+    await middle.press('Enter');
     const trail = history.locator('.research-trail');
     const group = trail.locator('.research-trail-question').first();
     const assertReturn = async control => {
