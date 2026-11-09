@@ -5940,6 +5940,101 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
+@pytest.mark.parametrize(("initial", "body_scan_fails"), [
+    ("accepted", False), ("accepted", True), ("delivered", False),
+])
+def test_already_attempted_private_path_is_rediscovered(tmp_path, monkeypatch, initial, body_scan_fails):
+    from concurrent.futures import Future
+    from loopx.chat_store import _atomic_write_json, _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+    from loopx.extensions.lark import private_conversations as private
+
+    class ImmediateExecutor:
+        """The worker still sees completed futures at the next scan boundary."""
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def submit(self, action, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(action(*args, **kwargs))
+            except Exception as error:
+                future.set_exception(error)
+            return future
+
+    # Same durable path: ordinary body sends first or an earlier native probe
+    # left no effect. A later full discovery finds eligibility, while the fast
+    # body scan continues to exclude the now-delivered receipt.
+    path = tmp_path / "original.json"
+    record = {"status": initial, "request_ref": "original", "session_id": "session",
+              "turn_id": "turn", "event": {"message_id": "source"}, "profile": "fixture"}
+    _atomic_write_json(path, record)
+    clock = [100.0]
+    now = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(worker, "time", now)
+    monkeypatch.setattr(private, "time", now)
+    monkeypatch.setattr(worker, "ThreadPoolExecutor", ImmediateExecutor)
+    attempts, discoveries, recovery_times = [], [], []
+    required_recoveries = 1 if initial == "accepted" else 2
+
+    def eligible(request_ref):
+        assert request_ref == record["request_ref"]
+        discoveries.append(clock[0])
+        return attempts.count("recovery") < required_recoveries
+
+    def reconcile(receipt):
+        assert receipt == path
+        current = _read_json(receipt)
+        if current["status"] == "accepted":
+            attempts.append("body")
+            _atomic_write_json(receipt, {**current, "status": "delivered"})
+        else:
+            attempts.append("recovery")
+            recovery_times.append(clock[0])
+            transport._context_recovery_probe_at[path] = clock[0] + 60
+        return 0
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.reconcile_app_feedback = lambda: 0
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: eligible)
+    transport.reconcile_request = reconcile
+    pending_body_paths = transport.pending_body_paths
+
+    def scan_bodies():
+        if body_scan_fails and clock[0] == 101:
+            raise OSError("temporary body scan failure")
+        return pending_body_paths()
+
+    transport.pending_body_paths = scan_bodies
+    service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport)
+
+    def drive(step, **_):
+        for tick in (100, 101, 102, 161, 162, 222, 223):
+            clock[0] = float(tick)
+            step()
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    service._reconcile_private()
+    expected = ["body", "recovery"] if initial == "accepted" else ["recovery", "recovery"]
+    assert len(discoveries) >= 2
+    assert attempts == expected, (attempts, discoveries)
+    if body_scan_fails:
+        assert recovery_times == [102.0]
+    assert _read_json(path) == {**record, "status": "delivered"}
+
+
 def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path, monkeypatch):
     from loopx.extensions.lark import private_conversations as private
 
