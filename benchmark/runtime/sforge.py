@@ -377,6 +377,11 @@ class SForgeWorker(CodexAgent):
                     "defer_codex_home": True} if self.warm_start is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.feedback == "native" and self.execution_observation is not None:
+                asyncio.run(self.runtime._install_research_entrypoint(
+                    self.environment, "loopx-bind-native-candidate", "sforge_candidate_binding.py",
+                    "--generated-file", "Native candidate verification is unavailable to the benchmark worker",
+                ))
             if self.warm_start is not None:
                 route_settings = {}
                 if runtime_base_url:

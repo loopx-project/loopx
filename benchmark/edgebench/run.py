@@ -367,7 +367,10 @@ def main(argv=None):
             eval_interval=args.eval_interval, internet=task.internet,
             selection=task.judge.selection, score_direction=task.judge.score_direction)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        workspace_instructions += research_artifact_instructions(checkpoint=checkpoint_request is not None)
+        workspace_instructions += research_artifact_instructions(
+            checkpoint=checkpoint_request is not None,
+            native_probe=args.execution_observation is not None,
+        )
         # All native arms get the same storage policy. Checkpoint coverage is
         # explicit; neither collection nor a sidecar changes native submissions.
         feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
