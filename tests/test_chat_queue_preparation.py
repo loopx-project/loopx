@@ -12,6 +12,7 @@ import urllib.request
 
 import pytest
 
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_agent import CodexChatAgentError
 from loopx.chat.coordination import PROJECT_CONTEXT_VERSION
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
@@ -72,7 +73,7 @@ def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, mon
     result = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
     assert result["status"] == "completed"
     assert len(sent) == 1 and sent[0]["threadId"] == "public-thread"
-    assert sent[0]["input"][0]["text"].endswith(material)
+    assert sent[0]["input"][0]["text"].endswith(material + CHAT_RESPONSE_EXAMPLE_SUFFIX)
     assert store.turn_for_client(sid, "material-request")["message"] == material
     assert store.messages(sid)[0]["text"] == material
     if document:
