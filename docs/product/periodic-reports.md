@@ -576,6 +576,16 @@ sent again, and uncertain sends are read back before retry. After extended
 offline time, produce the most recent complete window and disclose missing
 windows, rather than starting an unbounded series of model calls.
 
+When an original Session report fails during execution, it retains its window
+and its existing recovery options through the next scheduled boundary. After
+more than one later boundary, the same subscription can advance to the latest
+complete window if the original Turn and native journal agree on a terminal
+failure and there is no editorial response, generated report or delivery
+record. It archives the previous window and keeps the failed Turn and its
+evidence. The new report discloses the missed deadlines in its supporting
+coverage. A live worker, ambiguous evidence or an existing return keeps the
+older window in place for reconciliation.
+
 ### Original private report settings and execution
 
 In **Settings → Lark → the original steward → Native periodic monitoring**,
