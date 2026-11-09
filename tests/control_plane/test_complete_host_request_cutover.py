@@ -43,7 +43,14 @@ def test_complete_source_can_plan_without_producing_a_legacy_adapter(complete_ho
     request = build_loopx_turn_host_request(plan)
     assert request["schema_version"] == "loopx_turn_host_request_v1"
     assert request["work_contract"] == contract and "turn_envelope" not in request
-    assert turn_host_lineage(request) == turn_host_lineage(legacy)
+    expected_lineage = turn_host_lineage(legacy)
+    assert turn_host_lineage(request) == expected_lineage
+    assert turn_host_lineage({"work_contract": contract}) == expected_lineage
+    for invalid in ({"work_contract": {**contract, "goal_id": "other-goal"}},
+                    {"work_contract": contract, "turn_envelope": None},
+                    {"work_contract": contract, "turn_envelope": {}}):
+        with pytest.raises((ValueError, RuntimeError)):
+            turn_host_lineage(invalid)
     assert contract == before
 
 
