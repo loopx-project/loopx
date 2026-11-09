@@ -281,6 +281,65 @@ def deliver(root, event, pages):
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
 
+
+@pytest.mark.parametrize("ordering", ["ordered", "tail_first", "batch", "damaged"])
+def test_selected_hook_only_hashes_complete_coverage_for_ordered_pages(tmp_path, monkeypatch, ordering):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    body = "Preserve the observed evidence. " * 200
+    _, wire = project(tmp_path, payload={"ok": True, "evidence": body})
+    recovery = wire["recovery"]
+    first = read_context_capture(argparse.Namespace(capture_file=recovery["path"],
+        capture_sha256=recovery["sha256"], offset=0, page_bytes=4000, select=["/evidence"], format="json"))
+    assert first["ok"] and not first["eof"], first
+    tail = read_context_capture(argparse.Namespace(capture_file=recovery["path"],
+        capture_sha256=recovery["sha256"], selection_sha256=first["selection_sha256"],
+        offset=first["next_offset"], page_bytes=4000, select=["/evidence"], format="json"))
+    assert tail["ok"] and tail["eof"], tail
+    assert json.loads(first["content"] + tail["content"])["selections"] == [
+        {"pointer": "/evidence", "value": body}]
+
+    operations = []
+    original = turn_envelope._turn_envelope_result
+
+    def traced(operation, **request):
+        if operation == "context_read_sections":
+            operations.append(operation)
+        return original(operation, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", traced)
+
+    def observed():
+        journal = context._state(tmp_path)
+        assert "candidate" not in journal  # A selected view cannot prove full delivery.
+        return journal.get("consumed_pointers", {}).get("/evidence")
+
+    if ordering == "batch":
+        response = {"content": [{"type": "text", "text": json.dumps(page)} for page in (tail, first)]}
+        assert context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "batched-read", "tool_response": response}) == {}
+    else:
+        if ordering == "damaged":
+            damaged = {**first, "content": first["content"].replace("Preserve", "Deserve ", 1)}
+            assert damaged["content"] != first["content"] and len(damaged["content"]) == len(first["content"])
+            deliver(tmp_path, event, [damaged, tail])
+            assert observed() is None
+            deliver(tmp_path, event, [first])
+        else:
+            prefix, suffix = (tail, first) if ordering == "tail_first" else (first, tail)
+            deliver(tmp_path, event, [prefix])
+            assert observed() is None
+            if ordering == "ordered":
+                assert operations == [], "A verified prefix should not retransmit the complete source for hashing."
+            deliver(tmp_path, event, [suffix])
+    assert observed() == hashlib.sha256(json.dumps(body).encode()).hexdigest()
+    if ordering == "ordered":
+        assert len(operations) == 1
+
+
 def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
