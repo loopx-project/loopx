@@ -241,7 +241,17 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   const findings = Array.isArray(graph?.writeback_results) ? graph.writeback_results as JsonObject[] : [];
   const recent = Array.isArray(graph?.recent_findings) ? graph.recent_findings as JsonObject[] : [];
   const measurementFeedback = (Array.isArray(graph?.measurement_feedback) ? graph.measurement_feedback : [])
-    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    .map(row => {
+      // The profile is already on the group. Keep candidate/value comparisons
+      // inline; the existing source reader retains full point provenance.
+      const latest = row.latest as JsonObject | undefined;
+      const measurement = latest?.measurement as JsonObject | undefined;
+      const point = (value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+        ? {candidate_ref: (value as JsonObject).candidate_ref, value: (value as JsonObject).value} : value;
+      return {...row, best: point(row.best), previous_best: point(row.previous_best),
+        ...(latest && measurement ? {latest: point(measurement)} : {})};
+    });
   const workYardsticks = (Array.isArray(graph?.work_yardsticks) ? graph.work_yardsticks : [])
     .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const branches = Array.isArray(harness?.selected_branches) ? harness.selected_branches as JsonObject[] : [];
@@ -265,6 +275,7 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
       source.harness_enabled, [...byId.values()].slice(0, 6), ...(candidates.length ? [candidates] : [])])).digest("hex"),
     finding_refs: [...byId.values()].slice(0, 6),
     ...(measurementFeedback.length ? {measurement_feedback: measurementFeedback} : {}),
+    ...(graph?.measurement_feedback_page ? {measurement_feedback_page: graph.measurement_feedback_page} : {}),
     ...(typeof graph?.omitted_measurement_feedback === "number" && graph.omitted_measurement_feedback > 0
       ? {omitted_measurement_feedback: graph.omitted_measurement_feedback} : {}),
     ...(workYardsticks.length ? {work_yardsticks: workYardsticks} : {}),

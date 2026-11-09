@@ -355,8 +355,12 @@ test("Explore evidence and previous adoption are bound without inferring gain or
     graph_enabled: true, harness_enabled: true,
     graph: {writeback_results: [{finding_id: "finding-negative", node_id: "question-route", status: "refuted"}],
       measurement_feedback: [{node_id: "question-route", metric: "quality", unit: "points", higher_is_better: true,
-        best: {candidate_ref: "candidate:b", value: 20}, improvement: 10}],
+        best: {finding_id: "finding-negative", candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20},
+        latest: {finding_id: "finding-negative", measurement: {metric: "quality", unit: "points", higher_is_better: true,
+          candidate_ref: "candidate:b", evidence_ref: "result:b", value: 20}}, improvement: 10}],
       omitted_measurement_feedback: 1,
+      measurement_feedback_page: {total: 4, offset: 0, limit: 3, remaining: 1, revision: "b".repeat(64),
+        next_command: ["loopx", "explore", "turn-context", "--result-offset", "3", "--result-revision", "b".repeat(64)]},
       work_yardsticks: [{todo_id: "todo-route", node_id: "question-route", source_finding_id: "finding-negative",
         comparison_candidate_ref: "candidate:b", proxy_order_reversed: true}],
       omitted_work_yardsticks: 2,
@@ -364,6 +368,10 @@ test("Explore evidence and previous adoption are bound without inferring gain or
     harness: {selected_branches: [{todo_id: "todo-route", selection_status: "selected", actionable_open: true}]}}, "goal-a", "agent-a")!;
   assert.equal(measuredBasis.revision, basis.revision);
   assert.equal((measuredBasis.measurement_feedback as Record<string, unknown>[])[0].improvement, 10);
+  assert.deepEqual(measuredBasis.measurement_feedback[0].latest, {candidate_ref: "candidate:b", value: 20});
+  assert.deepEqual(measuredBasis.measurement_feedback[0].best, {candidate_ref: "candidate:b", value: 20});
+  assert.equal(measuredBasis.measurement_feedback_page.remaining, 1);
+  assert.equal(measuredBasis.measurement_feedback_page.next_command.at(-1), "b".repeat(64));
   assert.equal(measuredBasis.omitted_measurement_feedback, 1);
   assert.equal((measuredBasis.work_yardsticks as Record<string, unknown>[])[0].proxy_order_reversed, true);
   assert.equal(measuredBasis.omitted_work_yardsticks, 2);
