@@ -115,7 +115,7 @@ def _run_git_paths(
     ``\r`` and ``\r\n`` to ``\n`` before any of that framing happens. A file
     name carrying CR and one carrying LF would then decode to the same string
     and collapse in the change list. Bytes keep the name Git wrote until
-    ``_split_git_paths`` decodes each record on its own.
+    ``_display_git_path`` prepares the public artifact.
     """
 
     return subprocess.run(
@@ -183,27 +183,47 @@ def _git_status_lines(workspace: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def _split_git_paths(output: bytes) -> list[str]:
-    """Return one path per NUL-framed record, decoded after the split.
+def _split_git_paths(output: bytes) -> list[bytes]:
+    """Return one raw pathname per NUL-framed Git record.
 
-    Every caller passes ``-z`` and captures bytes: the default framing quotes a
-    non-ASCII name (``"\\344\\270\\255..."``) and ends records on LF, and text
-    mode turns a CR or CRLF inside a legal name into another LF before this
-    function ever sees it. Decoding each record separately keeps CR, LF and
-    CRLF names distinct, with leading and trailing spaces intact.
+    Every caller passes ``-z`` and captures bytes. Splitting before decoding
+    keeps CR, LF, CRLF and non-UTF-8 names distinct; display conversion happens
+    only when the public artifact is built.
     """
 
-    return [item.decode("utf-8", "replace") for item in output.split(b"\0") if item]
+    return [item for item in output.split(b"\0") if item]
 
 
-def _git_untracked_paths(workspace: Path) -> list[str]:
-    """Return the untracked paths exactly as Git recorded them."""
+_GIT_BYTE_PATH_PREFIX = "git-bytes:"
+
+
+def _display_git_path(path: bytes) -> str:
+    """Render a Git pathname without losing its byte identity.
+
+    Valid UTF-8 keeps its normal spelling. A pathname that begins with the
+    reserved prefix is escaped into a disjoint namespace so it cannot be
+    confused with an encoded byte pathname. Invalid UTF-8 is represented by
+    ``repr(bytes)``, which preserves every byte and distinguishes names such as
+    ``lossy-\\xfe.txt`` from the valid UTF-8 name ``lossy-\ufffd.txt``.
+    """
+
+    try:
+        text = path.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"{_GIT_BYTE_PATH_PREFIX}{path!r}"
+    if text.startswith(_GIT_BYTE_PATH_PREFIX):
+        return f"{_GIT_BYTE_PATH_PREFIX}utf8:{text}"
+    return text
+
+
+def _git_untracked_paths(workspace: Path) -> list[bytes]:
+    """Return the untracked byte pathnames exactly as Git recorded them."""
 
     result = _run_git_paths(workspace, ["status", "--porcelain", "-z"])
     if result.returncode != 0:
         raise RuntimeError("git status --porcelain -z failed")
     entries = result.stdout.split(b"\0")
-    paths: list[str] = []
+    paths: list[bytes] = []
     index = 0
     while index < len(entries):
         entry = entries[index]
@@ -216,7 +236,7 @@ def _git_untracked_paths(workspace: Path) -> list[str]:
             index += 1
             continue
         if status == b"??":
-            paths.append(entry[3:].decode("utf-8", "replace"))
+            paths.append(entry[3:])
     return paths
 
 
@@ -279,13 +299,13 @@ def _base_snapshot(workspace: Path, base_branch: str) -> dict[str, Any]:
 
 
 def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], bool]:
-    files: list[str] = []
+    files: list[bytes] = []
     truncated = False
 
-    def add_paths(paths: list[str]) -> None:
+    def add_paths(paths: list[bytes]) -> None:
         nonlocal truncated
         for path in paths:
-            if not path or path.startswith("/"):
+            if not path or path.startswith(b"/"):
                 continue
             if path not in files:
                 files.append(path)
@@ -308,7 +328,7 @@ def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], boo
             raise RuntimeError(f"git {' '.join(args)} failed")
         add_paths(_split_git_paths(result.stdout))
     add_paths(_git_untracked_paths(workspace))
-    return files[:20], truncated
+    return [_display_git_path(path) for path in files[:20]], truncated
 
 
 # Caller-validation execution (_run_caller_validation / _require_passed) is
