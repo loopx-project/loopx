@@ -7,7 +7,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, verifiedSelectedTodoSource}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
   from "../work_items/interaction_contract.ts";
 import {projectReplanSemantics} from "../work_items/replan_semantics.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
@@ -36,9 +36,12 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
     ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
   const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
   const work = jsonObject(at(context, workPath));
-  if (!work || !Array.isArray(work.sources)) return exactFields;
   const base = [...workPath, "sources"];
-  const fields = work.sources.flatMap<ReusableReadField>((value, i) => {
+  const sources = work?.sources;
+  if (!Array.isArray(sources)) return exactFields;
+  const selectedId = jsonObject(context.selected_todo)?.todo_id;
+  const selectedSources = sources.filter(value => jsonObject(value)?.source === "selected_todo").length;
+  const fields = sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
@@ -49,6 +52,24 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
         typeof content.state_file === "string" && completeGoalNarrative(content))
       return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
         sourceIdentity: content.state_file}];
+    if (source?.source === "selected_todo") {
+      const todo = jsonObject(content.todo), authority = jsonObject(content.authority_read);
+      const route = [context.goal_id, context.registry, context.runtime_root];
+      if (selectedSources !== 1 || work?.selected_todo_text_verified !== true ||
+          typeof selectedId !== "string" || !selectedId ||
+          typeof todo?.note !== "string" || authority?.decision_read_from_provider !== true ||
+          authority.legacy_fallback_used !== false || typeof authority.source_authority !== "string" ||
+          !authority.source_authority || !route.every((part): part is string => typeof part === "string" && !!part)) return [];
+      const full = content.ok === true && content.matched === true && content.ambiguous === false &&
+        content.read_complete !== false && content.source === authority.source_authority && todo.todo_id === selectedId;
+      // The interaction owner can elide the identical Todo id and title from
+      // its checked source. In that shape the explicit selected reference owns the id.
+      const compact = work.selected_todo_ref === "selected_todo" &&
+        known(content, ["todo", "authority_read"]) && (todo.todo_id === undefined || todo.todo_id === selectedId);
+      if (!full && !compact) return [];
+      return [{path: [...path, "todo", "note"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+        sourceIdentity: [...route, authority.source_authority, selectedId]}];
+    }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
@@ -79,30 +100,6 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
       return fields;
     }) : [];
   });
-  // Only the note may carry forward, after a fresh canonical read of the ready
-  // Todo. Keep the current task, ownership, constraints and settlement visible.
-  const todoId = jsonObject(context.selected_todo)?.todo_id;
-  const selected = verifiedSelectedTodoSource(work, todoId);
-  const authority = jsonObject(selected?.content.authority_read);
-  const preparation = jsonObject(at(context, ["interaction_contract", "cli_channel", "execution_preparation"]));
-  const identity = jsonObject(context.agent_identity);
-  if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-      && at(context, ["interaction_contract", "agent_channel", "delivery_allowed"]) === true
-      && preparation?.state === "ready" && preparation.delivery_allowed === true && preparation.todo_id === todoId
-      && typeof preparation.agent_id === "string" && preparation.agent_id === (context.agent_id ?? identity?.agent_id)
-      && (identity?.agent_id === undefined || identity.agent_id === preparation.agent_id)
-      && typeof context.goal_id === "string" && selected?.content.ambiguous === false
-      && typeof selected.source.command === "string" && selected.source.command.length > 0
-      && typeof selected.todo.note === "string" && typeof selected.todo.updated_at === "string"
-      && authority?.decision_read_from_provider === true && authority.legacy_fallback_used === false
-      && typeof authority.provider_revision === "string" && typeof authority.source_authority === "string"
-      && authority.source_authority === selected.content.source) {
-    fields.push({path: [...base, selected.index, "content", "todo", "note"], freshKeys: [],
-      minimumBytes: MIN_REUSABLE_BODY_BYTES, sourceIdentity: JSON.stringify([
-        context.goal_id, preparation.agent_id, todoId, selected.source.command, authority.source_authority,
-        selected.todo.updated_at,
-      ])});
-  }
   return [...exactFields, ...fields];
 }
 

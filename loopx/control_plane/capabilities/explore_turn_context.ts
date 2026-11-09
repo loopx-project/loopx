@@ -386,7 +386,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
             todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
             cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
             ...(comparison ? {comparison_cue: comparison.guidance,
-              comparison_candidate_ref: (comparison.goal as JsonObject).preferred_candidate_ref} : {}),
+              comparison_candidate_ref: (comparison.goal as JsonObject).preferred_candidate_ref,
+              ...(typeof comparison.proxy_order_reversed === "boolean"
+                ? {proxy_order_reversed: comparison.proxy_order_reversed} : {})} : {}),
             details_command: resultRead("--result-node", String(cue.node_id))};
         }), omitted_work_yardsticks: Math.max(0, workCues.length - 3),
           work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),

@@ -147,6 +147,18 @@ admission, but outstanding v1 plans must retain a compatible reader until their
 pending effects and supported recovery window are reconciled. An older binary
 alone cannot resume a v1 journal; do not strip its version or recreate its input.
 
+Use `loopx turn plan --include-transaction-detail --format markdown` to inspect
+`should_run`, the effective action, reason and selected work summary. Its **Full
+plan** JSON block retains the complete source contract, session and transaction
+that the same explicit JSON detail view exposes. Read the full source for
+requirements or evidence beyond the summary; neither view authorizes execution.
+The default short Markdown view and recorded v0 rendering remain unchanged.
+
+使用 `loopx turn plan --include-transaction-detail --format markdown` 检查是否应运行、
+有效动作、原因及已选工作的摘要。**Full plan** JSON 块保留同一显式 JSON 详情视图中的
+完整来源合同、session 与 transaction。摘要之外的要求与证据须查看完整来源；两种视图
+均不授予执行权限。默认简短 Markdown 视图与历史 v0 呈现保持原样。
+
 The example uses the repository's TraeX adapter and an integration-supplied
 validator. The two programs separate the executor's completion claim from
 validation of its artifact.
