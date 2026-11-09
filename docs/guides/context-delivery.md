@@ -134,6 +134,12 @@ same registered source in the current session and epoch. The current source
 revision and Turn controls still appear. A change to the narrative or its
 source, an incomplete read, or compaction restores the current text.
 
+For the same ready Todo in a native context epoch, the first read can reference
+an exactly matching writeback precondition already delivered in full. It still
+delivers the current settlement identity, commands and other steps. Changed
+guidance and lost continuity restore the literal text. An explicit same-capture
+read always returns the current precondition.
+
 ### Read and recover the right object
 
 Use the path, digest and command returned by the current response. A native

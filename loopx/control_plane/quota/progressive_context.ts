@@ -18,21 +18,62 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceFile?: string};
+type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
+const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
 
+function orderedSettlementSteps(plan: JsonObject | null | undefined): unknown[] | undefined {
+  return (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
+    && Array.isArray(plan.ordered_steps) ? plan.ordered_steps : undefined;
+}
+
+function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
+    plan: JsonObject | null | undefined): JsonObject | undefined {
+  const cli = jsonObject(interaction.cli_channel), prepared = jsonObject(cli?.execution_preparation);
+  const identity = jsonObject(plan?.identity);
+  return context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && jsonObject(interaction.agent_channel)?.delivery_allowed === true && cli?.selection_required !== true
+    && prepared?.state === "ready" && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
+    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
+    && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
+    && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
+    ? identity : undefined;
+}
+
+function reusableWritebackPrecondition(context: JsonObject): ReusableReadField | undefined {
+  const interaction = jsonObject(context.interaction_contract);
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return undefined;
+  const plan = jsonObject(at(context, SETTLEMENT_PLAN_PATH)), steps = orderedSettlementSteps(plan);
+  const identity = readySettlementIdentity(context, interaction, plan);
+  const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+  const agent = context.agent_id ?? identityAgent;
+  if (!plan || !steps || !identity || typeof agent !== "string" || agent !== identity.agent_id
+      || (identityAgent !== undefined && identityAgent !== agent)
+      || typeof context.goal_id !== "string" || context.goal_id !== identity.goal_id) return undefined;
+  const writebacks = steps.map((value, index) => ({step: jsonObject(value), index}))
+    .filter(({step}) => step?.kind === "durable_writeback");
+  if (writebacks.length !== 1) return undefined;
+  const {step, index} = writebacks[0]!;
+  if (step?.owner !== "agent" || typeof step.precondition !== "string") return undefined;
+  return {path: [...SETTLEMENT_PLAN_PATH, "ordered_steps", index, "precondition"],
+    freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+    sourceIdentity: JSON.stringify([plan.schema_version, identity.goal_id, agent, identity.todo_id, step.kind, step.owner])};
+}
+
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
 function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
   const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
   const sources = at(context, base);
-  if (!Array.isArray(sources)) return [];
-  return sources.flatMap<ReusableReadField>((value, i) => {
+  const writeback = reusableWritebackPrecondition(context);
+  const fields = writeback ? [writeback] : [];
+  if (!Array.isArray(sources)) return fields;
+  return [...fields, ...sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
@@ -42,7 +83,7 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
         (content.status === undefined || content.status === "loaded") &&
         typeof content.state_file === "string" && completeGoalNarrative(content))
       return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-        sourceFile: content.state_file}];
+        sourceIdentity: content.state_file}];
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
@@ -72,12 +113,12 @@ function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
       }
       return fields;
     }) : [];
-  });
+  })];
 }
 
 function observedSectionDigest(body: string, field?: ReusableReadField): string {
-  // Same text at a reused array index is insufficient after a Goal file rebind.
-  const value = field?.sourceFile === undefined ? body : JSON.stringify([field.sourceFile, body]);
+  // Matching bytes at an address do not establish a match after a source rebind.
+  const value = field?.sourceIdentity === undefined ? body : JSON.stringify([field.sourceIdentity, body]);
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -123,7 +164,7 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
 }
 
 /** Only registered, previously delivered bodies may use a reference. Current
- * decisions, stops, selection, settlement and unknown source shapes stay inline. */
+ * decisions, stops, settlement commands and identities stay inline. */
 function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
@@ -684,23 +725,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include(...source, "content", "harness", "orchestration_gate");
   });
   const cli = object(interaction.cli_channel);
-  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const planPath = SETTLEMENT_PLAN_PATH;
   const plan = object(cli?.settlement_plan);
-  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
-    && Array.isArray(plan.ordered_steps)
-    ? plan.ordered_steps : undefined;
-  const prepared = object(cli?.execution_preparation);
-  const identity = object(plan?.identity);
+  const steps = orderedSettlementSteps(plan);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && cli?.selection_required !== true && prepared?.state === "ready"
-    && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
-    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
-    && object(context.selected_todo)?.todo_id === identity.todo_id
-    && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
+  const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
     && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
     && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));

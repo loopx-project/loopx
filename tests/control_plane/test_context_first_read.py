@@ -1185,3 +1185,66 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert Path(fallback[0]["reference_file"]) == ordinary
     assert {key: value for key, value in after.items() if key != body_pointer} == facts
     assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
+@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version"])
+def test_native_first_read_reuses_only_observed_writeback_precondition(
+    tmp_path, monkeypatch, decision, version, transition,
+):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    decision.update(agent_id="agent", should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    contract = decision["interaction_contract"]
+    contract["agent_channel"]["delivery_allowed"] = True
+    cli = contract["cli_channel"]
+    cli["execution_preparation"] = {"state": "ready", "todo_id": "todo_current", "agent_id": "agent"}
+    plan = cli["settlement_plan"]
+    plan["schema_version"] = version
+    text = "After independent validation, write back under the original identity and respect the current stop. " * 38
+    step = {"kind": "durable_writeback", "owner": "agent", "precondition": text}
+    plan["ordered_steps"] = [step]
+    root = "/interaction_contract/cli_channel/settlement_plan"
+    precondition = root + "/ordered_steps/0/precondition"
+    command = root + "/ordered_steps/0/command_template"
+
+    def capture(turn):
+        identity = {"goal_id": "fixture", "agent_id": "agent", "todo_id": "todo_current",
+                    "turn_instance_id": turn, "effect_id": f"fixture:agent:todo_current:{turn}"}
+        decision["heartbeat_receipt"] = {"settlement_identity": identity}
+        plan["identity"] = {**identity, "effect_id": "mismatch"} if turn == "next" and transition == "wrong_binding" else identity
+        step["command_template"] = f"loopx refresh-state --turn-instance-id {turn}"
+        directory = tmp_path / turn
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=turn)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    first = capture("first")
+    page, facts = read_selection(first["first_read_command"])
+    assert facts[precondition] == text and "previously_delivered_fields" not in page
+    deliver(tmp_path, event, [page])
+
+    if transition == "changed":
+        step["precondition"] += " Await the updated external approval."
+    elif transition == "unknown_version":
+        plan["schema_version"] = "unknown"
+    decision["goal_boundary"]["stop_condition"] = "Stop before publishing."
+    second = capture("next")
+    page, facts = read_selection(second["first_read_command"])
+    assert facts[command] == "loopx refresh-state --turn-instance-id next"
+    assert facts["/goal_boundary"] == decision["goal_boundary"]
+    assert facts[root + "/identity/effect_id"] == plan["identity"]["effect_id"]
+    if transition != "same":
+        assert precondition not in page.get("previously_delivered_fields", [])
+        assert facts[precondition] == step["precondition"]
+        return
+
+    assert page["previously_delivered_fields"] == [precondition] and precondition not in facts
+    _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition)
+    assert recovered[precondition] == text
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    page, facts = read_selection(second["first_read_command"])
+    assert "previously_delivered_fields" not in page and facts[precondition] == text
