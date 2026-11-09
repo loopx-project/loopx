@@ -17,8 +17,12 @@ import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-res
 // Navigation must not turn organization into shared evidence or execution.
 const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
 const study = caseFixture.analyses[0].case_study;
+const studyNavigation = packId => ({url: new URL('http://127.0.0.1/chat/'), goalId: 'child', packId, namespace: null,
+  follow: () => {throw Error('read navigated');}});
 const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
-  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope, onCitation: () => {throw Error('read executed a citation');},
+  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope,
+  navigation: studyNavigation('saved-pack'),
+  onCitation: () => {throw Error('read executed a citation');},
 }));
 assert.ok(renderedStudy.includes(study.title));
 assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
@@ -31,7 +35,7 @@ const casePack = {pack_id: "one", title: "First study", scope: caseFixture.analy
   case_study: study, case_study_summary: {title: study.title}, applicability: "current"};
 const secondCase = {...casePack, pack_id: "two", title: "Second study"};
 const renderCase = packs => renderToStaticMarkup(createElement(ResearchCaseReading, {
-  analysis: {zh: false, pack: casePack, snapshot: {catalog: {packs}}, location: {open: false}},
+  analysis: {zh: false, pack: casePack, snapshot: {catalog: {packs}}, location: {open: false}, studyNavigation},
 }));
 assert.ok(!renderCase([casePack]).includes("<select"), "A single saved version reads directly");
 const alternatives = renderCase([casePack, secondCase]);
