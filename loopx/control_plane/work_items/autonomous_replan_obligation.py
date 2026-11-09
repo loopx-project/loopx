@@ -164,10 +164,13 @@ def build_autonomous_replan_cli_actions(
     obligation: Mapping[str, Any] = (
         raw_obligation if isinstance(raw_obligation, Mapping) else payload
     )
-    if writeback_contract.get("preferred_input") == "verified_replan_writeback":
+    preferred_input = writeback_contract.get("preferred_input")
+    if preferred_input == "verified_replan_writeback":
         return [quota_spend_action] if settlement_chain_ready else []
     semantic_delta_args = (
-        writeback_contract.get("cli_semantic_args")
+        ""
+        if preferred_input == "exact_historical_ack"
+        else writeback_contract.get("cli_semantic_args")
         or replan_writeback_requirements(obligation)["cli_semantic_args"]
     )
     delivery_args = (

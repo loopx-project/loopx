@@ -1662,6 +1662,29 @@ def build_goal_frontier_projection_context_from_status(
     )
     frontier_obligation_ack = frontier_transition_ack or effective_replan_ack
     frontier_transition_candidate = {"obligation": frontier_replan_obligation, "ack": frontier_transition_ack}
+    # A later durable Turn can have already acknowledged the exact review that
+    # an older receipt still owes. Keep that run-derived ACK distinct from a
+    # current-frontier transition: the settlement owner validates its exact
+    # Goal, Agent, obligation, chronology, and Turn before it can close the old
+    # writeback. Projected asset ACKs never enter this candidate.
+    raw_historical_ack_candidates = (
+        status_payload.get("receipt_bound_replan_ack_candidates")
+        if receipt_bound_replan_obligation_id
+        else None
+    )
+    historical_ack_candidates = [
+        {"historical_ack": dict(candidate)}
+        for candidate in (
+            raw_historical_ack_candidates
+            if isinstance(raw_historical_ack_candidates, list)
+            else []
+        )[:8]
+        if isinstance(candidate, dict)
+    ]
+    if latest_agent_replan_ack is not None and receipt_bound_replan_obligation_id:
+        historical_ack_candidates.append(
+            {"historical_ack": latest_agent_replan_ack}
+        )
     if frontier_replan_obligation is None and receipt_bound_replan_obligation_id:
         source = derive_goal_frontier_replan_obligation_from_summaries(
             user_todo_summary=user_todo_summary, agent_todo_summary=agent_todo_summary,
@@ -1763,6 +1786,7 @@ def build_goal_frontier_projection_context_from_status(
         "replan_transition_candidates": [
             run_transition_candidate,
             frontier_transition_candidate,
+            *historical_ack_candidates,
             *capability_transitions,
             *([lifecycle_candidate] if lifecycle_candidate else []),
         ],

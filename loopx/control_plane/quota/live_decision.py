@@ -55,13 +55,41 @@ def _receipt_bound_guard_fields(
     """Adapt the recorded guard identity and time for the shared decision owner."""
     guard = getattr(readback, "semantic_replan_guard", None)
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
+    receipt_details = (
+        receipt.get("details")
+        if isinstance(receipt.get("details"), Mapping)
+        else {}
+    )
+    guard_selected_obligation_id = (
+        guard.get("selected_obligation_id")
+        if isinstance(guard, Mapping)
+        else None
+    )
+    # Receipts written before semantic_replan_guard was persisted still bind
+    # the exact replan generation directly.  Treat that durable identity as
+    # the scoped guard; otherwise compact status loses the only route to the
+    # historical ACK lookup and asks the agent to repeat a blocked closeout.
+    receipt_selected_obligation_id = receipt.get(
+        "semantic_replan_obligation_id"
+    ) or receipt_details.get("semantic_replan_obligation_id")
     return {
         "receipt_bound_replan_guard_scoped": bool(
-            isinstance(guard, Mapping)
-            and guard.get("scope") == "turn_guard"
-            and guard.get("selected_obligation_id") == obligation_id
+            obligation_id
+            and (
+                (
+                    isinstance(guard, Mapping)
+                    and guard.get("scope") == "turn_guard"
+                    and guard_selected_obligation_id == obligation_id
+                )
+                or receipt_selected_obligation_id == obligation_id
+            )
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_guard_turn_instance_id": (
+            receipt.get("turn_instance_id")
+            or receipt.get("run_id")
+            or receipt_details.get("turn_instance_id")
+        ),
         "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
@@ -674,7 +702,15 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
-        replan_obligation_id=receipt_bound_replan_obligation_id,
+        # A Todo-bound receipt may also carry the semantic replan generation
+        # admitted by that Turn.  Its settlement identity remains the Todo;
+        # passing both bindings makes the readback owner treat the receipt as a
+        # conflicting replan-only identity and drops its semantic guard.
+        replan_obligation_id=(
+            None
+            if receipt_bound_todo_id
+            else receipt_bound_replan_obligation_id
+        ),
         registry_path=registry_path,
         goal_ref=goal_ref,
     )
@@ -687,6 +723,42 @@ def build_live_quota_should_run_decision(
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
     )
+    if (
+        receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
+        and receipt_bound_replan_obligation_id
+        and agent_id
+    ):
+        # Compact status intentionally retains only the newest semantic ACK.
+        # Exact receipt recovery therefore performs one bounded, obligation-
+        # specific journal lookup instead of widening every status packet.
+        from ...history import load_index
+        from ..runtime.time import chronology_key
+        from ..work_items.autonomous_replan_ack import (
+            autonomous_replan_ack_candidates_for_obligation,
+        )
+
+        durable_runs, _ = load_index(
+            runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
+        )
+        newest_first_durable_runs = [
+            run
+            for index, run in sorted(
+                enumerate(durable_runs),
+                key=lambda item: (
+                    *chronology_key(item[1].get("generated_at")),
+                    item[0],
+                ),
+                reverse=True,
+            )
+        ]
+        decision_status_payload["receipt_bound_replan_ack_candidates"] = (
+            autonomous_replan_ack_candidates_for_obligation(
+                newest_first_durable_runs,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                obligation_id=receipt_bound_replan_obligation_id,
+            )
+        )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )
@@ -836,6 +908,7 @@ def build_live_quota_should_run_decision(
     if (
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
+        and not original_replan_settlement
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
         and (
             receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
