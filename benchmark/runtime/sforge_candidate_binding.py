@@ -103,14 +103,8 @@ def _archive_file_hashes(raw: bytes) -> dict[str, str]:
     return files
 
 
-def verify_binding(observation: Path, snapshot: Path, result: Path, archive: Path,
+def verify_binding(observation: Path, snapshot: Path, result: Path | dict, archive: Path,
                    generated_files: list[tuple[str, Path]]) -> dict:
-    return verify_binding_from_native(observation, snapshot, _object(result, _RESULT_LIMIT),
-                                      archive, generated_files)
-
-
-def verify_binding_from_native(observation: Path, snapshot: Path, native: dict, archive: Path,
-                               generated_files: list[tuple[str, Path]]) -> dict:
     probe = _object(observation)
     pins = _object(observation.with_suffix(observation.suffix + ".candidate.json"))
     pin_hashes = _file_hashes(pins.get("files"))
@@ -143,6 +137,7 @@ def verify_binding_from_native(observation: Path, snapshot: Path, native: dict, 
         if hashlib.sha256(_read(path, _ARCHIVE_LIMIT)).hexdigest() != expected[name]:
             raise ValueError("generated output bytes differ from the sealed snapshot")
 
+    native = result if isinstance(result, dict) else _object(result, _RESULT_LIMIT)
     receipt = native.get("receipt")
     if (native.get("status") != "completed" or not isinstance(receipt, dict)
             or receipt.get("schema_version") != "sforge_submission_receipt_v1"
@@ -193,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.submission_id is not None:
         if not args.todo_id or not args.local_finding_id:
             parser.error("--submission-id requires --todo-id and --local-finding-id")
+        from http.client import HTTPException
+
         from benchmark.runtime.sforge_native_result import read_candidate_comparison, read_installed_scope
 
         try:
@@ -201,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 snapshot=args.snapshot, archive=args.archive, generated_files=args.generated_files,
                 todo_id=args.todo_id, local_finding_id=args.local_finding_id,
             )
-        except (OSError, ValueError, EOFError):
+        except (OSError, ValueError, EOFError, HTTPException):
             print("Scoped native result unavailable; use sforge-submit --result ID --json for ordinary feedback.",
                   file=sys.stderr)
             return 1

@@ -140,6 +140,52 @@ def test_full_file_set_matches_preupload_pins_across_distinct_uploads(case, tmp_
     assert updated["submitted_file_set_ref"] != first["submitted_file_set_ref"]
 
 
+def test_offline_binding_rejects_changed_output_before_opening_missing_result(case):
+    _, _, output, _, _, _ = case
+    output.write_bytes(b'{"answer":3}')
+    checked = _bind(case)
+    assert checked.returncode == 1
+    assert checked.stdout == ""
+    assert "generated output bytes differ from the sealed snapshot" in checked.stderr
+
+
+def test_scoped_read_falls_back_on_truncated_http(case, monkeypatch, capsys):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from benchmark.runtime import sforge_candidate_binding, sforge_native_result
+
+    class TruncatedResult(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"5\r\n{")
+
+    observation, snapshot, _, _, archive, _ = case
+    with ThreadingHTTPServer(("127.0.0.1", 0), TruncatedResult) as server:
+        scope = sforge_native_result.NativeResultScope(
+            relay=f"http://127.0.0.1:{server.server_port}/api/v1/feedback/test",
+            run="run", task="task", goal="goal", agent="agent",
+            task_sha256="a" * 64, scorer_commit="b" * 40, higher_is_better=True,
+        )
+        monkeypatch.setattr(sforge_native_result, "read_installed_scope", lambda: scope)
+        thread = Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            exit_code = sforge_candidate_binding.main([
+                "--submission-id", "submission-2", "--todo-id", "todo",
+                "--local-finding-id", "finding", "--observation", str(observation),
+                "--snapshot", str(snapshot), "--archive", str(archive),
+            ])
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+    captured = capsys.readouterr()
+    assert exit_code == 1 and captured.out == ""
+    assert "use sforge-submit --result ID --json" in captured.err
+
+
 @pytest.mark.parametrize(("defect", "diagnostic"), [
     ("archive_swapped", "native source receipt"),
     ("archive_content", "differ from the sealed snapshot"),

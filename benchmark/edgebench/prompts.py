@@ -43,8 +43,8 @@ def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = Fal
         binding += (
             "For an existing submission and an applicable recorded finding, the same tool's "
             "--submission-id, --todo-id and --local-finding-id options return the native "
-            "feedback and verified comparison together. It only reads; a missing comparison "
-            "does not invalidate the native result.\n\n"
+            "feedback, native score and matching recorded local measurements together. "
+            "It only reads. The native result is available even when a comparison is missing.\n\n"
         )
     return (
         "### Research Artifacts\n\n"

@@ -120,7 +120,7 @@ def read_public_result(scope: NativeResultScope, submission_id: str) -> tuple[in
 
 def _measurement(scope, native, submission_id, *, observation, snapshot, archive, generated_files,
                  todo_id, local_finding_id, registry_path, runtime_root):
-    from benchmark.runtime.sforge_candidate_binding import verify_binding_from_native
+    from benchmark.runtime.sforge_candidate_binding import verify_binding
     from loopx.agent_registry import require_registered_agent_id
     from loopx.capabilities.explore.result_log import (
         build_explore_result_projection, explore_result_log_path, load_explore_result_events_strict,
@@ -153,15 +153,19 @@ def _measurement(scope, native, submission_id, *, observation, snapshot, archive
                 and item["node_id"] in task.get("explore_result_node_refs", [])]
     if len(findings) != 1:
         raise ValueError("The local finding is not linked to the selected Todo")
-    binding = verify_binding_from_native(observation, snapshot, native, archive, generated_files)
-    expected = {binding["candidate_ref"], binding["submitted_file_set_ref"]}
-    candidates = {item["candidate_ref"] for item in findings[0].get("measurements", [])
-                  if item["candidate_ref"] in expected and item["input_revision"] == binding["input_revision"]
-                  and item["value"] is not None}
-    if not candidates:
+    binding = verify_binding(observation, snapshot, native, archive, generated_files)
+    submitted = binding["submitted_file_set_ref"]
+    uploaded = binding["candidate_ref"]
+    matches = {submitted: [], uploaded: []}
+    for measurement in findings[0].get("measurements", []):
+        candidate_ref = measurement["candidate_ref"]
+        if (candidate_ref in matches and measurement["input_revision"] == binding["input_revision"]
+                and measurement["value"] is not None):
+            matches[candidate_ref].append(measurement)
+    candidate = submitted if matches[submitted] else uploaded
+    local_measurements = matches[candidate]
+    if not local_measurements:
         raise ValueError("The finding does not measure the submitted candidate")
-    candidate = (binding["submitted_file_set_ref"] if binding["submitted_file_set_ref"] in candidates
-                 else binding["candidate_ref"])
     digest = hashlib.sha256(json.dumps([scope.run, scope.task, submission_id, native],
                                        sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     group = hashlib.sha256(json.dumps([scope.run, scope.task], separators=(",", ":")).encode()).hexdigest()
@@ -170,6 +174,7 @@ def _measurement(scope, native, submission_id, *, observation, snapshot, archive
         "node_id": findings[0]["node_id"],
         "local_finding_id": local_finding_id,
         "binding": binding,
+        "local_measurements": local_measurements,
         "native_measurement": {
             "metric": "native_score",
             "unit": "score",
