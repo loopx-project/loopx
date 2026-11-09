@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import json
-from dataclasses import dataclass
 from typing import Any, cast
 
 from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
@@ -27,27 +26,6 @@ ACTION_SIGNATURE_COVERAGE_V4 = "turn_envelope_action_dimensions_v4"
 ACTION_SIGNATURE_COVERAGE_V5 = "turn_envelope_action_dimensions_v5"
 ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0
 PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref"
-
-
-@dataclass(frozen=True, init=False, repr=False, slots=True)
-class TurnControllerInput:
-    """Local producer result; never an agent wire or a retained authority cache.
-
-    The envelope and its typed route originate in one projection. Store the
-    envelope as immutable bytes so a caller cannot mutate it after routing;
-    each consumer receives its own decoded object. Ordinary wire dictionaries
-    cannot supply this qualification through an extra JSON field.
-    """
-
-    envelope_json: str
-    route: str
-
-    def __init__(self) -> None:
-        raise TypeError("Use build_turn_controller_input with the original quota source")
-
-    def envelope(self) -> dict[str, Any]:
-        envelope: dict[str, Any] = json.loads(self.envelope_json)
-        return envelope
 
 
 def _apply_context_projection_changes(
@@ -103,7 +81,8 @@ def _turn_envelope_result(
     payload = params.get("payload")
     complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
     staged_replan = (
-        operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture"}
+        operation in {"build", "quota_signature", "replan_cli_view", "bind_capture",
+                      "capability_automation_source"}
         and isinstance(payload, Mapping)
         and (
             (operation == "replan_cli_view" and params.get("source_edits") is True)
@@ -194,8 +173,11 @@ def complete_turn_host_source(
     header = ({"complete_host_request": {key: request[key] for key in (
         "schema_version", "turn_key", "source_decision_hash", "detail_ref",
     ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
-    return _turn_envelope_result(operation, payload=request["work_contract"],
-                                 envelope=_wire_mapping(request.get("turn_envelope")), **header,
+    # Identity-only current callers need no executor adapter. Keep an explicit
+    # adapter, even a damaged one, on the typed owner's full Host validation.
+    adapter = ({"envelope": _wire_mapping(request.get("turn_envelope"))}
+               if "turn_envelope" in request or operation != "complete_host_lineage" else {})
+    return _turn_envelope_result(operation, payload=request["work_contract"], **adapter, **header,
                                  **({"recorded_capability_result": True} if recorded_capability_result else {}),
                                  **({"include_session_lineage": True} if include_session_lineage else {}))
 
@@ -259,6 +241,11 @@ def quota_action_signature_document(payload: Mapping[str, Any]) -> dict[str, Any
         "quota_signature",
         payload=dict(payload),
     )
+
+
+def quota_capability_automation_source(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Read checked capability gates before the native quota source is sealed."""
+    return _turn_envelope_result("capability_automation_source", payload=dict(payload))
 
 
 def turn_envelope_replan_settlement_identity(

@@ -33,9 +33,13 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactBody): ReusableReadField[] {
   const exactFields = exactBody && at(context, exactBody.path) !== undefined
     ? [{...exactBody, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}] : [];
-  const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
-  const sources = at(context, base);
+  const workPath: Path = ["interaction_contract", "agent_channel", "work_context"];
+  const work = jsonObject(at(context, workPath));
+  const base = [...workPath, "sources"];
+  const sources = work?.sources;
   if (!Array.isArray(sources)) return exactFields;
+  const selectedId = jsonObject(context.selected_todo)?.todo_id;
+  const selectedSources = sources.filter(value => jsonObject(value)?.source === "selected_todo").length;
   return [...exactFields, ...sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
@@ -47,6 +51,24 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
         typeof content.state_file === "string" && completeGoalNarrative(content))
       return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
         sourceIdentity: content.state_file}];
+    if (source?.source === "selected_todo") {
+      const todo = jsonObject(content.todo), authority = jsonObject(content.authority_read);
+      const route = [context.goal_id, context.registry, context.runtime_root];
+      if (selectedSources !== 1 || work?.selected_todo_text_verified !== true ||
+          typeof selectedId !== "string" || !selectedId ||
+          typeof todo?.note !== "string" || authority?.decision_read_from_provider !== true ||
+          authority.legacy_fallback_used !== false || typeof authority.source_authority !== "string" ||
+          !authority.source_authority || !route.every((part): part is string => typeof part === "string" && !!part)) return [];
+      const full = content.ok === true && content.matched === true && content.ambiguous === false &&
+        content.read_complete !== false && content.source === authority.source_authority && todo.todo_id === selectedId;
+      // The interaction owner can elide the identical Todo id and title from
+      // its checked source. In that shape the explicit selected reference owns the id.
+      const compact = work.selected_todo_ref === "selected_todo" &&
+        known(content, ["todo", "authority_read"]) && (todo.todo_id === undefined || todo.todo_id === selectedId);
+      if (!full && !compact) return [];
+      return [{path: [...path, "todo", "note"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+        sourceIdentity: [...route, authority.source_authority, selectedId]}];
+    }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
