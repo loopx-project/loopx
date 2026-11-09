@@ -310,6 +310,31 @@ def test_stop_does_not_fallback_for_non_global_registry(tmp_path: Path) -> None:
     )
 
 
+def test_resume_retry_rejects_shared_legacy_status_mismatch(
+    connected_registries: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_registry, global_registry = connected_registries
+    source = load_registry(source_registry)
+    registry_goals(source)[0]["status"] = "active"
+    _write_json(source_registry, source)
+    real_sync = activation_service.sync_project_registry_to_global
+
+    def corrupt_shared_status(**kwargs):
+        result = real_sync(**kwargs)
+        shared = load_registry(global_registry)
+        registry_goals(shared)[0]["status"] = "paused"
+        _write_json(global_registry, shared)
+        return result
+
+    monkeypatch.setattr(activation_service, "sync_project_registry_to_global", corrupt_shared_status)
+    result = set_goal_activation_state(registry_path=source_registry, goal_id="goal-one",
+        state="active", actor_kind="owner", execute=True)
+    assert not result["ok"] and not result["readback"]["verified"], result
+    assert not result["written"], "An already active source needs no new source mutation"
+    assert _goal(source_registry)["status"] == "active"
+    assert _goal(global_registry)["status"] == "paused"
+
+
 def test_stop_and_resume_sync_source_global_and_quota(
     connected_registries: tuple[Path, Path],
 ) -> None:
@@ -603,6 +628,66 @@ def test_owner_confirmed_typed_action_stops_goal(
     assert applied["proposal"]["receipt"]["projection_verified"] is True
     assert applied["proposal"]["receipt"]["outcome"] == "goal_stopped"
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
+
+
+def test_http_resume_rejects_stale_confirmation_before_clearing_new_legacy_pause(
+    connected_registries: tuple[Path, Path], tmp_path: Path,
+) -> None:
+    import http.client
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    source_registry, global_registry = connected_registries
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path = global_registry
+    server.runtime_root = global_registry.parent
+    server.runtime_root_override = str(global_registry.parent)
+    server.action_store = ChatActionStore(tmp_path / "http-actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=global_registry)
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post(path, body):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            connection.request("POST", path, json.dumps(body), {"Content-Type":"application/json",
+                "Origin":f"http://127.0.0.1:{server.server_port}"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def preview(key):
+        code, result = post("/api/actions/preview", {"action_kind":"goal.lifecycle",
+            "summary":"Resume the Goal", "normalized_parameters":{"goal_id":"goal-one","operation":"resume"},
+            "context":{"kind":"goal_directory"},"idempotency_key":key})
+        assert code == 201, result
+        return result["proposal"]
+
+    try:
+        old = preview("before-new-legacy-pause")
+        source = load_registry(source_registry)
+        registry_goals(source)[0]["status"] = "paused"
+        _write_json(source_registry, source)
+        assert sync_project_registry_to_global(registry_path=source_registry,
+            runtime_root_override=str(global_registry.parent), goal_id="goal-one", dry_run=False)["ok"]
+        before = source_registry.read_bytes(), global_registry.read_bytes()
+        code, refused = post(f"/api/actions/{old['proposal_id']}/apply", {})
+        assert code == 409 and refused["error_code"] == "action_stale", refused
+        assert (source_registry.read_bytes(), global_registry.read_bytes()) == before
+
+        fresh = preview("after-new-legacy-pause")
+        code, applied = post(f"/api/actions/{fresh['proposal_id']}/apply", {})
+        assert code == 200 and applied["proposal"]["status"] == "applied", applied
+        assert _goal(source_registry)["status"] == _goal(global_registry)["status"] == "active"
+        after = source_registry.read_bytes(), global_registry.read_bytes()
+        code, replayed = post(f"/api/actions/{fresh['proposal_id']}/apply", {})
+        assert code == 200 and replayed["proposal"]["receipt"] == applied["proposal"]["receipt"]
+        assert (source_registry.read_bytes(), global_registry.read_bytes()) == after
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(
