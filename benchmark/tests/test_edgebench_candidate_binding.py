@@ -1,6 +1,7 @@
 """Native submission binding over exact receipt and local probe artifacts."""
 
 import hashlib
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
@@ -75,6 +76,20 @@ def _native_response(archive):
             "round_id": "agent-2",
             "archive_sha256": _digest(raw),
             "archive_bytes": len(raw),
+        },
+    }
+
+
+def _evaluation_context():
+    return {
+        "schema_version": "sforge_run_evaluation_context_v1",
+        "task_id": "task", "run_id": "run", "registration_id": "registration",
+        "evaluation_conditions": {
+            "schema_version": "sforge_evaluation_conditions_v1",
+            "task_sha256": "a" * 64, "benchmark_sha256": "b" * 64,
+            "task_spec_sha256": "c" * 64, "native_source_sha256": "d" * 64,
+            "execution_config_sha256": "e" * 64, "judge_image_id": "sha256:" + "f" * 64,
+            "score_direction": "maximize", "selection": "score_first",
         },
     }
 
@@ -167,7 +182,8 @@ def test_scoped_read_falls_back_on_truncated_http(case, monkeypatch, capsys):
         scope = sforge_native_result.NativeResultScope(
             relay=f"http://127.0.0.1:{server.server_port}/api/v1/feedback/test",
             run="run", task="task", goal="goal", agent="agent",
-            task_sha256="a" * 64, scorer_commit="b" * 40, higher_is_better=True,
+            task_sha256="a" * 64, benchmark_sha256="b" * 64, higher_is_better=True,
+            evaluation_context=_evaluation_context(),
         )
         monkeypatch.setattr(sforge_native_result, "read_installed_scope", lambda: scope)
         thread = Thread(target=server.serve_forever)
@@ -185,19 +201,33 @@ def test_scoped_read_falls_back_on_truncated_http(case, monkeypatch, capsys):
     assert "use sforge-submit --result ID --json" in captured.err
 
 
-@pytest.mark.parametrize("matching_revision", [True, False])
-def test_native_read_emits_verified_facts_without_requiring_explore_state(case, matching_revision):
+@pytest.mark.parametrize("defect", [None, "input_revision", "legacy_conditions", "registration",
+                                    "task_spec", "native_source", "image", "execution_config"])
+def test_native_read_uses_service_conditions_and_one_result_request(case, defect):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
 
-    from benchmark.runtime.sforge_native_result import NativeResultScope, read_candidate_measurement
+    from benchmark.runtime.sforge_native_result import (
+        NativeResultScope, read_candidate_measurement, read_run_evaluation_context,
+    )
 
     observation, snapshot, output, _, archive, _ = case
     task_digest = "a" * 64
-    if matching_revision:
+    if defect != "input_revision":
         for document in (observation, snapshot):
             _write(document, {**json.loads(document.read_text()), "input_revision": "task:" + task_digest})
     native = _native_response(archive)
+    context = _evaluation_context()
+    native["receipt"]["evaluation_context"] = deepcopy(context)
+    if defect == "legacy_conditions":
+        native["receipt"].pop("evaluation_context")
+    elif defect == "registration":
+        native["receipt"]["evaluation_context"]["registration_id"] = "previous-registration"
+    elif defect in {"task_spec", "native_source", "image", "execution_config"}:
+        field = "judge_image_id" if defect == "image" else defect + "_sha256"
+        native["receipt"]["evaluation_context"]["evaluation_conditions"][field] = (
+            "sha256:" if defect == "image" else ""
+        ) + "0" * 64
     native["report"] = {"submission_id": native["submission_id"], "task_id": "task",
                         "score": -2, "valid": True, "timed_out": False}
     requests = []
@@ -207,17 +237,20 @@ def test_native_read_emits_verified_facts_without_requiring_explore_state(case, 
             requests.append(self.path)
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps(native).encode())
+            self.wfile.write(json.dumps(context if self.path.endswith("/context") else native).encode())
 
     with ThreadingHTTPServer(("127.0.0.1", 0), ResultRelay) as server:
-        scope = NativeResultScope(
-            relay=f"http://127.0.0.1:{server.server_port}/api/v1/feedback/test",
-            run="run", task="task", goal="goal", agent="agent",
-            task_sha256=task_digest, scorer_commit="b" * 40, higher_is_better=True,
-        )
         thread = Thread(target=server.serve_forever)
         thread.start()
         try:
+            relay = f"http://127.0.0.1:{server.server_port}/api/v1/feedback/test"
+            scope = NativeResultScope(
+                relay=relay, run="run", task="task", goal="goal", agent="agent",
+                task_sha256=task_digest, benchmark_sha256="b" * 64, higher_is_better=True,
+                evaluation_context=read_run_evaluation_context(relay),
+            )
+            assert requests == ["/api/v1/feedback/test/context"]
+            requests.clear()  # Registration qualification is outside the result-read budget.
             result = read_candidate_measurement(
                 scope, native["submission_id"], observation=observation, snapshot=snapshot,
                 archive=archive, generated_files=[("result.json", output)],
@@ -227,15 +260,38 @@ def test_native_read_emits_verified_facts_without_requiring_explore_state(case, 
             thread.join(timeout=5)
     assert requests == ["/api/v1/feedback/test/result/submission-2?include_receipt=true"]
     assert result["native"] == native
-    if matching_revision:
+    if defect is None:
         measurement = result["native_measurement"]
         assert measurement["input_revision"] == "task:" + task_digest
         assert measurement["value"] == -2
+        assert measurement["evaluation_ref"] == scope.evaluation_ref
         assert measurement["candidate_ref"] == result["candidate_binding"]["submitted_file_set_ref"]
         assert result["candidate_binding"]["candidate_ref"] == "archive:" + _digest(archive.read_bytes())
     else:
         assert result["native_measurement"] is None
         assert result["native_measurement_unavailable"] is True
+
+
+@pytest.mark.parametrize(("change", "value"), [
+    ("task_sha256", "0" * 64), ("benchmark_sha256", "0" * 64),
+    ("higher_is_better", False), ("run", "other-run"), ("task", "other-task"),
+])
+def test_worker_labels_cannot_override_service_grading_conditions(change, value):
+    from benchmark.runtime.sforge_native_result import NativeResultScope
+    values = dict(relay="http://127.0.0.1/api/v1/feedback/test", run="run", task="task",
+                  goal="goal", agent="agent", task_sha256="a" * 64, benchmark_sha256="b" * 64,
+                  higher_is_better=True, evaluation_context=_evaluation_context())
+    with pytest.raises(ValueError, match="conditions differ"):
+        NativeResultScope(**{**values, change: value})
+
+
+@pytest.mark.parametrize("response", [None, {"evaluation_conditions": None}])
+def test_unknown_service_conditions_cannot_be_promoted_by_worker(response):
+    from benchmark.runtime.sforge_native_result import NativeResultScope
+    with pytest.raises(ValueError, match="context is unavailable"):
+        NativeResultScope(relay="http://127.0.0.1/api/v1/feedback/test", run="run", task="task",
+                          goal="goal", agent="agent", task_sha256="a" * 64, benchmark_sha256="b" * 64,
+                          higher_is_better=True, evaluation_context=response)
 
 
 @pytest.mark.parametrize(("defect", "diagnostic"), [

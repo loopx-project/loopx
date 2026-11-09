@@ -463,6 +463,18 @@ checks pass, `native_measurement` with the full verified submission file-set
 reference and its own evaluator and evidence. Pending or unverified results
 retain the original feedback and an unavailable measurement.
 
+This opt-in requires the native service's run-scoped `/context` route. Before
+the solver starts, the runner checks the task and benchmark digests and score
+direction against that service's fixed registration. The installed
+`evaluation_ref` fingerprints the service's task specification, grading source,
+immutable judge image, execution configuration and selection policy; use it for
+the native Yardstick. The result receipt must carry that exact registration and
+conditions. A local checkout label does not identify the running evaluator.
+Older services without this context require ordinary native feedback instead;
+older results without those conditions remain unpaired. Qualification adds one
+startup request and no extra request to each result read. The conditions do not
+claim to freeze external services or mutable external data.
+
 Record local and native measurements on the same claimed Todo with
 [`loopx explore finding --result-json`](../../loopx/capabilities/explore/README.md#quantitative-findings).
 Reuse the exact question and submitted candidate reference. Explore returns

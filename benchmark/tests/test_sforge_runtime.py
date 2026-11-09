@@ -1493,6 +1493,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
     (tmp_path / "fixture.json").write_text("{}")
+    (tmp_path / "BENCHMARK.yaml").write_text("id: fixture\n")
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
     monkeypatch.setattr(run, "active_source_receipt", lambda *a, **k: {"commit": "b" * 40})
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
@@ -1560,4 +1561,7 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     if compare:
         scope, = scopes
         assert scope["run"] == "probe" and scope["task"] == "fixture"
-        assert scope["scorer_commit"] == "b" * 40
+        import hashlib
+        assert scope["benchmark_sha256"] == hashlib.sha256(
+            (tmp_path / "BENCHMARK.yaml").read_bytes()).hexdigest()
+        assert "scorer_commit" not in scope
