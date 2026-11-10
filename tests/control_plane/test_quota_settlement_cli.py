@@ -25,7 +25,6 @@ from loopx.control_plane.quota.settlement_validation import (
     completion_validation_spend_error,
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
-from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
@@ -1728,14 +1727,22 @@ def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
     assert initial["should_run"] is True
     index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     index_before = index_path.read_bytes() if index_path.exists() else None
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    # Exercise cache invalidation with a valid stored activation, rather than
-    # a retired alias rejected before the cache can be inspected.
-    registry["goals"][0]["activation"] = build_goal_activation(
-        state="stopped", updated_at=datetime.now(timezone.utc).isoformat(),
-        reason="Stop the cache fixture without appending a run.",
+    stop = ("goal-lifecycle", "--goal-id", GOAL_ID, "--operation", "stop")
+    rc, preview = _run_cli(registry_path, runtime, *stop, cwd=project)
+    assert rc == 0, preview
+    rc, stopped = _run_cli(
+        registry_path,
+        runtime,
+        *stop,
+        "--actor-kind",
+        "owner",
+        "--expected-state-fingerprint",
+        preview["observed_state_fingerprint"],
+        "--execute",
+        cwd=project,
     )
-    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    assert rc == 0, stopped
+    assert stopped["after_state"] == "stopped" and stopped["readback"]["verified"]
     assert (index_path.read_bytes() if index_path.exists() else None) == index_before
 
     rc, refreshed = _run_cli(
