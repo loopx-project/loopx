@@ -45,7 +45,11 @@ if path.exists():
 
 
 class SourceScopeError(ValueError):
-    """A request is outside this prepared source, before any IO."""
+    """A request is outside this prepared source's read authority."""
+
+
+class SourceGoalNotFoundError(SourceScopeError):
+    """Native readback has no registered match for this one Goal selector."""
 
 
 def _text(value, field, limit=4096):
@@ -192,9 +196,13 @@ class GoalSource:
                 or any(not isinstance(goal, dict) or not isinstance(goal.get("id"), str)
                        or not _GOAL_ID.fullmatch(goal["id"]) for goal in goals)):
             raise ValueError("Invalid native source status")
+        if selected is not None and not goals:
+            raise SourceGoalNotFoundError("The source no longer exposes the selected Goal")
         if selected is not None and (len(goals) != 1 or goals[0]["id"] != selected):
             raise SourceScopeError("The source no longer exposes the selected Goal")
         if self.goal_id is None and (any(goal.get("registry_member") is not True for goal in goals)):
+            if selected is not None:
+                raise SourceGoalNotFoundError("Only registered Goals are in this source scope")
             raise SourceScopeError("Only registered Goals are in this source scope")
         return status
 
@@ -269,10 +277,16 @@ class GoalSourceReader:
                 self.source.check_access(selected)
                 if (fresh or self._status is None or selected != self._selected
                         or monotonic() - self._read_at >= 2):
-                    self._status = None
-                    self._status = self.source.read_status(selected)
+                    status = self.source.read_status(selected)
+                    self._status = status
                     self._selected, self._read_at = selected, monotonic()
                 return deepcopy(self._status)
+            except SourceGoalNotFoundError:
+                # Missing another selector is not a failed source read. A
+                # known loss of the current Goal still revokes its cache.
+                if selected == self._selected:
+                    self._invalidate()
+                raise
             except (ValueError, OSError, subprocess.SubprocessError):
                 self._invalidate()
                 raise

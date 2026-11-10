@@ -188,11 +188,19 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
 
 
 @pytest.mark.parametrize("wrong_goal", ["another-goal", ""])
-def test_invalid_selector_does_not_invalidate_authorized_history(tmp_path, native_history, monkeypatch, wrong_goal):
+@pytest.mark.parametrize("scope", ["fixed", "all_registered"])
+@pytest.mark.parametrize("route", ["/api/goal-source/history?goal_id=shared-goal",
+                                  "/api/chat/explore-results?view=history&goal_id=shared-goal"])
+def test_invalid_selector_does_not_invalidate_authorized_history(
+    tmp_path, native_history, monkeypatch, wrong_goal, scope, route,
+):
     source, log, events = native_history
+    if scope == "all_registered":
+        from dataclasses import replace
+        source = replace(source, goal_id=None)
     registry = Path(source.registry)
     original = {path: path.read_bytes() for path in (log, registry)}
-    history = "/api/goal-source/history?goal_id=shared-goal"
+    history = route
     entered, release = Event(), Event()
     read_events = GoalSource.read_events
 
