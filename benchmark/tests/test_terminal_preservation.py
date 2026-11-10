@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import errno
+import io
 import json
+import tarfile
 import os
 from types import SimpleNamespace
 
@@ -25,7 +27,8 @@ def fixture_preservation(tmp_path, monkeypatch, fault=None):
     container = SimpleNamespace(id="a" * 64, attrs={"State": {
         "Running": False, "Paused": False, "Restarting": False, "Pid": 0}}, reload=lambda: None)
     supervisor = SimpleNamespace(destination=tmp_path, controller_file=tmp_path / "controller.json",
-        token="dummy-token", container=container, close=close)
+        token="dummy-token", container=container, close=close,
+        capture_phase_deadline_path=lambda: "/opt/loopx-benchmark/control/phase-deadline")
     def capture(*args, **kwargs):
         calls.append("capture")
         if fault == "capture":
@@ -176,6 +179,12 @@ def test_receipt_failure_never_masks_an_unconfirmed_stop(tmp_path, monkeypatch):
     assert preservation.receipt["stop_error_kind"] == "RuntimeError"
 
 
+def _read_retained_clock(container, name):
+    with io.BytesIO(b"".join(container.get_archive("/opt/loopx-benchmark/control/" + name)[0])) as raw:
+        with tarfile.open(fileobj=raw) as archive:
+            return archive.extractfile(name).read()
+
+
 @pytest.mark.parametrize("profile,feedback", [
     ("official", "best-only"), ("native-goal", "native"), ("heartbeat-explore", "native"),
 ])
@@ -210,7 +219,8 @@ def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, w
     script = '''from pathlib import Path
 import sqlite3,time
 root=Path('/opt/loopx-benchmark'); control=root/'control'; control.mkdir(parents=True)
-(control/'phase-deadline').write_text(str(int(time.time())+600))
+(control/'phase-deadline').write_text('1')
+(control/'continued-phase-deadline').write_text(str(int(time.time())+600))
 (control/'registry.json').write_text('{"fixture":true}')
 (control/'scheduler-state.json').write_text('{"host_attempt":{"status":"failed"}}')
 (root/'state/runtime').mkdir(parents=True)
@@ -231,7 +241,8 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
         components.append({"id": "missing", "source_path": "/missing-participant"})
     supervisor = CheckpointSupervisor(files[0], tmp_path / "terminal-points",
         retention_enabled=False, terminal_components=components,
-        terminal_receipt=tmp_path / "terminal-preservation.json")
+        terminal_receipt=tmp_path / "terminal-preservation.json",
+        phase_deadline_path="/opt/loopx-benchmark/control/continued-phase-deadline")
     if receipt_failure:
         def fail_receipt():
             raise OSError(errno.ENOSPC, "synthetic receipt disk full")
@@ -294,6 +305,8 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
         assert metadata["native_cursor_qualified"] is False
         assert (point / "components/terminal_workspace/candidate").read_text() == 'newer than the last graded candidate'
         capsule = point / "components" / metadata["native_capsule_component_id"]
+        assert (capsule / "components/host_phase_deadline").read_bytes() == _read_retained_clock(container, "continued-phase-deadline")
+        assert _read_retained_clock(container, "phase-deadline") == b"1"
         native = json.loads((capsule / "checkpoint.json").read_text())["point_metadata"]["native_reference"]
         assert native["opportunity"]["next_agent"] == 2
         assert native["opportunity"]["remaining_cooldown_seconds"] > 3500
