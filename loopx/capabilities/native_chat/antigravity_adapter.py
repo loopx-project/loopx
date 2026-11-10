@@ -1034,12 +1034,27 @@ class AntigravityAdapter:
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
         previous_progress: Any = None
         saw_running_or_new_step = False
+        observed_native_errors: set[int] = set()
+
+        def timeout(kind: str) -> None:
+            limit = self.hard_timeout_sec if kind == "hard" else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+            detail = {"kind": kind, "limit_seconds": limit,
+                      "native_error_count": len(observed_native_errors)}
+            if event_sink is not None:
+                event_sink("agent.phase", {"method": "native/timeout", "timeout": detail,
+                    "label": "原生助手达到执行时限" if kind == "hard" else "等待原生助手进展超时"})
+            error = CodexChatAgentError(
+                f"Antigravity did not finish before the turn deadline ({kind} timeout).",
+                gate=None, error_code="response_timeout")
+            error.native_error_info = {"timeout": detail}
+            raise error
 
         while True:
             now = time.monotonic()
-            if (deadline is not None and now >= deadline) or now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
-                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
-                                          gate=None, error_code="response_timeout")
+            if deadline is not None and now >= deadline:
+                timeout("hard")
+            if now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
+                timeout("idle")
             self._check_interrupted()
             self._interrupted.wait(0.25)
             self._check_interrupted()
@@ -1176,6 +1191,15 @@ class AntigravityAdapter:
                             # API attempts and cleared errors. The native host
                             # owns retry: only its settled terminal error ends
                             # this turn. Do not cancel its in-flight backoff.
+                            if (step_status != "CORTEX_STEP_STATUS_CLEARED"
+                                    and step_idx not in observed_native_errors):
+                                observed_native_errors.add(step_idx)
+                                if event_sink is not None:
+                                    # Error bodies can contain credentials, URLs
+                                    # and private host paths. Publish only the
+                                    # occurrence, never that native payload.
+                                    event_sink("agent.phase", {"method": "native/error",
+                                        "label": "原生助手记录了调用错误"})
                             continue
 
             # A running status alone is not progress. Observe only this input's
@@ -1195,8 +1219,7 @@ class AntigravityAdapter:
                 last_progress_at = now
             self._check_interrupted()
             if deadline is not None and now >= deadline:
-                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
-                                          gate=None, error_code="response_timeout")
+                timeout("hard")
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":

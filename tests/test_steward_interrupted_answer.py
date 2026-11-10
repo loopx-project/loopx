@@ -16,6 +16,126 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("hard_limit, native_error", [(None, True), (150.0, True), (None, False)])
+def test_native_timeout_reports_its_clock_without_extending_native_retry(
+    tmp_path, language_server, monkeypatch, hard_limit, native_error,
+):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    steps, frames = [user], []
+    for idx, at in enumerate((1.0, 120.0, 240.0, 305.0), 1):
+        if native_error:
+            steps = [*steps, {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": idx}},
+                "errorMessage": {"error": {"shortError": f"EOF {idx} NATIVE_PRIVATE_SENTINEL /private/host"}}}]
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path, hard_timeout_sec=hard_limit).start_turn(
+            "Original task", lambda kind, data: events.append((kind, data)))
+    assert raised.value.error_code == "response_timeout"
+    diagnostic = next(data["timeout"] for kind, data in events
+        if kind == "agent.phase" and data.get("method") == "native/timeout")
+    assert diagnostic["kind"] == ("hard" if hard_limit is not None else "idle")
+    assert diagnostic["limit_seconds"] == (hard_limit or 300.0)
+    assert diagnostic["native_error_count"] == ((3 if hard_limit else 4) if native_error else 0)
+    assert raised.value.native_error_info == {"timeout": diagnostic}
+    assert language_server["now"] == (240.0 if hard_limit else 305.0)
+    assert language_server["cancelled"].is_set()
+    assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+    assert not any(kind in {"answer.final", "turn.native_result"} for kind, _ in events)
+    serialized = json.dumps(events)
+    assert "NATIVE_PRIVATE_SENTINEL" not in serialized and "/private/host" not in serialized
+    errors = [data for kind, data in events if data.get("method") == "native/error"]
+    assert len(errors) == diagnostic["native_error_count"]
+
+
+@pytest.mark.parametrize("kind, expected", [
+    ("idle", "等待原生助手有效进展超时"), ("hard", "原生助手达到本次执行时限"),
+    ("unknown-host-value", "等待助手响应超时"), (None, "等待助手响应超时"),
+])
+def test_original_lark_timeout_keeps_typed_reason_and_never_replays(
+    steward, language_server, monkeypatch, kind, expected,
+):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    starts = []
+
+    def fail_after_observed_progress(_adapter, message, event_sink):
+        starts.append(message)
+        event_sink("turn.started", {"upstream_turn_id": "synthetic-timeout"})
+        event_sink("agent.phase", {"method": "native/timeout", "label": "private label",
+            "timeout": {"kind": kind, "native_error_count": 4, "raw": "NATIVE_PRIVATE_SENTINEL"}})
+        raise CodexChatAgentError("Private host diagnostic NATIVE_PRIVATE_SENTINEL", gate=None,
+                                  error_code="response_timeout")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", fail_after_observed_progress)
+    store, runtime, provider, transport, binding, _, _ = steward
+    native_route = kind in {"idle", "hard"}
+    if native_route:
+        from test_antigravity_steward_adapter import _native_clock, _native_frames
+        monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+        monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        runtime.hard_timeout_sec = 150.0 if kind == "hard" else None
+        frames = _native_frames(stagnant=True)
+        for index, frame in enumerate(frames):
+            frame["steps"] += [{"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2 + attempt}},
+                "errorMessage": {"error": {"shortError": "EOF NATIVE_PRIVATE_SENTINEL"}}}
+                for attempt in range(index)]
+        _native_clock(monkeypatch, language_server, frames)
+    source = provider.event("steward-app", "native-timeout-source", "Complete this original request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+    assert failed["status"] == "failed" and failed["error_code"] == "response_timeout"
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    assert transport.reconcile() == 1
+    saved = json.loads((transport.root / f"{ref}.json").read_text())
+    terminal = saved["deliveries"]["terminal"]
+    assert terminal["verified"] and expected in terminal["text"]
+    assert ("期间原生助手记录了调用错误" in terminal["text"]) is (kind in {"idle", "hard"})
+    assert "不会自动重放" in terminal["text"]
+    assert "NATIVE_PRIVATE_SENTINEL" not in terminal["text"] and "private label" not in terminal["text"]
+    returned = provider.messages[terminal["attempt"]["message_ref"]]
+    assert returned["chat_id"] == source["chat_id"]
+    assert expected in json.dumps(returned["body"], ensure_ascii=False)
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+        runner=provider, cli_bin="lark-cli")
+    before = list(provider.writes)
+    assert restarted.reconcile() == 0
+    assert restarted.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+    assert (not starts and [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+            if native_route else len(starts) == 1)
+    assert provider.writes == before
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+
+
+@pytest.mark.parametrize("info", [None, [], {"kind": []}, {"kind": {}}, {"kind": "idle", "native_error_count": True}])
+def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+    code, text = manager_failure_reply({"error_code": "response_timeout", "error": "NATIVE_PRIVATE_SENTINEL"},
+        phase_events=[{"kind": "agent.phase", "payload": {"method": "native/timeout", "timeout": info}}])
+    assert code == "processing_failed" and "超时" in text and "不会自动重放" in text
+    assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
+
+
+@pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
+def test_native_error_labels_preserve_shared_admission_failure_category(source_code):
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+    code, _ = manager_failure_reply({"error_code": source_code})
+    assert code == "processing_failed"
+
+
 @pytest.mark.parametrize("fault, expected", [
     ("done", True), ("error", True), ("canceled", True), ("cleared", True),
     ("running", False), ("generating", False), ("waiting", False),
