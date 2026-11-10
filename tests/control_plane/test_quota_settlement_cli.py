@@ -1705,6 +1705,8 @@ def test_scheduler_cache_freshness_keeps_authoritative_decode_fail_closed(
 def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
     tmp_path: Path,
 ) -> None:
+    from loopx.control_plane.goals.activation import build_goal_activation
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     guard = (
         "quota",
@@ -1728,7 +1730,12 @@ def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
     index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     index_before = index_path.read_bytes() if index_path.exists() else None
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    registry["goals"][0]["activation_state"] = "stopped"
+    # Cache invalidation needs a valid stored change, not a retired alias
+    # whose upgrade rejection prevents status collection altogether.
+    registry["goals"][0]["activation"] = build_goal_activation(
+        state="stopped", updated_at=datetime.now(timezone.utc).isoformat(),
+        reason="Stop the cache fixture without appending a run.",
+    )
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
     assert (index_path.read_bytes() if index_path.exists() else None) == index_before
 

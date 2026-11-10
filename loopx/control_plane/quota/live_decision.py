@@ -642,6 +642,11 @@ def _attach_receipt_bound_ack_candidates(
     )
 
 
+def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
+    packet = payload.get("replan_action_packet") or {}
+    return packet.get("settlement_only") is True and packet.get("decision") == "historical_ack_recorded"
+
+
 def _attach_original_replan_settlement(
     payload: dict[str, Any], readback: QuotaSettlementReadback | None, *,
     available_capabilities: list[str] | None,
@@ -655,15 +660,16 @@ def _attach_original_replan_settlement(
     if original_replan_settlement and readback is not None:
         attach_settlement_progress(payload, readback,
             registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref)
-        # Settlement retains the verified receipt identity without restoring a
-        # runnable Todo or granting another delivery.
-        payload["interaction_contract"] = build_interaction_contract(
-            payload, available_capabilities=available_capabilities,
-            scheduler_execution_context=scheduler_execution_context,
-            turn_instance_id=turn_instance_id,
-            registry_path=str(registry_path), runtime_root=str(runtime_root),
-            receipt_bound_identity=readback.identity.value,
-        )
+        if _historical_ack_writeback_required(payload):
+            # Settlement retains the verified receipt identity without restoring a
+            # runnable Todo or granting another delivery.
+            payload["interaction_contract"] = build_interaction_contract(
+                payload, available_capabilities=available_capabilities,
+                scheduler_execution_context=scheduler_execution_context,
+                turn_instance_id=turn_instance_id,
+                registry_path=str(registry_path), runtime_root=str(runtime_root),
+                receipt_bound_identity=readback.identity.value,
+            )
     return original_replan_settlement
 
 
@@ -917,7 +923,7 @@ def build_live_quota_should_run_decision(
     if (
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
-        and not original_replan_settlement
+        and not _historical_ack_writeback_required(payload)
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
         and (
             receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
