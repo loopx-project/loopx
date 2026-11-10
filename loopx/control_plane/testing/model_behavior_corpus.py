@@ -5,7 +5,7 @@ import random
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ..quota.turn_envelope import build_turn_envelope
+from ..quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION, build_turn_envelope
 from .model_behavior_qualification import (
     MODEL_BEHAVIOR_HARD_INVARIANT_FIELDS,
     MODEL_BEHAVIOR_SEMANTIC_CONTRACT_FIELDS,
@@ -76,9 +76,12 @@ def _case(
         qualification_id=f"validate-{case_id}",
         arm="full_packet",
     )
+    # Keep the existing raw-quota/v0 control by default. An explicitly retained
+    # complete capture is already its own source; do not reconstruct an old
+    # projection or silently replace its recorded host/settlement binding.
     normalized_candidate = copy.deepcopy(
-        dict(candidate_packet)
-        if candidate_packet is not None
+        dict(candidate_packet) if candidate_packet is not None
+        else normalized_full if normalized_full.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
         else build_turn_envelope(normalized_full)
     )
     build_model_behavior_actor_request(

@@ -449,6 +449,8 @@ export function createEffectRuntimeHandlers(
     ["presentation.goal_sources.project", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceLinks}) => projectGoalSourceLinks)],
     ["presentation.goal_sources.status", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceStatus}) => projectGoalSourceStatus)],
     ["presentation.goal_sources.strategies", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceStrategies}) => projectGoalSourceStrategies)],
+    ["presentation.goal_sources.document_plan", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({planGoalSourceDocument}) => planGoalSourceDocument)],
+    ["presentation.goal_sources.document", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceDocument}) => projectGoalSourceDocument)],
   ["presentation.owner_attention.plan", lazyHandler(() => import("./presentation/owner_attention.ts"), ({planOwnerAttention}) => planOwnerAttention)],
   ["presentation.owner_attention.observe", lazyHandler(() => import("./presentation/owner_attention.ts"), ({observeOwnerAttention}) => observeOwnerAttention)],
   ["presentation.owner_attention.health", lazyHandler(() => import("./presentation/owner_attention.ts"), ({ownerAttentionHealth}) => ownerAttentionHealth)],
