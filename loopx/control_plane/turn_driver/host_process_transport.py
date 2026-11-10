@@ -44,6 +44,10 @@ _DRAIN_PRECEDENCE = (HOST_PROCESS_UNSUPPORTED_PLATFORM, HOST_PROCESS_DRAINING,
                      HOST_PROCESS_UNATTRIBUTABLE, HOST_PROCESS_DRAINED, HOST_PROCESS_NOT_LAUNCHED)
 
 
+class HostProcessInterruptionUnconfirmed(RuntimeError):
+    """The owned process cleanup did not observe the Host return after interruption."""
+
+
 def host_process_drain_supported() -> bool:
     """Whether this platform can prove an owned Host group has exited.
 
@@ -156,7 +160,9 @@ def _host_process_drain(record: dict[str, Any] | None, *, supervises: str,
     group_present = _process_group_present(group)
     if group_present is None:
         return HOST_PROCESS_UNATTRIBUTABLE
-    return HOST_PROCESS_DRAINING if group_present else HOST_PROCESS_DRAINED
+    if group_present:
+        return HOST_PROCESS_DRAINING
+    return HOST_PROCESS_UNATTRIBUTABLE if record.get("interrupt_unconfirmed") is True else HOST_PROCESS_DRAINED
 
 
 def execution_host_drain(record_path: Path, *, launch_possible: bool = False) -> str:
@@ -301,13 +307,16 @@ def run_host_process(
     delegated_lease: dict[str, Any] | None = None,
     environment: dict[str, str] | None = None,
     launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    check_running: Callable[[], None] | None = None,
+    interrupt_before_terminate: bool = False,
 ) -> dict[str, Any]:
     """Keep the control pipe open until exit; EOF cancels the owned process group.
 
     Callbacks observe transient chunks. They must not persist raw Host output.
     TS owns deadlines, byte budgets, termination and the final observation.
     An owning admission guard covers request delivery through spawn observation,
-    then releases before Host output; it must never lock the entire Host run.
+    then releases before Host output. Optional running checks continue on a silent
+    stream and run outside that launch fence.
     """
     request = _host_process_request(
         argv,
@@ -318,6 +327,10 @@ def run_host_process(
         drain_timeout_seconds=drain_timeout_seconds,
         delegated_lease=delegated_lease,
     )
+    if check_running is not None and launch_guard is None:
+        raise ValueError("a running Host check requires an admitted launch guard")
+    if interrupt_before_terminate:
+        request["interrupt_before_terminate"] = True
     bridge = Path(__file__).with_name("host_process_bridge.ts")
     bridge_environment, record_value, record_path, supervision, supervises = _bridge_record_scope(environment, delegated_lease)
     launch_budget = max(1.0, timeout_seconds) if timeout_seconds is not None else 30.0
@@ -370,8 +383,12 @@ def run_host_process(
                 proc.stdin.write(frame)
                 proc.stdin.flush()
             while True:
-                event = (guarded.next(deadline=launch_deadline) if guarded is not None
-                         else json.loads(line) if (line := next(proc.stdout, None)) is not None else None)
+                if guarded is not None:
+                    running = check_running if launch_deadline is None and result is None else None
+                    event = guarded.next(deadline=launch_deadline, check_running=running)
+                else:
+                    line = next(proc.stdout, None)
+                    event = json.loads(line) if line is not None else None
                 if event is None:
                     break
                 kind = event.get("kind")
@@ -408,7 +425,17 @@ def run_host_process(
                 if guarded is not None and (launch_deadline is not None or sys.exc_info()[0] is not None):
                     # A failed handoff still owns the Goal fence. The TS bridge must
                     # report no launch or finish its Host cleanup before it releases.
-                    guarded.cancel()
+                    if interrupt_before_terminate and launch_deadline is None and result is None:
+                        try:
+                            guarded.cancel()
+                        except RuntimeError as exc:
+                            _record_unconfirmed_interrupt(record_path, record)
+                            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed") from exc
+                        if not _host_return_observed(guarded.result):
+                            _record_unconfirmed_interrupt(record_path, record)
+                            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
+                    else:
+                        guarded.cancel()
                     if record is not None and guarded.not_launched:
                         assert record_path is not None
                         record.update(phase=HOST_PROCESS_NOT_LAUNCHED, process_group=None)
@@ -435,17 +462,41 @@ def run_host_process(
                             guarded.close_output()
                         else:
                             proc.stdout.close()
-        if record is not None and result is not None and proc.returncode == 0:
+        if proc.returncode != 0 or result is None:
+            raise RuntimeError("Managed Host process supervision returned no result")
+        unconfirmed = (interrupt_before_terminate and result["outcome"] in {"timeout", "cancelled", "output_limit"}
+                       and not _host_return_observed(result))
+        if record is not None:
             assert record_path is not None
             # The supervisor returned only after cleaning its group; the group is still re-read.
             record["phase"] = "finished"
+            if unconfirmed:
+                record["interrupt_unconfirmed"] = True
             _write_host_process_record(record_path, record)
-        if proc.returncode != 0 or result is None:
-            raise RuntimeError("Managed Host process supervision returned no result")
+        if unconfirmed:
+            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
         return result
 
 
-def _bridge_record_scope(environment, delegated_lease):
+def _host_return_observed(result: dict[str, Any] | None) -> bool:
+    return bool(result and result.get("output_complete") is True and (
+        result.get("interrupt_returned") is True or (
+            result.get("outcome") == "exited" and result.get("signal") is None
+            and isinstance(result.get("returncode"), int)
+        )
+    ))
+
+
+def _record_unconfirmed_interrupt(path: Path | None, record: dict[str, Any] | None) -> None:
+    if path is not None and record is not None:
+        record["interrupt_unconfirmed"] = True
+        _write_host_process_record(path, record)
+
+
+def _bridge_record_scope(
+    environment: dict[str, str] | None,
+    delegated_lease: dict[str, Any] | None,
+) -> tuple[dict[str, str], str, Path | None, str, str]:
     """Separate the supervisor's private record namespace from its child Host."""
     # The bridge runs on the caller's environment, which may pin the release the
     # Host must run and name the record its supervisor owns. Copy it instead of
