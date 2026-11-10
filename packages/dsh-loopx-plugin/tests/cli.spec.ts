@@ -17,6 +17,39 @@ const command: LoopXCommand = {
 }
 
 describe('safe command diagnostics', () => {
+  it('preserves the primary timeout and final exit among nine candidates', async () => {
+    let attempts = 0
+    const failure = await resolveLoopXCommand({
+      env: { LOOPX_BIN: '', PYTHON_BIN: undefined },
+      managedLauncher: {
+        path: '/fixture/private-launcher.py',
+        pythonBins: Array.from({ length: 6 }, (_, index) => `fixture-python-${index}`),
+      },
+      runner: (_file, _args, options) => {
+        attempts += 1
+        // Use real child processes behind the candidate adapter on every platform.
+        return runFile(process.execPath, ['-e', attempts === 1
+          ? 'setTimeout(() => {}, 10_000)'
+          : 'process.stderr.write("PRIVATE process output"); process.exitCode = 1'], {
+          ...options, timeoutMs: attempts === 1 ? 50 : 5_000,
+        })
+      },
+    }).catch(error => error)
+    expect(attempts).toBe(9)
+    expect(failure.diagnostics.probes).toHaveLength(9)
+    const record = cliErrorFields(failure)
+    const probes = record.split(' probes=')[1]!.split(' ')[0]!.split(';')
+    expect(probes).toHaveLength(8)
+    expect(probes[0]).toContain('kind=timeout,cause_kind=timeout')
+    expect(probes[0]).toContain('candidate=managed-launcher')
+    expect(probes.at(-1)).toContain('kind=exit,cause_kind=exit')
+    expect(probes.at(-1)).toContain('candidate=python-module')
+    expect(record).toContain('probes_omitted=1')
+    for (const privateValue of ['PRIVATE', 'fixture-python', 'private-launcher', process.cwd(), process.execPath, '--version']) {
+      expect(record).not.toContain(privateValue)
+    }
+  })
+
   it('retains the primary probe failure as well as the final Windows fallback exit', async () => {
     const failure = await resolveLoopXCommand({
       env: { LOOPX_BIN: '', PYTHON_BIN: '' },

@@ -645,7 +645,11 @@ export class LoopXContinuationDriver {
       ?? (() => `dsh-loopx-${randomUUID()}`)
     this.retryDelaysMs = options.retryDelaysMs ?? [200, 750]
     this.runDetached = options.runDetached ?? (operation => operation())
-    this.warn = options.warn ?? (() => {})
+    this.warn = message => {
+      try { options.warn?.(message) } catch {
+        // Diagnostic exporters must not interrupt admission or message restoration.
+      }
+    }
   }
 
   observeAgent(agent: Agent): void {

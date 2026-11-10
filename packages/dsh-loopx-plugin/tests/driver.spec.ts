@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
+import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
@@ -467,6 +467,41 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('driver diagnostic records', () => {
+  it.each(['before', 'downstream'])('restores user input with a throwing Cordis exporter in the %s batch', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const service = new LoggerService(new Context())
+    const exporter = { export: vi.fn(() => { throw new Error('exporter unavailable') }) }
+    const removeExporter = service.exporter(exporter)
+    const logger = new Logger({ name: 'fixture', level: 2 }, service)
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner: fixture.runner,
+      warn: message => { logger.warn(message) },
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      const other = userMessage('pending user input')
+      const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [submitted, other] }))
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      await expect(driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
+        new AbortController().signal, next,
+      )).resolves.toEqual({ kind: 'reject' })
+      expect(exporter.export).toHaveBeenCalledOnce()
+      expect(host.nextStep).toEqual([other])
+      expect(next).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1)
+      await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
+        .resolves.toEqual({ kind: 'reject' })
+      expect(host.nextStep).toEqual([other])
+      expect(host.cancelCalls).toBe(0)
+    } finally {
+      removeExporter()
+      await driver.dispose()
+    }
+  })
+
   it('records the maintenance signal independently of the Driver controller', async () => {
     const host = fakeAgent()
     const maintenance = new AbortController()

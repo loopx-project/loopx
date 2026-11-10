@@ -67,9 +67,10 @@ function cliFailureFields(error: unknown): string {
 
 export function cliErrorFields(error: unknown): string {
   const probes = error instanceof LoopXCliError
-    ? error.diagnostics.probes?.slice(-8).map(probe => cliFailureFields(probe).replaceAll(' ', ',')).join(';')
-    : undefined
-  return `${cliFailureFields(error)} probes=${probes || 'none'}`
+    ? error.diagnostics.probes ?? [] : []
+  const selected = probes.length > 8 ? [probes[0]!, ...probes.slice(-7)] : probes
+  const fields = selected.map(probe => cliFailureFields(probe).replaceAll(' ', ',')).join(';')
+  return `${cliFailureFields(error)} probes=${fields || 'none'} probes_omitted=${probes.length - selected.length}`
 }
 
 export interface FileResult {
