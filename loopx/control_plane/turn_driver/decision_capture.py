@@ -260,6 +260,11 @@ def _validate_handoff_capture_root(endpoint: Path, requested_root: Path) -> None
         return  # Earlier Hosts still validate the capture when accepting it.
     except (OSError, ValueError) as exc:
         raise QuotaCommandValidationError(f"invalid decision handoff binding; no guard was run: {exc}") from exc
+    try:
+        if requested_root.resolve(strict=True) != requested_root:
+            raise ValueError("capture root must remain a physical absolute directory")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff root; no guard was run: {exc}") from exc
     if bound_root != os.fsencode(requested_root):
         raise QuotaCommandValidationError(
             "decision handoff capture root differs from the current Host wake; no guard was run. "

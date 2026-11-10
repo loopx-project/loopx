@@ -296,7 +296,9 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
-def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("invalid_root", ["foreign", "symlinked_ancestor"])
+def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path, provider, invalid_root):
     from pathlib import Path
     import subprocess
 
@@ -309,7 +311,7 @@ def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path):
 
     project, runtime, registry = _write_fixture(tmp_path / "authority")
     _configure_autonomous_replan_fixture(project, runtime, registry)
-    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    _initialize_fixture_authority(project, runtime, provider=provider)
     request = tmp_path / "checkpoint-request.json"
     request.write_text(json.dumps({
         "destination": str(tmp_path / "checkpoints"), "trigger": "fresh_replan",
@@ -324,18 +326,30 @@ def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path):
         host.capture_root.mkdir(parents=True, mode=0o700)
         native_context = tmp_path / "native-context"
         native_context.mkdir(mode=0o700)
+        requested_root = native_context
+        original_parent = host.capture_root.parent.with_name("original-parent")
+        if invalid_root == "symlinked_ancestor":
+            (native_context / host.capture_root.name).mkdir(mode=0o700)
+            host.capture_root.parent.rename(original_parent)
+            host.capture_root.parent.symlink_to(native_context, target_is_directory=True)
+            requested_root = host.capture_root
         command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
                    "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run",
                    "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
                    "--runtime-profile", "generic_cli", "--context-delivery", "off",
                    "--decision-handoff-socket", host.socket_path, "--decision-output-root"]
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
-        refused = subprocess.run([*command, str(native_context)], cwd=project, env=env,
-                                 capture_output=True, text=True, timeout=15, check=False)
-        assert refused.returncode == 1
-        assert "capture root differs from the current Host wake" in refused.stdout + refused.stderr
-        assert not list(native_context.iterdir())
-        assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+        try:
+            refused = subprocess.run([*command, str(requested_root)], cwd=project, env=env,
+                                     capture_output=True, text=True, timeout=15, check=False)
+            assert refused.returncode == 1
+            assert "no guard was run" in (refused.stdout + refused.stderr).lower()
+            assert not list(requested_root.iterdir())
+            assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+        finally:
+            if invalid_root == "symlinked_ancestor":
+                host.capture_root.parent.unlink()
+                original_parent.rename(host.capture_root.parent)
 
         host.listener.settimeout(15)
         with subprocess.Popen([*command, str(host.capture_root)], cwd=project, env=env,
