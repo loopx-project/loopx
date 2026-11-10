@@ -10,9 +10,11 @@ from ..control_plane.quota.error_codes import (
     QuotaActionSelectionConflictError,
     QuotaActionSelectionConflictKind,
 )
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_pending_action_todo_id,
+    heartbeat_receipt_request_subject,
     heartbeat_receipt_semantic_replan_obligation_id,
     heartbeat_receipt_settlement_replan_obligation_id,
     heartbeat_receipt_settlement_todo_id,
@@ -127,13 +129,22 @@ def load_requested_quota_action_selection(
     details: Mapping[str, object] = (
         details_value if isinstance(details_value, Mapping) else {}
     )
+    bound_todo = heartbeat_receipt_settlement_todo_id(existing)
+    bound_replan = heartbeat_receipt_settlement_replan_obligation_id(existing)
+    # A recovery-only guard observed the current review while repairing a prior
+    # Turn. It did not admit that review or bind this Turn's future work.
+    unbound_recovery = (
+        not bound_todo and not bound_replan and not heartbeat_receipt_request_subject(existing)
+        and existing.get("status") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+        and details.get("interaction_mode") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+    )
     return RequestedQuotaActionSelection(
         requested_todo_id=requested_todo_id,
         receipt=existing,
-        receipt_bound_todo_id=heartbeat_receipt_settlement_todo_id(existing),
+        receipt_bound_todo_id=bound_todo,
         receipt_bound_replan_obligation_id=(
-            heartbeat_receipt_semantic_replan_obligation_id(existing)
-            or heartbeat_receipt_settlement_replan_obligation_id(existing)
+            (None if unbound_recovery else heartbeat_receipt_semantic_replan_obligation_id(existing))
+            or bound_replan
         ),
         receipt_pending_action_todo_id=(
             heartbeat_receipt_pending_action_todo_id(existing)
