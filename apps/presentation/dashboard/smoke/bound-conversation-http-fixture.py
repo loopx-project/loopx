@@ -151,11 +151,16 @@ class SyntheticPrivateSource:
                           server.chat_store.sessions_root / sid / "turns" / f"{turn['turn_id']}.json"])
             reply_evidence = {path: path.read_bytes() for path in paths}
             bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        returned_files = {}
+        if "--returned-files" in sys.argv:
+            returned_files, reply_evidence = self.seed_returned_files(server, original)
+            bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
         other, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="", mode="new",
             work_dir=self.root / "project", project_ref=binding["project_ref"])
         server.chat_store.append_message(other["session_id"], role="agent", text="Unrelated desktop conversation — must remain separate.")
         print(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}",
-            "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"]}), flush=True)
+            "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"],
+            **returned_files}), flush=True)
         settings_handler = server.RequestHandlerClass._private_conversations
         history_handler = server.RequestHandlerClass._session_snapshot
         sessions_handler = server.RequestHandlerClass._list_sessions
@@ -253,6 +258,8 @@ class SyntheticPrivateSource:
                         result.update(model_turns=sum(json.loads(line).get("method") == "turn/start"
                             for line in (self.root / "synthetic-requests.jsonl").read_text().splitlines()),
                             reply_evidence_unchanged=all(path.read_bytes() == content for path, content in reply_evidence.items()))
+                    if returned_files:
+                        result["provider_sends"] = self.file_sender.calls
                 elif command == "stop":
                     server.shutdown()
                     return
@@ -260,6 +267,52 @@ class SyntheticPrivateSource:
                     result = {"unknown_command": command}
                 print(json.dumps(result), flush=True)
         threading.Thread(target=control, daemon=True).start()
+
+    def seed_returned_files(self, server, session):
+        """Publish once through the real result owner, then test read-only history."""
+        from hashlib import sha256
+        from loopx.capabilities.manager_context import _root, _write, POLICY_SCHEMA, register_ingress, deliver, acknowledge
+        from loopx.capabilities.manager_context.roundtrip import report, drain
+
+        root = server.runtime_controller.coordination_runtime_root
+        store, registry = server.chat_store, server.registry_path
+        sid = session["session_id"]
+        turn, _ = store.create_turn(sid, client_turn_id="synthetic-files", origin="lark",
+            message="请核对结果并返回原文件。Please return the original result files.")
+        target = {"goal_id": "goal-a", "agent_id": "agent-a"}
+        _write(_root(root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}}})
+        register_ingress(root, session_id=sid, client_turn_id=turn["client_turn_id"], channel=session["channel_id"],
+            sender_id="owner", message=turn["message"], source_id="lark:om_fixture_files")
+        receipt = deliver(root, registry, session=session, turn=turn, request=target, source_store=store)
+        store.update_turn(sid, turn["turn_id"], status="completing", response={
+            "message": "The receiver will return the original files.", "context_handoff_receipt": receipt})
+        store.finalize_managed_turn_completion(sid, turn["turn_id"])
+        acknowledge(root, "goal-a", "agent-a", receipt["request_id"], "adopt", "Verify the original files")
+        files = {"结果.json": b'\xef\xbb\xbf{"result":"verified"}\r\n', "source.bin": b"\x00\xffbinary source\x00"}
+        for name, raw in files.items():
+            (self.root / "project" / name).write_bytes(raw)
+        report(root, "goal-a", "agent-a", receipt["request_id"], "conclusion",
+            "### 结果已核验 / Verified result\n\n原始结果和文件均已保存。The original results and files are saved.\n\n"
+            "已核对结论、来源和失败记录。The result, sources and failed attempts were checked.",
+            registry=registry, attachment_refs=list(files))
+
+        class Sender:
+            supports_result_files = True
+            calls = 0
+
+            def __call__(self, *_):
+                self.calls += 1
+                return {"ok": True, "reply_verified": True}
+
+        self.file_sender = Sender()
+        assert drain(root, registry, store, self.file_sender) == 1
+        message = next(row for row in store.messages(sid) if row.get("origin") == "manager_followup")
+        paths = list(_root(root).rglob("*.json")) + [store.sessions_root / sid / "messages.jsonl",
+            store.sessions_root / sid / "turns" / f"{turn['turn_id']}.json"]
+        return {"fileMessageId": message["message_id"], "files": [
+            {"name": name, "sha256": sha256(raw).hexdigest(), "size": len(raw)} for name, raw in files.items()]}, {
+                path: path.read_bytes() for path in paths}
 
     reply_background = ("### 话题背景 / Topic background\n\n"
                         + "完整上下文保持可读。Keep the original context readable. " * 35)
@@ -315,9 +368,10 @@ def main():
             '        output.write(json.dumps(request) + "\\n")\n    method = request.get("method")')
         fake.write_text(model)
         fake.chmod(0o700)
-        steward = any(flag in sys.argv for flag in ("--steward", "--reply-context", "--steward-fallback"))
+        steward = any(flag in sys.argv for flag in ("--steward", "--reply-context", "--steward-fallback", "--returned-files"))
         source = SyntheticPrivateSource(root, steward=steward)
-        peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward and "--reply-context" not in sys.argv else None
+        peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward and not any(
+            flag in sys.argv for flag in ("--reply-context", "--returned-files")) else None
         source.peer_provider = peer
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
