@@ -14,6 +14,7 @@ from ...materials import goal_state_path
 from ...quota import (
     AUTONOMOUS_REPLAN_ACK_NEUTRAL_CLASSIFICATIONS,
     _resolve_reward_memory_experiment_from_status,
+    quota_status,
 )
 from ..agents.agent_lane_recommendation import (
     build_agent_lane_next_action,
@@ -77,6 +78,7 @@ from ..quota.task_orchestration import (
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
+from ..status.monitor_display_projection import build_project_asset
 from ..todos.contract import (
     TODO_STATUS_BLOCKED,
     TODO_STATUS_DEFERRED,
@@ -109,6 +111,7 @@ from ..work_items.capability_monitor_fallback import (
     build_capability_gate_with_monitor_fallback,
 )
 from ..work_items.primary_action import protocol_action_text as _protocol_action_text
+from ..work_items.project_asset import project_asset_quota_summary
 from ..work_items.work_lane import (
     lark_inbox_reply_due_work_lane_contract,
     operator_inbox_material_review_due_work_lane_contract,
@@ -658,6 +661,64 @@ def _prepare_gate_selection_candidates(
     return requested_action_candidate, fallback_todo_id, source_candidate
 
 
+def _apply_agent_scoped_user_todo_override(
+    source_item: dict[str, Any],
+    *,
+    quota: dict[str, Any],
+    project_asset: dict[str, Any],
+    override: dict[str, Any],
+    registry_goal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Keep the scoped quota decision and its cached projection coherent."""
+    item = {**source_item, **override.pop("item_patch", {})}
+    quota = {**quota, **override.pop("quota_patch", {})}
+    # Resolve the current lane through the existing quota owner. Removing a
+    # foreign gate does not remove exhaustion, focus waits or lifecycle stops.
+    for field in ("safe_bypass_allowed", "safe_bypass_kind", "safe_bypass_policy", "blocked_action_scope"):
+        quota.pop(field, None)
+    scoped_quota = quota_status(
+        {**registry_goal, "quota": quota},
+        waiting_on=item.get("waiting_on"), severity=source_item.get("severity"),
+        lifecycle_phase=source_item.get("lifecycle_phase"),
+        lifecycle_flags=source_item.get("lifecycle_flags"), status=source_item.get("status"),
+    )
+    state = str(scoped_quota["state"])
+    reason = str(
+        override["reason"] if state == override["to_state"] else scoped_quota["reason"]
+    )
+    override["to_state"] = state
+    quota = {**quota, **scoped_quota, str(override["kind"]): override, "reason": reason}
+    if project_asset:
+        shared_asset_inputs = {
+            "operator_question": source_item.get("operator_question"),
+            "agent_command": source_item.get("agent_command"),
+            "missing_gates": source_item.get("missing_gates"),
+            "next_handoff_condition": source_item.get("next_handoff_condition"),
+        }
+        source_asset = build_project_asset(
+            status=str(source_item.get("status") or ""),
+            waiting_on=str(source_item.get("waiting_on") or ""),
+            recommended_action=str(source_item.get("recommended_action") or ""),
+            **shared_asset_inputs,
+        )
+        scoped_asset = build_project_asset(
+            status=str(item.get("status") or ""),
+            waiting_on=str(item.get("waiting_on") or ""),
+            recommended_action=str(item.get("recommended_action") or ""),
+            **shared_asset_inputs,
+        )
+        # Only replace a derived stop instruction. Opaque caller constraints
+        # are retained verbatim and never participate in quota admission.
+        cached_stop = project_asset.get("stop_condition")
+        if cached_stop and cached_stop != source_asset["stop_condition"]:
+            scoped_asset["stop_condition"] = cached_stop
+        project_asset = {**project_asset, **scoped_asset}
+        if "quota" in project_asset:
+            project_asset["quota"] = project_asset_quota_summary(quota)
+        item = {**item, "project_asset": project_asset}
+    return {**item, "quota": quota}, quota, project_asset
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -738,16 +799,11 @@ def _prepare_quota_should_run_item(
         agent_identity=agent_identity,
     )
     if agent_scoped_user_todo_override:
-        state = str(agent_scoped_user_todo_override["to_state"])
-        reason = str(agent_scoped_user_todo_override["reason"])
-        quota = {
-            **quota,
-            **agent_scoped_user_todo_override.pop("quota_patch", {}),
-            "state": state,
-            str(agent_scoped_user_todo_override["kind"]): agent_scoped_user_todo_override,
-            "reason": reason,
-        }
-        item = {**item, **agent_scoped_user_todo_override.pop("item_patch", {})}
+        item, quota, project_asset = _apply_agent_scoped_user_todo_override(
+            item, quota=quota, project_asset=project_asset,
+            override=agent_scoped_user_todo_override, registry_goal=registry_goal,
+        )
+        state, reason = str(quota["state"]), str(quota["reason"])
         normal_delivery_allowed = goal_health_ok and state == "eligible"
         recovery_allowed = _recovery_delivery_allowed(quota, plan_ok=goal_health_ok)
     if recovery_allowed and _outcome_floor_blocker_already_projected(agent_todo_summary):
