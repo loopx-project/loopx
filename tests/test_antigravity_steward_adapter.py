@@ -1427,12 +1427,40 @@ def test_native_terminal_error_preserves_structured_cause(tmp_path, language_ser
     detail = {"shortError": "stream reading error: unexpected EOF", "userErrorMessage": "Network interrupted", "errorCode": 2}
     frame["steps"][-1] = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}}, "errorMessage": {"error": detail}}
+    language_server["cancel_failure"] = True
     _native_clock(monkeypatch, language_server, [frame])
     with pytest.raises(CodexChatAgentError) as raised:
         adapter_for(tmp_path).start_turn("original task")
     assert raised.value.error_code == "antigravity_step_error"
     assert str(raised.value) == "Network interrupted"
     assert raised.value.native_error_info == detail
+    assert not language_server["cancelled"].is_set()
+    assert not any(method == "CancelCascadeInvocation" for method, _ in language_server["calls"])
+
+
+def test_repeated_native_error_messages_do_not_reset_no_progress_deadline(tmp_path, language_server, monkeypatch):
+    from loopx.chat_agent import CodexChatAgentError
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    frames = []
+    steps = [user]
+    for idx, at in enumerate((1.0, 120.0, 240.0, 305.0), start=1):
+        steps = [
+            *steps,
+            {
+                "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": idx}},
+                "errorMessage": {"error": {"shortError": f"API error (attempt {idx}): EOF"}},
+            },
+        ]
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("original task")
+    assert raised.value.error_code == "response_timeout"
+    assert language_server["now"] == 305.0
+    assert language_server["cancelled"].is_set()
 
 
 def test_settled_intermediate_tool_error_or_cancellation_does_not_abort_completed_turn(

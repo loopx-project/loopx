@@ -259,6 +259,8 @@ export function projectTodoSummaryDisplay(input: JsonObject, onSource?: (key: st
     return gate.gate_state === "cleared_with_successor" && Array.isArray(gate.successor_todo_ids) ? gate.successor_todo_ids.map(id).filter(Boolean) : [];
   }));
   const selected: {item: JsonObject; text: unknown}[] = [], seen = new Set<string>();
+  const rawIds = new Set<unknown>();
+  const coordinates = new Map<unknown, {all: Set<string>; anonymous?: Set<string>}>();
   if (source) {
     for (const key of planning ? PLANNING_SOURCES : SUMMARY_SOURCES) {
       for (const [index, value] of (Array.isArray(source[key]) ? source[key] as unknown[] : []).entries()) {
@@ -267,7 +269,20 @@ export function projectTodoSummaryDisplay(input: JsonObject, onSource?: (key: st
         let todo = id(item.todo_id);
         if (terminal && !todo) {const legacy = stripPythonWhitespace(pythonFieldText(item, "todo_id")); if (legacy.startsWith("todo_")) todo = legacy;}
         if (!body || (planning ? !todo || !terminal && item.status === "done" || seen.has(todo!) : item.done === true)) continue;
-        if (!planning && selected.some(({item: prior, text}) => item.todo_id && prior.todo_id ? item.todo_id === prior.todo_id : prior.index === item.index && text === body)) continue;
+        if (!planning) {
+          // Either missing ID makes legacy coordinates decisive. Preserve raw
+          // IDs and strict equality: unlike Map keys, NaN never equals itself.
+          const rawId = item.todo_id, coordinate = item.index;
+          const prior = coordinate === coordinate ? coordinates.get(coordinate) : undefined;
+          if (rawId ? rawIds.has(rawId) || prior?.anonymous?.has(body) : prior?.all.has(body)) continue;
+          if (rawId) rawIds.add(rawId);
+          if (coordinate === coordinate) {
+            const entry = prior ?? {all: new Set<string>(), anonymous: undefined};
+            entry.all.add(body);
+            if (!rawId) (entry.anonymous ??= new Set<string>()).add(body);
+            coordinates.set(coordinate, entry);
+          }
+        }
         if (todo) seen.add(todo);
         selected.push({item, text: body});
         onSource?.(key, index);

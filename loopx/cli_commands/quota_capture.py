@@ -28,6 +28,7 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
+    budgeted_ready_opening,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
     _saved_context_read_page,
@@ -108,16 +109,17 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    initial_read_content = b""
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
-        nonlocal initial_read_pointers, initial_read_reference
+        nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, _ = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
@@ -188,6 +190,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    opening_observation = None
     if (progressive_enabled and observed and "first_read_command" in result
             and observed["pointer_bytes"] <= first_output_bytes // 4):
         first = Path(observed["path"])
@@ -195,6 +198,13 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
+        opening_observation = (initial_read_plan or {}).get("observed_opening")
+        if opening_observation is None or opening_observation["path"] != str(first):
+            return result
+    if not page_attached and initial_read_plan and initial_read_plan.get("linked_opening_detail"):
+        return budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
+            page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
+            context_directory=context_directory, observation=opening_observation)
     return result
 
 

@@ -1,16 +1,17 @@
 <!doctype html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fafafa">
-<title>Agent 读上下文，也需要一套“查书”的方法 · LoopX</title><meta name="description" content="从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。">
+<title>Agent 读上下文，也需要一套“查书”的方法 · LoopX</title><meta name="description" content="沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。">
 <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/context-delivery/"><link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/context-delivery/">
-<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
+<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
 </head><body><a class="skip-link" href="#main">跳至正文</a>
 <header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../context-delivery/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 3 日更新实证</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 8 日更新</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#stage-scopes">范围在影响决定之前读到</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#first-read-budget">首条响应要能完整送达</a><a href="#transport-cost">往返几次，正文搬了几遍</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
 <p>LoopX 的 context delivery 把这件事拆开做：<strong>完整资料保存下来，当前决定需要的事实先读，支持材料沿问题展开；同一个有效 compaction 周期内，再精确复用没有变化的结构。</strong></p>
-<p>本文以已发布的 <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a> Codex 原生路径为准。受支持的 POSIX Codex App／SSH 会话与新的 benchmark heartbeat 默认开启 context delivery；已有关闭设置继续生效，也可以显式关闭。开启后完整内容先保存，Agent 收到当前读取入口。具体发布与验证范围见 <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 版本说明</a>；下文的合成测量仍保留原始实验版本与条件。</p>
-<p>可以把它想成查一本厚书：capture 是完整保存的那本书，目录告诉我们章节在哪，JSON Pointer 是书内地址。渐进式读取决定这一刻翻到多深；差分决定下一轮哪些内容可以沿用。</p>
+<p>核心 Codex 原生路径已随 <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a> 发布。受支持的 POSIX Codex App／SSH 会话与新的 benchmark heartbeat 默认开启 context delivery；已有关闭设置继续生效，也可以显式关闭。开启后完整内容先保存，Agent 收到当前读取入口。具体发布与验证范围见 <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 版本说明</a>。</p>
+<p>可以把它想成查一本厚书：capture 是完整保存的快照，像一本版本固定的书；目录告诉我们章节在哪，JSON Pointer 是书内地址。渐进式读取决定这一刻翻到多深；差分决定下一轮哪些内容可以沿用。</p>
+<p>11 月 8 日这次修订，还接入了 2.2.0 之后合入的首读、阶段化范围读取、进程传输和数字精度修复，核对源码为 <a href="https://github.com/loopx-project/loopx/tree/611019243eeb91a8cf53d5d0f04e562210de0d7e"><code>611019243e</code></a>。对应章节描述的是这份源码，不代表所有安装都已升级。下文原有的教学测量与归档研究结果仍保留各自较早的版本和条件。</p>
 <h2 id="example">用“管家读语音”串起一次工作</h2>
 <p>假设要让管家理解语音消息，并在原对话返回结果。完整资料里保留了目标、服务约束、隐私要求、验收，以及很长的方案讨论。下面是教学示意，后文的示例程序会生成完整数据，可在隔离目录复现。</p>
 <pre><code class="language-text">capture.json
@@ -114,6 +115,9 @@ sample-2：转写正确，却回复到了另一对话
 <p>实际实现中的 <code>supporting_material_pointer</code> 给出原始 outcome 的位置。假设把这个返回前缀记为 <code>$P</code>，需要评审解释时，就沿它接上 <code>/requirements/2/agent_review/note</code>；需要证据引用时，接上 <code>/requirements/2/agent_review/evidence_refs</code>。前缀来自当前捕获，不能照抄另一份文件的数组序号。</p>
 <p>本例将语音任务装配成现有 typed owner 支持的验收结构后，完整原始捕获是 <strong>57,014 字节</strong>，必要视图为 <strong>5,107 字节</strong>。<strong>10 条要求的原文全部保留，未通过、依据过期和独立核验标记仍在；原始 57,014 字节也完整保存。</strong> 支持历史与长解释有了可展开的地址。</p>
 <p>关系导航还可以沿任务依赖、共享验收、来源和证据，建议先看哪些 outcome。关系不完整时扩大范围；其他路线的反证仍然可达。它帮助安排阅读顺序，最终哪些事实影响当前判断，仍需要 Agent 理解。</p>
+<h3 id="stage-scopes">范围在影响决定之前读到</h3>
+<p>给语音任务接服务，还涉及一个时机问题：什么时候必须逐条检查允许写入的路径？11 月的源码允许在选择任务、准备普通认领时，把很长的 <code>write_scope</code> 列表换成原始捕获中的精确补读地址，停止条件和审批要求仍直接可见。如果选择语音适配器取决于能否修改它的文件，就必须先打开范围再选择。工作就绪的 ready 决定恢复完整当前范围，认领任务仍原子检查归属与范围。</p>
+<p>这里改变的是读取细节的时机，既不授予权限，也不免除必需检查。回归样例用 220 条合成路径制造长列表；它是压力输入，不是 220 条产品规则。需要范围时，补读仍增加一次调用，ready 阶段的列表也仍然完整。<a href="https://github.com/loopx-project/loopx/pull/8303">范围读取改动与验证</a> · <a href="https://github.com/loopx-project/loopx/blob/611019243eeb91a8cf53d5d0f04e562210de0d7e/loopx/control_plane/quota/turn_envelope.ts#L1762-L1789">核对的实现</a>。</p>
 <h2 id="sharing">同一份交付里的相同记录，保留一个完整位置</h2>
 <p>同一个任务可能同时出现在“当前工作”和“队列摘要”里。完全相同的正文重复两遍，并没有增加事实。</p>
 <p>原生必要视图可以保留一份完整任务，让另一处准确引用它：</p>
@@ -188,9 +192,36 @@ loopx --format json quota context-read \
   --select &quot;$POINTER_A&quot; --select &quot;$POINTER_B&quot;
 </code></pre>
 <p>续页引用固定当前选择，沿它返回的 <code>next_command</code> 读至 EOF；更换 Pointer 时，回到原 recovery 引用。极小预算可能保留原显式文件／摘要接口。上面的教学测量也使用这个兼容接口，数字仍对应原实验条件。</p>
+<h3 id="first-read-budget">首条响应要能完整送达</h3>
+<p>一条读取命令很短，不代表返回也小。语音任务的首读要同时交付当前决定、必读要求和继续读取的方法。如果工具截断了响应，Agent 可能连恢复缺失材料的方法一起丢掉。</p>
+<p>所以 11 月的源码按<strong>完整 JSON 响应序列化后的 UTF-8 字节</strong>计算预算，包括转义、分页元数据和导航。<code>--page-bytes</code> 限制正文，<code>--max-page-output-bytes</code> 限制整条响应。没有显式输出预算时，生成的 linked 首读命令与附带首屏的原生 <code>context-project --initial-read</code> 使用 12,000 字节回退值；普通 bulk／恢复 reader 和保存的任务选择 recipe 保留原预算。</p>
+<p>完整起始选择需要分页时，附带首屏的 reader 会尝试先交付一个独立完整的 opening，包含决定和读取义务。只有整条响应放得下才使用它；其余内容仍须沿 <code>remaining_read_command</code> 和后续游标读完。游标就是返回的字节偏移，用于接续同一组选读。opening 放不下时，继续使用同一捕获的普通分页；上下文存储缺失或不可写时，恢复也仍保留原捕获。</p>
+<pre><code class="language-sh"># 对当前返回的 reader 引用显式指定预算：
+loopx --format json quota context-read \
+  --reference-file &quot;$RECOVERY_READER_REFERENCE&quot; \
+  --select &quot;$POINTER_A&quot; --select &quot;$POINTER_B&quot; \
+  --page-bytes 12000 --max-page-output-bytes 12000
+</code></pre>
+<p>两项上限可以同为 12,000，实际正文却更短，因为封装也占空间。这个值是工具边界未知时的回退值，不是普适最优值，也不保证宿主在后续模型输入里仍保留这些字节。更小的页面可能增加调用和重复封装。发生截断后，要对同一捕获的受影响区间用合适的显式预算恢复，不能重新准入任务或重做外部工作。<a href="https://github.com/loopx-project/loopx/pull/8300">首读改动与验证</a> · <a href="https://github.com/loopx-project/loopx/blob/611019243eeb91a8cf53d5d0f04e562210de0d7e/loopx/cli_commands/quota_capture.py">核对的 reader</a>。</p>
 <h3 id="file-and-model">文件保存了什么，模型读到了什么</h3>
 <p>差分编码要回答的是：<strong>用已核验的旧文件，能否准确还原当前文件？</strong> 原生 <code>captured_file</code> 路径核验完整保存的基线、版本和 scope，不以模型先通读旧文件、某组选读的 EOF 或一次 ACK 作为前提。每份基线本身是完整版本，也不要求模型先追完一串差分。</p>
 <p>渐进式读取回答另一个问题：<strong>这次决定需要哪些事实？</strong> 仍以语音示意为例，下一轮只新增了样本 3，隐私约束没有变化。用一个遗漏读取的反例检验：假设 Agent 漏读了必需的隐私约束，或压缩后已经无法确认它。准备外发音频前，仍须从<strong>当前</strong>恢复入口补读 <code>/goal/constraints</code>，并遵守原有授权边界。它可以直接读这处事实，无须先通读旧基线。文件已保存、字段未变化，都不能代替这次必要读取。</p>
+<h2 id="transport-cost">往返几次，正文搬了几遍</h2>
+<p>有些交付开销发生在模型看到内容之前：Python CLI 请求 TypeScript owner 生成视图，再收回响应。这样一次进程之间的请求和返回，就是一次内部 RPC 往返；一条 CLI 命令可能包含多次往返。</p>
+<p>对已经核验的保存捕获，11 月的源码可以在开启渐进交付、关闭周期差分时直接返回首组选读。选择本身已经指出要读哪些事实，事先再生成一次根目录会多一次往返。审阅、写回说明和恢复仍指向同一份原始决定。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/8298">#8298</a> 的作者用固定合成 SQLite 输入，记录了首组选读、审阅和写回契约读取这段序列。报告版本为 <code>775394bd8d</code>，已集成 <code>94b91e48aa</code>：</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="保存捕获的进程成本对照"><table>
+<thead><tr><th>计量层</th><th>改动前</th><th>改动后</th></tr></thead>
+<tbody>
+<tr><td>CLI 调用</td><td>4</td><td>3</td></tr>
+<tr><td>内部 RPC</td><td>5</td><td>4</td></tr>
+<tr><td>RPC 传输</td><td>326,204 B</td><td>271,741 B</td></tr>
+<tr><td>首读所选正文</td><td>8,046 B</td><td>8,046 B</td></tr>
+<tr><td>CLI 完整 stdout</td><td>32,846 B</td><td>33,060 B</td></tr>
+</tbody></table></div>
+<p>少一次命令，没有让每一层都变小：所选正文没变，导航反而使 stdout 略增。这些是作者的进程测量，不是这次文章源码上的新性能复验，也不是模型 Token 结果。</p>
+<p>另一处重复发生在一条响应内部：原生 full 交付曾把同一投影正文同时放进 typed edits 和 <code>delivery.context</code>。现在生产端只跨 Effect bridge 发送一份，再由 Python adapter 还原普通 full 结构；delta 保留自己的编辑。<a href="https://github.com/loopx-project/loopx/pull/8285">#8285 的作者记录</a>中，受影响的 SQLite 响应从 53,999 降到 38,225 B；包含 guard、原生 hook、一次错误摘要拒绝和同捕获重试的序列，从 1,021,975 降到 1,006,203 B。各阶段输出及调用数一致。<a href="https://github.com/loopx-project/loopx/blob/611019243eeb91a8cf53d5d0f04e562210de0d7e/loopx/control_plane/quota/progressive_context.ts">生产端</a> · <a href="https://github.com/loopx-project/loopx/blob/611019243eeb91a8cf53d5d0f04e562210de0d7e/loopx/control_plane/quota/turn_envelope.py">adapter</a>。</p>
+<p>这两处改动都在保留任务要求的前提下减少重复搬运。它们对完整任务的价值，仍要连同补读、恢复、实际模型输入与缓存、输出、耗时和验收成果一起判断，不能用内部传输字节替代这些成本。</p>
 <h2 id="recovery">压缩或读取失败，恢复上下文，也保留原工作</h2>
 <p>宿主发生 compaction，后续新工作轮次建立新的完整基线。原目标、要求和来源仍然存在，必要事实可以重新读到。</p>
 <p>如果压缩、缺页或输出截断发生在尚未结束的 Turn 内，就沿原捕获补回缺失事实，保留原任务、执行和结算身份。假设语音结果已经发送，只是回执没有读到，恢复上下文不能变成再发一次结果。</p>
@@ -201,6 +232,9 @@ loopx --format json quota context-read \
 <li><strong>长内容跨页：</strong> 按 <code>next_command</code> 接读，保留捕获摘要、选择摘要和字节游标，按连续偏移组合正文。某组选读的 EOF 只覆盖该选择。</li>
 <li><strong>遇到未知结构或不适用的来源：</strong> 保留完整内容及原有读取义务，不猜哪些文字可以隐藏。</li>
 </ul>
+<h3 id="exact-values">视图变短，原值也要保真</h3>
+<p>文件完整，不保证投影里的每个值都完整跨过了语言边界。11 月复现的一条阶段化读取，把整数 <code>9007199254740993</code> 变成了 <code>9007199254740992</code>；两份不同的验收记录还可能因此看起来相同，被放到一个引用下面。原始捕获没有变，返回的事实却已经错了。</p>
+<p>保存的原生路径现在对普通决定跳过无须执行的 replan 投影，确需重规划时，将呈现编辑应用于原始来源值。阶段化 replan reader 同样恢复原数字，保留整数、整数值浮点数和负零。不同记录得到不同引用；历史引用若有歧义，明确拒绝并指回审阅，无歧义的仍能解析。显式分页窗口也沿现有校验进入保存 reader。这些是 <a href="https://github.com/loopx-project/loopx/pull/8319">#8319</a>、<a href="https://github.com/loopx-project/loopx/pull/8324">#8324</a> 合入的正确性与恢复修复，有合成输入的公开 CLI 回归支撑；它们不证明模型理解或整题成本收益。</p>
 <figure class="diagram"><p class="diagram-label">连续性与恢复</p><a href="../../images/context-delivery/context-cycle-v9.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的连续性图"><img src="../../images/context-delivery/context-cycle-v9.svg" alt="Differential：同一有效周期内复用，失效即完整恢复" width="1200" height="620" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><p><strong>同一有效周期</strong>：完整基线 → 新事实与差分 → 完整还原。</p><p><strong>新周期或已知连续性丢失</strong>：当前完整来源 → 必要事实重新读取。</p><figcaption>未结束的 Turn 保留原捕获、原工作与结算身份。恢复读取不重新执行外部副作用。</figcaption></figure>
 <h2 id="evidence">这些数据说明了什么</h2>
 <p>这组例子把三个收益来源分开了：<strong>少重复搬当前用不上的历史，少发本可合并的读取请求，少重复交付已经核验的不变结构。</strong> 完整来源、要求与恢复路径贯穿其中。</p>
@@ -226,12 +260,12 @@ loopx --format json quota context-read \
 <tr>
 <td>ANN 18h：Explore · Context off</td>
 <td style="text-align:right">5,766 QPS（+0.2%）</td>
-<td>11.37h 触顶；全量上下文重复投递消耗较多主会话预算</td>
+<td>11.37h 触顶；输入成本在下方单列统计</td>
 </tr>
 <tr>
 <td>ANN 18h：Explore · Context on</td>
 <td style="text-align:right">6,020 QPS（+4.6%）</td>
-<td>14.43h 触顶；渐进选读与周期差分释放后程上下文余量</td>
+<td>14.43h 触顶；该次运行的后程峰值不能单独隔离原因</td>
 </tr>
 <tr>
 <td>ANN 18h：Explore · Context on + Stride</td>
@@ -256,7 +290,7 @@ loopx --format json quota context-read \
 <tr>
 <td><strong>边界反例 2：</strong>前 2h 早窗未缓存输入 Token</td>
 <td style="text-align:right">+304.7%（0.25M → 1.00M）</td>
-<td>早窗首次建立基线与分步选读存在前置开销，需在更长周期内摊薄</td>
+<td>建立基线与分步选读增加前置工作；这个早窗不能保证后续摊薄</td>
 </tr>
 <tr>
 <td><strong>边界反例 3：</strong>跨题 Historical Grid（越低越好）</td>
@@ -265,7 +299,7 @@ loopx --format json quota context-read \
 </tr>
 </tbody>
 </table></div>
-<p>这组双轨实证说明：<strong>控制包裁剪率（−74.25% / −38.54%）不能直接等同于整轮模型 Token 节省（未缓存 −12.07%、总输入 −7.46%），更不能掩盖前 2 小时早窗的前置建索引开销（4.05×）和跨题反例。</strong> Context Delivery 的真实价值在于长周期（如 10h–18h）内延缓上下文膨胀、配合 Stride 将省下的注意力转化为后程有效实验（参见 <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench 后程突破与五臂归因</a>）。</p>
+<p>这组双轨实证说明：<strong>控制包裁剪率（−74.25% / −38.54%）不能直接等同于整轮模型 Token 节省（未缓存 −12.07%、总输入 −7.46%），更不能掩盖前 2 小时早窗的前置建索引开销（4.05×）和跨题反例。</strong> 报告中的 ANN 运行同时出现了较低输入总量和后程有效实验，值得据此继续检验上下文交付能否支撑长程研究。但这些观察本身不能将成果归因于省下的注意力、拆清它与 Stride 的全部交互，也不能证明换一题仍有收益。上文 11 月的源码修复并不是这些归档运行的实验干预。原研究条件见 <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench 后程突破与五臂归因</a>。</p>
 <p>2.2.0 已交付完整来源、文件入口、批量选择、目录深度、适用验收分层、精确共享、周期差分与恢复。更广的候选、偏好、Explore 按决策阶段统一交付及全入口一致性仍有未完成部分。在「设置 → 本机 → 能力 → 差分上下文 → Codex」可以关闭，已有 off 会保留；单次命令或新 benchmark trial 可用 <code>--context-delivery off</code>。Trial 不继承本机开关，已有冻结 trial 不被重写。默认策略下，普通 CLI、不支持的宿主和非 heartbeat benchmark 保留原完整路径；显式请求不支持的 on 会明确拒绝，hooks 不可用时使用完整交付。保存配置、实际安装与模型采用分别核验。</p>
 <h2 id="reproduce">用同一份材料动手读一遍</h2>
 <p><a href="../../context-delivery/example.py">example.py</a> 完整生成这个合成语音任务，调用现有 reader、渐进投影与差分 owner，逐项核对选择值、目录地址、全部 10 条要求、共享引用与完整恢复。程序不注册 Goal，不做准入或结算，也不调用模型或语音服务。</p>

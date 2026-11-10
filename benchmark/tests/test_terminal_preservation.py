@@ -176,15 +176,17 @@ def test_receipt_failure_never_masks_an_unconfirmed_stop(tmp_path, monkeypatch):
     assert preservation.receipt["stop_error_kind"] == "RuntimeError"
 
 
-@pytest.mark.parametrize("profile", ["official", "native-goal", "heartbeat-explore"])
-def test_cli_preservation_requires_full_native_controller_before_trial(tmp_path, profile):
+@pytest.mark.parametrize("profile,feedback", [
+    ("official", "best-only"), ("native-goal", "native"), ("heartbeat-explore", "native"),
+])
+def test_cli_preservation_rejects_unowned_native_feedback_and_checkpoint_routes(tmp_path, profile, feedback):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import main
     with pytest.raises(SystemExit) as error:
         main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
               "--run-id", "fixture", "--worker", profile, "--model", "fixture", "--effort", "xhigh",
-              "--judge-url", "http://127.0.0.1:9999", "--preserve-failed-worker"])
+              "--feedback", feedback, "--judge-url", "http://127.0.0.1:9999", "--preserve-failed-worker"])
     assert error.value.code == 2 and not (tmp_path / "runs").exists()
 
 
