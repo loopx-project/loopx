@@ -200,12 +200,18 @@ console.log(JSON.stringify(scenarioCatalog.map(scenario => scenario.id)));
 """
     # Importing the real catalog must not start a server, require Playwright or
     # apply the caller's scenario filter. The gate needs the complete catalog.
+    catalog_command = ["node", "--input-type=module", "-e", catalog_probe]
+    catalog_env = {**os.environ, "LOOPX_PERSONAL_WORKSPACE_SCENARIO": "unknown",
+                   "LOOPX_PERSONAL_WORKSPACE_SHARD": "invalid", "LOOPX_USAGE_PING": "0"}
     catalog = json.loads(subprocess.check_output(
-        ["node", "--input-type=module", "-e", catalog_probe], cwd=ROOT,
-        env={**os.environ, "LOOPX_PERSONAL_WORKSPACE_SCENARIO": "unknown",
-             "LOOPX_PERSONAL_WORKSPACE_SHARD": "invalid"}, text=True, timeout=10,
+        catalog_command, cwd=ROOT, env=catalog_env, text=True, timeout=10,
     ))
     assert catalog and len(catalog) == len(set(catalog))
+    # A catalog consumer can have a virtual entry name, as with Node stdin.
+    virtual_entry_catalog = json.loads(subprocess.check_output(
+        [*catalog_command, "-"], cwd=ROOT, env=catalog_env, text=True, timeout=10,
+    ))
+    assert virtual_entry_catalog == catalog
     with tempfile.TemporaryDirectory(prefix="loopx-release-browser-gate-") as temporary:
         root = Path(temporary)
         examples = root / "examples"
@@ -216,6 +222,18 @@ console.log(JSON.stringify(scenarioCatalog.map(scenario => scenario.id)));
                 (examples / child.name).symlink_to(child, target_is_directory=child.is_dir())
         entry_source = (ROOT / "examples" / entry.name).read_text()
         entry.write_text(entry_source)
+        linked_entry = root / "linked entry.mjs"
+        linked_entry.symlink_to(entry)
+        # Direct entry paths must execute validation, including through symlinks.
+        # The specific error distinguishes a reached main() from a parse/import failure.
+        for runner in (entry, linked_entry):
+            result = subprocess.run(
+                ["node", str(runner)], cwd=root, capture_output=True, text=True, timeout=10,
+                env={**catalog_env, "LOOPX_PERSONAL_WORKSPACE_PACKAGED": "0", "LOOPX_DASHBOARD_COVERAGE": "0",
+                     "LOOPX_RELEASE_SOURCES_FILE": "", "LOOPX_USAGE_PING": "0"},
+            )
+            assert result.returncode != 0, runner
+            assert "Unknown personal workspace scenario unknown" in result.stderr, result.stderr
         subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
         subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                         "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=root, check=True)

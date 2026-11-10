@@ -37,9 +37,10 @@ import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/expl
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import {
   launchBrowser,
@@ -247,6 +248,17 @@ async function main() {
 }
 
 // The release gate imports the same catalog without starting a server/browser.
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch (error) {
+    // Imports from stdin or a virtual launcher can have no filesystem entry.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+if (isDirectEntry()) {
   await main();
 }
