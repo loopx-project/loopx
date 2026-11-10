@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_antigravity_steward_adapter import language_server  # noqa: F401
+from test_antigravity_steward_adapter import language_server as language_server
 from test_native_steward_private import steward  # noqa: F401
 
 from loopx.capabilities.native_chat import antigravity_adapter as native
@@ -16,17 +16,149 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("fault, expected", [
+    ("done", True), ("error", True), ("canceled", True), ("cleared", True),
+    ("running", False), ("generating", False), ("waiting", False),
+    ("missing-status", False), ("visible-error", False),
+    ("mixed-execution", False), ("final-error", False), ("missing-stop", False),
+])
+def test_capacity_readback_uses_the_completed_native_turn_boundary(language_server, fault, expected):
+    """Handled tool failures do not hide quota; unknown/active work stays held."""
+    meta = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "completed-execution"}
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta},
+        {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_" + fault.upper(), "metadata": meta},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
+         "plannerResponse": {"response": "Completed after the tool attempt.", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+    ]
+    if fault == "missing-status":
+        steps[1].pop("status")
+    elif fault == "visible-error":
+        steps[1].update(type="CORTEX_STEP_TYPE_ERROR_MESSAGE", status="CORTEX_STEP_STATUS_DONE",
+                        errorMessage={"shouldShowUser": True})
+    elif fault == "mixed-execution":
+        steps[1].update(status="CORTEX_STEP_STATUS_DONE", metadata={**meta, "executionId": "another-execution"})
+    elif fault == "final-error":
+        steps[1]["status"] = steps[2]["status"] = "CORTEX_STEP_STATUS_ERROR"
+    elif fault == "missing-stop":
+        steps[1]["status"] = "CORTEX_STEP_STATUS_DONE"
+        steps[2]["plannerResponse"].pop("stopReason")
+    language_server.update(active=True, frames=[], frame={"at": 1, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"})
+    capacity = native.AntigravityAdapter.metadata_review_capacity(cascade_id="synthetic-cascade", model_id="gemini-4-argon-high")
+    if expected:
+        assert capacity and capacity["normal_completion"] is True and capacity["remaining_fraction"] == 1
+        assert capacity["quota_exhausted"] is False
+    else:
+        assert capacity is None
+    assert {method for method, _ in language_server["calls"]} <= {
+        "GetCascadeModelConfigData", "GetCascadeTrajectory", "GetCascadeTrajectorySteps", "GetUserStatus"}
+    assert language_server["sent_count"] == 0 and not language_server["cancelled"].is_set()
+
+
+@pytest.mark.parametrize("prior_status, error_status, cancellation_needed", [
+    ("CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_ERROR", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_CANCELED", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_CLEARED", "CORTEX_STEP_STATUS_DONE", False),
+    ("CORTEX_STEP_STATUS_RUNNING", "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_WAITING", "CORTEX_STEP_STATUS_DONE", True),
+    (None, "CORTEX_STEP_STATUS_DONE", True),
+    ("CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_WAITING", True),
+    ("CORTEX_STEP_STATUS_DONE", None, True),
+])
+def test_idle_native_error_keeps_only_unsettled_work_cancellable(
+    tmp_path, language_server, monkeypatch, prior_status, error_status, cancellation_needed,
+):
+    from test_antigravity_steward_adapter import _native_clock, _native_frames, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    frame = _native_frames()[-1]
+    detail = {"shortError": "stream interrupted", "userErrorMessage": "Network interrupted", "errorCode": 2}
+    frame["steps"] = [frame["steps"][0],
+        {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": prior_status,
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+         "runCommand": {"commandLine": "synthetic inspection", "exitCode": 0}},
+        {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": error_status,
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+         "errorMessage": {"error": detail}},
+    ]
+    _native_clock(monkeypatch, language_server, [frame])
+    language_server["cancel_failure"] = True
+    adapter = adapter_for(tmp_path)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("Inspect existing state", lambda kind, data: events.append((kind, data)))
+
+    error = raised.value
+    waiting_for_permission = "CORTEX_STEP_STATUS_WAITING" in {prior_status, error_status}
+    if waiting_for_permission:
+        assert error.error_code == "host_tool_gate" and error.gate is not None
+    else:
+        assert error.error_code == "antigravity_step_error" and error.native_error_info == detail
+        assert str(error).startswith("Network interrupted")
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == int(cancellation_needed)
+    assert ("cancellation remains unconfirmed" in str(error)) is cancellation_needed
+    assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
+
+
+def test_settled_native_error_releases_core_for_independent_input(tmp_path, language_server):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    store = ChatSessionStore(tmp_path / "runtime")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-codex")
+    session, _ = controller.open_session(goal_id="synthetic-goal", agent_id="antigravity",
+        work_dir=tmp_path, objective="Synthetic conversation", mode="new", channel_id="synthetic-argon-chat")
+    sid = session["session_id"]
+    language_server.update(quota_error_indices=[0], cancel_failure=True)
+    try:
+        original, _ = controller.submit_turn(session_id=sid, client_turn_id="original-failure",
+            message="Original request", work_dir=tmp_path, objective="Synthetic conversation")
+        failed = controller.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=8)
+        assert failed["status"] == "failed" and failed["error_code"] == "antigravity_step_error"
+        assert "cancellation remains unconfirmed" not in failed["error"]
+        assert store.load_session(sid)["active_turn_id"] is None
+        retained = store._turn_path(sid, original["turn_id"]).read_bytes()
+
+        language_server["quota_error_indices"] = []
+        later, _ = controller.submit_turn(session_id=sid, client_turn_id="later-independent",
+            message="A separate question", work_dir=tmp_path, objective="Synthetic conversation")
+        completed = controller.wait_for_turn(session_id=sid, turn_id=later["turn_id"], timeout_sec=8)
+        assert completed["status"] == "completed" and completed["response"]["message"] == "Argon answer 2"
+        assert store._turn_path(sid, original["turn_id"]).read_bytes() == retained
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == [
+            "Original request", "A separate question"]
+        methods = [method for method, _ in language_server["calls"]]
+        assert methods.count("SendUserCascadeMessage") == 2
+        assert "CancelCascadeInvocation" not in methods
+        assert not any(e["kind"] == "answer.final" for e in store.events_after(sid, original["turn_id"], None))
+    finally:
+        controller.close_session(sid)
+
+
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed",
     "review-action", "post-enqueue-crash", "image-view", "checkpoint-live", "checkpoint-cold",
+    "checkpoint-before-review", "checkpoint-before-review-account-change",
     "checkpoint-injection-unknown", "checkpoint-empty", "checkpoint-settings-change"])
 def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.chat_agent import CodexChatAgentError
     from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    from test_chat_manager_model_adoption import configure
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     fake = Path(runtime.codex_bin)
     checkpoint = bool(fault and fault.startswith("checkpoint-"))
+    cold_before_review = fault in {"checkpoint-before-review", "checkpoint-before-review-account-change"}
+    if cold_before_review:
+        from loopx.capabilities.native_chat import codex_auth
+        login_epoch = ["original-login"]
+        monkeypatch.setattr(codex_auth, "conversation_account_epoch",
+                            lambda *_args, **_kwargs: (login_epoch[0], "subscription"))
+        configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
     original_thread = "working-thread" if checkpoint else "durable-thread"
     code = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
         permissions = request.get("params", {}).get("permissions")
@@ -105,8 +237,8 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
     monkeypatch.setattr(external_conversations, "datetime", Ahead)
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
-    from test_chat_manager_model_adoption import configure
-    configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
+    if not cold_before_review:
+        configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
     allocation = manager_module.manager_executor_allocation(runtime,
         endpoint_capabilities=[{"agent_id": "codex", "available": True}, {"agent_id": "antigravity", "available": False}])
     def route(*_args, **_kwargs):
@@ -145,6 +277,12 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         provider.messages[event["message_id"]]["content"] = "Revised original source"
     restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
         runner=provider, cli_bin="lark-cli")
+    review_trace_start = 0
+    if cold_before_review:
+        runtime.adapters.pop(original["session_id"]).close_session()
+        review_trace_start = len(capture.read_text().splitlines())
+        if fault == "checkpoint-before-review-account-change":
+            login_epoch[0] = "different-login"
     if fault == "post-enqueue-crash":
         enqueue = runtime.enqueue_turn
         def crash(**kwargs):
@@ -180,8 +318,9 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert opened["config"]["features"]["apps"] is False
         assert opened["config"]["permissions"][opened["permissions"]]["network"]["enabled"] is False
         assert [t["name"] for t in opened["dynamicTools"]] == ["loopx_manager_read"]
-        assert not any(c["method"] == "thread/resume" for c in calls), "unknown old business must not be resumed"
-        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in calls)
+        review_calls = calls[review_trace_start:]
+        assert not any(c["method"] == "thread/resume" for c in review_calls), "unknown old business must not be resumed"
+        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in review_calls)
         if fault is None:
             assert any(item["text"] == history_marker for item in store.messages(original["session_id"]))
             review_inputs = [c["params"] for c in calls if c["method"] == "turn/start"]
@@ -189,7 +328,9 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         writes = list(provider.writes)
         restarted.reconcile_request(path)
         assert provider.writes == writes
-        if checkpoint:
+        if fault == "checkpoint-before-review-account-change":
+            assert store.load_session(original["session_id"]).get("parked_native_working") is None
+        elif checkpoint:
             sid = original["session_id"]
             review_session = store.load_session(sid)
             parked = review_session["parked_native_working"]

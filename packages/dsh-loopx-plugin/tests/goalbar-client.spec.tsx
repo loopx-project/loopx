@@ -998,13 +998,19 @@ describe('GoalBar Connection and registration boundaries', () => {
       component: unknown
     } | undefined
     const registerLocale = vi.fn(() => () => undefined)
+    const injectedKeys: string[] = []
+    const registrations: Array<{ options: Record<string, unknown>; component: unknown }> = []
     const ctx = {
       connection: { rpc: { call: vi.fn() } },
       locale: { register: registerLocale },
       slots: {
-        inject: vi.fn((_key: string, install: () => () => void) => install()),
+        inject: vi.fn((key: string, install: () => () => void) => {
+          injectedKeys.push(key)
+          return install()
+        }),
         register: vi.fn((options: typeof registration extends { options: infer O } ? O : never, component: unknown) => {
           registration = { options, component }
+          registrations.push({ options: options as unknown as Record<string, unknown>, component })
           return () => undefined
         }),
       },
@@ -1026,6 +1032,25 @@ describe('GoalBar Connection and registration boundaries', () => {
     expect(registration?.options.id).toBe('loopx-goal')
     expect(registration?.options.order).toBe(15)
     expect(registration?.component).toBe(LoopXGoalBar)
+    // The panel contributes one global sidebar row plus its keyed central
+    // panel; both must be present so one row always selects one panel.
+    expect(injectedKeys).toEqual([
+      'sidebar.panellist',
+      'main',
+      'conversation.input.dock',
+    ])
+    expect(registerLocale).toHaveBeenCalledWith('loopx.dashboard', expect.any(Object))
+    expect(registrations[0]?.options).toMatchObject({
+      name: 'sidebar.panellist',
+      id: 'loopx-dashboard',
+      order: 7,
+    })
+    expect(registrations[0]?.options.label).toBeTypeOf('function')
+    expect(registrations[1]?.options).toMatchObject({
+      name: 'main',
+      key: 'loopx-dashboard',
+      locale: 'loopx.dashboard',
+    })
     const injected = registration?.options.inject('session-injected')
     expect(injected?.rpcSessionId).toBe('session-injected')
     expect(injected).not.toHaveProperty('sessionId')

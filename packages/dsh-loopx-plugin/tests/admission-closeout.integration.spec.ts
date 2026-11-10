@@ -315,7 +315,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(admission.kind).toBe('enter')
 
     const unselected = await runCli(testFixture, [
-      'quota', 'should-run',
+      'quota', 'should-run', '--context-delivery', 'off',
       '--goal-id', goalId,
       '--agent-id', agentId,
       '--runtime-profile', 'generic_cli',
@@ -337,7 +337,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(claimed.payload.ok).toBe(true)
 
     const guardArgs = [
-      'quota', 'should-run',
+      'quota', 'should-run', '--context-delivery', 'off',
       '--goal-id', goalId,
       '--todo-id', todoId,
       '--agent-id', agentId,

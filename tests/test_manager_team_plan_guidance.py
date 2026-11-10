@@ -59,7 +59,11 @@ def test_the_owner_visible_failure_does_not_guess_why_the_host_failed() -> None:
     class _Restarted(RuntimeError):
         error_code = "server_restarted"
 
-    assert "服务在处理过程中重启" in manager_failure_reply(_Restarted())[1]
+    restart_code, restart_reply = manager_failure_reply(_Restarted())
+    assert restart_code == "server_restarted"
+    assert "管家服务重启中断" in restart_reply
+    assert "原请求和会话已保留" in restart_reply
+    assert "执行效果不明的操作不会直接重做" in restart_reply
 
     class _InvalidRequest(Exception):
         error_code = "upstream_invalid_request"

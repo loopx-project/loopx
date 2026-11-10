@@ -279,12 +279,16 @@ class StewardTurnHost:
             if len(keys) != 1 or not isinstance(next(iter(keys)), str):
                 return None
             key = keys.pop()
+            from ...control_plane.effect_runtime import source_number_tokens
+
+            journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
             # Transport canonical observations to the shared typed admission
             # owner. Neither a missing model event nor Python prose decides.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
-                "journal": load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))}
+                "journal": journal,
+                "source_number_tokens": source_number_tokens((journal.get("plan") or {}).get("work_contract"))}
         return proof
 
     def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
@@ -462,12 +466,14 @@ class StewardTurnHost:
             # supplies the new event; no status or publication proof is forged.
             self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)
 
-    def _prepare_submission(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None,
+    def _submission_binding(self, binding_id: str) -> dict[str, Any] | None:
+        return next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
+
+    def _prepare_submission(self, binding: dict[str, Any] | None, *, turn_instance_id: str, todo_id: str | None,
                             validation_command: Sequence[str] | None, work_kind: str,
                             monitor_deadline: str | None, report_window: dict[str, Any] | None,
                             quota_observation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Read original request/recovery identity without accepting any work."""
-        binding = next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
         if binding is None:
             raise ValueError("the original steward binding is unavailable")
         actor = binding.get("managed_actor")
@@ -568,14 +574,23 @@ class StewardTurnHost:
         parameters = dict(turn_instance_id=turn_instance_id, todo_id=todo_id,
             validation_command=validation_command, work_kind=work_kind,
             monitor_deadline=monitor_deadline, report_window=report_window)
-        with controller.lock, exclusive_file_lock(self.bindings.path, operation="inspect_native_steward_turn"):
-            prepared = self._prepare_submission(binding_id, **parameters)
+
+        def inspect_submission(quota_observation: dict[str, Any] | None = None) -> dict[str, Any]:
+            # History and recovery reads can be slow. Inspect one atomic
+            # binding snapshot without blocking input, and check it again even
+            # if this only returns an existing Turn. Admission is fenced below.
+            binding = self._submission_binding(binding_id)
+            inspected = self._prepare_submission(binding, **parameters, quota_observation=quota_observation)
+            if binding != self._submission_binding(binding_id):
+                raise ValueError("the original steward authorization changed during submission inspection")
+            return inspected
+
+        prepared = inspect_submission()
         quota_observation = None
         if "quota_probe" in prepared:
             quota_observation = prepared["quota_probe"]
             quota_observation["request"] = self.report_quota_request(quota_observation["original"])
-            with controller.lock, exclusive_file_lock(self.bindings.path, operation="inspect_native_steward_turn"):
-                prepared = self._prepare_submission(binding_id, **parameters, quota_observation=quota_observation)
+            prepared = inspect_submission(quota_observation)
         if "turn" in prepared:
             return prepared["turn"], False
         observed = self._observe(prepared["request"]["actor"])
@@ -587,7 +602,8 @@ class StewardTurnHost:
             retained = native_command(controller, ["task-lease", "inspect", "--goal-id", prepared["request"]["actor"]["goal_id"],
                 "--todo-id", todo_id]).get("lease")
         with controller.lock, exclusive_file_lock(self.bindings.path, operation="admit_native_steward_turn"):
-            current = self._prepare_submission(binding_id, **parameters, quota_observation=quota_observation)
+            current = self._prepare_submission(self._submission_binding(binding_id), **parameters,
+                quota_observation=quota_observation)
             if "turn" in current:
                 return current["turn"], False
             if current["request"] != prepared["request"] or current["client_id"] != prepared["client_id"]:
@@ -688,12 +704,15 @@ class StewardTurnHost:
 
         def session_binding(envelope: Mapping[str, Any]) -> dict[str, Any]:
             current()
-            if envelope.get("goal_id") != actor["goal_id"] or envelope.get("agent_id") != actor["agent_id"]:
+            identity = (envelope.get("agent_identity") if envelope.get("schema_version") == "loopx_turn_envelope_v1"
+                        else envelope)
+            if (envelope.get("goal_id") != actor["goal_id"] or not isinstance(identity, Mapping)
+                    or identity.get("agent_id") != actor["agent_id"]):
                 raise ValueError("native Turn belongs to another actor")
             return {"schema_version": "loopx_turn_session_binding_v0",
                 "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
 
-        def prepare_native_task(decision: Mapping[str, Any], envelope: Mapping[str, Any]) -> str | None:
+        def prepare_native_task(decision: Mapping[str, Any]) -> str | None:
             nonlocal managed_lease, managed_lease_request, preparation_status
             from ...control_plane.turn_driver.codex_execution_preparation import compact_execution_preparation_request
 
@@ -708,7 +727,7 @@ class StewardTurnHost:
             current()
             if managed_turn is not None:
                 try:
-                    managed_turn.prepare_validation(request, {"turn_envelope": envelope})
+                    managed_turn.prepare_validation(request, {"work_contract": decision})
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     preparation_status = "stopped"
@@ -731,7 +750,8 @@ class StewardTurnHost:
                     "next_action": "Retain the original report; its native governance route is no longer admitted."})
             if managed_turn and not governance_work:
                 try:
-                    managed_turn.prepare_validation(request, native_request)
+                    managed_turn.prepare_validation(request, native_request,
+                        _checked_work_identity=authority.get("_work_identity"))
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     return build_result(native_request, {"result_kind": "user_action_required",
@@ -830,6 +850,18 @@ class StewardTurnHost:
         result: dict[str, Any] = {}
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
                 admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+            if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
+                # The selected Task's existing lease must precede the kernel's
+                # delivery guard. Taking it in the model callback is too late:
+                # the guard correctly withholds a Host launch without it.
+                from .steward_commands import native_command
+                selected = native_command(self.controller, ["todo", "list", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"], "--agent-id", actor["agent_id"]])
+                # Unknown work still reaches the kernel's structured selection
+                # refusal. An unavailable authority never looks like a miss.
+                if selected.get("matched") is True:
+                    managed_lease_request = dict(request)
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(request, turn_id))
             if selection_recovery and "probe" not in selection_recovery:
                 governance_work = True
 

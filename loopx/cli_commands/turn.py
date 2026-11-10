@@ -12,7 +12,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.turn_envelope import compose_turn_decision
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
@@ -25,6 +25,7 @@ from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
     build_turn_error_payload,
+    project_turn_plan_inspection,
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
 )
@@ -49,7 +50,7 @@ def handle_turn_command(
     print_payload: PrintPayload,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
-    native_execution_preparer: Callable[[Mapping[str, Any], Mapping[str, Any]], str | None] | None = None,
+    native_execution_preparer: Callable[[Mapping[str, Any]], str | None] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> int | None:
@@ -167,13 +168,8 @@ def handle_turn_command(
                 runtime_root,
                 goal_id=args.goal_id,
                 turn_key=args.resume_turn_key,
+                agent_id=args.agent_id,
             )
-            raw_envelope = payload.get("turn_envelope")
-            envelope = raw_envelope if isinstance(raw_envelope, dict) else {}
-            if envelope.get("agent_id") != args.agent_id:
-                raise ValueError(
-                    "LoopX Turn resume journal belongs to another agent"
-                )
             goal_admission = FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path,
                 goal_id=args.goal_id,
@@ -261,27 +257,22 @@ def handle_turn_command(
             decision_owner = read_decision_owner()
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
-            decision = decision_owner.resolve()
+            decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
-            turn_envelope = build_turn_envelope(
-                decision,
-                scheduler_execution_context=scheduler_context,
-            )
             if native_execution_preparer is not None and args.turn_command == "run-once" and args.execute:
-                prepared_todo = native_execution_preparer(decision, turn_envelope)
+                prepared_todo = native_execution_preparer(decision)
                 if prepared_todo is not None:
                     # Host preparation changes canonical lease state. Plan and
                     # settle against a fresh read of the same Turn and Todo.
                     decision_owner = read_decision_owner()
                     operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
                     scheduler_context = decision_owner.scheduler_execution_context
-                    decision = decision_owner.resolve()
+                    decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
                     preparation = decision.get("execution_preparation") or {}
                     if (preparation.get("state") != "ready" or preparation.get("todo_id") != prepared_todo
                             or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
                             or decision.get("normal_delivery_allowed") is not True):
                         raise ValueError("native task preparation did not make the same Todo ready")
-                    turn_envelope = build_turn_envelope(decision, scheduler_execution_context=scheduler_context)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
@@ -289,30 +280,24 @@ def handle_turn_command(
             if args.host in {"codex-cli", "codex-app-server"} and delegated_context and delegated_context.get("request_subject") is not None:
                 session_scope = "agent"
             if native_session_binding_resolver is not None:
-                session_binding = native_session_binding_resolver(turn_envelope)
+                session_binding = native_session_binding_resolver(decision)
             if (
                 args.turn_command == "run-once"
                 and (args.host == "codex-cli" or dsh_operation_module)
                 and not resume_requested
                 and not args.resume_turn_key
                 and args.iteration_context != "fresh"
-                and turn_envelope.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
+                and decision.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
             ):
                 from ..control_plane.turn_driver.codex_cli import codex_cli_session_binding
 
-                session_binding = (
-                    codex_cli_session_binding(
-                        runtime_root,
-                        turn_envelope,
-                        goal_admission=strict_goal_admission,
-                        session_scope=session_scope,
-                        host=args.host,
-                    )
-                    if strict_goal_admission is not None
-                    else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope, host=args.host)
+                session_binding = codex_cli_session_binding(
+                    runtime_root, work_contract=decision,
+                    goal_admission=strict_goal_admission,
+                    session_scope=session_scope, host=args.host,
                 )
             payload = build_loopx_turn_plan(
-                turn_envelope,
+                decision,
                 host=args.host,
                 execution_mode=args.execution_mode,
                 scheduler_owner=args.scheduler_owner,
@@ -321,6 +306,8 @@ def handle_turn_command(
                 iteration_context_policy=args.iteration_context,
                 session_scope=session_scope,
                 goal_ref=goal_ref,
+                inspect_plan=(args.turn_command == "plan" and not args.include_transaction_detail
+                              and output_format(args) == "json"),
             )
             if delegated_context and delegated_context.get("request_subject") is not None:
                 import json
@@ -359,11 +346,17 @@ def handle_turn_command(
                 capability_action["command"] = shlex.join(capability_action["command_argv"])
         if args.turn_command == "plan":
             if not args.include_transaction_detail:
+                # The current plan has one source, so inspection retains it.
+                # Execution still requires its explicit surface, even if a
+                # caller restores omitted session/transaction metadata.
+                payload = dict(payload)
+                payload["boundary"] = {**payload.get("boundary", {}), "inspection_only": True}
                 payload.pop("session", None)
                 payload.pop("transaction", None)
                 boundary = payload.get("boundary")
                 if isinstance(boundary, dict):
                     boundary.pop("opaque_session_handle_omitted", None)
+                project_turn_plan_inspection(payload, runtime_root)
             else:
                 # The typed settlement plan is used by validation and
                 # execution, but is not part of the agent-facing CLI contract.
@@ -415,7 +408,9 @@ def handle_turn_command(
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"
-        else _render_loopx_turn_plan_markdown
+        else lambda value: _render_loopx_turn_plan_markdown(
+            value, include_transaction_detail=args.include_transaction_detail,
+        )
     )
     print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

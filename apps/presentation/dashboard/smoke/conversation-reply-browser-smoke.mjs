@@ -72,6 +72,8 @@ try {
     await context.locator("summary").scrollIntoViewIfNeeded();
     assert.ok(await page.locator("body").evaluate(node => node.scrollWidth <= innerWidth + 1));
     await page.screenshot({path: resolve(output, "expanded-narrow.png"), animations: "disabled"});
+    await context.locator("blockquote ol").nth(1).scrollIntoViewIfNeeded();
+    await page.screenshot({path: resolve(output, "expanded-narrow-steps.png"), animations: "disabled"});
     await context.locator("summary").click();
     await page.screenshot({path: resolve(output, "default-narrow.png"), animations: "disabled"});
     await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
@@ -79,6 +81,13 @@ try {
     await page.getByRole("navigation", {name: "Manager view"}).getByRole("button", {name: /^(Chat|Conversation)$/}).click();
     await page.getByText("Reply and thread context", {exact: true}).waitFor();
     await page.screenshot({path: resolve(output, "english-narrow.png"), animations: "disabled"});
+    const quote = context.locator("blockquote");
+    assert.deepEqual(await quote.locator("ol").evaluateAll(lists => lists.map(list => list.start)),
+      [1, 2, 3, 7, 0], "Paragraph-separated steps and independent lists retain their starting numbers");
+    assert.equal(await quote.locator("ol").nth(3).locator("li").count(), 2,
+      "Later source markers in one consecutive list do not split its sequence");
+    assert.equal(await quote.locator("ul li").count(), 2, "Unordered lists stay unordered");
+    assert.equal(await quote.locator("pre code").textContent(), "9. This is literal code, not another list.");
     assert.deepEqual(errors, []);
     assert.ok(!writes.some(path => /\/turns(?:\/|$)/u.test(path)), "Browsing cannot submit a Turn");
     child.stdin.write("inspect\n");

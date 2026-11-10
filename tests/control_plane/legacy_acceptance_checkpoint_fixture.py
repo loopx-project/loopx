@@ -41,7 +41,9 @@ def legacy_acceptance_checkpoint_cli(project: Path, *, base_source: Path | None 
     prefix = [sys.executable, *command,
         "--registry", str(project.parent / "registry.json"),
         "--runtime-root", str(project.parent / "runtime"), "--format", "json"]
-    environment = {**os.environ, "PYTHONPATH": str(source), "LOOPX_USAGE_PING": "0"}
+    # Both codec arms compare the raw policy and original receipt identity.
+    environment = {**os.environ, "PYTHONPATH": str(source), "LOOPX_USAGE_PING": "0",
+                   "LOOPX_CONTEXT_DELIVERY": "off"}
 
     def run(*arguments):
         result = subprocess.run([*prefix, *arguments], cwd=source, env=environment,

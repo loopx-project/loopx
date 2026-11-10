@@ -213,6 +213,7 @@ def _run_turn(
                 ),
                 "--project",
                 str(workspace),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-adapter-command-json",
                 json.dumps(_host_command(host, mode)),
                 "--validation-command-json",

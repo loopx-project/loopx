@@ -1200,6 +1200,11 @@ For a later comparison, call `experiment-board-show` with the same Goal/project
 route and relevant benchmark/study filters. Reuse a current board already read
 when it answers the decision; avoid rebuilding and returning it after every
 single-row update. Validation and invalid-transition rejection still apply.
+An initially fail-closed `runner_invalid` row may advance to `completed` when a
+later deterministic terminal adjudication supplies a schema-valid completed row
+for the same run identity. This promotion is one-way: completed and cancelled
+rows cannot be reopened or demoted. Provider-ledger reconciliation continues to
+reject conflicting terminal shards because it has no single adjudication owner.
 
 The default ledger is locked, atomically updated, and keyed by benchmark, study,
 case, and run identity. A compact row carries arm role, exact and comparison

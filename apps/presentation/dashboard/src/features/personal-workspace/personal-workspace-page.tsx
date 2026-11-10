@@ -186,7 +186,6 @@ function ManagerHomeBoard({
   systemHealth,
   operations,
   onSelectOperation,
-  onViewAllOperations,
 }: {
   goals: WorkspaceGoal[];
   attention: WorkspaceAttention[];
@@ -204,7 +203,6 @@ function ManagerHomeBoard({
   systemHealth?: WorkspaceSystemHealth;
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
-  onViewAllOperations: () => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const currentGoals = goals.filter((goal) => goal.activationState === "active");
@@ -296,7 +294,7 @@ function ManagerHomeBoard({
       </section> : null}
       {goals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
         attention={attention} onSelectAttention={onSelectAttention}
-        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
+        operations={operations} onSelectOperation={onSelectOperation} /> : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? null : <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>}
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
@@ -3017,8 +3015,7 @@ export function PersonalWorkspacePage({
                 onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
-                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
-                onViewAllOperations={() => setSelectedGoalTab("chat")} />
+                operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
               <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
                 emptyState={originalConversation && (originalSourceUnresolved

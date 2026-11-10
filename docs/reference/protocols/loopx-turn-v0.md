@@ -84,18 +84,31 @@ and an independent validator:
 
 1. Run `loopx turn plan` to inspect the live typed decision without launching
    the host or changing state.
-2. The host adapter reads one `loopx_turn_host_request_v0` JSON object from
-   stdin, invokes the selected agent CLI in the governed workspace, and writes
-   exactly one `loopx_turn_host_result_v0` JSON object to stdout.
+2. A new Turn sends one `loopx_turn_host_request_v1` object with a complete
+   `work_contract`. The adapter reads it on stdin, invokes the selected agent
+   CLI in the governed workspace, and writes one `loopx_turn_result_v0` object
+   to stdout.
 3. The validator reads the normalized host result from stdin and independently
    checks the claimed postcondition. Exit zero means passed; non-zero means the
    result is rejected. A timeout or unavailable validator is inconclusive.
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
-The adapter and validator executable names below are placeholders supplied by
-the integration. They are separate programs because the executor must not
-validate its own completion claim.
+Use `loopx turn plan --include-transaction-detail --format markdown` to inspect
+`should_run`, the effective action, reason and selected work summary. Its **Full
+plan** JSON block retains the complete source contract, session and transaction
+that the same explicit JSON detail view exposes. Read the full source for
+requirements or evidence beyond the summary; neither view authorizes execution.
+The default short Markdown view and recorded v0 rendering remain unchanged.
+
+使用 `loopx turn plan --include-transaction-detail --format markdown` 检查是否应运行、
+有效动作、原因及已选工作的摘要。**Full plan** JSON 块保留同一显式 JSON 详情视图中的
+完整来源合同、session 与 transaction。摘要之外的要求与证据须查看完整来源；两种视图
+均不授予执行权限。默认简短 Markdown 视图与历史 v0 呈现保持原样。
+
+The example uses the repository's TraeX adapter and an integration-supplied
+validator. The two programs separate the executor's completion claim from
+validation of its artifact.
 
 ```bash
 loopx turn plan \
@@ -110,7 +123,8 @@ loopx turn run-once \
   --host generic-cli \
   --execution-mode isolated-headless \
   --project "$PWD" \
-  --host-adapter-command-json '["./tools/turn-host-adapter","--agent-cli","trae","chat"]' \
+  --host-adapter-request-schema loopx_turn_host_request_v1 \
+  --host-adapter-command-json '["python3","./scripts/traex_turn_host_adapter.py"]' \
   --validation-command-json '["./tools/verify-turn-postcondition"]' \
   --execute
 ```
@@ -123,10 +137,17 @@ Turn request/result objects and that CLI's prompt, session, and output model.
 Raw transcript text, process exit zero, and the host's own completion claim are
 never sufficient validation.
 
-A reference headless adapter for TraeX (`traex exec`) lives at
-`scripts/traex_turn_host_adapter.py`; it reads the bounded action text from the
-Turn envelope and writes one typed result, leaving goal/todo authority and
-validation to LoopX.
+The TraeX reference adapter (`traex exec`) renders the checked complete
+request and accepts the shared typed result fields. LoopX owns Goal and Todo
+authority, independent validation, writeback and quota. For another generic
+adapter, verify that the installed version accepts v1 before declaring it with
+`--host-adapter-request-schema`. A missing or incompatible declaration stops
+a v1 invocation before the adapter process starts.
+
+A recorded v0 Turn keeps its original wire version. If recovery still needs
+the adapter, use a v0-compatible adapter and omit the declaration or pass
+`loopx_turn_host_request_v0`. Recovery with a saved typed result continues
+without launching an adapter.
 
 A DeepSeek Harness adapter lives in the `loopx.dsh_goal_mode` subpackage
 (run with `python -m loopx.dsh_goal_mode`; the legacy
