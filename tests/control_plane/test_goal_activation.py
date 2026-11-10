@@ -310,6 +310,33 @@ def test_stop_does_not_fallback_for_non_global_registry(tmp_path: Path) -> None:
     )
 
 
+def test_resume_retry_rejects_shared_activation_mismatch(
+    connected_registries: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_registry, global_registry = connected_registries
+    source = load_registry(source_registry)
+    registry_goals(source)[0]["status"] = "active"
+    _write_json(source_registry, source)
+    real_sync = activation_service.sync_project_registry_to_global
+
+    def corrupt_shared_activation(**kwargs):
+        result = real_sync(**kwargs)
+        shared = load_registry(global_registry)
+        registry_goals(shared)[0]["activation"] = {
+            "schema_version": "loopx_goal_activation_v1", "state": "stopped",
+        }
+        _write_json(global_registry, shared)
+        return result
+
+    monkeypatch.setattr(activation_service, "sync_project_registry_to_global", corrupt_shared_activation)
+    result = set_goal_activation_state(registry_path=source_registry, goal_id="goal-one",
+        state="active", actor_kind="owner", execute=True)
+    assert not result["ok"] and not result["readback"]["verified"], result
+    assert not result["written"], "An already active source needs no new source mutation"
+    assert _goal(source_registry)["status"] == "active"
+    assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
+
+
 def test_stop_and_resume_sync_source_global_and_quota(
     connected_registries: tuple[Path, Path],
 ) -> None:
@@ -544,19 +571,23 @@ def test_idempotent_execute_reconciles_drifted_global_projection(
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
 
 
-def test_stop_migrates_legacy_projected_activation_state(
+def test_upgrade_retires_stored_activation_alias_before_stop(
     connected_registries: tuple[Path, Path],
 ) -> None:
     source_registry, global_registry = connected_registries
     source_payload = load_registry(source_registry)
     registry_goals(source_payload)[0]["activation_state"] = "active"
     _write_json(source_registry, source_payload)
-    sync_project_registry_to_global(
-        registry_path=source_registry,
-        runtime_root_override=None,
-        goal_id="goal-one",
-        dry_run=False,
-    )
+    from loopx.control_plane.goals.activation_service import upgrade_goal_activation_registries
+
+    before = source_registry.read_bytes()
+    # The existing fail-safe Stop can still stop the shared projection while
+    # its source awaits upgrade. It must not silently migrate that source.
+    fallback = set_goal_activation_state(registry_path=global_registry, goal_id="goal-one",
+                                         state="stopped", actor_kind="owner", execute=True)
+    assert fallback["ok"] and fallback["readback"]["verified"]
+    assert source_registry.read_bytes() == before
+    upgrade_goal_activation_registries([source_registry, global_registry], execute=True)
 
     stopped = set_goal_activation_state(
         registry_path=global_registry,
@@ -603,6 +634,71 @@ def test_owner_confirmed_typed_action_stops_goal(
     assert applied["proposal"]["receipt"]["projection_verified"] is True
     assert applied["proposal"]["receipt"]["outcome"] == "goal_stopped"
     assert goal_activation_state(_goal(global_registry)) is GoalActivationState.STOPPED
+
+
+@pytest.mark.parametrize("interruption", ["stop", "upgrade"])
+def test_http_resume_rejects_stale_confirmation_after_stop_or_upgrade(
+    connected_registries: tuple[Path, Path], tmp_path: Path, interruption: str,
+) -> None:
+    import http.client
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.control_plane.goals.activation_service import upgrade_goal_activation_registries
+
+    source, shared = connected_registries
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path = shared
+    server.runtime_root = shared.parent
+    server.runtime_root_override = str(shared.parent)
+    server.action_store = ChatActionStore(tmp_path / "http-actions")
+    server.action_service = ChatActionService(store=server.action_store, registry_path=shared)
+    server.verbose = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post(path, body):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json",
+                "Origin": f"http://127.0.0.1:{server.server_port}"})
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def preview(key):
+        code, result = post("/api/actions/preview", {"action_kind": "goal.lifecycle",
+            "summary": "Resume the Goal", "normalized_parameters": {"goal_id": "goal-one", "operation": "resume"},
+            "context": {"kind": "goal_directory"}, "idempotency_key": key})
+        assert code == 201, result
+        return result["proposal"]["proposal_id"]
+
+    try:
+        old = preview("before-upgrade")
+        if interruption == "stop":
+            stopped = set_goal_activation_state(registry_path=shared, goal_id="goal-one",
+                state="stopped", actor_kind="owner", execute=True)
+            assert stopped["ok"], stopped
+        else:
+            registry = load_registry(source)
+            registry["goals"][0]["status"] = "paused"
+            _write_json(source, registry)
+            upgrade_goal_activation_registries([source, shared], execute=True)
+        before = source.read_bytes(), shared.read_bytes()
+        code, refused = post(f"/api/actions/{old}/apply", {})
+        assert code == 409 and refused["error_code"] == "action_stale", refused
+        assert (source.read_bytes(), shared.read_bytes()) == before
+        fresh = preview("after-upgrade")
+        code, applied = post(f"/api/actions/{fresh}/apply", {})
+        assert code == 200 and applied["proposal"]["status"] == "applied", applied
+        assert goal_activation_state(_goal(source)) is goal_activation_state(_goal(shared)) is GoalActivationState.ACTIVE
+        after = source.read_bytes(), shared.read_bytes()
+        code, replay = post(f"/api/actions/{fresh}/apply", {})
+        assert code == 200 and replay["proposal"]["receipt"] == applied["proposal"]["receipt"], replay
+        assert (source.read_bytes(), shared.read_bytes()) == after
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(

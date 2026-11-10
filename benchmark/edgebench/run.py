@@ -24,7 +24,7 @@ from benchmark.edgebench.source import active_source_receipt, bootstrap
 if __name__ == "__main__":
     bootstrap()  # Select SForge before any provider or adapter imports.
 
-from sforge.harness.benchmark import load_benchmark
+from sforge.harness.benchmark import BENCHMARK_FILENAME, load_benchmark
 from sforge.harness.config import load_config
 from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
@@ -128,6 +128,8 @@ def main(argv=None):
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
                         help="Optional local execution probe for heartbeat workers")
+    parser.add_argument("--native-result-comparison", action="store_true",
+                        help="Opt-in read-only native result comparison for native Explore")
     parser.add_argument("--native-child-limit", type=int,
                         help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
@@ -165,7 +167,7 @@ def main(argv=None):
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
     parser.add_argument("--preserve-failed-worker", action="store_true",
-                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
+                        help="Retain an Official worker after confirmed failure, or capture and retain a failed heartbeat worker with full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -200,6 +202,9 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_result_comparison and (
+            args.worker != "heartbeat-explore" or args.feedback != "native"):
+        parser.error("--native-result-comparison requires native heartbeat-explore")
     if args.native_child_limit is not None and (
             args.native_child_limit < 1 or args.feedback != "native"):
         parser.error("--native-child-limit requires a positive limit and native feedback")
@@ -274,8 +279,9 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
-    if args.preserve_failed_worker and not handoff:
-        parser.error("Failed-worker preservation requires full native controller capture")
+    retain_official_failure = args.preserve_failed_worker and args.worker == "official" and args.feedback == "native"
+    if args.preserve_failed_worker and not (handoff or retain_official_failure):
+        parser.error("Failed-worker preservation requires native Official feedback or full native controller capture")
     if args.preserve_failed_worker and args.eval_interval != 0:
         parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
@@ -322,6 +328,10 @@ def main(argv=None):
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
+    if args.execution_observation is not None or args.native_result_comparison:
+        from benchmark.runtime.source import require_candidate_content
+
+        require_candidate_content(product, pins[0], work_finding=args.native_result_comparison)
     if args.restore_checkpoint is not None:
         # Activating the native capsule starts its remaining phase clock.
         # Qualify the actual install archives first, including ignored assets;
@@ -337,6 +347,18 @@ def main(argv=None):
     if managed_binding is not None and task.task_id != args.task:
         parser.error("Managed run task specification differs from the selected task")
     research_sidecar = args.feedback == "native" and not task.game_mode
+    native_result_scope = None
+    sforge_source = None
+    if args.native_result_comparison:
+        sforge_source = active_source_receipt()
+        if not research_sidecar or not sforge_source or task.task_id != args.task:
+            parser.error("--native-result-comparison requires a pinned native archive-scoring task")
+        native_result_scope = {
+            "judge_url": args.judge_url, "run": args.run_id, "task": task.task_id,
+            "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+            "benchmark_sha256": hashlib.sha256((args.tasks_dir / BENCHMARK_FILENAME).read_bytes()).hexdigest(),
+            "higher_is_better": task.judge.score_direction == "maximize",
+        }
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
         validate_research_scope(task.cwd, task.submit_paths)
@@ -367,7 +389,11 @@ def main(argv=None):
             eval_interval=args.eval_interval, internet=task.internet,
             selection=task.judge.selection, score_direction=task.judge.score_direction)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        workspace_instructions += research_artifact_instructions(checkpoint=checkpoint_request is not None)
+        workspace_instructions += research_artifact_instructions(
+            checkpoint=checkpoint_request is not None,
+            native_probe=args.execution_observation is not None,
+            native_result_comparison=args.native_result_comparison,
+        )
         # All native arms get the same storage policy. Checkpoint coverage is
         # explicit; neither collection nor a sidecar changes native submissions.
         feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
@@ -432,6 +458,7 @@ def main(argv=None):
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),
+                         **({"native_result_scope": native_result_scope} if native_result_scope is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          **({"native_readiness_total_seconds": readiness_budget[0],
@@ -480,6 +507,7 @@ def main(argv=None):
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      docker_host_bridge=args.docker_host_bridge,
                                      research_sidecar=research_sidecar,
+                                     retain_failed_native_worker=retain_official_failure,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     local_docker_images = backend.observe_local_images(
         work_key=task.work_image_key, judge_key=task.judge_image_key,
@@ -508,12 +536,13 @@ def main(argv=None):
         "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
         **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
-        "sforge_source": active_source_receipt(),
+        "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         "local_docker_images": local_docker_images,
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),
+        **({"native_result_comparison": True} if native_result_scope is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),

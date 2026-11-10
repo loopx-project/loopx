@@ -43,6 +43,13 @@ def register_quota_monitor_poll_request_arguments(
     quota_parser.add_argument("--target-key", help="Stable monitor target key for `quota monitor-poll` metadata writeback.")
     quota_parser.add_argument("--result-hash", help="Public-safe result hash observed by `quota monitor-poll`.")
     quota_parser.add_argument("--material-change", action="store_true", help="Mark a monitor poll as a material transition instead of unchanged evidence.")
+    quota_parser.add_argument(
+        "--material-change-scope",
+        help=(
+            "Optional public-safe case/run scope for --material-change. Waiting Todos may use "
+            "monitor_changed:<monitor_todo_id>@<scope> so unrelated transitions do not wake them."
+        ),
+    )
     quota_parser.add_argument("--cadence", help="Monitor cadence used to compute the next due timestamp, e.g. 30m, 2h, or 1d.")
     quota_parser.add_argument("--next-due-at", help="Explicit ISO timestamp for the next monitor poll.")
     quota_parser.add_argument(
@@ -118,6 +125,12 @@ def register_quota_monitor_poll_request_arguments(
 
 def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
+    if getattr(args, "material_change_scope", None) and (
+        command != "monitor-poll" or not args.material_change
+    ):
+        raise QuotaCommandValidationError(
+            "--material-change-scope requires quota monitor-poll --material-change"
+        )
     if command != "monitor-poll" and any(
         getattr(args, f"next_{role}_priority", None) is not None for role in ("agent", "user")
     ):

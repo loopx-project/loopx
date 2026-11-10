@@ -1,6 +1,7 @@
 """Durable queued inputs and ingress receipts for the existing Chat store."""
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 import os
@@ -73,9 +74,68 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
 class ChatIngressStore:
     @cached_property
     def _terminal_turn_discovery(self) -> FileChatDiscovery:
-        # File queue discovery owns this per-store hint. Concurrent first use
+        # Queue discovery and client lookup share this hint. Concurrent first use
         # may build two empty observers; neither holds execution authority.
         return FileChatDiscovery()
+
+    def _turn_discovery_rows(
+        self, session_id: str, turns_dir: Path, read: Callable[[Path], dict[str, Any]],
+    ) -> Iterator[tuple[Path, dict[str, Any], dict[str, Any] | None]]:
+        from .chat_store import CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+
+        def terminal(path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
+            status = payload.get("status")
+            client_id = payload.get("client_turn_id")
+            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
+                    and isinstance(status, str) and status in TERMINAL_TURN_STATES
+                    and (client_id is None or isinstance(client_id, str))):
+                return {
+                    "schema_version": CHAT_TURN_SCHEMA_VERSION, "session_id": session_id,
+                    "turn_id": path.stem, "status": status, "client_turn_id": client_id,
+                }
+            return None
+
+        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
+        fresh: dict[Path, dict[str, Any]] = {}
+
+        def read_current(path: Path) -> dict[str, Any]:
+            payload = read(path)
+            fresh[path] = payload
+            return payload
+
+        for path, observation in self._terminal_turn_discovery.rows(
+            turns_dir, paths, read=read_current, project=terminal,
+        ):
+            # Retain only the current iteration's complete read, never a body
+            # in the discovery cache or a second read on the cold path.
+            yield path, observation, fresh.pop(path, None)
+
+    def _matched_discovered_turn(
+        self, session_id: str, client_id: str, path: Path, fresh: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        from .chat_store import CHAT_TURN_SCHEMA_VERSION, _read_json
+
+        payload = fresh if fresh is not None else _read_json(path)
+        if (payload.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
+                or payload.get("session_id") != session_id or payload.get("turn_id") != path.stem
+                or payload.get("client_turn_id") != client_id):
+            raise ValueError("Matched Chat Turn is unavailable; retry the same client_turn_id.")
+        return payload
+
+    def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
+        from .chat_store import _read_json
+
+        turns_dir = self._session_dir(session_id) / "turns"
+        if not turns_dir.is_dir():
+            return None
+        for path, observation, fresh in self._turn_discovery_rows(session_id, turns_dir, _read_json):
+            if observation.get("client_turn_id") != client_turn_id:
+                continue
+            # Replay validation needs the complete current record, including
+            # the original request body and the latest persisted result.
+            return self._matched_discovered_turn(session_id, client_turn_id, path, fresh)
+        return None
 
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
@@ -109,16 +169,7 @@ class ChatIngressStore:
                 payload = _read_json(path)
             return payload
 
-        def terminal(path, payload):
-            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
-                    and isinstance(payload.get("status"), str)
-                    and payload.get("status") in TERMINAL_TURN_STATES):
-                return {key: payload[key] for key in ("schema_version", "session_id", "turn_id", "status")}
-            return None
-
-        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
-        for path, payload in self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal):
+        for _, payload, _ in self._turn_discovery_rows(session_id, turns_dir, read):
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"
@@ -223,6 +274,11 @@ class ChatIngressStore:
                 or value.get("session_id") != session_id or value.get("client_ingress_id") != ingress_id):
             raise OSError("Steering receipt is unreadable")
         return value
+
+    def steering_delivery_lock(self, session_id: str, ingress_id: str):
+        """Serialize one native send and its later readback across controllers."""
+        return exclusive_file_lock(self._ingress_path(session_id, ingress_id).with_suffix(".delivery"),
+            agent_id="loopx-chat", operation="chat_steering_delivery")
 
     def write_queue_steering(self, session_id: str, turn: dict[str, Any], plan: dict[str, Any]):
         """Persist the typed plan while the caller holds both queue fences."""
@@ -521,7 +577,7 @@ class ChatIngressStore:
             payload = _read_json(path)
             if payload.get("schema_version") != CHAT_INGRESS_SCHEMA_VERSION:
                 raise KeyError("chat ingress receipt was not found")
-            allowed = {"status", "active_turn_id", "error_code"}
+            allowed = {"status", "active_turn_id", "error_code", "native_steering"}
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat ingress fields: {sorted(unknown)}")

@@ -60,19 +60,16 @@ def execution_observation_guidance() -> str:
 
 
 def candidate_snapshot(paths: list[Path], workspace: Path) -> tuple[str, list[dict[str, str]]]:
-    files = []
-    for path in paths:
-        resolved = path.resolve(strict=True)
-        if not resolved.is_relative_to(workspace) or not resolved.is_file():
-            raise ValueError("candidate files must be existing files in the workspace")
-        with resolved.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        files.append({"path": resolved.relative_to(workspace).as_posix(), "sha256": digest})
-    if not 1 <= len(files) <= 32 or len({row["path"] for row in files}) != len(files):
-        raise ValueError("select one to 32 distinct candidate files")
-    files.sort(key=lambda row: row["path"])
-    encoded = json.dumps(files, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest(), files
+    # Lazy import keeps feature-off runners compatible with older product pins.
+    from loopx.capabilities.explore.candidate_content import candidate_snapshot as capture
+
+    return capture(paths, workspace)
+
+
+def candidate_manifest_sha256(files: list[dict[str, str]]) -> str:
+    from loopx.capabilities.explore.candidate_content import candidate_manifest_sha256 as digest
+
+    return digest(files)
 
 
 def _group_members(group_id: int) -> dict[int, bytes]:

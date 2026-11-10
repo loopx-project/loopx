@@ -46,6 +46,8 @@
     "tests/control_plane_ts/authority_store.test.ts",
     "tests/control_plane_ts/authority_state_log.test.ts",
     "tests/control_plane_ts/sqlite_authority_store.test.ts",
+    "tests/control_plane_ts/sqlite_authority_consumer_lag.test.ts",
+    "tests/control_plane_ts/sqlite_authority_consumer_process.ts",
     "tests/control_plane_ts/sqlite_runtime_admission.test.ts",
     "tests/control_plane_ts/local_authority_provider.test.ts",
     "tests/control_plane_ts/sqlite_authority_process.ts",

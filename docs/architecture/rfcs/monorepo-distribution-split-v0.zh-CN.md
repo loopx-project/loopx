@@ -2565,3 +2565,50 @@ campaign，不证明 Linux browser 恢复、installed-host、PostgreSQL host/whe
 完整边际成本或 model/team adoption。全部历史失败与原验收继续开放；前瞻 M2
 规则不会把历史冻结失败改记为通过。未变 head 的 review、必需验证与新鲜 merge
 readiness 继续分别约束交付。
+
+### 2026-11-09 — 发行资格分片提案
+
+两次 head 未变的 Release Artifacts 运行在约 28 分钟后通过完整的 86 场景
+packaged 浏览器目录和原 companion 流程，随后在既有 30 分钟 job 总限下于
+snapshot 资格阶段取消。构建出 snapshot 不等于取得资格；这两次取消和此前
+全部冻结延迟失败仍保留为失败。
+
+S12 发行资格提案将 package/sdist/已安装 frontend/DSH 与 snapshot 检查和
+三个隔离浏览器分片分开，复用已有 catalog、分片 selector 和 packaged
+catalog/team/craft 命令。每个原场景和 companion 仍为必需；craft 命令还包含
+它已有的 command-palette 检查。这改变发行浏览器并发，并重复依赖安装和
+静态检查；job 总限、场景期限、M2 阈值和六条共享 Python 验证通道不变。
+首次完整 Linux 资格验证
+[run 42633152296](https://github.com/loopx-project/loopx/actions/runs/42633152296)
+中，prepare 用时 1m43s，浏览器 worker 为 12m46s/9m25s/7m29s，最终门为 22s。
+86 个唯一场景和必需 companion 全部通过，snapshot 检查完成。被测 synthetic
+merge `ef048a32c` 与整合提案 `5a9fd8020` 的完整 tracked source tree 相同；
+该证据只验证这个 candidate。后续 main 整合改变 product source，需重新取得
+packaged 资格。完整 CI 成本和可比条件下的端到端边际成本收益仍未取得资格。
+
+后续完整 Linux 资格验证
+[run 42649914601](https://github.com/loopx-project/loopx/actions/runs/42649914601)
+通过全部 86 场景、team/craft companion 与 snapshot 检查。其 product source
+`4747408cc36067a9175bd4a00c440466c316ffc3` 与提案
+`9b4ab03a96eff9c3866193819d7da50945912db7` 的完整 tracked tree 相同。
+下载后的最终回执与 bundle 校验独立确认共同来源、目录覆盖及 package/runtime
+digest。后续整合已合入的内核工作及当前 main 再次改变该 product tree；整合提案
+仍需取得自己的完整资格。独立的带覆盖率源码 M2 失败仍为失败；
+[#8456](https://github.com/loopx-project/loopx/pull/8456) 的前瞻测量修复不重分类
+该运行，也不替代本提案的精确 head CI 和 merge-readiness 门。
+
+Worker 安装同一个 candidate wheel，只采用 producer 精确选定的 fixture
+commit/path。源码侧 fixture authority 还获得从同一 wheel 复制的预构建页面，
+并对 product source 验证，不自行重建。首次分片运行漏供这些源码资源，
+两条 research companion 路径失败；该失败运行单独保留。Package、checksum、snapshot 和 source digest 加 candidate
+artifact id 将最终 `build` 门绑定到成功的分片回执。门禁导入真实 catalog
+而不启动浏览器，在 attestation 或既有 validated-bundle 上传前拒绝缺失、
+失败、未知、重复、分片错误场景、错误来源和不完整 companion。仅发布恢复保留
+原成功 build 与 immutable asset 检查。本地负例资格和完整 GitHub runner
+资格分别记录。
+
+这是最小化内核工作的发行流水线资格修复，本提案不改 kernel 代码或性能归因。
+合入仍需精确 head 评审、必需验证和 fresh ready=true。原任务以及
+I3/minor-release、M1/#8011、R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel、完整成本和 adoption
+缺口继续开放。

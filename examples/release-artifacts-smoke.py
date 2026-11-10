@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import gzip
 import hashlib
 import io
@@ -77,6 +78,7 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
     )
     recover = workflow_run(workflow, "Resolve browser fixture correction without rebuilding product bytes")
     restore = workflow_run(workflow, "Restore browser fixtures and bind verified package checksums")
+    adopt = workflow_run(workflow, "Verify candidate provenance and adopt only selected fixture corrections").split("python -m venv", 1)[0]
     source = recover.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     allowed = next(node.value for node in ast.walk(ast.parse(source))
                    if isinstance(node, ast.Assign)
@@ -143,6 +145,21 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
             assert git("diff", "--name-only") == ""
             assert {path.name: digest(path) for path in artifacts} == before
             assert json.loads((root / "dist/RELEASE-SOURCES.json").read_text())["sha256"] == before
+            source_digest = digest(root / "dist/RELEASE-SOURCES.json")
+            result = subprocess.run(["bash", "-euc", adopt], cwd=root, capture_output=True, text=True,
+                                    env={**env, "RELEASE_SOURCES_SHA256": source_digest,
+                                         "RELEASE_PRODUCT_COMMIT": product})
+            assert result.returncode == 0, result
+            assert all((root / path).read_text() == ("corrected fixture\n" if selected else "tagged fixture\n") for path in paths)
+            assert (root / "product.txt").read_text() == "immutable product\n"
+            assert execute(restore).returncode == 0
+            for overrides in ({"RELEASE_SOURCES_SHA256": "0" * 64}, {"RELEASE_PRODUCT_COMMIT": correction}):
+                result = subprocess.run(["bash", "-euc", adopt], cwd=root, capture_output=True, text=True,
+                                        env={**env, "RELEASE_SOURCES_SHA256": source_digest,
+                                             "RELEASE_PRODUCT_COMMIT": product, **overrides})
+                assert result.returncode != 0, overrides
+                assert git("diff", "--name-only") == ""
+            assert {path.name: digest(path) for path in artifacts} == before
 
         # Invalid candidates must fail before copying even an earlier valid path.
         candidates = [(correction[:12], "full commit SHA"), ("f" * 40, "")]
@@ -174,6 +191,167 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
             assert error in result.stderr, result
             assert git("diff", "--name-only") == "", candidate
             assert {path.name: digest(path) for path in artifacts} == before
+
+
+def browser_qualification_contract(workflow: str) -> None:
+    gate = workflow_run(workflow, "Require exact catalog coverage and common package provenance")
+    catalog_probe = """import {scenarioCatalog} from './examples/personal-workspace-browser-smoke.mjs';
+console.log(JSON.stringify(scenarioCatalog.map(scenario => scenario.id)));
+"""
+    # Importing the real catalog must not start a server, require Playwright or
+    # apply the caller's scenario filter. The gate needs the complete catalog.
+    catalog_command = ["node", "--input-type=module", "-e", catalog_probe]
+    catalog_env = {**os.environ, "LOOPX_PERSONAL_WORKSPACE_SCENARIO": "unknown",
+                   "LOOPX_PERSONAL_WORKSPACE_SHARD": "invalid", "LOOPX_USAGE_PING": "0"}
+    catalog = json.loads(subprocess.check_output(
+        catalog_command, cwd=ROOT, env=catalog_env, text=True, timeout=10,
+    ))
+    assert catalog and len(catalog) == len(set(catalog))
+    # A catalog consumer can have a virtual entry name, as with Node stdin.
+    virtual_entry_catalog = json.loads(subprocess.check_output(
+        [*catalog_command, "-"], cwd=ROOT, env=catalog_env, text=True, timeout=10,
+    ))
+    assert virtual_entry_catalog == catalog
+    with tempfile.TemporaryDirectory(prefix="loopx-release-browser-gate-") as temporary:
+        root = Path(temporary)
+        examples = root / "examples"
+        examples.mkdir()
+        entry = examples / "personal-workspace-browser-smoke.mjs"
+        for child in (ROOT / "examples").iterdir():
+            if child.name != entry.name:
+                (examples / child.name).symlink_to(child, target_is_directory=child.is_dir())
+        entry_source = (ROOT / "examples" / entry.name).read_text()
+        entry.write_text(entry_source)
+        linked_entry = root / "linked entry.mjs"
+        linked_entry.symlink_to(entry)
+        # Direct entry paths must execute validation, including through symlinks.
+        # The specific error distinguishes a reached main() from a parse/import failure.
+        for runner in (entry, linked_entry):
+            result = subprocess.run(
+                ["node", str(runner)], cwd=root, capture_output=True, text=True, timeout=10,
+                env={**catalog_env, "LOOPX_PERSONAL_WORKSPACE_PACKAGED": "0", "LOOPX_DASHBOARD_COVERAGE": "0",
+                     "LOOPX_RELEASE_SOURCES_FILE": "", "LOOPX_USAGE_PING": "0"},
+            )
+            assert result.returncode != 0, runner
+            assert "Unknown personal workspace scenario unknown" in result.stderr, result.stderr
+        subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=root, check=True)
+        product = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        packages = root / "dist/packages"
+        runtime = root / "dist/runtime"
+        packages.mkdir(parents=True)
+        runtime.mkdir()
+        (packages / "loopx-fixture.whl").write_bytes(b"immutable wheel\n")
+        (root / "dist/SHA256SUMS").write_bytes(b"fixture checksums\n")
+        (runtime / "qualification.json").write_bytes(b'{"ok":true}\n')
+        (runtime / "runtime.tar.gz").write_bytes(b"qualified snapshot\n")
+        source = root / "dist/RELEASE-SOURCES.json"
+        source.write_text(json.dumps({
+            "product_commit": product,
+            "sha256": {path.name: digest(path) for path in [*packages.iterdir(), root / "dist/SHA256SUMS"]},
+            "runtime_sha256": {path.name: digest(path) for path in runtime.iterdir()},
+        }))
+        env = {**os.environ, "RELEASE_SOURCES_SHA256": digest(source), "RELEASE_CANDIDATE_ARTIFACT_ID": "fixture-candidate"}
+        partition_root = root / "browser-qualification"
+        baseline = {}
+        for index in (1, 2, 3):
+            selected = catalog[index - 1::3]
+            baseline[index] = {
+                "qualification.json": {"shard": f"{index}/3", "release_sources_sha256": digest(source),
+                                       "candidate_artifact_id": "fixture-candidate",
+                                       "companions": ["team"] if index == 1 else ["craft"] if index == 2 else []},
+                "acceptance-results.json": {"shard": f"{index}/3", "release_sources_sha256": digest(source),
+                                            "catalog_count": len(catalog), "selected": selected,
+                                            "scenarios": {name: {"status": "PASS"} for name in selected}},
+            }
+
+        def write(receipts: dict) -> None:
+            shutil.rmtree(partition_root, ignore_errors=True)
+            for index, documents in receipts.items():
+                directory = partition_root / f"release-browser-{index}"
+                directory.mkdir(parents=True)
+                for name, document in documents.items():
+                    (directory / name).write_text(json.dumps(document))
+
+        def execute() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(["bash", "-euc", gate], cwd=root, env=env,
+                                  capture_output=True, text=True, timeout=10)
+
+        write(baseline)
+        assert execute().returncode == 0
+        # An immutable tagged runner has the same catalog and an unconditional
+        # invocation. The temporary import adapter must preserve it without effects.
+        entry.write_text(entry_source.split("// The release gate imports", 1)[0]
+                         .replace("export { scenarioCatalog };\n", "") + "\nawait main();\n")
+        assert execute().returncode == 0
+        assert not (examples / (entry.name + ".release-catalog.mjs")).exists()
+        entry.write_text(entry_source)
+        negatives = []
+        missing = copy.deepcopy(baseline)
+        del missing[3]
+        negatives.append(missing)
+        extra = copy.deepcopy(baseline)
+        extra[4] = copy.deepcopy(extra[1])
+        negatives.append(extra)
+        for field, value in (("shard", "2/3"), ("release_sources_sha256", "0" * 64),
+                             ("candidate_artifact_id", "previous-candidate"), ("companions", [])):
+            changed = copy.deepcopy(baseline)
+            changed[1]["qualification.json"][field] = value
+            negatives.append(changed)
+        for field, value in (("shard", "2/3"), ("release_sources_sha256", "0" * 64), ("catalog_count", len(catalog) - 1)):
+            changed = copy.deepcopy(baseline)
+            changed[1]["acceptance-results.json"][field] = value
+            negatives.append(changed)
+        for kind in ("missing", "unknown", "duplicate", "wrong-partition", "failed", "missing-result", "extra-result"):
+            changed = copy.deepcopy(baseline)
+            results = changed[1]["acceptance-results.json"]
+            name = results["selected"][0]
+            if kind == "missing":
+                results["selected"].pop()
+            elif kind == "unknown":
+                results["selected"][0] = "unknown"
+            elif kind == "duplicate":
+                results["selected"][0] = results["selected"][1]
+            elif kind == "wrong-partition":
+                results["selected"][0] = baseline[2]["acceptance-results.json"]["selected"][0]
+            elif kind == "failed":
+                results["scenarios"][name]["status"] = "FAIL"
+            elif kind == "missing-result":
+                del results["scenarios"][name]
+            else:
+                results["scenarios"]["unknown"] = {"status": "PASS"}
+            negatives.append(changed)
+        for receipts in negatives:
+            write(receipts)
+            assert execute().returncode != 0, receipts
+        write(baseline)
+        binding = workflow_run(workflow, "Bind the successful browser partition to the unchanged candidate")
+        binding_python = binding.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        output = root / "output/playwright/personal-workspace"
+        output.mkdir(parents=True)
+        legacy_results = copy.deepcopy(baseline[1]["acceptance-results.json"])
+        del legacy_results["release_sources_sha256"]
+        acceptance = output / "acceptance-results.json"
+        acceptance.write_text(json.dumps(legacy_results))
+        result = subprocess.run([sys.executable, "-c", binding_python], cwd=root, capture_output=True, text=True,
+                                env={**env, "LOOPX_PERSONAL_WORKSPACE_SHARD": "1/3", "GITHUB_OUTPUT": str(root / "step-output")})
+        assert result.returncode == 0, result
+        bound = json.loads(acceptance.read_text())
+        assert bound.pop("release_sources_sha256") == digest(source)
+        assert bound == legacy_results
+        assert json.loads((output / "qualification.json").read_text()) == baseline[1]["qualification.json"]
+        for path in (source, packages / "loopx-fixture.whl", root / "dist/SHA256SUMS", runtime / "runtime.tar.gz", runtime / "qualification.json"):
+            original = path.read_bytes()
+            path.write_bytes(original + b"tampered\n")
+            assert execute().returncode != 0, path
+            path.write_bytes(original)
+        assert execute().returncode == 0
+        prerequisite_gate = workflow_run(workflow, "Require every qualification job to succeed")
+        for prepare, browser in (("success", "success"), ("failure", "success"), ("success", "failure"), ("success", "skipped")):
+            result = subprocess.run(["bash", "-euc", prerequisite_gate],
+                                    env={**os.environ, "PREPARE_RESULT": prepare, "BROWSER_RESULT": browser})
+            assert (result.returncode == 0) == (prepare == browser == "success")
 
 
 def main() -> int:
@@ -277,6 +455,7 @@ def main() -> int:
         encoding="utf-8"
     )
     fixture_recovery_contract(workflow, identity)
+    browser_qualification_contract(workflow)
     required_contract = (
         "release:\n    types: [published]",
         "python scripts/release_artifacts.py validate-tag",

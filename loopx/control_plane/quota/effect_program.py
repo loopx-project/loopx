@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import shlex
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import _encode_rpc_json, effect_runtime_result
 from ..effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -32,6 +35,34 @@ from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
 from ..turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
 _PLATFORM_IS_POSIX = os.name == "posix"
+
+_CLI_PLAN_PROJECTIONS: ContextVar[dict[bytes, Any] | None] = ContextVar(
+    "quota_cli_plan_projections",
+    default=None,
+)
+
+
+@contextmanager
+def reuse_cli_settlement_plans() -> Iterator[None]:
+    """Reuse pure rendering within one quota decision's projection passes."""
+    token = _CLI_PLAN_PROJECTIONS.set({})
+    try:
+        yield
+    finally:
+        _CLI_PLAN_PROJECTIONS.reset(token)
+
+
+def _render_cli_settlement_plan(request: dict[str, Any]) -> Any:
+    projections = _CLI_PLAN_PROJECTIONS.get()
+    if projections is None:
+        return effect_runtime_result("settlement.turn_scoped_cli_plan", request)
+    # Key by the complete typed request, including scope and command
+    # arguments. Each projection gets an independent copy to edit.
+    key = _encode_rpc_json(request)
+    if key not in projections:
+        projections[key] = effect_runtime_result("settlement.turn_scoped_cli_plan", request)
+    return deepcopy(projections[key])
+
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
@@ -281,7 +312,7 @@ def build_turn_scoped_cli_settlement_plan(
         f"--source {quota_spend_source} --execute{binding_arg}{turn_arg}{goal_ref_arg}"
         f"{scoped_cli_args}{max_output_arg}"
     )
-    payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
+    payload = _render_cli_settlement_plan({
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
         "autonomous_replan": autonomous_replan,
         "handoff_mode": handoff_mode,

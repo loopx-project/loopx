@@ -49,6 +49,19 @@ AddFormat = Callable[[argparse.ArgumentParser], None]
 UPDATE_CONTROL_COMMANDS = {"update", "upgrade"}
 
 
+def _selected_runtime_route(
+    registry_path: Path, runtime_root: str | None, *, registry_was_supplied: bool,
+) -> tuple[Path, Path]:
+    selected_registry = registry_path if registry_was_supplied else explicit_global_registry(
+        runtime_root, registry_path=registry_path,
+    )
+    selected_runtime = resolve_runtime_root(
+        load_registry(selected_registry) if selected_registry.exists() else {},
+        runtime_root, registry_path=selected_registry,
+    )
+    return selected_registry, selected_runtime
+
+
 def register_update_command(
     subparsers: argparse._SubParsersAction,
     add_subcommand_format: AddFormat,
@@ -219,9 +232,16 @@ def handle_update_command(
             print_payload(payload, output_format(args), renderer)
             return 0 if payload.get("ok") else 1
         if args.rollback:
-            payload = build_rollback_plan(release_id=args.rollback)
+            selected_registry, selected_runtime = _selected_runtime_route(
+                registry_path, args.runtime_root, registry_was_supplied=registry_was_supplied,
+            )
+            payload = build_rollback_plan(
+                release_id=args.rollback, registry_path=selected_registry,
+                runtime_root=str(selected_runtime),
+            )
             payload = execute_rollback_plan(
-                payload, timeout_seconds=args.timeout_seconds
+                payload, timeout_seconds=args.timeout_seconds,
+                registry_path=selected_registry, runtime_root=str(selected_runtime),
             )
         else:
             doctor_payload = None
@@ -276,12 +296,8 @@ def handle_update_command(
                 from ..control_plane.heartbeat.installed_prompt_update import (
                     update_with_prompts,
                 )
-                selected_registry = registry_path if registry_was_supplied else explicit_global_registry(
-                    args.runtime_root, registry_path=registry_path,
-                )
-                selected_runtime = resolve_runtime_root(
-                    load_registry(selected_registry) if selected_registry.exists() else {},
-                    args.runtime_root, registry_path=selected_registry,
+                selected_registry, selected_runtime = _selected_runtime_route(
+                    registry_path, args.runtime_root, registry_was_supplied=registry_was_supplied,
                 )
                 payload = update_with_prompts(
                     payload, registry=selected_registry,

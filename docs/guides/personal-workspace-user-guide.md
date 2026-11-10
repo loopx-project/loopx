@@ -280,6 +280,25 @@ loopx goal-lifecycle --goal-id <goal-id> --operation resume --actor-kind owner -
 
 执行时，LoopX 会写入权威 source registry、同步全局 registry，并验证两端 readback；任一端未验证成功时不会宣称操作完成。
 
+暂停/恢复只由持久化的 `activation.state` 控制。Registry 的 `status` 继续表达注册、
+归档等状态，不再接受旧的 `paused` / `stopped` 值；前端响应中的 `activation_state`
+是派生展示值，不能写回 registry。
+
+使用 `loopx upgrade` 或 snapshot 安装器时，会在启用候选运行时前，通过已有的
+`authority-archive upgrade --all-known --execute` 流程备份并迁移这些旧元数据。
+直接通过 pip 安装、源码运行或恢复旧备份时，可先只读检查：
+
+```bash
+loopx authority-archive upgrade --all-known --require-current
+# 需要迁移时，先备份原字节，再执行迁移
+loopx authority-archive upgrade --all-known --execute
+```
+
+原 registry 保存在相邻 `backups/registry-preimages/` 下，迁移结果返回具体备份路径。
+迁移保留暂停意图；字段冲突时保持停止，不会自动 Resume，也不改 Todo、执行回执或额度。
+之后仍可从「已停止」区或上面的同一 CLI 恢复。迁移失败时升级不会宣称完成，备份保留，
+原命令可重试；不要用备份覆盖迁移之后产生的新工作。
+
 切换到 SSH 状态来源后，只有来源与本机 OpenSSH 配置中的精确 Host alias 绑定时，
 侧边栏才显示停止/恢复按钮。操作通过 SSH 在目标主机执行同一个
 `goal-lifecycle` typed contract，并验证远端投影；不会回退修改本机同名 Goal。

@@ -46,6 +46,7 @@ from .completion_validation_projection import (
 from .external_wait_contract import TodoExternalWaitAuthoringError
 from .path_resolution import resolve_todo_state_path
 from .monitor_metadata import MonitorPollObservation
+from .resume_condition import normalize_supported_todo_resume_when
 
 
 def _dispatch_canonical_todo_update(
@@ -182,20 +183,54 @@ def _raise_public_update_rejection(
     result: dict[str, Any],
     *,
     planning_intent: dict[str, Any] | None,
+    runtime_root: Path | None = None,
+    goal_id: str | None = None,
+    todo_id: str | None = None,
 ) -> None:
     if result.get("status") != "failed":
         return
     reason_code = str(result.get("reason_code") or "")
     if reason_code.startswith("external_wait_"):
-        resume_when = str((planning_intent or {}).get("resume_when") or "")
-        resume_kind, separator, dependency_id = resume_when.partition(":")
+        raw_resume_when = (planning_intent or {}).get("resume_when")
         raw_successors = (planning_intent or {}).get("successor_todo_ids")
+        if (
+            (not raw_resume_when or raw_successors is None)
+            and runtime_root is not None
+            and goal_id
+            and todo_id
+        ):
+            canonical = read_canonical_todos_if_promoted(
+                runtime_root=runtime_root, goal_id=goal_id
+            )
+            target = next(
+                (
+                    todo
+                    for todo in (canonical or {}).get("todos", ())
+                    if todo.get("todo_id") == todo_id
+                ),
+                {},
+            )
+            if not raw_resume_when:
+                raw_resume_when = target.get("resume_when")
+            if raw_successors is None:
+                raw_successors = target.get("successor_todo_ids")
+        resume_when = (
+            normalize_supported_todo_resume_when(raw_resume_when)
+            or str(raw_resume_when or "").strip()
+        )
+        resume_kind, separator, dependency_spec = resume_when.partition(":")
+        monitor_id, scope_separator, scope = dependency_spec.partition("@")
         raise TodoExternalWaitAuthoringError(
             str(result.get("reason") or "external-wait Todo update was rejected"),
             code=reason_code,
             monitor_todo_id=(
-                dependency_id
-                if separator and resume_kind == "monitor_changed"
+                monitor_id
+                if separator and resume_kind == "monitor_changed" and monitor_id
+                else None
+            ),
+            material_change_scope=(
+                scope.lower()
+                if separator and resume_kind == "monitor_changed" and scope_separator and scope
                 else None
             ),
             successor_todo_ids=(
@@ -351,7 +386,13 @@ def update_canonical_todo_if_promoted(
             return failure
     # Keep the public lookup-error contract, without a second pre-transaction read.
     if isinstance(result, dict):
-        _raise_public_update_rejection(result, planning_intent=planning_intent)
+        _raise_public_update_rejection(
+            result,
+            planning_intent=planning_intent,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            todo_id=todo_id,
+        )
     if isinstance(result, dict) and (
         result.get("status") == "missing"
         and result.get("source_authority") in LOCAL_AUTHORITY_SOURCES
