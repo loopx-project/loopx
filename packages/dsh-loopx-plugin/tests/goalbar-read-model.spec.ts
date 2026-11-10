@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { LoopXCliError } from '../src/cli.ts'
 import type { FileResult, FileRunner, LoopXCommand } from '../src/cli.ts'
@@ -39,6 +39,10 @@ describe('GoalBar source revision', () => {
       const first = await computeGoalBarSourceRevision({ cwd, ...exactBinding })
       await writeFile(state, 'state=two', 'utf8')
       const equalSizeReplacement = await computeGoalBarSourceRevision({ cwd, ...exactBinding })
+      expect(await computeGoalBarSourceRevision({
+        cwd: cwd.split(sep).join('/'),
+        ...exactBinding,
+      })).toBe(equalSizeReplacement)
 
       expect(new Set([missing, registryPresent, boundMissing, first, equalSizeReplacement]).size)
         .toBe(5)
@@ -130,11 +134,28 @@ describe('GoalBar source revision', () => {
 
   it('rejects unsafe goal path segments and non-normalized cwd values', async () => {
     await expect(computeGoalBarSourceRevision({
-      cwd: '/fixture/project',
+      cwd: resolve('fixture/project'),
       goalId: '../outside',
     })).rejects.toThrow('safe path segment')
     await expect(computeGoalBarSourceRevision({ cwd: 'relative/project' }))
       .rejects.toThrow('absolute and normalized')
+  })
+
+  it('rejects a registered state path escaping a forward-slash cwd', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-escape-'))
+    try {
+      await mkdir(join(cwd, '.loopx'), { recursive: true })
+      await writeFile(join(cwd, '.loopx', 'registry.json'), JSON.stringify({
+        goals: [{ id: goalId, state_file: '../outside/ACTIVE_GOAL_STATE.md' }],
+      }), 'utf8')
+      await expect(computeGoalBarSourceRevision({
+        cwd: cwd.split(sep).join('/'),
+        goalId,
+        loopxAgentId,
+      })).rejects.toThrow('escaped project cwd')
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
   })
 
   it('rejects an authoritative source symlink that resolves outside the project', async () => {
