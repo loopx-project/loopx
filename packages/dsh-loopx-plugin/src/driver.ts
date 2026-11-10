@@ -844,6 +844,7 @@ export class LoopXContinuationDriver {
     const controller = new AbortController()
     state.controller = controller
     let evaluationStarted = false
+    let waitingForIdle = false
     let plan: EvaluationPlan
     try {
       plan = await state.agent.runMaintenance(async maintenanceSignal => {
@@ -852,6 +853,23 @@ export class LoopXContinuationDriver {
         return this.buildPlan(state, signal)
       })
     } catch (error: unknown) {
+      if (!evaluationStarted && !controller.signal.aborted
+        && !(error instanceof LoopXCliError)) {
+        // Maintenance keeps public status idle; wait for the actual slot to be free.
+        waitingForIdle = true
+        void state.agent.whenIdle().then(() => {
+          if (state.controller === controller && !controller.signal.aborted) {
+            this.requestEvaluation(state)
+          }
+        }).catch((idleError: unknown) => {
+          if (state.controller === controller && !controller.signal.aborted) {
+            this.warn(`dsh-loopx-driver: could not wait for idle: ${renderThrown(idleError)}`)
+          }
+        }).finally(() => {
+          if (state.controller === controller) state.controller = undefined
+        })
+        return false
+      }
       const cancelled = error instanceof LoopXCliError && error.kind === 'aborted'
       if (error instanceof LoopXCliError && error.kind === 'missing') {
         this.command = undefined
@@ -861,7 +879,7 @@ export class LoopXContinuationDriver {
       }
       return evaluationStarted
     } finally {
-      if (state.controller === controller) state.controller = undefined
+      if (!waitingForIdle && state.controller === controller) state.controller = undefined
     }
 
     if (plan.kind === 'wait') {
