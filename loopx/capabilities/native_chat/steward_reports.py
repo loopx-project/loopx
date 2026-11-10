@@ -113,7 +113,7 @@ class StewardReports:
         from ...chat_store import _read_jsonl
         from ...control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
         from ...control_plane.turn_driver.turn_journal_runtime import interpret_turn_journal_projection
-        from .steward_turn import report_turn
+        from .steward_turn import StewardTurnHost, report_turn
 
         store = self.controller.store
         folder = attempt_directory(self.root, window)
@@ -174,7 +174,9 @@ class StewardReports:
                         or identity.get("turn_instance_id") != request["turn_instance_id"]):
                     return False
                 inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
-                return inspection.get("journal_consistent") is True and inspection.get("completed_phases") == []
+                return (inspection.get("journal_consistent") is True
+                    and inspection.get("completed_phases") == []
+                    and StewardTurnHost(self.controller).report_failure_observation(turn) is not None)
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:

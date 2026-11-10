@@ -1602,12 +1602,11 @@ def test_report_http_preview_apply_is_original_source_bound_and_failure_is_revie
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("native_status", ["failed", "inProgress"])
 def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
-        steward, tmp_path, monkeypatch, provider, local_session):
+        steward, tmp_path, monkeypatch, provider, local_session, native_status):
     from datetime import timezone
-    from loopx.chat_agent import CodexChatAgentError
     from loopx.capabilities.native_chat import steward_reports as report_host
-    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path
     from loopx.capabilities.periodic_report.private_generation import freeze_private_report
     from loopx.control_plane.turn_driver.journal_store import turn_journal_path
@@ -1630,20 +1629,28 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
         sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
         owner = binding["binding_id"]
     install_model(steward, tmp_path, sid)
-    calls = []
-    original_start = CodexAppServerAdapter.start_turn
-
-    def fail_after_launch(adapter, prompt, event_sink):
-        calls.append("original")
-        event_sink("turn.started", {"upstream_turn_id": "report-failed-after-launch"})
-        raise CodexChatAgentError("The original report worker ended without an editorial response.")
-
-    def start_latest(adapter, prompt, event_sink):
-        calls.append("latest")
-        return original_start(adapter, prompt, event_sink)
-
-    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: None))
-    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", fail_after_launch)
+    # An actual stdio peer acknowledges the report Turn, then either sends a
+    # typed terminal failure or loses its connection while still running.
+    # Its persisted inventory is served by the later read-only control peer.
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text()
+    fail_once = tmp_path / "fail-next-report"
+    fail_once.touch()
+    probe = f"""
+    if method == "turn/start" and __import__("pathlib").Path({str(fail_once)!r}).exists():
+        print(json.dumps({{"id": request["id"], "result": {{"turn": {{"id": "report-failed-after-launch", "status": "running"}}}}}}), flush=True)
+        if {native_status!r} == "failed":
+            print(json.dumps({{"method": "turn/completed", "params": {{"threadId": "durable-thread", "turn": {{"id": "report-failed-after-launch", "status": "failed", "error": {{"codexErrorInfo": "other", "message": "Synthetic terminal failure"}}}}}}}}), flush=True)
+            continue
+        sys.exit(0)
+    if method == "thread/turns/list":
+        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"id": "report-failed-after-launch", "status": {native_status!r}, "error": {{"codexErrorInfo": "other"}}}}]}}}}), flush=True)
+        continue
+    if method == "thread/items/list":
+        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]}}}}), flush=True)
+        continue
+"""
+    fake.write_text(source.replace('    method = request.get("method")', '    method = request.get("method")' + probe, 1))
     original = finish(runtime, pump_steward_monitors(runtime)[0])
     native = original["response"]["native_loopx"]
     assert native["status"] == "failed" and native["receipt"]["failed_phase"] == "host_execute"
@@ -1658,7 +1665,9 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     original_bytes = [path.read_bytes() for path in old_artifacts]
     sent = list(bot.writes)
     calls_before = capture.read_bytes()
-    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", start_latest)
+    fail_once.unlink()
+    Path(store.load_session(sid)["codex_home"]).mkdir(parents=True, exist_ok=True)
+    runtime.adapters.pop(sid).close_session()
 
     def wake():
         runtime._steward_monitor_next_check.clear()
@@ -1683,9 +1692,24 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     with exclusive_file_lock(old_folder / "generation.lock", operation="in-flight-report"):
         assert wake() == []
     assert json.loads(cadence.read_text()) == previous
-    assert calls == ["original"] and capture.read_bytes() == calls_before and bot.writes == sent
+    assert bot.writes == sent
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    assert starts() == original_starts
 
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    native_proof = StewardTurnHost(runtime).report_failure_observation(original)
+    assert bool(native_proof) is (native_status == "failed"), native_proof
+    assert reports._failed_without_generation(actor, old) is (native_status == "failed")
     pending = wake()
+    if native_status != "failed":
+        assert pending == [] and starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        observed = [row["method"] for row in map(json.loads, capture.read_text().splitlines())]
+        assert "thread/turns/list" in observed
+        return
     assert len(pending) == 1, "the retained failure must not suppress every later deadline"
     done = finish(runtime, pending[0])
     assert done["response"]["native_loopx"]["status"] == "committed", done
@@ -1720,7 +1744,7 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
         assert any("缺报区间" in text for _, text in bot.writes[len(sent):])
     assert read_periodic_report_publication_cursor(runtime_root=reports.root,
         goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == latest["due_at"]
-    assert wake() == [] and calls == ["original", "latest"]
+    assert wake() == [] and len(starts()) == len(original_starts) + 1
     assert transport.steward_reports.reconcile() == 0
 
 
