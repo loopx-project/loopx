@@ -2441,7 +2441,7 @@ M0 pin 修复已在 CI 通过，同一记录中的提案 head 也通过真实 Po
 kernel、TypeScript、浏览器和 Stage 2C 检查。组合源码现已接入目标 main
 `1cba745f5`，并保留原提案祖先。报告 calendar CLI smoke 在组合源码上仍失败，
 因为它直接读取已退役的 `turn_envelope` 字段。replan 必须为 `None` 的断言也属于
-旧 projection adapter：完整源保留竞争建议，最终 capability 优先级由 typed
+旧 projection adapter：完整源保留竞争建议；最终 capability 优先级仍由现有 typed
 controller 决定。
 
 smoke 现在将单一 `work_contract` 直接交给现有 controller，在 plan、dry-run、

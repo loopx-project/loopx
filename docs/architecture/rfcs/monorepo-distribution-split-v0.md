@@ -3139,7 +3139,7 @@ now includes target main `1cba745f5` while retaining the original proposal ances
 The report calendar CLI smoke still fails on that integrated source because it
 reads the retired `turn_envelope` carrier. Its `None` replan assertion also
 belongs to the old projected adapter: the complete source retains competing
-advice while the typed controller owns final capability precedence.
+advice; final capability precedence remains with the existing typed controller.
 
 The smoke now gives the single `work_contract` directly to the existing controller.
 Across plan, dry-run and executing generic/Codex CLI calls, it checks the same
