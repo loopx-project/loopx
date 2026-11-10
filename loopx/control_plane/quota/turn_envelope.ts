@@ -2410,9 +2410,15 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const checked = host ? completeHostSource(request) : null;
     const payload = checked?.decision ?? (Object.hasOwn(request, "source_transport")
       ? decodeTurnSource(request, "payload") : requireJsonObject(request.payload, "quota payload"));
+    if (!checked && (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding"))) {
+      requireCompleteTurnDecision(payload, request.source_number_tokens);
+    }
     const projection = checked?.projection ?? turnActionProjection(payload,
       replanReadPrecision(payload, request.source_number_tokens));
     assertSupportedQuotaPacket(projection);
+    if (!checked && payload.agent_id && projection.agent_id && payload.agent_id !== projection.agent_id) {
+      throw new EffectRuntimeRequestError("context source has conflicting Agent identities");
+    }
     return {goal_id: payload.goal_id ?? null, agent_id: projection.agent_id ?? null,
       boundary: {capabilities: object(projection.boundary).capabilities ?? null}};
   }
