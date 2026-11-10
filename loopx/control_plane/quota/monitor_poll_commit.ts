@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import {planTodoCreationPriority, readTodoPriority} from "../todos/priority.ts";
 import { monitorSuccessorIntent, monitorSuccessorRoute, monitorSuccessorPriorities } from "../scheduler/monitor_successor.ts";
 import { normalizeTodoCapabilities } from "../todos/work_requirements.ts";
+import { normalizeMonitorChangeScope } from "../todos/monitor_scope.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
 import { isMonitorUnavailableWait } from "./blocked_wait.ts";
 import {
@@ -116,6 +117,7 @@ interface MonitorObservation extends JsonObject {
   target_key: string | null;
   result_hash: string | null;
   material_change: boolean;
+  material_change_scope?: string | null;
   cadence: string | null;
   next_due_at: string | null;
   next_agent_todo: string | null;
@@ -160,6 +162,7 @@ interface MonitorProviderPlan extends JsonObject {
   target_key: string | null;
   result_hash: string;
   material_change: boolean;
+  material_change_scope?: string | null;
   cadence: string | null;
   next_due_at: string | null;
   reason_summary: string | null;
@@ -341,6 +344,21 @@ function observationObject(value: unknown): MonitorObservation {
     observation.material_change,
     "observation.material_change",
   );
+  const rawMaterialChangeScope = optionalString(
+    observation.material_change_scope,
+    "observation.material_change_scope",
+  )?.trim() ?? null;
+  const materialChangeScope = rawMaterialChangeScope === null
+    ? null
+    : normalizeMonitorChangeScope(rawMaterialChangeScope);
+  if (rawMaterialChangeScope !== null && materialChangeScope === null) {
+    throw new EffectRuntimeRequestError(
+      "observation.material_change_scope must be a public-safe token of at most 96 characters",
+    );
+  }
+  if (materialChangeScope !== null && !materialChange) {
+    throw new EffectRuntimeRequestError("material_change_scope requires material_change=true");
+  }
   const result: MonitorObservation = {
     ...observation,
     actor_agent_id: optionalString(
@@ -359,6 +377,7 @@ function observationObject(value: unknown): MonitorObservation {
     target_key: optionalString(observation.target_key, "observation.target_key")?.trim() ?? null,
     result_hash: optionalString(observation.result_hash, "observation.result_hash")?.trim() ?? null,
     material_change: materialChange,
+    ...(materialChangeScope === null ? {} : {material_change_scope: materialChangeScope}),
     cadence: optionalString(observation.cadence, "observation.cadence")?.trim() ?? null,
     next_due_at: optionalString(
       observation.next_due_at,
@@ -802,6 +821,9 @@ function compactProviderWriteback(receipt: JsonObject): JsonObject {
   ]) {
     compact[field] = receipt[field] ?? null;
   }
+  if (receipt.material_change_scope != null) {
+    compact.material_change_scope = receipt.material_change_scope;
+  }
   if (receipt.lease_proof != null) compact.lease_proof = receipt.lease_proof;
   Object.assign(compact, monitorProjectionDelivery(receipt));
   return compact;
@@ -880,6 +902,9 @@ function buildRecord(request: MonitorRequest, allowed: Admission): JsonObject {
     monitor_target: target,
     reason_summary: request.observation.reason_summary ?? defaultReason,
     material_change: material,
+    ...(request.observation.material_change_scope == null ? {} : {
+      material_change_scope: request.observation.material_change_scope,
+    }),
     settlement_todo_id: request.observation.settlement_todo_id,
     todo_id: request.observation.todo_id,
     target_key: request.observation.target_key,
@@ -967,6 +992,9 @@ function providerPlanFor(request: MonitorRequest, gateGuard = true,
     target_key: request.observation.target_key,
     result_hash: resultHash,
     material_change: request.observation.material_change,
+    ...(request.observation.material_change_scope == null ? {} : {
+      material_change_scope: request.observation.material_change_scope,
+    }),
     cadence: request.observation.cadence,
     next_due_at: request.observation.next_due_at,
     reason_summary: request.observation.reason_summary,
@@ -1022,6 +1050,12 @@ function providerPlanObject(value: unknown): MonitorProviderPlan {
       plan.material_change,
       "provider_plan.material_change",
     ),
+    ...(Object.hasOwn(plan, "material_change_scope") ? {
+      material_change_scope: optionalString(
+        plan.material_change_scope,
+        "provider_plan.material_change_scope",
+      )?.trim() ?? null,
+    } : {}),
     cadence: optionalString(plan.cadence, "provider_plan.cadence")?.trim() ?? null,
     next_due_at: optionalString(plan.next_due_at, "provider_plan.next_due_at")?.trim() ?? null,
     reason_summary: optionalString(plan.reason_summary, "provider_plan.reason_summary"),
@@ -1291,6 +1325,15 @@ function validatedProviderReceipt(
     plan.material_change,
     "provider_receipt.material_change",
   );
+  const materialChangeScope = optionalString(
+    receipt.material_change_scope,
+    "provider_receipt.material_change_scope",
+  )?.trim() ?? null;
+  requireProviderMatch(
+    materialChangeScope,
+    plan.material_change_scope ?? null,
+    "provider_receipt.material_change_scope",
+  );
   const dryRun = requireBoolean(receipt.dry_run, "provider_receipt.dry_run");
   requireProviderMatch(dryRun, !plan.execute, "provider_receipt.dry_run");
   const generation = requireInteger(
@@ -1344,6 +1387,7 @@ function validatedProviderReceipt(
     target_key: targetKey,
     result_hash: resultHash,
     material_change: materialChange,
+    ...(materialChangeScope === null ? {} : {material_change_scope: materialChangeScope}),
     material_change_generation: generation,
     consecutive_no_change: noChange,
     last_checked_at: lastCheckedAt,
@@ -2084,6 +2128,13 @@ function conflictFields(
   if (requested.material_change !== (recorded.material_change === true)) {
     conflicts.push("material_change");
   }
+  const recordedScope = optionalString(
+    recorded.material_change_scope,
+    "recorded material_change_scope",
+  )?.trim() ?? null;
+  if ((requested.material_change_scope ?? null) !== recordedScope) {
+    conflicts.push("material_change_scope");
+  }
   const recordedProof = decodeTaskLeaseProof(recorded.lease_proof ?? jsonObject(recorded.todo_writeback)?.lease_proof);
   if ((requested.lease_proof?.idempotency_key ?? null) !== (recordedProof?.idempotency_key ?? null) ||
       (requested.lease_proof?.expected_version ?? null) !== (recordedProof?.expected_version ?? null)) {
@@ -2121,6 +2172,9 @@ function validateNoEffect(receipt: JsonObject | null, plan: MonitorProviderPlan)
     "todo_id", "target_key", "result_hash", "material_change", "generated_at",
     "cadence", "next_due_at", "reason_summary",
   ].map(key => [key, plan[key]]));
+  if (Object.hasOwn(plan, "material_change_scope")) {
+    observation.material_change_scope = plan.material_change_scope ?? null;
+  }
   const intent = Object.fromEntries([
     "next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
     "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",

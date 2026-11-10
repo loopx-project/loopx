@@ -80,7 +80,7 @@ class ChatTodoActionMixin:
                 parameters.get("agent_id") if operation == "reassign" else None
             ),
             resume_when=parameters.get("resume_when"),
-            clear_resume_when=(operation == "block" or status == "open") and basis is not None,
+            clear_resume_when=(operation == "block" or (status == "open" and not parameters.get("resume_when"))) and basis is not None,
             successor_todo_ids=parameters.get("successor_todo_ids"),
             agent_id=parameters.get("agent_id"),
             authority_reason="owner-confirmed typed Chat action",

@@ -1124,8 +1124,8 @@ class ChatRequestHandler(
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, error_code=exc.error_code, gate=exc.gate)
             return
-        except RuntimeError as exc:
-            code = str(exc)
+        except (RuntimeError, OSError) as exc:
+            code = str(exc) if isinstance(exc, RuntimeError) else "live_steering_delivery_unresolved"
             not_delivered = code in STEERING_NOT_DELIVERED_CODES
             self._send_error(
                 "本轮追加指令未送达。请检查当前回合与执行器，条件恢复后可重试原文。" if not_delivered

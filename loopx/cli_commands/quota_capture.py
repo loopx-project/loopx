@@ -538,8 +538,13 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
         raise QuotaCommandValidationError(
             "native Codex context delivery needs JSON and a capture destination")
     if handoff is not None:
-        validate_handoff_socket(handoff)
-        if requested is None and root is None:
+        handoff_root = None
+        if root is not None:
+            handoff_root = Path(root).expanduser().absolute()
+        elif requested is not None:
+            handoff_root = Path(requested).expanduser().absolute().parent
+        validate_handoff_socket(handoff, capture_root=handoff_root)
+        if handoff_root is None:
             raise QuotaCommandValidationError("decision handoff requires an explicit decision capture destination")
     if requested is None and root is None:
         return None

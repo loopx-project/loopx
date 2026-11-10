@@ -437,6 +437,10 @@ def structured_todo_item(
     )
     if material_change_generation is not None:
         normalized["material_change_generation"] = material_change_generation
+    for field in ("material_change_scope", "material_change_scope_generations"):
+        value = str(item.get(field) or "").strip()
+        if value:
+            normalized[field] = value
     no_followup = normalize_todo_no_followup(item.get("no_followup"))
     if no_followup is not None:
         normalized["no_followup"] = no_followup

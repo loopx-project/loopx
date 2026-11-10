@@ -295,6 +295,75 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
     assert code.read_text() == "retained source"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("invalid_root", ["foreign", "symlinked_ancestor"])
+def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path, provider, invalid_root):
+    from pathlib import Path
+    import subprocess
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture,
+        _heartbeat_receipt_count, _initialize_fixture_authority, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    request = tmp_path / "checkpoint-request.json"
+    request.write_text(json.dumps({
+        "destination": str(tmp_path / "checkpoints"), "trigger": "fresh_replan",
+        "point_metadata": {}, "components": [{"id": "workspace", "source_path": str(project)}],
+    }))
+    wake_env = {
+        "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_CHECKPOINT_REQUEST": str(request),
+    }
+    with CheckpointWake(wake_env, {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID}) as host:
+        assert host.listener is not None
+        host.capture_root.mkdir(parents=True, mode=0o700)
+        native_context = tmp_path / "native-context"
+        native_context.mkdir(mode=0o700)
+        requested_root = native_context
+        original_parent = host.capture_root.parent.with_name("original-parent")
+        if invalid_root == "symlinked_ancestor":
+            (native_context / host.capture_root.name).mkdir(mode=0o700)
+            host.capture_root.parent.rename(original_parent)
+            host.capture_root.parent.symlink_to(native_context, target_is_directory=True)
+            requested_root = host.capture_root
+        command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                   "--registry", str(registry), "--runtime-root", str(runtime), "quota", "should-run",
+                   "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID,
+                   "--runtime-profile", "generic_cli", "--context-delivery", "off",
+                   "--decision-handoff-socket", host.socket_path, "--decision-output-root"]
+        env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+        try:
+            refused = subprocess.run([*command, str(requested_root)], cwd=project, env=env,
+                                     capture_output=True, text=True, timeout=15, check=False)
+            assert refused.returncode == 1
+            assert "no guard was run" in (refused.stdout + refused.stderr).lower()
+            assert not list(requested_root.iterdir())
+            assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+        finally:
+            if invalid_root == "symlinked_ancestor":
+                host.capture_root.parent.unlink()
+                original_parent.rename(host.capture_root.parent)
+
+        host.listener.settimeout(15)
+        with subprocess.Popen([*command, str(host.capture_root)], cwd=project, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            with held_quota_decision(host.listener, host.capture_root, goal_id=GOAL_ID,
+                                    agent_id=AGENT_ID, turn_instance_id=TURN_ID,
+                                    interrupt_when=lambda _: False) as held:
+                assert held["quota"]["ok"] is True
+                assert held["path"].parent.parent == host.capture_root
+            stdout, stderr = process.communicate(timeout=15)
+            assert process.returncode == 0, (stdout, stderr)
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
 @pytest.mark.parametrize("use_selector,closeout,settlement_only", [
     (False, False, False), (True, False, False), (True, True, False), (True, False, True),
