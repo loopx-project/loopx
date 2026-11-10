@@ -94,6 +94,23 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
         assert "Missing vision: same-turn checkpoint-context" not in body
 
 
+def test_codex_app_quiet_completion_is_host_control_not_chat(tmp_path) -> None:
+    variants = [{mode: True} for mode in ("full", "compact", "brief", "thin")]
+    variants.append({
+        "thin": True, "turn_envelope": True,
+        "decision_output_root": tmp_path, "turn_instance_id": "fixture-quiet-turn",
+    })
+    for variant in variants:
+        body = build_heartbeat_prompt(
+            goal_id="quiet-completion-fixture", agent_id="worker-a",
+            registered_agents=["worker-a"], runtime_profile="codex_app_heartbeat",
+            **variant,
+        )["task_body"]
+        assert "DONT_NOTIFY: no chat text" in body, variant
+        assert "required host quiet result in full" in body, variant
+        assert "response with the skip reason" not in body, variant
+
+
 def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
     # Build the shipped payload, including the short/default worker entrypoint.
     # An unchanged artifact may still accompany a validated route elimination;

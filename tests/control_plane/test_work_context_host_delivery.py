@@ -152,8 +152,14 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('declaration', ['envelope', 'signature', 'coverage'])
-def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, monkeypatch, provider, declaration):
+@pytest.mark.parametrize(('declaration', 'diagnostic'), [
+    ('version', 'unsupported complete Turn decision version'),
+    ('hash_codec', 'unsupported complete Turn decision hash codec'),
+    ('content_hash', 'complete Turn decision content integrity mismatch'),
+])
+def test_real_turn_refuses_unsupported_consumer_version_before_launch(
+    tmp_path, monkeypatch, provider, declaration, diagnostic,
+):
     import contextlib
     import io
     import sys
@@ -163,19 +169,20 @@ def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, 
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
-    original_builder = turn.build_turn_envelope
+    original_builder = turn.build_loopx_turn_plan
     observed = []
 
-    def incompatible_writer(*args, **kwargs):
-        packet = original_builder(*args, **kwargs)
-        if declaration == 'envelope':
+    def incompatible_writer(decision, **kwargs):
+        packet = copy.deepcopy(decision)
+        assert packet['schema_version'] == 'loopx_turn_envelope_v1'
+        if declaration == 'version':
             packet['schema_version'] = 'unsupported_work_contract'
         else:
-            packet['action_signature']['schema_version' if declaration == 'signature' else 'coverage'] = 'unsupported_required_semantics'
-        observed.append(copy.deepcopy(packet))
-        return packet
+            packet['contract_binding'][declaration] = 'unsupported_required_semantics'
+        observed.append(packet)
+        return original_builder(packet, **kwargs)
 
-    monkeypatch.setattr(turn, 'build_turn_envelope', incompatible_writer)
+    monkeypatch.setattr(turn, 'build_loopx_turn_plan', incompatible_writer)
     marker = project / 'host-started'
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -187,8 +194,7 @@ def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, 
     result = json.loads(output.getvalue())
     assert observed and code != 0, result
     assert not marker.exists()
-    assert 'unsupported TurnEnvelope' in result['error'], result
-    assert 'compatible consumer' in result['error'], result
+    assert diagnostic in result['error'], result
     # Generic CLI error effects are unknown; the marker and ledger independently
     # prove this pre-dispatch refusal, without interpreting null as false.
     assert _spend_run_count(runtime) == 0

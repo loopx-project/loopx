@@ -66,13 +66,35 @@ const zh: Record<GoalBarLocaleKey, string> = {
 
 export const GOALBAR_LOCALES = Object.freeze({ en, zh })
 
+/** Dictionary namespace of the LoopX personal-workspace sidebar panel. */
+export const DASHBOARD_LOCALE_NAMESPACE = 'loopx.dashboard' as const
+
+const dashboardEn = {
+  'iframe.title': 'LoopX personal workspace',
+  'panel.unavailable': 'The LoopX dashboard is not reachable yet. Run `loopx dashboard` first.',
+  'panel.retry': 'Retry',
+} as const
+
+export type DashboardLocaleKey = keyof typeof dashboardEn
+
+const dashboardZh: Record<DashboardLocaleKey, string> = {
+  'iframe.title': 'LoopX 个人工作区',
+  'panel.unavailable': '尚未连接到 LoopX 本地看板。请先在终端运行 `loopx dashboard`。',
+  'panel.retry': '重试',
+}
+
+export const DASHBOARD_LOCALES = Object.freeze({ en: dashboardEn, zh: dashboardZh })
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     'loopx.goalbar': GoalBarLocaleKey
+    'loopx.dashboard': DashboardLocaleKey
   }
 }
 
 export type GoalBarTranslate = Translate<GoalBarLocaleKey>
+
+export type DashboardTranslate = Translate<DashboardLocaleKey>
 
 const ERROR_KEYS: Readonly<Record<GoalBarUiErrorCode, GoalBarLocaleKey>> = {
   session_unavailable: 'error.session_unavailable',

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from loopx.cli import main as cli_main
-from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+from loopx.control_plane.coordination.local_authority_shadow_projection import ProjectionValueError
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
 from loopx.control_plane.goals.goal_frontier import fallback_source
 from canonical_authority_fixture import (
@@ -432,7 +432,7 @@ def test_duplicate_authored_fallback_is_rejected_before_canonical_creation(
     )
 
     before = state_file.read_bytes()
-    with pytest.raises(EffectRuntimeRejected, match="duplicate succession identity"):
+    with pytest.raises(ProjectionValueError, match="duplicate todos identity"):
         initialize_canonical_source_fixture(
             tmp_path / "runtime", GOAL_ID, state_path=state_file, provider="sqlite",
         )
@@ -440,7 +440,7 @@ def test_duplicate_authored_fallback_is_rejected_before_canonical_creation(
     # Invalid authored input never becomes authority. The actual CLI cannot
     # fabricate fallback advice from the uninitialized source afterward.
     assert cli_main(args) == 1
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=1)
     assert result["should_run"] is False
     assert result["state"] == "blocked_health"
     assert "canonical_authority_required" in json.dumps(result)

@@ -28,6 +28,23 @@ CHAT_TODO_RECEIPT_SCHEMA_VERSION = "loopx_chat_todo_receipt_v0"
 CHAT_TODO_NO_WRITE_RECEIPT_SCHEMA_VERSION = "loopx_chat_todo_no_write_receipt_v0"
 CHAT_REVIEW_OPEN_TAG = "<loopx-review-json>"
 CHAT_REVIEW_CLOSE_TAG = "</loopx-review-json>"
+CHAT_RESPONSE_EXAMPLE_SUFFIX = (
+    "\n\nAfter the visible answer, append the envelope below. "
+    "Use both tags verbatim, including when returning an existing report. "
+    "Write nothing after the closing tag.\n"
+    + CHAT_REVIEW_OPEN_TAG
+    + json.dumps({
+        "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
+        "message": "",
+        "proposals": [],
+        "protected_action": None,
+        "goal_draft": None,
+        "context_handoff": None,
+        "gate": None,
+        "unfinished_work": None,
+    }, ensure_ascii=False)
+    + CHAT_REVIEW_CLOSE_TAG
+)
 CHAT_TODO_ACTION_KIND = "loopx_chat_proposal"
 CHAT_PROTECTED_ACTION_OPERATIONS = frozenset(
     {"merge", "release", "deploy", "delete", "payment"}

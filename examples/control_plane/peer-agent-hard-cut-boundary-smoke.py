@@ -56,6 +56,10 @@ def hierarchy_scan_line(path: Path, line: str) -> str:
     if (path == REPO_ROOT / "docs/architecture/rfcs/controller-executor-unified-contract-v0.md"
             and line.strip() == 'the current single Agent-scoped slot. One controller owns control dialogue;'):
         return line.replace("controller owns", "native session role owns")
+    # Benchmark recovery assigns retries to the experiment provider or controller.
+    if (path == REPO_ROOT / "loopx/capabilities/benchmark_toolkit/README.md"
+            and line.strip() == "grading alive until it drains. The provider/controller owns bounded retry after"):
+        return line.replace("provider/controller owns", "benchmark provider or controller handles")
     return line
 
 
@@ -79,6 +83,7 @@ def main() -> int:
         "handoff_agent",
         "agent_profile_v0",
         "primary_checkout",
+        "controller owns",
     ):
         assert LEGACY_PATTERN.search(token), token
     for domain_term in ("primary_reviewers", "primary_review_score"):

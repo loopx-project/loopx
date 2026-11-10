@@ -12,7 +12,7 @@
 → `collect_status` → 状态依赖读取或 Effect runtime → 错误响应 → 逐 Goal 提示。
 
 归属仍是现有 Dashboard 状态读取与展示边界：
-[chat_status_api.py](../../../loopx/chat_status_api.py)、
+[chat/status_api.py](../../../loopx/chat/status_api.py)、
 [workspace-progressive-status.ts](../../../apps/presentation/dashboard/src/data/workspace-progressive-status.ts)
 和 [i18n.tsx](../../../apps/presentation/dashboard/src/features/personal-workspace/i18n.tsx)。
 复用 [Effect runtime](../../../loopx/control_plane/effect_runtime.py) 的类型及诊断码；

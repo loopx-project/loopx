@@ -98,7 +98,8 @@ def _process_window(receipt):
     raise ValueError("Original native process group is still alive")
 
 
-def _stopped_source(state_file: Path, state: dict, env: dict[str, str], wake_log_dir: str):
+def _stopped_source(state_file: Path, state: dict, env: dict[str, str], wake_log_dir: str,
+                    *, observer_locks: dict[Path, Path] | None = None):
     """Consume the Docker provider's exact, explicitly prepared legacy source.
 
     This is only valid on that unchanged filesystem. A proof cannot be combined
@@ -143,7 +144,33 @@ def _stopped_source(state_file: Path, state: dict, env: dict[str, str], wake_log
         root = Path(component['source_path'])
         if root.resolve(strict=True) != root or root.is_symlink() or root.is_dir() != component['directory']:
             raise ValueError('Stopped recovery source participant moved')
-        if file_inventory(root) != component['files']:
+        actual, expected_files = file_inventory(root), component['files']
+        if observer_locks:
+            from loopx.file_lock import (
+                LOCK_HOLDER_SCHEMA_VERSION, _effect_mutation_lock_path, _lock_id,
+                cross_runtime_lock_witness, lock_holder_host_label,
+            )
+
+            # Only the current admission's exact owned diagnostic records may
+            # change. Registry/state bytes and unrelated *.lock files stay in
+            # the original byte comparison; no filename pattern grants this.
+            for record_path, target in observer_locks.items():
+                if record_path == root or record_path.is_relative_to(root):
+                    record = json.loads(_physical_read(record_path))
+                    if record_path == _effect_mutation_lock_path(target):
+                        witness = cross_runtime_lock_witness(target)
+                        if record != {key: value for key, value in witness.items() if key != 'target'}:
+                            raise ValueError('Idle observer mutation lock differs from its owned witness')
+                    elif (record.get('schema_version') != LOCK_HOLDER_SCHEMA_VERSION
+                            or record.get('pid') != os.getpid() or record.get('host') != lock_holder_host_label()
+                            or record.get('lock_id') != _lock_id(target)
+                            or record.get('operation') != 'benchmark_idle_host_handoff'):
+                        raise ValueError('Idle observer does not own its admission lock diagnostic')
+            def source_files(entries):
+                return [item for item in entries if (root / item['path'] if root.is_dir() else root)
+                        not in observer_locks]
+            actual, expected_files = source_files(actual), source_files(expected_files)
+        if actual != expected_files:
             raise ValueError('Stopped recovery source bytes changed')
     path = Path(wake_log_dir) / declaration['wake_turn_id'] / 'receipt.json'
     receipt_raw = _physical_read(path)
@@ -237,6 +264,99 @@ def read_interrupted_host(state: dict, *, state_file: Path, env: dict[str, str],
             "receipt_path": str(path), "receipt_sha256": hashlib.sha256(raw).hexdigest(),
             "source_phase_deadline_epoch": phase, "session_profile_digest": current.digest,
             "native": native}
+
+
+def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_log_dir: str) -> dict:
+    """Explicitly hand off one stopped legacy Host to its unchanged idle session.
+
+    An empty output and unknown failure do not establish idleness. The native
+    owner must independently return its complete stable history before the
+    original attempt. No failure classification or original receipt is changed.
+    """
+    from benchmark.edgebench.stopped_recovery import native_source_paths, validate_idle_host_return
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.hosts.codex_checkpoint import native_idle_turn
+    from .codex import process_environment
+    from .codex_readiness import require_native_receiver_allowance
+    from scripts.external_scheduler_worker import _host_pending
+    from .worker import host_output_paths
+
+    env = process_environment(Path(env['LOOPX_CODEX_HOME']), base=env)
+    if _host_pending(state_file) is not True:
+        raise ValueError('Idle handoff requires its original pending Host witness')
+    path, raw, receipt, source = _stopped_source(state_file, state, env, wake_log_dir)
+    if source.get('idle_host_handoff') is not True:
+        raise ValueError('Idle handoff requires its explicitly sealed stopped source')
+    stdout, stderr = host_output_paths(path.parent)
+    validate_idle_host_return(state, receipt, stdout=_physical_read(stdout),
+                              stderr=_physical_read(stderr),
+                              lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
+    started = _number(source['process_started_at'])
+    stopped = _number(source['process_stopped_at'])
+    if (receipt.get('turn_id') != path.parent.name or stopped != math.floor(path.stat().st_mtime)
+            or started > stopped):
+        raise ValueError('Idle handoff differs from its original returned Host window')
+    session = receipt['session']['session_id']
+    current = CodexAgentSession(env, context='resume',
+        sandbox=env.get('LOOPX_CODEX_SANDBOX', 'danger-full-access'), receipt={})
+    with current.admission.launch_lifetime(operation='benchmark_idle_host_handoff'):
+        pass
+    if not current.binding or current.session_id != session:
+        raise ValueError('Idle handoff native session binding changed')
+    allowance = require_native_receiver_allowance(env)
+    native = native_idle_turn(env, session, process_started_at=started,
+        sealed_store_paths=tuple(native_source_paths(source['declaration']).values()))
+    with current.admission.launch_lifetime(operation='benchmark_idle_host_handoff'):
+        from loopx.file_lock import _effect_mutation_lock_path, lock_holder_paths
+        from loopx.control_plane.goals.source_session_registry_state import guard_path
+
+        admission, observer_locks = current.admission, {}
+        while admission is not None:
+            target = (guard_path(admission.registry_path, admission.goal_id)
+                      if admission.source_profile else admission.registry_path)
+            observer_locks.update((path, target) for path in lock_holder_paths(target))
+            observer_locks[_effect_mutation_lock_path(target)] = target
+            admission = admission.legacy_source_admission
+        # Current admission updates only its own holder diagnostics. Check
+        # every durable source byte again while those exact locks remain held.
+        again = _stopped_source(state_file, state, env, wake_log_dir, observer_locks=observer_locks)
+    if again[1] != raw or again[3] != source:
+        raise ValueError('Idle handoff source changed during native readback')
+    return {'source_container_id': source['container_id'],
+            'source_proof_sha256': hashlib.sha256(_physical_read(Path(env['LOOPX_INTERRUPTED_SOURCE']))).hexdigest(),
+            'receipt_path': str(path), 'receipt_sha256': hashlib.sha256(raw).hexdigest(),
+            'wake_turn_id': receipt['turn_id'], 'process_started_at': started,
+            'source_phase_deadline_epoch': source['source_phase_deadline_epoch'],
+            'session_profile_digest': current.digest, 'allowance': allowance,
+            'original_host_failure': state['host_attempt']['host_failure'], 'native': native}
+
+
+def verify_idle_host_replay(state_file: Path, recovery: dict, *, env: dict[str, str]) -> None:
+    """A repeated phase selection retains its original qualification and clock."""
+    from benchmark.edgebench.stopped_recovery import validate_idle_host_return
+    from .worker import host_output_paths
+
+    native, allowance = recovery.get('native'), recovery.get('allowance')
+    if (not isinstance(native, dict) or not isinstance(allowance, dict)
+            or allowance.get('availability') != 'available'
+            or not 0 < _number(allowance.get('observed_at')) <= _number(recovery.get('phase_deadline_epoch'))
+            or any(not isinstance(recovery.get(key), str) or not re.fullmatch(r'[a-f0-9]{64}', recovery[key])
+                   for key in ('receipt_sha256', 'session_profile_digest', 'source_proof_sha256'))):
+        raise ValueError('Idle handoff replay requires its complete original qualification')
+    source = json.loads(_physical_read(state_file))
+    raw = _physical_read(Path(recovery['receipt_path']))
+    receipt = json.loads(raw)
+    stdout, stderr = host_output_paths(Path(recovery['receipt_path']).parent)
+    validate_idle_host_return(source, receipt, stdout=_physical_read(stdout),
+                              stderr=_physical_read(stderr),
+                              lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
+    if (hashlib.sha256(raw).hexdigest() != recovery['receipt_sha256']
+            or source['host_attempt']['host_failure'] != recovery['original_host_failure']
+            or native.get('status') != 'completed' or native.get('session_id') != receipt['session']['session_id']
+            or not _number(native.get('completed_at')) < math.floor(_number(recovery['process_started_at']))
+            or type(native.get('turn_count')) is not int or native['turn_count'] < 1
+            or not re.fullmatch(r'[a-f0-9]{64}', native.get('visible_history_sha256', ''))):
+        raise ValueError('Idle handoff replay differs from the original qualified source')
 
 
 def _verify_failed_wake(path: Path, receipt: dict, failure: dict, env: dict[str, str], *,

@@ -99,15 +99,19 @@ def _required_git_text(repo_root: Path, *args: str) -> str:
 
 
 def _name_only(repo_root: Path, *args: str) -> list[str]:
+    """Return the exact paths Git reported, one per NUL-separated record.
+
+    ``-z`` is required at every call site: without it Git quotes non-ASCII
+    names (``"\\346\\226\\226..."``) and separates records with newlines, so a
+    legal file name that contains a newline, leading or trailing spaces, or a
+    literal backslash would arrive as a fragment the caller could not open.
+    """
+
     result = _git(repo_root, *args, text=True)
     if result.returncode != 0:
         detail = str(result.stderr or "").strip()
         raise ValueError(f"git {' '.join(args)} failed: {detail}")
-    return [
-        line.strip().replace("\\", "/")
-        for line in str(result.stdout or "").splitlines()
-        if line.strip()
-    ]
+    return [name for name in str(result.stdout or "").split("\0") if name]
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -174,12 +178,15 @@ def build_change_quality_scope(
         repo_root,
         "diff",
         "--name-only",
+        "-z",
         committed_range,
         "--",
     )
-    staged = _name_only(repo_root, "diff", "--name-only", "--cached")
-    unstaged = _name_only(repo_root, "diff", "--name-only")
-    untracked = _name_only(repo_root, "ls-files", "--others", "--exclude-standard")
+    staged = _name_only(repo_root, "diff", "--name-only", "-z", "--cached")
+    unstaged = _name_only(repo_root, "diff", "--name-only", "-z")
+    untracked = _name_only(
+        repo_root, "ls-files", "--others", "--exclude-standard", "-z"
+    )
     changed_files = _dedupe([*committed, *staged, *unstaged, *untracked])
 
     digest = hashlib.sha256()

@@ -311,8 +311,8 @@ if(result.status!=="applied") throw new Error(JSON.stringify(result));
     host.write_text(host.read_text().replace("print(json.dumps(build_result", """
 from loopx.capabilities.manager_context.roundtrip import report
 source_id = delegation['source_request_id']
-acknowledge(root / 'runtime', envelope['goal_id'], actor, source_id, 'adopt', 'Read original request')
-report(root / 'runtime', envelope['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
+acknowledge(root / 'runtime', identity['goal_id'], actor, source_id, 'adopt', 'Read original request')
+report(root / 'runtime', identity['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
 print(json.dumps(build_result"""))
     worker.execute(operation, prepared_source_request_id=receipt["request_id"])
     assert worker.read(operation)["status"] == "accepted"
@@ -434,10 +434,10 @@ def test_prepared_replay_retains_original_work_while_native_lane_is_busy(saved_h
 from loopx.control_plane.collaboration.peers import read_inbox
 from loopx.capabilities.manager_context.roundtrip import report
 source_id = delegation['source_request_id']
-items = read_inbox(root / 'runtime', root / 'registry.json', envelope['goal_id'], actor)['items']
+items = read_inbox(root / 'runtime', root / 'registry.json', identity['goal_id'], actor)['items']
 assert any(item['request_id'] == source_id for item in items)
-acknowledge(root / 'runtime', envelope['goal_id'], actor, source_id, 'adopt', 'Read original request')
-report(root / 'runtime', envelope['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
+acknowledge(root / 'runtime', identity['goal_id'], actor, source_id, 'adopt', 'Read original request')
+report(root / 'runtime', identity['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
 print(json.dumps(build_result"""))
     worker.execute(operation, prepared_source_request_id=receipt["request_id"])
     assert worker.read(operation)["status"] == "accepted"

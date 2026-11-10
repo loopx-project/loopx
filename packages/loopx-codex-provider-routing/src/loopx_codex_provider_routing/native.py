@@ -30,6 +30,11 @@ OBSERVER_BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_byt
                                        for name in ("native.py", "native_policy.ts", "native_policy_bridge.ts"))).hexdigest()
 
 
+def observer_build_identity() -> dict[str, str]:
+    from .openai_relay import BUILD
+    return {"build": OBSERVER_BUILD, "relay_build": BUILD}
+
+
 def private_read(path: Path, *, schema: str = SCHEMA) -> dict:
     if any(p.is_symlink() for p in (path, *path.parents)):
         raise HostError("state_untrusted")
@@ -644,7 +649,7 @@ class Watcher:
     def _heartbeat(self, phase: str, *, deadline: float, next_check: float | None = None):
         now = time.time()
         atomic(self.provider.root / "observer.json", {"schema_version": OBSERVER_SCHEMA,
-               "build": OBSERVER_BUILD, "checked_at": now, "deadline_at": now + deadline,
+               **observer_build_identity(), "checked_at": now, "deadline_at": now + deadline,
                "next_check_at": next_check, "phase": phase})
 
     def close(self):

@@ -45,7 +45,7 @@ import type { LarkGoalConnection } from "../../data/chat";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, hasGoalUsage } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
-import { TaskRequest } from "./task-request";
+import { TaskRequest, taskRequestIdentity, type TaskRequestRead } from "./task-request";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
@@ -145,6 +145,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const { locale, t } = useWorkspaceI18n();
   const [correction, setCorrection] = useState("");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [taskRequestRead, setTaskRequestRead] = useState<TaskRequestRead | null>(null);
   const [repositoryCopyState, setRepositoryCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [runDrawerTab, setRunDrawerTab] = useState<"record" | "details">("record");
   const [runActions, setRunActions] = useState<Record<string, RunActionStates>>({});
@@ -355,6 +356,15 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       : selection.item.goalId;
   const taskNamespace = goals.find(goal => goal.goalId === goalId)?.sourceAccess?.namespace;
   const taskReadable = !readOnly || Boolean(taskNamespace);
+  const taskDetail = selection.kind === "todo" && taskRequestRead?.phase === "ready"
+    && taskRequestRead.identity === taskRequestIdentity(selection.item, taskReadable, taskNamespace)
+    ? taskRequestRead.detail : null;
+  // Missing fields retain compatibility with older/local request-only readers;
+  // an explicit null from the current source clears an outdated display hint.
+  const taskEvidence = taskDetail && "evidence" in taskDetail ? taskDetail.evidence
+    : selection.kind === "todo" ? selection.item.evidence : undefined;
+  const taskNote = taskDetail && "note" in taskDetail ? taskDetail.note
+    : selection.kind === "todo" ? selection.item.note : undefined;
   const contextLabel = selection.kind === "attention" ? selection.item.goalTitle ?? t("drawer.currentGoal")
     : selection.kind === "todo" ? selection.item.goalTitle
       : selection.kind === "run" ? selection.item.goalTitle
@@ -684,7 +694,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         ) : selection.item.detailMode ? (
           <section className="personal-task-inspector-summary">
             <p className="personal-proposal-explainer">{t(selection.item.detailMode === "missing_current" ? "drawer.taskReadbackUnavailable" : "drawer.taskRequestOnly")}</p>
-            <TaskRequest todo={selection.item} local={taskReadable} sourceNamespace={taskNamespace} />
+            <TaskRequest todo={selection.item} local={taskReadable} sourceNamespace={taskNamespace} onRead={setTaskRequestRead} />
           </section>
         ) : (
           <>
@@ -697,6 +707,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 <span>{selection.item.taskClass === "advancement_task" ? t("drawer.taskAdvancement") : selection.item.taskClass ?? t("drawer.taskOrdinary")}</span>
               </div>
               <TaskRequest key={`${taskNamespace}:${selection.item.goalId}:${selection.item.todoId}`} todo={selection.item} local={taskReadable} sourceNamespace={taskNamespace}
+                onRead={setTaskRequestRead}
                 onSave={!readOnly && !todoCompleted ? callbacks.onSaveTodoRequirements : undefined} />
               {selection.item.status === "blocked" ? <section aria-label={t("drawer.blockedReason")} className="personal-task-blocked-reason" data-recorded={selection.item.blockedReason ? "true" : "false"}>
                 <h4><AlertCircle size={14} />{t("drawer.blockedReason")}</h4>
@@ -788,13 +799,13 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <small>{t("drawer.taskCompletionProofHint")}</small></label>
               </details>}
             </div> : null}
-            {selection.item.evidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
+            {taskEvidence ? <section className="personal-detail-card" aria-label={t("drawer.evidence")}>
               <h4>{t("drawer.evidence")}</h4>
-              <MarkdownText text={selection.item.evidence} />
+              <MarkdownText text={taskEvidence} />
             </section> : null}
-            {selection.item.note ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
+            {taskNote ? <details className="personal-detail-card" aria-label={t("drawer.notes")}>
               <summary>{t("drawer.notes")}</summary>
-              <MarkdownText text={selection.item.note} />
+              <MarkdownText text={taskNote} />
             </details> : null}
             {todoCompleted ? <div className="personal-task-completed-note"><Check size={16} /><span><strong>{t("drawer.taskCompletedTitle")}</strong><small>{t("drawer.taskCompletedNote")}</small></span></div> : null}
           </>

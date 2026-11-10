@@ -8,7 +8,7 @@ import {createInterface} from "node:readline";
 import {createElement} from "react";
 import {renderToStaticMarkup} from "react-dom/server";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
-import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
+import {readAnalysisSnapshot, ResearchAnalysisPanel, ResearchCaseReading, ResearchCitationPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
 import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
 import {fetchExploreResults} from "../src/data/chat.ts";
 import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-research-workbench.tsx";
@@ -17,14 +17,33 @@ import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-res
 // Navigation must not turn organization into shared evidence or execution.
 const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
 const study = caseFixture.analyses[0].case_study;
+const studyNavigation = packId => ({url: new URL('http://127.0.0.1/chat/'), goalId: 'child', packId, namespace: null,
+  follow: () => {throw Error('read navigated');}});
 const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
-  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope, onCitation: () => {throw Error('read executed a citation');},
+  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope,
+  navigation: studyNavigation('saved-pack'),
+  onCitation: () => {throw Error('read executed a citation');},
 }));
 assert.ok(renderedStudy.includes(study.title));
 assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
 assert.ok(renderedStudy.includes('not current results'));
-assert.ok(renderedStudy.includes('unknown'), 'Missing values do not become zero');
+assert.match(renderedStudy, /候选 A<.*?>7<.*?候选 B<.*?>Not recorded<.*?候选 C<.*?>3</,
+  'Saved chart observations stay in author order, with numbers and the unrecorded value visible together');
 for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
+
+const casePack = {pack_id: "one", title: "First study", scope: caseFixture.analyses[0].input.scope,
+  case_study: study, case_study_summary: {title: study.title}, applicability: "current"};
+const secondCase = {...casePack, pack_id: "two", title: "Second study"};
+const renderCase = packs => renderToStaticMarkup(createElement(ResearchCaseReading, {
+  analysis: {zh: false, pack: casePack, snapshot: {catalog: {packs}}, location: {open: false}, studyNavigation},
+}));
+assert.ok(!renderCase([casePack]).includes("<select"), "A single saved version reads directly");
+const alternatives = renderCase([casePack, secondCase]);
+assert.ok(alternatives.includes("<select") && alternatives.includes("Second study"), "Multiple saved versions remain selectable");
+const sourceFailure = renderToStaticMarkup(createElement(ResearchCitationPanel, {
+  analysis: {zh: false, citationError: "Source unavailable", retryCitation() {throw Error("Rendering retried the read");}},
+}));
+assert.ok(sourceFailure.includes('aria-label="Retry reading source"'), "An unavailable citation can be retried in place");
 const goals = [
   {goalId:'parent',title:'Benchmark'},
   {goalId:'child',parentGoalId:'parent',title:'Local case'},
@@ -38,6 +57,18 @@ assert.ok(navigate('parent').includes('Local case'));
 assert.ok(navigate('parent').includes('Foreign case'));
 assert.ok(navigate('child').includes('Benchmark'));
 assert.ok(navigate('foreign').includes('Benchmark'), 'Explicit directory links retain their local parent');
+const savedLocation = globalThis.window;
+try {
+  const renderEntry = search => {
+    globalThis.window = {location: new URL(search, "http://127.0.0.1/chat/")};
+    return renderToStaticMarkup(createElement(GoalResearchWorkbench, {goalId: "child", zh: false, active: true, refreshRevision: 0}));
+  };
+  assert.ok(renderEntry("?research_goal=child&research_reading=case").includes("research-case-reader"),
+    "A direct case address retains its reader while the catalogue is pending");
+  assert.ok(!renderEntry("?research_goal=another&research_reading=case").includes("research-case-reader"),
+    "Another Goal's case address cannot replace this Goal's history");
+} finally {globalThis.window = savedLocation;}
+
 
 // Transport uses the workspace view; immutable findings still identify the native Goal.
 const sourceFetch = globalThis.fetch, sourceWindow = globalThis.window;

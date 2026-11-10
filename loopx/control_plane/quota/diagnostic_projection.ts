@@ -114,7 +114,8 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
         visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key], after as object);
       // Small scalar records can cost less than separate removal paths.
       // Keep source-lineage and numeric edits on their existing exact codec.
-      if (changes.length - start > 1 && Object.values(after as JsonObject).every(
+      // The transport addresses properties; its consumer rejects root replacements.
+      if (path.length > 0 && changes.length - start > 1 && Object.values(after as JsonObject).every(
           value => value === null || typeof value === "string" || typeof value === "boolean")) {
         const edits = changes.slice(start), replacement = {path, value: after};
         if (!edits.some(edit => "from" in edit) &&

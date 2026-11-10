@@ -942,8 +942,8 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
         "\ndef fake_report_model(params):\n"
         "    import json\n"
         "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
-        "    authority = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:', 1)[1].lstrip())[0]\n"
-        "    if authority.get('replan_action_packet'):\n"
+        "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
         "        return " + repr(json.dumps(replan)) + "\n"
         "    return report_only(params)\n")
     calls, writes = capture.read_bytes(), list(bot.writes)

@@ -776,6 +776,89 @@ benchmark outcome 作为一种 evidence source。trajectory-level reward 不能�
 causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablation。benchmark 内容
 绝不能以污染后续 task 的方式被保留。
 
+<a id="edgebench-budgeted-planning"></a>
+
+### 8.7 EdgeBench 预算内研究规划
+
+**假设。** 按剩余预算结束时的预期验收结果比较有界多步接续，可能比当前 LoopX
+策略获得更好的 native 结果。比较包含前置工作、有信息价值的测量和确认时间，
+不只看下一步的即时涨分。
+[联合决策 §5.8](target-yardstick-stride-decisions-v0.zh-CN.md#budgeted-planning)
+定义决策语义，§5.9 定义后续校准/学习路径。这是拟议实验，尚未执行或证明收益。
+
+#### 首个实现切片
+
+复用现有单 Agent 的 Stride/Yardstick/Explore 路径。固定版本的 benchmark treatment
+在当前决策指令中加入 §5.8 的比较：把已有证据支持的接续与少量合理路线比较，
+指出依赖和可区分结果的下一边界，然后执行首个连贯切片。证据与预测使用已有 finding
+和 plan reasoning；即时选择使用支持的 `next_probe` 与 Yardstick 字段。
+不加 v0 不支持的字段、不要求额外模型调用或每 Turn 填表。
+
+首个实现 PR 包含有界指令修改、已有 benchmark 配置/manifest 中显式选择 treatment
+的方式，以及一次真实路径的回读/接续场景，展示模型接下来实际做了什么。保持默认行为。
+固定实际采用的 policy、源码和投影；更丰富的投影未合并时可用已有详情读取。
+源码交付和模型采用只验证路径，不证明效果。双会话 Controller/Worker、数值 fidelity
+引擎和学习型策略均非前置条件。后续 schema 修改要有已观察到的 producer/consumer 缺口。
+
+#### 可负担的条件效应 pilot
+
+先选三个互补任务类型，使用固定 upstream 版本的任务名称：
+
+| 任务 | 要研究的机制 |
+| --- | --- |
+| ANN 向量搜索 | 投入不同搜索机制可能经过多步才产生 native 增益。 |
+| Ad placement | 本地排序可能与 native 结果冲突；增加本地样本未必消除偏差。 |
+| Grid 优化 | 均值更好仍可能违反硬正确性或尾部耗时约束。 |
+
+这些是选题假设，不是新的实测结论。比较两组：**当前 LoopX 策略**和**同一路径加预算内
+规划**。两组获得相同的可用证据、资源事实、模型/工具、反馈和验收规则；冻结 context
+投影、初始候选、资源争用规则及源码。推理变化是 treatment，其开销计入预算。
+不能只给规划组修好的代理指标或额外 native 评测。
+
+一个有界起点是 **3 题 × 2 个独立产生、前瞻选定的 checkpoint × 2 组 × 3 小时
+= 36 个额外 worker 小时**。另报状态生成、控制和评测成本。每题的两个来源 run、
+checkpoint 规则和分配都在结果产生前选定，不挑有利峰值。小 pilot 用于筛查机制，
+不足以单独支持一般性收益结论；启动前冻结资源上限。
+
+沿用[同状态接续边界](hierarchical-agent-stride-control-v0.zh-CN.md#matched-research-continuation)：
+复制 workspace 不等于共享 research state。候选/frontier、已验收 incumbent、证据、
+memory、待返回结果、可用预算及 native 提交历史/cooldown 必须可等价恢复，同时使用
+新的 run 身份并继承不可变来源关联。优先选无待处理结果的 checkpoint 以减少歧义。
+[适配器](../../../benchmark/edgebench/README.md)目前不保证 native judge 重启/cooldown
+连续性；准入配对前验证所需恢复接缝。若不可用，则改成从头匹配比较并报告真实预算，
+不能把新注册会话称为 checkpoint fork；这不要求先构建通用 replay 平台。
+
+保留 native cooldown 和终局选择。如果三小时容不下有用的多步路线及协议允许的确认，
+将 pilot 标为信息不足，为下一次预注册实验调整时长，不放宽 cooldown 或事后增加
+评测机会。有效配对只估计该 checkpoint 后三小时的条件效应，不能证明从头运行
+十八小时的策略效应。
+
+#### 完整预算收益与后续细化
+
+pilot 有用后，从头比较**强 Official 接续、当前 LoopX、选中的规划 treatment**，
+按 task/model/seed 匹配，单次预算十八小时。确认性结果采集前冻结重复次数、资源
+上限、具有实际意义的改善/非劣效界限、终局选择和分析方法。保留第 5 节要求的基线
+证据；局部 pilot 不能替代完整证据计划。报告 6/12/18 小时曲线，以十八小时 native
+结果为主；首提/启动优势与持续接续收益分开。早期落后可能换来后期提升，但事后
+看到突破不能证明当时坚持合理。
+
+采用 native 验收结果及冻结的 best/final 规则，不用最高本地分数或未经评测的最终
+workspace。按预先声明的处理保留正确性失败、未完成评分、取消与覆盖缺失。每项
+结果绑定精确候选、evaluator/input 和提交身份。报告配对效应与不确定性、首次验收
+改善时间、完整 token/墙钟时间、控制及评测成本。不把原始 QPS 和无关任务分数相加；
+报告分任务效应，聚合只用 benchmark 声明的归一化规则。
+
+把行动前预测与真实方法、资源、中间证据及终局结果对照，区分预测价值、实际采用、
+信息与确认收益。分析延迟收益时关联相关工作序列，不自动只归给最后一步；观察关联
+仍不是因果结论。只有具体疑问值得时，再增加可负担的 lookahead 深度或校准消融，
+不一开始铺开全因子矩阵。
+
+重复终局收益达到冻结的界限与不确定性要求，且无不可接受的正确性、资源或权限
+回归，才扩大实验。保留负结果及不确定结果。冻结选中策略后再测 held-out 任务和
+工作负载；被自适应查询的 native 反馈属于开发证据。校准预测和学习型分配必须在
+同样完整预算下超过已资格化的当前模型策略。benchmark 证据本身不授权 production
+推广或把原始题目数据用于训练。
+
 ## 9. Benchmark 集成计划
 
 ### 9.1 ALE

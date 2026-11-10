@@ -391,7 +391,8 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
 
     args = build_parser().parse_args([
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-        "quota", "should-run", "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
+        "quota", "should-run", "--context-delivery", "off",
+        "--goal-id", "selected-race-goal", "--agent-id", "agent-a",
     ])
     packet: dict[str, object] = {}
 
