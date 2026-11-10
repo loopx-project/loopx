@@ -30,11 +30,11 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import Execution, TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
-    DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
+    DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker, profile_execution,
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import archive_source, source_pins
@@ -118,6 +118,8 @@ def main(argv=None):
     parser.add_argument("--log-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", choices=PROFILES, required=True)
+    parser.add_argument("--validation-command-json", type=json.loads,
+                        help="For turn-resume, trusted guest argv that independently checks the work postcondition")
     parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="native",
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--managed-run-json", type=Path,
@@ -200,6 +202,15 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    try:
+        execution = profile_execution(
+            args.worker, task_entry=args.task_entry,
+            context_delivery=args.context_delivery, turn_envelope=args.turn_envelope,
+            validation_command=args.validation_command_json, native_child_limit=args.native_child_limit,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    args.context_delivery = execution.context_delivery
     if args.native_child_limit is not None and (
             args.native_child_limit < 1 or args.feedback != "native"):
         parser.error("--native-child-limit requires a positive limit and native feedback")
@@ -237,14 +248,6 @@ def main(argv=None):
         args.submission_cooldown = 3600 if args.feedback == "native" else 120
     if args.eval_interval < 0 or args.submission_cooldown < 0:
         parser.error("Evaluation interval and submission cooldown must be non-negative")
-    if args.task_entry == "loopx-planned" and not args.worker.startswith("heartbeat-"):
-        parser.error("--task-entry loopx-planned requires a heartbeat worker")
-    if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
-        parser.error("--turn-envelope requires a heartbeat worker")
-    if args.context_delivery is None:
-        args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
-    if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
-        parser.error("--context-delivery requires a heartbeat worker")
     if args.execution_observation is not None and not args.worker.startswith("heartbeat-"):
         parser.error("--execution-observation requires a heartbeat worker")
     if args.provider_request_admission:
@@ -257,12 +260,12 @@ def main(argv=None):
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
-            ) and not args.worker.startswith("heartbeat-"):
-        parser.error("Replan cadence requires a heartbeat worker")
-    if args.stride_strategy is not None and not args.worker.startswith("heartbeat-"):
-        parser.error("--stride-strategy requires a heartbeat worker")
-    if args.planning_horizon_goal is not None and not args.worker.startswith("heartbeat-"):
-        parser.error("--planning-horizon-goal requires a heartbeat worker")
+            ) and not execution.uses_loopx:
+        parser.error("Replan cadence requires a heartbeat worker or turn-resume")
+    if args.stride_strategy is not None and not execution.uses_loopx:
+        parser.error("--stride-strategy requires a heartbeat worker or turn-resume")
+    if args.planning_horizon_goal is not None and not execution.uses_loopx:
+        parser.error("--planning-horizon-goal requires a heartbeat worker or turn-resume")
     checkpoint_request = None
     if args.checkpoint_request is not None:
         if not args.worker.startswith("heartbeat-"):
@@ -429,6 +432,7 @@ def main(argv=None):
                          native_child_limit=args.native_child_limit,
                          task_objective=task_objective,
                          task_entry=args.task_entry,
+                         validation_command=execution.validation_command,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
@@ -504,6 +508,7 @@ def main(argv=None):
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
         "task_entry": agent.task_entry,
+        **execution.validation_receipt(),
         **({"planning_timeout_seconds": None}
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,

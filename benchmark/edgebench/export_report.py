@@ -13,6 +13,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from loopx.capabilities.benchmark_toolkit.experiment_board import (
@@ -28,6 +29,16 @@ def _validate_feedback_payload(runner, profile):
         raise ValueError("Settings profile disagrees with feedback payload")
     if payload is not None and (payload != FEEDBACK_PAYLOAD or runner["feedback"] != "best-only"):
         raise ValueError("Unsupported feedback payload for this mode")
+
+
+def _validate_turn_validator(runner, profile):
+    key = "validation_argv_sha256"
+    if runner["worker"] == "turn-resume":
+        digest = runner.get(key)
+        if not isinstance(digest, str) or not re.fullmatch("[0-9a-f]{64}", digest) or profile.get(key) != digest:
+            raise ValueError("Turn validator argv digest missing or mismatched")
+    elif key in runner or key in profile:
+        raise ValueError("Unexpected Turn validator on another worker")
 
 
 def digest(path: Path) -> str:
@@ -130,6 +141,7 @@ def _validate_run_data(row, config, summary, points):
             raise ValueError(f"Settings identity mismatch: {key}")
     runner, profile = config["runner"], config["worker_profile"]
     _validate_feedback_payload(runner, profile)
+    _validate_turn_validator(runner, profile)
     if (
         runner["runner_commit"] != row["runner_revision"]
         or runner["model"] != row["model_id"]
@@ -257,6 +269,7 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
         _validate_feedback_payload(receipt, profile)
+        _validate_turn_validator(receipt, profile)
         if receipt.get("planning_horizon_goal") != profile.get("planning_horizon_goal"):
             raise ValueError("Profile disagrees with runtime: planning_horizon_goal")
         for source in (receipt, profile):
@@ -334,6 +347,9 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         }
         # Old notification-only attempts retain absent/unknown payload metadata;
         # never relabel them using today's default or operator-supplied settings.
+        if "validation_argv_sha256" in receipt:
+            for target in ("runner", "worker_profile"):
+                config[target]["validation_argv_sha256"] = receipt["validation_argv_sha256"]
         if "feedback_payload" in receipt:
             config["runner"]["feedback_payload"] = receipt["feedback_payload"]
             config["worker_profile"]["feedback_payload"] = profile["feedback_payload"]

@@ -514,3 +514,24 @@ def test_unreadable_neighbor_cannot_lend_capabilities(tmp_path: Path) -> None:
     bad = _write_journal(tmp_path, _journal(), digest="f" * 64)
     bad.write_text("{lost", encoding="utf-8")
     assert _observed(tmp_path) is None
+
+
+def test_instance_recovery_refuses_two_todos_at_the_same_wake(tmp_path: Path) -> None:
+    def lookup(agent_id: str) -> str | None:
+        return journal_store.find_loopx_turn_key_by_instance(
+            tmp_path, goal_id=GOAL_ID, agent_id=agent_id, turn_instance_id=TURN_ID)
+
+    assert lookup(AGENT_ID) is None
+    _write_journal(tmp_path, _journal())
+    assert lookup(AGENT_ID) == TURN_KEY
+    assert lookup(OTHER_AGENT_ID) is None
+    other = _journal(selected_todo_id=OTHER_TODO_ID)
+    other["turn_key"] = "sha256:" + "e" * 64
+    other["plan"]["transaction"]["turn_key"] = other["turn_key"]
+    _write_journal(tmp_path, other, digest="e" * 64)
+    with pytest.raises(ValueError, match="multiple journals"):
+        lookup(AGENT_ID)
+    # A caller with the original settlement identity remains fully addressed.
+    assert journal_store.find_loopx_turn_key_by_settlement_identity(
+        tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID) == TURN_KEY
