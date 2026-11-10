@@ -181,6 +181,7 @@ def _heartbeat_prompt_commands(
     context_delivery: str | None,
     turn_envelope: bool,
     delta_delivery: str | None = None,
+    complete_turn: bool = False,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
@@ -300,6 +301,9 @@ def _heartbeat_prompt_commands(
         for key in ("quota_guard_command", "task_body_quota_guard_command"):
             commands[key] = str(commands[key]) + display_arg + capture_arg
         commands["thin_prompt_command"] = str(commands["thin_prompt_command"]) + display_arg + capture_arg
+    if complete_turn:
+        for key in ("quota_guard_command", "task_body_quota_guard_command", "thin_prompt_command"):
+            commands[key] = str(commands[key]) + " --complete-turn"
     return commands
 
 
@@ -356,6 +360,7 @@ def build_heartbeat_prompt(
     context_delivery: str | None = None,
     delta_delivery: str | None = None,
     turn_envelope: bool = False,
+    complete_turn: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):
         thin = True
@@ -428,6 +433,7 @@ def build_heartbeat_prompt(
         codex_context_root=codex_context_root,
         context_delivery=effective_context_delivery,
         turn_envelope=turn_envelope,
+        complete_turn=complete_turn,
     )
     explicit_agent_scopes = normalize_agent_scopes(agent_scopes)
     if explicit_agent_scopes:
@@ -521,6 +527,7 @@ def build_heartbeat_prompt(
         context_delivery=context_delivery,
         delta_delivery=delta_delivery,
         turn_envelope=turn_envelope,
+        complete_turn=complete_turn,
     )
     cli_preflight = render_cli_preflight(cli_bin=cli_bin)
     task_body_renderer = _select_task_body_renderer(

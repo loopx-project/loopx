@@ -169,11 +169,15 @@ def register_heartbeat_control_commands(
              "or codex-context-root with the normal per-wake LOOPX_TURN binding.",
     )
 
-    heartbeat_prompt_parser.add_argument(
+    turn_view = heartbeat_prompt_parser.add_mutually_exclusive_group()
+    turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
         help="Explicitly use the short TurnEnvelope dispatcher; requires --decision-output-root. Capture alone keeps the ordinary full decision.",
     )
+    turn_view.add_argument("--complete-turn", action="store_true",
+        help="Explicitly consume complete v1 Turn context on the generated thin host-owned heartbeat guard. "
+             "Retains the existing legacy --turn-envelope protocol when unselected.")
 
     heartbeat_prompt_parser.add_argument(
         "--decision-handoff-socket",

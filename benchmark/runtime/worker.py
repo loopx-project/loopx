@@ -97,8 +97,13 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         command += ["--turn-instance-id", turn_id]
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    if env.get("LOOPX_COMPLETE_TURN", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_COMPLETE_TURN must be 0 or 1")
+    complete_turn = env.get("LOOPX_COMPLETE_TURN") == "1"
+    if complete_turn and env.get("LOOPX_TURN_ENVELOPE") == "1":
+        raise ValueError("Complete Turn and legacy TurnEnvelope are mutually exclusive")
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
-    if env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None or context_dir:
+    if complete_turn or env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None or context_dir:
         if native_goal:
             raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
@@ -107,6 +112,8 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
         command += ["--decision-output-root", str(root)]
         if env.get("LOOPX_TURN_ENVELOPE") == "1":
             command += ["--turn-envelope"]
+        if complete_turn:
+            command += ["--complete-turn"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
@@ -499,6 +506,8 @@ def run_once(env: dict[str, str]) -> dict:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
     if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
         raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    if env.get("LOOPX_COMPLETE_TURN", "0") not in {"0", "1"}:
+        raise ValueError("LOOPX_COMPLETE_TURN must be 0 or 1")
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
@@ -511,6 +520,7 @@ def run_once(env: dict[str, str]) -> dict:
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
+        complete_turn=env.get("LOOPX_COMPLETE_TURN", "0") == "1",
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -557,6 +567,8 @@ def run_once(env: dict[str, str]) -> dict:
            if observation_producer is not None else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
+        **({"complete_turn": True, "complete_turn_source": "explicit"}
+           if execution.complete_turn else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),

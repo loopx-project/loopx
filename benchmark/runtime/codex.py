@@ -30,6 +30,7 @@ class Execution:
     turn_envelope: bool = False
     context_delivery: str | None = None
     native_child_limit: int | None = None
+    complete_turn: bool = False
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -44,6 +45,8 @@ class Execution:
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
             raise ValueError("turn_envelope requires heartbeat execution and a boolean opt-in")
+        if type(self.complete_turn) is not bool or (self.complete_turn and (self.mode != "heartbeat" or self.turn_envelope)):
+            raise ValueError("complete_turn requires heartbeat execution without legacy turn_envelope")
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:
@@ -79,11 +82,10 @@ class Execution:
         return self.mode in {"native-goal", "loopx-goal"}
 
 
-def turn_envelope_receipt(*, explicit: bool) -> dict:
+def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
     """Record only the explicit display opt-in; checkpoint capture is independent."""
-    if explicit:
-        return {"turn_envelope": True, "turn_envelope_source": "explicit"}
-    return {}
+    return {**({"turn_envelope": True, "turn_envelope_source": "explicit"} if explicit else {}),
+        **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
 
 
 def native_child_instructions(limit: int | None) -> str:
