@@ -5,11 +5,7 @@ import random
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ..quota.turn_envelope import (
-    COMPLETE_TURN_DECISION_VERSION,
-    build_turn_envelope,
-    compose_turn_decision,
-)
+from ..quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION, build_turn_envelope
 from .model_behavior_qualification import (
     MODEL_BEHAVIOR_HARD_INVARIANT_FIELDS,
     MODEL_BEHAVIOR_SEMANTIC_CONTRACT_FIELDS,
@@ -80,11 +76,13 @@ def _case(
         qualification_id=f"validate-{case_id}",
         arm="full_packet",
     )
-    if candidate_packet is None:
-        candidate_packet = (normalized_full
-            if normalized_full.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
-            else compose_turn_decision(normalized_full))
-    normalized_candidate = copy.deepcopy(dict(candidate_packet))
+    # Preserve the original treatment of retained raw/v0 cases. Complete
+    # production captures already carry the candidate source and its binding.
+    normalized_candidate = copy.deepcopy(
+        dict(candidate_packet) if candidate_packet is not None
+        else normalized_full if normalized_full.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
+        else build_turn_envelope(normalized_full)
+    )
     build_model_behavior_actor_request(
         normalized_candidate,
         qualification_id=f"validate-{case_id}",
