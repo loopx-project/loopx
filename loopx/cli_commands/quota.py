@@ -373,7 +373,7 @@ def _emit_scheduler_observation_result(
         )
     succeeded = payload.get("ok") is True
     print_payload(project_scheduler_observation(payload), args.format,
-                  _quota_renderer(args, failure=not succeeded))
+                  _quota_renderer(args))
     return 0 if succeeded else 1
 
 
