@@ -48,8 +48,7 @@ jobs:
           tests/test_dsh_goal_mode.py tests/test_turn_managed_executor_binding.py
           tests/test_ark_managed_agent_host.py
           tests/test_loopx_turn_driver.py tests/test_collaboration_mcp.py
-          tests/test_auto_research_artifact_receipt.py
-          tests/test_worker_command_validation.py tests/test_workspace_story_demo.py
+          tests/test_workspace_story_demo.py
           tests/test_local_delegation.py tests/test_managed_research_scenario.py
           tests/test_managed_research_team.py
       - name: Lint optional package and example

@@ -727,9 +727,11 @@ An owner-only mode is a storage precaution, not proof of solver exclusion.
 
 When the selected native runner supports `host_registration_callback`, the
 adapter binds enabled checkpoint/feedback observers through that host callback
-before container creation. It does not inject the registration token into the
-solver environment. Frozen older providers retain their original environment
-binding path; runs without either observer add no callback. Blind modes also
+before container creation. The CLI consults the backend's registration options
+for every worker profile, including native controls. The default backend still
+returns no callback when both observers are absent. It does not inject the
+registration token into the solver environment. Frozen older providers retain
+their original environment binding path. Blind modes also
 remove the newer `SFORGE_FEEDBACK_URL` from the solver environment. A restored
 registration may include the native provider's nonempty `feedback_relay_id`;
 all original activation identities must still match, and unknown fields fail
@@ -1397,6 +1399,20 @@ and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
 
+### Preserve an interrupted Official control
+
+For `--worker official --feedback native --eval-interval 0`, the explicit
+`--preserve-failed-worker` option keeps the original Docker worker after a
+confirmed final solver failure. Native auto-resume, scoring, and final archive
+collection keep their ordinary behavior. The retained worker is stopped and
+verified by exact identity; a failed stop observation or receipt write never
+falls through to deletion. Without the option, ordinary cleanup still applies.
+
+The private terminal receipt records source retention only. It does not
+export an authentication file, create a joint checkpoint, or authorize
+a resume. Recover the original evaluator, session, and finite remaining
+budget separately before treating later work as part of this control.
+
 ### Continue an interrupted Host in its retained filesystem
 
 The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
@@ -1501,6 +1517,12 @@ allowance before requesting another phase. This does not change the desktop
 login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
 into automatic timed retries.
 
+`benchmark.runtime.codex_accounts` observes the native account owner without
+resuming desktop service recovery or adopting an out-of-band login selection.
+A missing or mismatched active selection remains an ownership error for the
+native account manager to resolve. `--execute` only permits the explicitly
+requested private continuation-login copy; it does not expand desktop authority.
+
 For a retained complete worker, the same scheduler entrypoint accepts
 `--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.
 Supply the independently admitted finite remainder in
@@ -1543,3 +1565,24 @@ no account response, login values or token is emitted. The ordinary startup
 probe and automatic retry path keep their previous behavior. This observation
 is not a reservation of future provider capacity; a later failure is retained
 and requires another explicit repair.
+
+For a **new** native Goal or heartbeat receiver, the startup-only account probe
+keeps its default single 25-second total window. An operator may explicitly pass
+`--native-readiness-total-seconds 75 --native-readiness-attempt-seconds 25` to
+`benchmark.edgebench.run` when bounded setup recovery is authorized. These caps
+are at most 75 seconds total and 25 seconds per attempt, with at most three
+attempts. The total is additionally clipped to the native runner's original
+remaining execution snapshot, charging entry delay, preparation, reads, cleanup
+and backoff; terminal cleanup can finish after the deadline but grants no more
+requests. A missing, invalid or expired snapshot refuses the observer.
+
+This opt-in retries only locally typed `account/read` or
+`account/rateLimits/read` transport timeouts. Its bounded `account_timeout`
+diagnostic preserves that distinction without exposing remote payloads.
+Initialization failure, identity or
+protocol rejection, disconnect, unknown failure, Stop and exhausted budget do
+not authorize another attempt. It performs no inference, token refresh, account
+switch, model retry or Goal mutation, and starts no solver phase until a probe
+succeeds. It is unavailable for Official/single profiles, custom API providers
+and warm checkpoint continuations. Omit both options to retain existing startup
+behavior; neither option changes submission counting, cooldown or solver budget.

@@ -30,6 +30,7 @@ from .model_tool_behavior import (
     argument_value,
     digest_text,
     execute_loopx_cli,
+    is_context_read_command,
     loopx_command_tokens,
     snapshot_disposable_fixture,
 )
@@ -112,6 +113,7 @@ class _ReentryQualificationState:
     settled_todo_ids: list[str] = field(default_factory=list)
     provider_call_count: int = 0
     terminal_quota_observed: bool = False
+    terminal_quota_context: QuotaToolContext | None = None
 
 
 @dataclass
@@ -292,6 +294,7 @@ def _build_fixture(root: Path) -> _TerminalSettlementFixture:
             "filesystem_write",
         ],
         runtime_profile="codex_app_heartbeat",
+        registry_path=os.path.relpath(global_registry_path, project_root),
     )
     quota_guard_command = str(prompt["quota_guard_command"])
     if quota_guard_command not in str(prompt["task_body"]):
@@ -714,7 +717,7 @@ def _execute_cli(command: str, state: _QualificationState) -> dict[str, Any]:
     vision = argument_value(tokens or [], "--agent-vision-json")
     if vision:
         draft = (state.fixture.project_root / vision).resolve()
-        if not draft.is_relative_to(state.fixture.project_root.resolve()) or not draft.is_file():
+        if not draft.is_relative_to(state.fixture.project_root.resolve()):
             raise _TerminalToolViolation("vision_draft_outside_workspace")
     if tokens and "--format" not in tokens:
         command = shlex.join([tokens[0], "--format", "json", *tokens[1:]])
@@ -814,6 +817,7 @@ def _receipt(
         **dict(state.contract or {}),
         "observed_tool_sequence": [step["kind"] for step in state.steps],
         "tool_call_count": len(state.steps),
+        "tool_call_limit": TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
         "settlement_receipt_steps": list(state.receipt_steps),
         "terminal_order_observed": bool(
             passed and state.receipt_steps == _EXPECTED_RECEIPT_STEPS
@@ -991,6 +995,15 @@ def _execute_terminal_cli(
     return output, kind
 
 
+def _protected_terminal_fixture(state: _QualificationState) -> dict[str, tuple[Any, ...]]:
+    root = state.fixture.project_root.parent
+    scratch = str(state.fixture.project_root.relative_to(root) / ".scratch")
+    return {
+        path: value for path, value in snapshot_disposable_fixture(root).items()
+        if path != scratch and not path.startswith(scratch + "/")
+    }
+
+
 def _execute_terminal_workspace(
     command: str, state: _QualificationState, workspace_shell: VisionShellHost | None, resources: ExitStack,
 ) -> tuple[str, str, VisionShellHost | None]:
@@ -1007,9 +1020,18 @@ def _execute_terminal_workspace(
             )
             resources.callback(workspace_shell.close)
         state.workspace_shell_executed = True
+        before = _protected_terminal_fixture(state)
         output, exit_code = workspace_shell.execute(command)
         if exit_code:
-            raise _TerminalToolViolation("workspace_authoring_failed")
+            if _protected_terminal_fixture(state) != before:
+                raise _TerminalToolViolation("workspace_authoring_failed")
+            # The native exec host returns failed draft commands to the model.
+            # Correction consumes this same budget and grants no CLI effect.
+            output = json.dumps({
+                "error_code": "shell_nonzero", "exit_code": exit_code,
+                "output": output[:4096], "truncated": len(output) > 4096,
+            })
+            return output, "shell_nonzero", workspace_shell
         kind = "workspace_authoring"
     return output, kind, workspace_shell
 
@@ -1075,6 +1097,14 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "A receipt without command templates does not replace "
                         "that plan. "
                         f"{QUOTA_FIRST_TOOL_INSTRUCTION}"
+                        "For the captured first read, use the reader's supported "
+                        "bounded page size: replace the existing --page-bytes and "
+                        "--max-page-output-bytes values with 64000 together. "
+                        "Keep its original source, selection and --initial-read; "
+                        "do not add duplicate options or read the whole capture. "
+                        "If it is still paginated, consume next_command through eof "
+                        "before depending on that selection. Read the complete "
+                        "vision_authoring attachment before composing a Vision. "
                         "The exec tool's current workspace is the connected goal "
                         "project root, so task "
                         "paths are directly addressable. Read the exact proof target "
@@ -1085,14 +1115,24 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "settlement plan, including the validation step's "
                         "command_condition. Ordinary Todo completion validates the "
                         "deliverable before writeback/spend; it is distinct from "
-                        "the final --no-follow-up closeout after spend. Preserve "
+                        "the final --no-follow-up closeout after spend. When "
+                        "ordinary completion is due, run it before authoring "
+                        "any durable_writeback input. Use the resulting same-Turn "
+                        "plan to decide which inputs are required. Preserve "
                         "the projected Goal, Agent, Todo and Turn arguments. Fill "
                         "the writeback placeholders from the proof's typed fields "
                         "in the current same-Turn plan's durable_writeback command; execute the complete "
                         "projected command, not a bare command name or help lookup."
-                        " If a vision packet is needed, use the plan's "
-                        "vision_authoring schema and author a project draft under "
-                        "`.scratch/`. Draft shell calls are OS-isolated: original "
+                        " Decide from the live writeback command and precondition "
+                        "whether a draft is needed. vision_authoring describes the "
+                        "available syntax. For material Vision closeout, adapt its "
+                        "minimal_example with a current acceptance_summary, a top-level "
+                        "path_delta and an evidence reference from the proof you read. "
+                        "A follow-up decision does not supply scope coverage. If choosing "
+                        "typed no_followup, include the coverage fields named in the plan. "
+                        "Write any needed draft in one tool call under the shell's existing "
+                        "`.scratch/` directory. Correct rejected inputs using the CLI feedback. "
+                        "Draft shell calls are OS-isolated: original "
                         "inputs, authority stores, private host data and network "
                         "access are protected. Run every LoopX command directly, "
                         "one per tool call; draft shells cannot invoke LoopX."
@@ -1147,6 +1187,9 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                     "kind": kind if failure_code is None else failure_code,
                     "command_digest": digest_text(tool_call.command),
                 }
+                if kind == "shell_nonzero" and failure_code is None:
+                    step_receipt["error_code"] = "shell_nonzero"
+                    step_receipt["exit_code"] = json.loads(output)["exit_code"]
                 if failure_code is not None:
                     step_receipt["redacted_command_shape"] = _redacted_command_shape(
                         tool_call.command
@@ -1196,7 +1239,9 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "projected Todo lifecycle settlement with a concise "
                         "public-safe note; do not repeat refresh-state, inspect the "
                         "workspace, spend quota, or invent filler work. Then run "
-                        "the projected quota should-run command. When it reports "
+                        "the projected quota should-run command. If it returns a "
+                        "context reference, use its recovery reader with "
+                        "--select /should_run. When the tool reports "
                         "should_run=false, return a concise final response without "
                         "another tool call."
                     ),
@@ -1277,9 +1322,24 @@ class DoubaoTerminalSettlementToolBehaviorActor:
             try:
                 if state.terminal_quota_observed:
                     raise _TerminalToolViolation("model_called_tool_after_terminal_quota")
-                if command_kind == "refresh_state":
+                if state.terminal_quota_context is not None:
+                    if not is_context_read_command(tool_call.command):
+                        raise _TerminalToolViolation("terminal_quota_read_required")
+                    output = state.terminal_quota_context.read(
+                        tool_call.command, source_root=fixture.source_root,
+                        project_root=fixture.project_root,
+                    )
+                    page = json.loads(output)
+                    if not (page.get("ok") is True
+                            and page.get("schema_version") == "context_capture_selection_page_v1"
+                            and json.loads(page["content"]).get("selections")
+                            == [{"pointer": "/should_run", "value": False}]):
+                        raise _TerminalToolViolation("terminal_quota_read_incomplete")
+                    state.terminal_quota_observed = True
+                    kind = "context_read"
+                elif command_kind == "refresh_state":
                     raise _TerminalToolViolation("repeated_refresh_state")
-                if command_kind == "todo" and command_action == "complete":
+                elif command_kind == "todo" and command_action == "complete":
                     if not tokens:
                         raise _TerminalToolViolation("lifecycle_settlement_command_malformed")
                     todo_id = argument_value(tokens, "--todo-id") or ""
@@ -1337,11 +1397,15 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         state=state,
                         accepted_return_codes=(0, 1),
                     )
-                    if payload.get("should_run") is not False:
+                    quota_context = QuotaToolContext.from_output(
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                    )
+                    if quota_context.packet.get("should_run") is not False:
                         raise _TerminalToolViolation("quota_reentry_did_not_terminate")
-                    state.terminal_quota_observed = True
+                    state.terminal_quota_context = quota_context
+                    state.terminal_quota_observed = quota_context.capture_path is None
                     kind = "terminal_quota_reentry"
-                    output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                    output = quota_context.output
                 elif command_kind == "todo" and command_action == "add":
                     raise _TerminalToolViolation("invented_lifecycle_successor")
                 elif command_kind == "quota" and command_action == "spend-slot":

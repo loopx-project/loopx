@@ -23,11 +23,22 @@ def test_returned_completion_prepares_and_preserves_original_execution(
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
-                        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-                        "--todo-id", TODO_ID, "--turn-instance-id", "claim-guidance")
+    guard_args = ("quota", "should-run", *host, "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                  "--todo-id", TODO_ID, "--turn-instance-id", "claim-guidance")
+    rc, guard = _run_cli(registry, runtime, *guard_args, cwd=project)
     assert rc == 0, guard
     assert guard["goal_boundary"]["handoff_mode"] == handoff_mode
+    if handoff_mode == "hard_lease":
+        channel = guard["interaction_contract"]["cli_channel"]
+        assert "settlement_plan" not in channel
+        preparation = channel["execution_preparation"]
+        assert preparation["state"] == "claim_required" and preparation["delivery_allowed"] is False
+        # Follow the original guard's native preparation before requesting its plan.
+        rc, claim = _run_cli(registry, runtime, *preparation["claim"]["cli_args"], cwd=project)
+        assert rc == 0 and claim["execution_managed"] is True, claim
+        rc, guard = _run_cli(registry, runtime, *guard_args, cwd=project)
+        assert rc == 0, guard
+        assert guard["interaction_contract"]["cli_channel"]["execution_preparation"]["state"] == "ready"
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert build_turn_envelope(guard)["writeback"]["settlement_plan"] == plan
     step = next(s for s in plan["ordered_steps"] if s["kind"] == "validation")
@@ -35,9 +46,7 @@ def test_returned_completion_prepares_and_preserves_original_execution(
     command = step["command_template"].replace("<validated evidence>", "evidence:accepted-deliverable")
     if handoff_mode == "hard_lease":
         assert preparation is not None
-        # Follow only the returned plan, without a failed completion or global help.
-        rc, claim = _run_generated_cli(preparation[1], registry_path=registry)
-        assert rc == 0 and claim["execution_managed"] is True, claim
+        assert "<original claim_operation_id>" in command
         command = command.replace("<original claim_operation_id>", claim["claim_operation_id"])
         # A guessed reference must not adopt the active execution or complete work.
         rc, refused = _run_generated_cli(

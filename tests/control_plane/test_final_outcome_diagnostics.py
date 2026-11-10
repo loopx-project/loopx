@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from loopx.cli import main as cli_main
 from loopx.control_plane.goals.acceptance_observation import (
     build_goal_acceptance_observation,
@@ -363,6 +365,7 @@ def test_public_cli_diagnostic_reentry_preserves_guard_identity_without_spending
                         "domain": "software",
                         "repo": str(project),
                         "state_file": state.name,
+                        "execution_profile": {"stride_strategy": "off"},
                         "adapter": {
                             "kind": "harness_self_improvement",
                             "status": "connected-read-only",
@@ -415,7 +418,7 @@ def test_public_cli_diagnostic_reentry_preserves_guard_identity_without_spending
             )
             == 0
         )
-        result = json.loads(capsys.readouterr().out)
+        result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
         assert result["goal_frontier_projection"]["replan_required"] is True
         assert (
             result["vision_continuation_audit"]["outcome_checkpoint_diagnostics"][0][

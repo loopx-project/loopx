@@ -416,8 +416,8 @@ def test_tool_portfolio_keeps_bounded_repeat_diagnostics_without_raw_commands() 
             "tool_call_count": 40 if failed else 16,
             "tool_call_limit": 40,
             "tool_call_receipts": [
-                {"error_code": "shell_nonzero", "raw_command": "never-publish-this-command"},
-                {"error_code": "private/path", "raw_command": "never-publish-this-command"},
+                {"kind": "shell", "error_code": "shell_nonzero", "raw_command": "never-publish-this-command"},
+                {"kind": "private/command", "error_code": "private/path", "raw_command": "never-publish-this-command"},
             ],
         }
 
@@ -435,15 +435,18 @@ def test_tool_portfolio_keeps_bounded_repeat_diagnostics_without_raw_commands() 
     assert scenario["repeat_diagnostics"] == [
         {"repeat": 1, "actor_passed": False, "failure_code": "tool_call_budget_exhausted",
          "tool_call_count": 40, "tool_call_limit": 40,
+         "observed_tool_sequence": ["shell", "unclassified"],
          "tool_error_counts": {"shell_nonzero": 1, "unclassified": 1},
          "tool_errors_truncated": False},
         {"repeat": 2, "actor_passed": True, "failure_code": None,
          "tool_call_count": 16, "tool_call_limit": 40,
+         "observed_tool_sequence": ["shell", "unclassified"],
          "tool_error_counts": {"shell_nonzero": 1, "unclassified": 1},
          "tool_errors_truncated": False},
     ]
     assert "never-publish-this-command" not in json.dumps(scenario)
     assert "private/path" not in json.dumps(scenario)
+    assert "private/command" not in json.dumps(scenario)
 
 
 def _capability_monitor_repair_actor(_: str) -> dict[str, Any]:

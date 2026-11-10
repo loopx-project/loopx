@@ -13,6 +13,7 @@ from ...control_plane.capability_hooks import (
     dispatch_interaction_projection_hooks,
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
+    TurnStartContextProjector,
     dispatch_turn_start_hooks,
 )
 from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
@@ -63,6 +64,36 @@ def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: st
             **({"review_pages": review_pages} if review_pages is not None else {}))
     except (OSError, ValueError, RuntimeError):
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
+
+
+def project_work_yardstick_sources(
+    *, events: list[dict[str, Any]], projection: Mapping[str, Any],
+    goal_id: str, agent_id: str, work_todos: list[dict[str, Any]],
+    enabled: bool, todo_id: str | None = None, result_node: str | None = None,
+) -> list[dict[str, Any]]:
+    """Replay typed-owner-selected prefixes from one already-read canonical log.
+
+    Ordinary reads and immediate finding receipts share this I/O adapter; the
+    typed owner selects current captures, verifies their prefixes and scopes
+    the resulting measurements. This performs no write or additional log read.
+    """
+    if not enabled:
+        return []
+    requests = effect_runtime_result("work_item.yardstick.sources", {
+        "yardstick_enabled": enabled, "work_todos": work_todos,
+        "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id, "result_node": result_node,
+        "findings": projection.get("findings", []),
+        "source_events": [{"goal_id": row["goal_id"], "event_id": row["event_id"]} for row in events],
+    })
+    sources, prefixes = [], {}
+    for request in requests["sources"]:
+        count = request["source_snapshot"]["event_count"]
+        if count not in prefixes:
+            prefixes[count] = build_explore_result_projection(
+                events[:count], goal_id=goal_id, finding_limit=count, mermaid_node_limit=1,
+            )["findings"]
+        sources.append({**request, "findings": prefixes[count]})
+    return sources
 
 
 @effect_runtime_request_scope()
@@ -130,6 +161,14 @@ def explore_turn_context(
         "--format",
         "json",
     ]
+    work_todos = [{key: row[key] for key in (
+        "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
+        for row in todos.get("todos", [])] if yardstick else []
+    sources = []
+    if yardstick and graph:
+        sources = project_work_yardstick_sources(events=events, projection=projection,
+            goal_id=goal_id, agent_id=agent_id, work_todos=work_todos, enabled=yardstick,
+            todo_id=todo_id, result_node=result_node)
     return cast(dict[str, Any], effect_runtime_result(
         "explore.turn_context",
         {
@@ -139,9 +178,7 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
-            **({"yardstick_enabled": True, "work_todos": [{key: row[key] for key in (
-                "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
-                for row in todos.get("todos", [])]} if yardstick else {}),
+            **({"yardstick_enabled": True, "work_todos": work_todos, "yardstick_sources": sources} if yardstick else {}),
             **focus,
             **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,
@@ -155,6 +192,30 @@ def explore_turn_context(
     ))
 
 
+def turn_context_projector(
+    *, registry_path: Path, runtime_root: Path, goal_id: str,
+    agent_id: str | None, todo_id: str | None = None,
+) -> TurnStartContextProjector | None:
+    """Bind an entrypoint's existing read request after governing selection.
+
+    Merely enabling a Goal or supplying unrelated hooks cannot request this
+    read. The decision owner supplies facts; this adapter changes no admission.
+    """
+    if not agent_id:
+        return None
+
+    def project(payload: Mapping[str, Any], dispatch: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+        selected = payload.get("selected_todo") or {}
+        focus = (selected.get("todo_id") if payload.get("normal_delivery_allowed") is True
+                 and channel.get("delivery_allowed") is True and selected.get("status") == "open" else None)
+        return extend_turn_start_dispatch(dict(dispatch or {}),
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, selected_todo_id=focus)
+
+    return project
+
+
 def extend_turn_start_dispatch(
     dispatch: dict[str, Any] | None,
     *,
@@ -163,12 +224,20 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None = None,
+    selected_todo_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return dispatch
-    _, graph, gate = _policy(registry_path, goal_id, runtime_root)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not graph and not gate["enabled"]:
         return dispatch
+    if selected_todo_id is not None:
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+
+        # This optional policy's current-work card follows the resolved work
+        # identity. With the policy off, preserve the caller's original scope.
+        if work_yardstick_enabled(goal, runtime_root):
+            todo_id = selected_todo_id
 
     def produce() -> dict[str, Any]:
         return {

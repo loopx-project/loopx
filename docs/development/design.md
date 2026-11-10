@@ -205,7 +205,9 @@ finding's full content. Do not invent short titles or infer findings from prose.
 A selected question is a focused document, not another full history stacked below
 the chart. Show one finding at a time with its declared status and full text;
 keep all findings selectable and failed or tentative counts visible. Preserve
-the exact finding on reload and Back. Offer the whole recorded history in place
+the exact finding event on reload and Back, including an earlier judgment later
+revised under the same finding identity. Period selection opens the original
+event from that period; current-state projection does not replace its text. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
 When opening a specific finding, put its parent question in accessible contextual
 help rather than another collapsed title row. Opening a route's question still
@@ -221,6 +223,14 @@ with their outcome, change and recorded status; retain stopped/retained evidence
 and expose earlier records in place. Counts and date spans describe the selected
 time range. Keep negative and tentative record counts visible when older rows
 are folded, and open each row's exact finding in the existing reader.
+When opening a question from a selected timeline period, prefer its last
+readable finding recorded in that period. An explicitly chosen finding, the
+other findings and revisions in source history stay readable.
+
+In the loaded-record list, a node and its unambiguously linked finding share an
+entry after a complete read. Show the finding status beside the node's lifecycle
+status and retain each event, time and source when opened. Keep raw record
+counts, search and export independent of display grouping.
 
 Reading a question from a day or nearby-point group keeps that collection as
 navigation context. Offer a compact question selector and previous/next controls

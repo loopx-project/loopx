@@ -16,6 +16,7 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from ...chat_store import ChatSessionStore
 
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...control_plane.todos.mutation_api import add_goal_todo
@@ -30,7 +31,7 @@ def _encoded(bundle: dict[str, Any]) -> bytes:
 
 
 def _path(root: Path, goal_id: str, digest: str) -> Path:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", goal_id) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", goal_id) or not BARE_SHA256_PATTERN.fullmatch(digest):
         raise ValueError("Invalid report review identity")
     return root / "goals" / goal_id / "periodic_reports" / "review-bundles" / (digest + ".json")
 

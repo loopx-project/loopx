@@ -243,7 +243,7 @@ BUDGET_ANCHOR = {
     "same_runtime_forks": 1,
     "same_runtime_fork_definitions": 3,
     "conflicting_values": 16,
-    "conflicting_definitions": 54,
+    "conflicting_definitions": 52,
     "schema_version_same_runtime_forks": 0,
     "multi_value_twins": 8,
     "multi_value_forks": 2,

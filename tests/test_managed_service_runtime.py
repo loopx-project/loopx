@@ -1,6 +1,7 @@
 """Service alignment preserves the real Chat admission boundary and manager route."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import socket
 import time
+from types import SimpleNamespace
 import urllib.request
 import uuid
 
@@ -93,6 +95,191 @@ def test_pair_adopts_target_without_changing_routes_or_cli_and_is_idempotent(man
     calls.clear()
     assert align_managed_runtime(str(target))["restarted_services"] == []
     assert calls == []
+
+
+@pytest.fixture
+def managed_with_observer(managed, monkeypatch):
+    root, agents, target, loaded, calls, fail = managed
+    # Chat's message store and the shared native account owner are different.
+    account = agents.parent.parent / "shared native accounts"
+    (account / "extensions/codex-native-accounts").mkdir(parents=True)
+    (agents.parent.parent / "registry").write_text(json.dumps({
+        "goals": [], "common_runtime_root": str(account),
+    }))
+    core = target.parent
+    (core / "scripts").mkdir()
+    target = target.rename(core / "scripts/loopx")
+    (core / "loopx/extensions").mkdir(parents=True)
+    (core / "loopx/extensions/chat_service_guard.py").touch()
+    label = "com.loopx.codex-native-accounts"
+    path = agents / f"{label}.plist"
+    payload = {"Label": label, "ProgramArguments": ["/old/python", "-m",
+        "loopx_codex_provider_routing.native", "watch", "--runtime-root", str(account)],
+        "KeepAlive": True, "EnvironmentVariables": {"PATH": "/original/bin", "PYTHONPATH": "/old/core",
+            "PYTHONHOME": "/old/python/home"}}
+    path.write_bytes(plistlib.dumps(payload))
+    loaded[label] = payload
+    state = {"intent": None}
+    held = set()
+
+    class Owner:
+        def __init__(self, runtime_root):
+            assert runtime_root == account
+            self.root = runtime_root / "extensions/codex-native-accounts"
+
+        @contextmanager
+        def _lock(self, *, name="lock"):
+            assert name not in held
+            held.add(name)
+            try:
+                yield
+            finally:
+                held.remove(name)
+
+        def _load(self):
+            assert held == {"lock", "api-relay-state.lock"}
+            return state
+
+    def observer_heartbeat(*_, **__):
+        now = time.time()
+        candidate = loaded[label]["ProgramArguments"][0] == sys.executable
+        return {"build": "candidate" if candidate else "old",
+            "relay_build": "candidate-relay" if candidate else "old-relay",
+            "checked_at": now, "deadline_at": now + 60, "phase": "retrying"}
+
+    native = SimpleNamespace(NativeAccounts=Owner, HostError=RuntimeError,
+        OBSERVER_SCHEMA="observer-fixture", private_read=observer_heartbeat,
+        observer_build_identity=lambda: {"build": "candidate", "relay_build": "candidate-relay"})
+    monkeypatch.setitem(sys.modules, "loopx_codex_provider_routing.native", native)
+    monkeypatch.setattr(managed_runtime, "_provider_pinned", lambda _: True)
+    monkeypatch.setattr(managed_runtime, "_native_package", lambda _: native)
+    monkeypatch.setattr(managed_runtime, "_observer_lock_pid", lambda _: 900 if label in loaded else None)
+    return agents, target, loaded, calls, fail, state, held, path
+
+
+def test_provider_bound_core_adopts_original_observer_and_keeps_its_route(managed_with_observer):
+    _, target, loaded, calls, _, _, held, path = managed_with_observer
+    original = plistlib.loads(path.read_bytes())
+    result = align_managed_runtime(str(target))
+    assert result["readiness_verified"]
+    assert calls == [("bootout", "com.loopx.status"), ("bootout", "com.loopx.chat"),
+        ("bootout", path.stem), ("bootstrap", path.stem),
+        ("bootstrap", "com.loopx.status"), ("bootstrap", "com.loopx.chat")]
+    observer = loaded[path.stem]
+    assert observer["ProgramArguments"] == [sys.executable, *original["ProgramArguments"][1:]]
+    env = observer["EnvironmentVariables"]
+    assert env["PYTHONPATH"] == env["LOOPX_RELEASE_ROOT"] == str(target.parent.parent)
+    assert env["PATH"] == "/original/bin" and "PYTHONHOME" not in env
+    assert not held
+    calls.clear()
+    assert align_managed_runtime(str(target))["restarted_services"] == []
+    assert calls == []
+
+
+@pytest.mark.parametrize("blocker", ["active_intent", "foreign_owner"])
+def test_native_observer_hold_leaves_all_services_running(managed_with_observer, monkeypatch, blocker):
+    agents, target, loaded, calls, _, state, held, path = managed_with_observer
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    if blocker == "active_intent":
+        state["intent"] = {"target": "fixture"}
+        expected = activation.RuntimeActivationDeferred
+        reason = "native_account_work_pending"
+    else:
+        monkeypatch.setattr(managed_runtime, "_observer_lock_pid", lambda _: 901)
+        expected = ValueError
+        reason = "native_observer_owner_unverified"
+    with pytest.raises(expected, match=reason):
+        align_managed_runtime(str(target))
+    assert set(loaded) == {"com.loopx.status", "com.loopx.chat", path.stem}
+    assert not calls and not held
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_core_only_activation_does_not_retarget_standalone_observer(managed_with_observer, monkeypatch):
+    _, target, _, calls, _, _, _, path = managed_with_observer
+    original = path.read_bytes()
+    monkeypatch.setattr(managed_runtime, "_provider_pinned", lambda _: False)
+    align_managed_runtime(str(target))
+    assert path.read_bytes() == original
+    assert all(label != path.stem for _, label in calls)
+
+
+def test_core_only_update_preserves_an_adopted_provider_binding(managed_with_observer, monkeypatch):
+    agents, target, _, calls, _, _, _, _ = managed_with_observer
+    align_managed_runtime(str(target))
+    calls.clear()
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    monkeypatch.setattr(managed_runtime, "_provider_pinned", lambda _: False)
+    with pytest.raises(activation.RuntimeActivationDeferred, match="native_observer_provider_binding_required"):
+        align_managed_runtime(str(target))
+    assert not calls
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_provider_activation_leaves_another_account_root_alone(managed_with_observer):
+    agents, target, _, calls, _, _, _, path = managed_with_observer
+    registry = agents.parent.parent / "registry"
+    registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(agents / "other owner")}))
+    original = path.read_bytes()
+    align_managed_runtime(str(target))
+    assert path.read_bytes() == original
+    assert all(label != path.stem for _, label in calls)
+
+
+def test_handoff_reads_relay_build_even_when_observer_build_matches(managed_with_observer, monkeypatch):
+    _, target, _, _, _, _, _, _ = managed_with_observer
+    native = sys.modules["loopx_codex_provider_routing.native"]
+    read_heartbeat = native.private_read
+    builds = []
+
+    def readback(*args, **kwargs):
+        value = read_heartbeat(*args, **kwargs)
+        assert value["build"] == "candidate"
+        if not builds:
+            value["relay_build"] = "old-relay"
+        builds.append(value["relay_build"])
+        return value
+
+    monkeypatch.setattr(native, "private_read", readback)
+    assert align_managed_runtime(str(target))["readiness_verified"]
+    assert builds[0] == "old-relay" and builds[1:] and set(builds[1:]) == {"candidate-relay"}
+
+
+def test_failed_chat_readiness_rolls_back_observer_and_core(managed_with_observer, monkeypatch):
+    agents, target, loaded, calls, _, _, held, path = managed_with_observer
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    def unavailable(*_):
+        raise RuntimeError("service_runtime_alignment_failed")
+    monkeypatch.setattr(managed_runtime, "_verify_services", unavailable)
+    with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+        align_managed_runtime(str(target))
+    assert {p: p.read_bytes() for p in before} == before
+    assert loaded == {p.stem: plistlib.loads(content) for p, content in before.items()}
+    assert calls[-3:] == [("bootstrap", path.stem), ("bootstrap", "com.loopx.status"),
+        ("bootstrap", "com.loopx.chat")]
+    assert not held and not (agents / ".loopx-runtime-activation.json").exists()
+
+
+def test_interrupted_observer_handoff_restores_original_routes(managed_with_observer, monkeypatch):
+    agents, target, loaded, calls, _, _, held, path = managed_with_observer
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    write = managed_runtime.write_bytes_atomic
+    def crash(plist, content, **kwargs):
+        write(plist, content, **kwargs)
+        if plist == path:
+            raise KeyboardInterrupt("fixture process interruption")
+    monkeypatch.setattr(managed_runtime, "write_bytes_atomic", crash)
+    with pytest.raises(KeyboardInterrupt):
+        align_managed_runtime(str(target))
+    journal = agents / ".loopx-runtime-activation.json"
+    assert journal.exists() and not loaded and not held
+    monkeypatch.setattr(managed_runtime, "write_bytes_atomic", write)
+    managed_runtime._recover_alignment(journal)
+    assert {p: p.read_bytes() for p in before} == before
+    assert loaded == {p.stem: plistlib.loads(content) for p, content in before.items()}
+    assert calls[-3:] == [("bootstrap", path.stem), ("bootstrap", "com.loopx.status"),
+        ("bootstrap", "com.loopx.chat")]
+    assert not held and not journal.exists()
 
 
 def test_mutable_cli_alias_cannot_hide_a_new_runtime_from_the_pair(managed):

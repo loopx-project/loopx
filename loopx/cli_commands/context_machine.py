@@ -42,7 +42,8 @@ def _private_transport_root(runtime_root: Path) -> str:
     return str(root)
 
 
-def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> dict[str, Any]:
+def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
+                             index_and_select: bool = True) -> dict[str, Any]:
     """Publish exact write-time facts through the existing generic file reader.
 
     This does not present a delta, advance a native baseline or rerun admission.
@@ -54,8 +55,28 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> di
     )
 
     try:
-        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=_private_transport_root(runtime_root)))
+        from ..control_plane.runtime.private_permissions import protect_private_path, require_private_path
+
+        # This is a write-once recovery file, not native continuity. Reuse the
+        # cross-platform private IO owner without enabling a native baseline.
+        runtime_root = runtime_root.expanduser().resolve()
+        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = runtime_root / "context-delivery"
+        try:
+            root.mkdir(mode=0o700)
+        except FileExistsError:
+            try:
+                require_private_path(root, directory=True)  # Never repair an existing leaf.
+            except OSError as error:
+                raise ValueError("machine context transport requires a private physical directory owned by this user") from error
+        else:
+            protect_private_path(root, directory=True)
+        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=root))
+        protect_private_path(directory, directory=True)
         reference = capture_context_projection(value, directory=directory, filename="required-context.json")
+        protect_private_path(Path(reference["path"]))
+        if not index_and_select:
+            return {key: reference[key] for key in ("path", "sha256", "command")}
         path, digest = Path(reference["path"]), reference["sha256"]
         return {"path": str(path), "sha256": digest,
             "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),

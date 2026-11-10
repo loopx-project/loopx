@@ -1129,6 +1129,7 @@ function buildPersonalHomeModel(
           agentId: thread.agent_id ?? null,
           hostSurface: thread.host_surface,
           lastEventAt: thread.last_event_at ?? null,
+          turnStartedAt: thread.turn_started_at ?? null,
           state: thread.state,
           reason: thread.reason ?? null,
           deliveryWindow: thread.delivery_window ? {
@@ -3638,7 +3639,7 @@ export function DashboardPage() {
             workSession: sameStatusSource ? current.workSession : undefined,
             // Node/pack ids are source-local even when the Goal ids coincide.
             // Back restores the original source's URL and its own selection.
-            ...(runtimeSourceChanged ? {research_lens: undefined, research_phase: undefined, research_goal: undefined, research_node: undefined, research_finding: undefined,
+            ...(runtimeSourceChanged ? {research_lens: undefined, research_phase: undefined, research_goal: undefined, research_node: undefined, research_finding: undefined, research_event: undefined, research_state: undefined,
               research_group: undefined, research_analysis: undefined,
               research_analysis_goal: undefined, research_pack: undefined} : {}),
           };

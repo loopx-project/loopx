@@ -7,19 +7,32 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from ...command_invocation import current_loopx_cli_argv
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+class LegacyNativePreparationCapture(ValueError):
+    """The capture cannot prove a live guard bound its claim."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This saved capture has no verified live guard binding for Host claims. Preserve any existing claim receipt. "
+            "If preparation is still needed, run the current quota should-run for the original Goal, "
+            "Agent, Todo and Turn with a fresh capture and follow its preparation only if eligible."
+        )
+
+
 def compact_execution_preparation_request(
-    payload: Mapping[str, Any],
+    payload: Mapping[str, Any], *, claim_source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Retain only the exact Host-executable action beside a private capture."""
 
@@ -62,6 +75,11 @@ def compact_execution_preparation_request(
         if isinstance(receipt, Mapping)
         else ""
     )
+    claim_binding = {}
+    if turn_instance_id and claim_source_sha256 is not None:
+        operation_id = f"todo-claim:codex-capture:{claim_source_sha256}"
+        expected_claim += ["--claim-operation-id", operation_id]
+        claim_binding["claim_source_sha256"] = claim_source_sha256
     return {
         "goal_id": goal_id,
         "agent_id": agent_id,
@@ -75,6 +93,7 @@ def compact_execution_preparation_request(
             "runtime_root": str(runtime_root),
         },
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
+        **claim_binding,
     }
 
 
@@ -133,6 +152,72 @@ def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[
     }
 
 
+def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
+    """Reuse the captured managed claim identity on an authorized retry."""
+    digest = request.get("claim_source_sha256")
+    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None:
+        raise ValueError("Native execution preparation requires its original capture digest")
+    return f"todo-claim:codex-capture:{digest}"
+
+
+def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> str | None:
+    """Expose only existing receipt, lease and ready-capture readers after an interrupted preparation."""
+    goal, agent, todo, turn = (request.get(key) for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id"))
+    route = request.get("authority_route")
+    if not isinstance(route, Mapping) or not all(
+        isinstance(part, str) and part for part in (goal, agent, todo, turn)
+    ):
+        return None
+    registry_path, runtime_root = route.get("registry_path"), route.get("runtime_root")
+    if not all(isinstance(part, str) and Path(part).is_absolute() for part in (registry_path, runtime_root)):
+        return None
+    operation_id = request.get("claim_operation_id")
+    if not isinstance(operation_id, str) or not operation_id:
+        operation_id = _native_claim_operation_id(request)
+    base = [*current_loopx_cli_argv(), "--registry", registry_path,
+            "--runtime-root", runtime_root, "--format", "json"]
+    facts: dict[str, Any] = {
+        "event": "host_execution_preparation_readback_required",
+        "goal_id": goal, "agent_id": agent, "todo_id": todo, "turn_instance_id": turn,
+        "claim_operation_id": operation_id,
+        "receipt_command": shlex.join([*base, "todo", "receipt", "--goal-id", goal, "--operation-id", operation_id]),
+        "lease_command": shlex.join([*base, "task-lease", "inspect", "--goal-id", goal, "--todo-id", todo]),
+    }
+    ready_capture = request.get("ready_capture")
+    if isinstance(ready_capture, Mapping):
+        ready_path = ready_capture.get("path")
+        ready_sha256 = ready_capture.get("sha256")
+        if (
+            isinstance(ready_path, str)
+            and ready_path
+            and isinstance(ready_sha256, str)
+            and BARE_SHA256_PATTERN.fullmatch(ready_sha256) is not None
+        ):
+            from .decision_capture import context_capture_read_command, read_context_capture_file
+
+            try:
+                read_context_capture_file(ready_path, ready_sha256, private=True)
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                pass
+            else:
+                recovery_command = context_capture_read_command(
+                    Path(ready_path), ready_sha256, reader_argv=current_loopx_cli_argv(),
+                )
+                facts["capture_sha256"] = ready_sha256
+                facts["context"] = {
+                    "capture_sha256": ready_sha256,
+                    "recovery_command": recovery_command,
+                }
+    return (
+        "Automatic preparation started for this captured Turn and may still be finishing. "
+        "Read the original claim receipt and current lease before deciding how to recover. "
+        "With the matching active lease, follow the current captured same-Todo and same-Turn readiness check before work. "
+        "For an authorized retry of this claim, pass the original --claim-operation-id. "
+        "A retired lease requires a fresh eligible capture. "
+        "Receipt: " + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 def execute_codex_execution_preparation(
     request: Mapping[str, Any],
     *,
@@ -173,7 +258,6 @@ def execute_codex_execution_preparation(
         not goal_id
         or not agent_id
         or not todo_id
-        or request.get("claim_args") != expected_claim
         or not registry_path.is_absolute()
         or registry_path.resolve() != registry_path
         or not runtime_root.is_absolute()
@@ -189,8 +273,17 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
-    if context_directory is not None and (capture_directory is None or not turn_instance_id):
-        raise ValueError("Native execution preparation requires a bound captured Turn")
+    claim_operation_id = None
+    if context_directory is not None or "source_sha256" in request:
+        if context_directory is None or capture_directory is None or not turn_instance_id:
+            raise ValueError("Native execution preparation requires a bound captured Turn")
+        source_sha256 = request.get("claim_source_sha256")
+        if not isinstance(source_sha256, str) or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None:
+            raise ValueError("Native execution preparation requires its original capture digest")
+        claim_operation_id = f"todo-claim:codex-capture:{source_sha256}"
+        expected_claim += ["--claim-operation-id", claim_operation_id]
+    if request.get("claim_args") != expected_claim:
+        raise ValueError("invalid Codex execution-preparation claim arguments")
     claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
@@ -199,6 +292,9 @@ def execute_codex_execution_preparation(
         timeout=timeout / 2,
         runner=invoke,
     )
+    claim_reference = claimed.get("claim_operation_id")
+    if claim_operation_id is not None and claim_reference != claim_operation_id:
+        raise RuntimeError("Native execution preparation did not recover its original managed claim")
     guard = [
         "quota", "should-run",
         "--goal-id", goal_id,
@@ -259,7 +355,7 @@ def execute_codex_execution_preparation(
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError("The guard did not return its published capture digest")
         receipt["capture_sha256"] = digest
-    claim_reference = claimed.get("claim_operation_id")
+        receipt["capture_path"] = str(capture_directory / "decision.json")
     if isinstance(claim_reference, str) and claim_reference:
         receipt["claim_operation_id"] = claim_reference
     # The Host already paid for the captured complete decision. Its caller

@@ -625,12 +625,19 @@ exhausted. This is opt-in Agent guidance in the existing axes/reasons and
 or automatic experiment launch. A larger portfolio or a recorded switch does
 not establish adoption or benefit; subsequent evidence must still qualify both.
 
+With a staged reader, read `decision_value_review` in the review stage before
+choosing work. The writeback stage carries the authoring and settlement
+contract. Both stages use the same captured decision.
+
 当证据削弱当前路线时，现有 `route_distance` 指引要求先提出少量真正不同的解释或
 方法，再选择实验；可考虑表征、问题分解、搜索机制或信息来源。比较各自预测和
 完整成本，保留已验证的当前最佳产物，选择能改变下一步决策的对照。相同机制的
 参数变体不算不同路线；缺少反馈属于等待或证据缺口，不证明路线失败或其他方法
 已经穷尽。这仅补充启用策略后的既有轴、理由与 `next_probe` 指引，不增加字段、
 强制转向、分支调度或执行权限。记录了切换或更多候选，不等于执行或效果已经成立。
+
+使用分阶段读取时，在选择工作前读取 review 阶段的 `decision_value_review`。
+writeback 阶段提供编写和结算契约。两个阶段都读取同一次已捕获决定。
 
 When a prior accepted decision is delivered, `previous_review` references its
 exact `replan-decision-*` id and separately records:
@@ -639,6 +646,11 @@ exact `replan-decision-*` id and separately records:
 - `information_gain`: new evidence, repeated evidence or unknown;
 - `goal_gain`: improved, flat, regressed or unknown;
 - delivered evidence references and the bounded lesson for the next experiment.
+
+The authoring contract exposes `review_reference_limit` (3). It applies separately
+to `previous_review.evidence_refs` and `explore_review.considered_refs`.
+
+编写契约的 `review_reference_limit`（3）分别限制上述两个引用列表。
 
 A claim needs evidence references; unavailable evidence remains unknown. These
 are explicit Agent assessments, not host certification of scientific truth.

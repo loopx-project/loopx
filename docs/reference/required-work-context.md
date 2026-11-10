@@ -134,6 +134,13 @@ related source, note and evidence fields without replaying the outcome's inline
 requirements. An unmet or stale review stays visible before its explanation
 is opened. Agent review still does not establish independent acceptance.
 
+In the first read, an unexpanded outcome can use the parent of its selected
+`id` JSON pointer to locate supporting material. The planner omits a separate
+address only when it exactly matches that parent and the pinned instructions
+are included. The required view and explicit selectors retain the address.
+Older captures, different addresses and unavailable guidance keep the original
+first-read address.
+
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge full model retention of the required
@@ -206,12 +213,15 @@ corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
-The existing bounded `unfinished_delegations` projection and `read_complete`
-flag also remain visible. Adoption or a queued return does not establish
-completion. Pending peer results, counts, omitted items and unavailable
-observations retain their source semantics. Full request bodies stay on demand and must be
-read before assessing, executing or returning a request; the initial view does
-not consume a result or grant authority.
+The initial read includes the bounded `unfinished_delegations` projection and
+`read_complete` flag. For an admitted normal work Turn with a large, complete
+agenda and a matching required Manager Inbox read, the initial view keeps the
+incoming and outgoing request counts, scan status and required command. The
+required read delivers the rows and their guidance. The original rows remain
+available from the same capture. Adoption and
+queued returns are intermediate states. Read the full current request before
+assessing, executing or returning it. Use the existing scoped request and
+consumption routes for those actions.
 It also exposes existing outcome material addresses and the current settlement
 plan's obligations, including unknown step fields. Only attachments explicitly
 marked `required=false` defer their guidance/templates; their routes stay visible
@@ -263,24 +273,69 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+The generated `first_read_command` and its paging cursor default to a 12,000-byte
+serialized UTF-8 output limit when the caller supplied no tool budget. This
+applies after explicit Todo selection as well. An explicit output limit still
+controls the opening, and the ordinary bulk and recovery commands keep their
+existing budgets.
+
+中文：调用方未指定工具预算时，生成的 `first_read_command` 与续页默认每次最多
+返回 12,000 个序列化 UTF-8 字节。显式选择 Todo 后的首读也适用。调用方可以显式
+指定首读预算，完整读取与恢复命令继续使用原有预算。
+
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the
 saved decision and reads it in one call. Replace `--initial-read` with repeated
-`--select` for known fields. The output is a normal bounded reader page with its
-navigation attached. Forward the whole response within the tool's output
-budget and read its top-level `content`. When `eof` is false, follow the
-top-level `next_command` for remaining bytes. Use
-`navigation.first_read_command`, when present, to recover missing initial
-context, and `navigation.recovery.command` for other fields. A smaller
-`--max-page-output-bytes` bounds the combined response for tighter tool limits.
-If the response is lost, use the original digest-bound capture in the wake
-prompt. Read recovery reuses the saved decision and its original receipt.
+`--select` for known fields. The opening defaults to 12,000 serialized UTF-8
+bytes including navigation. With a known tool and retained-history budget,
+set `--max-page-output-bytes` to a compatible byte limit, up to 64,000. A byte
+limit is not a model-token or retention guarantee. An optional `--page-bytes`
+also bounds UTF-8 content on the attached page and its cursor, using the same
+window rules as `context-read`. The output budget still applies to the complete
+serialized response.
+
+Read the top-level `content` and follow its `next_command` until that selection's
+`eof`. If the whole initial selection would need paging and its decision and
+read obligations fit in one page, the opening contains those controls and
+`navigation.remaining_read_command` points to the rest. The page's
+`read_instruction` directs the reader to that command even when the opening
+reports EOF. Follow it and its cursor before work. Both selections pin the same
+immutable capture.
+`navigation.first_read_command` replays the opening. Use
+`navigation.recovery.command` for other fields. If the response is lost, use the
+original digest-bound capture in the wake prompt. Recovery reuses the saved
+decision and its original receipt.
+
+The native `quota should-run` navigation can link two reads when a ready
+decision's write scope pushes its controls past the serialized first page
+budget. When those controls fit, the ordinary reader keeps its cursor.
+Read `first_read_command` for the decision, stop conditions and required reads.
+If `remaining_read_command` is present,
+follow it and its cursor before work, even when the opening reports EOF. It
+starts with the complete current write scope and uses the same capture.
+The remainder can refer to other fully observed, unchanged fields. If the
+observation is lost, its same-capture fallback restores the full remainder.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
-取得首屏，已知字段可改用多个 `--select`。在工具输出预算内转发完整结果并阅读顶层
-`content`，`eof` 为 false 时按顶层 `next_command` 续读。`navigation.first_read_command`
-用于补读缺失的首读上下文，其他字段沿 `navigation.recovery.command` 读取。工具预算较小时可
-降低 `--max-page-output-bytes`。结果丢失时，用唤醒正文中的原文件及其摘要恢复，复用原决策和回执。
+取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
+已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
+64,000。字节数不能保证模型实际收到的 token 数或历史保留。附带页及续读也可用
+`--page-bytes` 限制正文的 UTF-8 字节数，沿用 `context-read` 的窗口规则。
+输出预算仍约束整个序列化响应。
+
+阅读顶层 `content`，按 `next_command` 续读到当前选区的 `eof`。首读内容需要分页且决策
+和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
+`navigation.remaining_read_command`。即使首屏已到 EOF，页级 `read_instruction` 仍指向
+这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
+`navigation.first_read_command` 可重读首屏，其他字段沿
+`navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+
+原生 `quota should-run` 的已就绪决策中，如果写入范围让控制信息超出序列化后的首页
+预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
+先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
+`remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
+续读从完整的当前写入范围开始，两段绑定同一份捕获。
+续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
@@ -331,9 +386,11 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
-已有的有界 `unfinished_delegations` 投影和 `read_complete` 标记也直接呈现；采纳和
-回传入队不等于完成。待对端结果、计数、遗漏和不可用观测保留原来源语义。
-完整请求按需读取，评估、执行或回传前仍须读其全文；首读不消费结果，也不授予权限。
+首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
+工作 Turn 若有完整的大型委派摘要，且必读列表中有同一条管家收件箱命令，首读保留
+收发请求计数、扫描状态和必读命令，逐条记录及其说明由必做的收件箱读取交付。原记录仍可从
+同一捕获回读。采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，
+并沿已有范围约束和消费入口办理。
 
 既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
 Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
@@ -391,6 +448,32 @@ returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
 bytes before work can continue.
+The private native journal reserves automatic preparation before claiming a
+bound capture and records the verified ready capture before projecting it. If
+readiness or hook delivery is interrupted, the hook repeatably surfaces
+readback for the original claim receipt, current lease and any verified ready
+capture without repeating the claim or guard. A Hook response alone does not
+prove delivery. For this session the repeat hint is suppressed after a tool
+read is verified against the recorded ready capture.
+Follow the captured readiness check for the same Todo and Turn once the active
+lease matches. An authorized retry of the same bound capture reuses its
+managed claim operation, and the authority owner checks the original lease on
+replay. The native session keeps the latest eligible live guard digest
+separately from the capture. Presenting the exact saved decision preserves
+that binding. Older captures and copies with different bytes remain readable.
+Preserve any original claim receipt and use `quota should-run` with the same
+Goal, Agent, Todo and Turn and a fresh capture if preparation is still
+required. A retired lease requires a fresh eligible preparation capture.
+
+中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
+ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
+及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
+观察到针对原 ready capture 的已验证工具读取后，同会话才停止重复提示。活动租约匹配后，
+沿同一 Todo 与 Turn 完成就绪检查。对同一绑定 capture 的授权重试复用原受管领取操作，
+由权威 owner 验证原租约。原生会话独立保存最新合格准入的摘要，重新展示逐字节一致的
+快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
+Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
+结果准备。已退役的租约需要新的合格 capture。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
@@ -724,6 +807,8 @@ complete native input's actually included sections. Digests remain in the journa
 they are not repeated in model-facing index rows. A list, partial page, EOF without
 earlier coverage, failed/damaged output, subagent hook or unrelated capture cannot
 acknowledge a section. Selected reads never establish a full retained-input baseline.
+The native hook still verifies each page's bytes. It skips computing section
+digests when the terminal range is absent from both the batch and the journal.
 Changed content remains unread; compaction or a different Goal/Agent/scope retires
 the old epoch's observations. Stateless hosts make no such observation claim and
 keep the complete current source available. These observations do not establish
@@ -1044,7 +1129,9 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 私有原生 journal 的 `consumed_pointers` 与 `confirmed_read_sections` 只记录经过字节核对、
 连续完整交付的选读视图，或完整原生输入中实际包含的部分；摘要留在 journal，不反复展示给模型。
 目录、部分页、仅 EOF、失败／篡改输出、子 Agent hook、无关捕获都不构成读取确认；选读不建立全量
-模型保留基线。内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
+模型保留基线。
+原生 hook 仍逐页核对字节；当本批和 journal 都没有末尾范围时，跳过正文字段的摘要计算。
+内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
 无状态宿主不声称观测确认，完整当前来源始终可达；这些记录不证明理解、后续保留、执行权限或计费下降。
 
 受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
@@ -1160,6 +1247,10 @@ profile. Its short filename is only a locator, never a truncated integrity check
 permission or freshness claim. Missing, malformed, public or symlinked reader
 documents and capture/selection digest mismatches fail closed without admission. Selection reads may publish a derived
 private reader document beside the capture; they do not write Goal state.
+For new pinned value selections, the private reference can retain the selector's
+resolved addresses. The reader and native observation reuse those addresses
+against the verified source, then check the rendered selection digest. Older
+references and new discovery requests use the existing selector.
 Compact selected pages use `context_capture_selection_page_v1`, with a reader
 reference and byte cursors instead of repeated hashes or pointer vectors. They
 are never full-input observations. Explicit file/hash readers and full-page
@@ -1174,6 +1265,8 @@ the compact navigation cannot fit; no navigation or source is truncated.
 引用缺失、格式错误、公开可读、为符号链接或摘要不符时拒绝读取，不重新 admission。选读可在
 捕获旁生成派生私有引用，不修改 Goal 状态。精简选读页返回引用及字节游标，使用
 独立 schema，不能作为完整输入证明；原显式文件/摘要接口及完整页证明保持兼容。
+新生成的值选读引用可保存选择器已解析的地址。读页和原生观察使用校验过的原捕获
+按地址取值，再校验渲染后的选读摘要。旧引用和新字段发现继续使用现有选择器。
 导航引用同时保存完整机器元数据；极小输出预算保留原显式摘要引用，不截断正文或导航。
 
 `quota context-read --select /path --select /another/path` reads an explicit

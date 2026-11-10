@@ -105,6 +105,8 @@ def test_committed_progress_before_wait_recovers_only_original_spend(
     )
 
     def run(*args: str) -> tuple[int, dict]:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         with monkeypatch.context() as context:
             context.chdir(workspace)
             rc = cli_main(

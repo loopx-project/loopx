@@ -9,6 +9,7 @@ import shlex
 import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_codex_context_lifecycle import setup, project, deliver, read_pages
@@ -464,22 +465,38 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
             "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
             "--operation-id", f"original-outcome-{i}", "--execute")
         assert code == 0, refined
+    unrelated_source = {"ref": "message:archive", "summary": ("Historical material. " * 16).strip()}
+    unrelated = {**original, "outcome_id": "archive", "todo_ids": [],
+        "source": unrelated_source}
+    document.write_text(json.dumps(unrelated))
+    code, refined = cli("refine", "--agent-id", "agent-a", "--document", str(document),
+        "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
+        "--operation-id", "unrelated-outcome", "--execute")
+    assert code == 0, refined
     before = cli("inspect")[1]
     lifecycle = tmp_path / "native"
     lifecycle.mkdir(mode=0o700)
     (tmp_path / "captures").mkdir(mode=0o700)
     setup(lifecycle, monkeypatch)
-    code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+    # Use the raw CLI response here. The acceptance fixture's policy reader
+    # unwraps the navigation before returning the authoritative document.
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(tmp_path / "captures"),
-        "--turn-instance-id", "original-turn")
+        "--turn-instance-id", "original-turn", registry_path=workspace.parent / "registry.json",
+        runtime_root=workspace.parent / "runtime")
     assert code == 0, {key: packet.get(key) for key in ("error", "error_code", "error_detail", "reason", "reason_code")}
+    first_read = shlex.split(packet["first_read_command"])
+    assert int(first_read[first_read.index("--max-page-output-bytes") + 1]) == 12000
+    bulk_read = shlex.split(packet["recovery"]["command"])
+    assert int(bulk_read[bulk_read.index("--max-page-output-bytes") + 1]) == 64000
     recovery = context._state(lifecycle)["recovery"]
     assert Path(recovery["path"]).name == "required-context.json"
     required = json.loads(Path(recovery["path"]).read_bytes())
     source = next(row for row in required["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if row["source"] == "goal_acceptance")
-    shown = source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    outcomes = source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    shown = next(outcome for outcome in outcomes if outcome["id"] == "export")
     assert [row["description"] for row in shown["requirements"]] == [row["description"] for row in original["requirements"]]
     assert "sources" not in shown and "on demand" in source["reason"]
     details = required["context_details"]
@@ -489,5 +506,24 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     assert code == 0 and page["eof"], page
     recovered = json.loads(page["content"])["selections"][0]["value"]
     assert recovered == sources
+    code, initial = run("quota", "context-read", "--capture-file", recovery["path"],
+        "--capture-sha256", recovery["sha256"], "--initial-read",
+        "--page-bytes", "64000", "--max-page-output-bytes", "64000")
+    assert code == 0 and initial["eof"], initial.get("reason")
+    selections = {row["pointer"]: row["value"] for row in json.loads(initial["content"])["selections"]}
+    shown_address = shown["supporting_material_pointer"]
+    assert selections.get(shown_address) == shown or selections.get(shown_address + "/id") == "export"
+    id_address, = (address for address, value in selections.items() if address.endswith("/id") and value == "archive")
+    original_address = id_address.removesuffix("/id")
+    alias_address = original_address + "/supporting_material_pointer"
+    assert alias_address not in selections
+    assert "remove /id" in selections["/context_details/instruction"]
+    archived = next(outcome for outcome in outcomes if outcome["id"] == "archive")
+    assert original_address == archived["supporting_material_pointer"]
+    code, evidence = run("quota", "context-read", "--capture-file", details["path"],
+        "--capture-sha256", details["sha256"], "--select", original_address + "/sources",
+        "--page-bytes", "16000", "--max-page-output-bytes", "20000")
+    assert code == 0 and evidence["eof"], evidence
+    assert json.loads(evidence["content"])["selections"][0]["value"] == [unrelated_source]
     assert "candidate" not in context._state(lifecycle)
     assert cli("inspect")[1] == before, "presentation must not rewrite canonical acceptance"

@@ -99,7 +99,7 @@ async function readOriginalNativeSnapshot(page, history, capture, language) {
   }
   await missing.getByRole("button", {name: /native-report-1/}).first().click();
   const source = history.locator(".analysis-source");
-  await source.locator(".analysis-error").waitFor();
+  await source.getByRole("alert").waitFor();
   assert.equal(await source.locator("pre").count(), 0, "An uncaptured source is not borrowed from a different snapshot");
   await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
   await progress.locator('[data-native-point="best_valid"] button').click();
@@ -215,9 +215,13 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
       for (const summary of await missingEpisode.locator(".analysis-judgments > details:not([open]) > summary").all()) await summary.click();
       await missingEpisode.getByRole("button", {name: /native-report-1/}).first().click();
       const unavailable = history.locator(".analysis-source");
-      await unavailable.locator(".analysis-error").waitFor();
-      assert.match(await unavailable.locator(".analysis-error").innerText(), /not captured/);
+      const sourceFailure = unavailable.getByRole("alert");
+      await sourceFailure.waitFor();
+      assert.match(await sourceFailure.innerText(), /not captured/);
       assert.equal(await unavailable.locator("pre").count(), 0, "Uncaptured citations do not substitute unrelated evidence");
+      await unavailable.getByRole("button", {
+        name: language === "zh" ? "重试读取原文" : "Retry reading source", exact: true,
+      }).waitFor();
       await unavailable.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
       const citation = capture.analysis_citations[0].response;
       const cited = saved.result.assessments.find(row => row.citations.some(c => c.source_id === citation.source_id
@@ -266,24 +270,40 @@ export const researchRealBenchmarkScenario = {
     const coverageEntries = [];
     coverageEntries.push(...await readUnanalyzedNativeResults(browser, collectCoverage));
     const observations = [];
-    for (const [arm, fixture] of [
-      ["grid-on", "edgebench-grid-context-on-20261103-history.json"],
-      ["grid-off", "edgebench-grid-context-off-20261103-history.json"],
-      ["ad", "edgebench-ad-20261023-history.json"],
-      ["schema", "edgebench-schema-20261025-history.json"],
+    for (const [arm, fixture, entries] of [
+      ["grid-on", "edgebench-grid-context-on-20261103-history.json", 31],
+      ["grid-off", "edgebench-grid-context-off-20261103-history.json", 11],
+      ["ad", "edgebench-ad-20261023-history.json", 254],
+      ["schema", "edgebench-schema-20261025-history.json", 92],
     ]) {
       const path = resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures", fixture);
       const capture = JSON.parse(await readFile(path, "utf8"));
       const owner = await startHistoryOwner(path);
       let page;
       try {
-        page = await browser.newPage({viewport: {width: 1440, height: 900}});
+        page = await browser.newPage({viewport: {width: 1440, height: 900}, timezoneId: "Asia/Shanghai"});
         if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
         await page.addInitScript(() => localStorage.setItem("loopx-pw-locale", "en"));
         await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
         const history = page.locator(".research-history");
         await page.waitForFunction(() => document.querySelector(".research-history")?.getAttribute("aria-busy") === "false");
         assert.match(await history.locator(".research-history-coverage").innerText(), new RegExp(`${capture.events.length} / ${capture.events.length}`));
+        if (arm === "grid-on") {
+          const axis = history.getByRole("group", {name: "Since first record", exact: true});
+          const ticks = axis.locator("time");
+          await page.waitForFunction(() => document.querySelectorAll(".research-axis time").length > 2);
+          assert.equal(await ticks.first().innerText(), "0s");
+          assert.equal(await ticks.last().innerText(), "9h 4m 9s", "Same-day history has a visible elapsed end");
+          assert.equal(await ticks.last().getAttribute("datetime"), "PT32649S");
+          await page.setViewportSize({width: 390, height: 844});
+          await page.waitForFunction(() => document.querySelectorAll(".research-axis time").length === 2);
+          assert.equal(await axis.evaluate(element => {
+            const bounds = element.getBoundingClientRect();
+            const [start, end] = [...element.querySelectorAll("time")].map(tick => tick.getBoundingClientRect());
+            return start.left >= bounds.left - 1 && end.right <= bounds.right + 1 && start.right < end.left;
+          }), true, "Both endpoint labels fit the 390px first screen");
+          await page.setViewportSize({width: 1440, height: 900});
+        }
         assert.equal(await history.locator(".research-history-edges > g > path").count(), 0, "No relation is inferred from matching questions or adjacent times");
         const absentDecisions = history.locator(".research-trail-empty");
         assert.equal(await absentDecisions.evaluate(element => element.open), false, "The real source's missing structured decisions use an on-demand disclosure");
@@ -295,11 +315,11 @@ export const researchRealBenchmarkScenario = {
         await history.getByRole("button", {name: "Search research records", exact: true}).click();
         const records = history.locator(".research-record-search");
         const search = records.getByRole("searchbox", {name: "Search research records"});
-        assert.equal(await records.locator(".research-record-entry").count(), Math.min(50, capture.events.length));
-        while (await records.getByRole("button", {name: /Show more records/}).count()) {
-          await records.getByRole("button", {name: /Show more records/}).click();
+        assert.equal(await records.locator(".research-record-entry").count(), Math.min(50, entries));
+        while (await records.getByRole("button", {name: /Show more entries/}).count()) {
+          await records.getByRole("button", {name: /Show more entries/}).click();
         }
-        assert.equal(await records.locator(".research-record-entry").count(), capture.events.length, "Later real records stay reachable across display pages");
+        assert.equal(await records.locator(".research-record-entry").count(), entries, "Later real entries stay reachable across display pages");
         const received = page.waitForEvent("download");
         await records.getByRole("button", {name: "Download matches (JSON)", exact: true}).click();
         const download = await received;

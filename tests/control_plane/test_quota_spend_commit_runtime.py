@@ -265,7 +265,8 @@ def test_large_spend_preserves_validation_before_effects(tmp_path: Path) -> None
 def test_spend_snapshot_limit_rejects_before_commit(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    # Exercise the existing private-file bound with a bounded fixture allocation.
+    # Cross the inline threshold first so the private snapshot guard is used.
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 1_000_000)
     monkeypatch.setattr(effect_runtime, "MAX_LOCAL_SNAPSHOT_BYTES", 2_100_000)
     preview = _preview(
         before={**_decision(0), "context": "x" * 1_100_000},

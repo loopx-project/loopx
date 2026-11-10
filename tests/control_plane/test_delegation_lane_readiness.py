@@ -111,10 +111,10 @@ def test_busy_handoff_resumes_after_source_completion_without_another_dispatch(s
 from loopx.control_plane.collaboration.peers import read_inbox
 from loopx.capabilities.manager_context.roundtrip import report
 source_id = delegation['source_request_id']
-items = read_inbox(root / 'runtime', root / 'registry.json', envelope['goal_id'], actor)['items']
+items = read_inbox(root / 'runtime', root / 'registry.json', identity['goal_id'], actor)['items']
 assert any(item['request_id'] == source_id for item in items)
-acknowledge(root / 'runtime', envelope['goal_id'], actor, source_id, 'adopt', 'Read original request')
-report(root / 'runtime', envelope['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
+acknowledge(root / 'runtime', identity['goal_id'], actor, source_id, 'adopt', 'Read original request')
+report(root / 'runtime', identity['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
 print(json.dumps(build_result"""))
 
     def dispatch():

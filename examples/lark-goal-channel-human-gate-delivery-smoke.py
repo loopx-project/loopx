@@ -81,6 +81,9 @@ for line in sys.stdin:
     method = request.get("method")
     if method == "initialize":
         result = {}
+    elif method == "config/read":
+        assert request["params"]["includeLayers"] is False
+        result = {"config": {}}
     elif method in ("thread/start", "thread/resume"):
         assert request["params"].get("approvalPolicy") == "never"
         result = {"thread": {"id": "synthetic-notice-thread"}}

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import warnings
 from collections.abc import Mapping, Sequence
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -11,26 +13,50 @@ from ...control_plane.capability_hooks import (
     PostWritebackHookRegistration,
 )
 from ...control_plane.digest_envelope import enveloped_sha256, sha256_envelope
-from ...control_plane.coordination.local_authority import canonical_todo_summary_fields
-from ...control_plane.goals.goal_frontier import (
-    build_goal_frontier_projection_from_summaries,
-)
-from .todo_source import read_report_source_history, read_report_todo_source
-from ...control_plane.todos.quota_summary import summarize_user_todos_for_quota
-from ...control_plane.todos.todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from ...history import collect_history, load_index_snapshot, load_registry
 from ...paths import resolve_runtime_root
 from ...registry import registry_goals
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
-from .stage_completion import STAGE_COMPLETION_RECEIPT_SCHEMA
-from .stage_completion import derive_periodic_report_stage_completion_from_runs
-from .presets import build_periodic_report_preset_activation
-from .project_progress_snapshot import build_project_progress_snapshot_from_fields
-from .incremental import read_periodic_report_goal_publication_cursors
 from .machine_defaults import resolve_goal_periodic_report_subscription
 from .machine_store import read_periodic_report_machine_defaults
-from .triggers import build_periodic_report_trigger_decision
-from .request_action import REQUEST_ACTION_SCHEMA
+
+
+# Subscription validation stays on the composition path. Construction and
+# source providers are loaded only by their actual caller, with the original
+# module-level aliases retained for compatibility and caller patching.
+_LAZY_EXPORTS = {
+    "canonical_todo_summary_fields": "loopx.control_plane.coordination.local_authority",
+    "build_goal_frontier_projection_from_summaries": "loopx.control_plane.goals.goal_frontier",
+    "read_report_source_history": "loopx.capabilities.periodic_report.todo_source",
+    "read_report_todo_source": "loopx.capabilities.periodic_report.todo_source",
+    "summarize_user_todos_for_quota": "loopx.control_plane.todos.quota_summary",
+    "MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL": "loopx.control_plane.todos.todo_index",
+    "load_rollout_events": "loopx.rollout_event_log",
+    "rollout_event_log_path": "loopx.rollout_event_log",
+    "STAGE_COMPLETION_RECEIPT_SCHEMA": "loopx.capabilities.periodic_report.stage_completion",
+    "derive_periodic_report_stage_completion_from_runs": "loopx.capabilities.periodic_report.stage_completion",
+    "build_periodic_report_preset_activation": "loopx.capabilities.periodic_report.presets",
+    "build_project_progress_snapshot_from_fields": "loopx.capabilities.periodic_report.project_progress_snapshot",
+    "read_periodic_report_goal_publication_cursors": "loopx.capabilities.periodic_report.incremental",
+    "build_periodic_report_trigger_decision": "loopx.capabilities.periodic_report.triggers",
+    "REQUEST_ACTION_SCHEMA": "loopx.capabilities.periodic_report.request_action",
+}
+
+
+def __getattr__(name: str) -> Any:
+    owner = _LAZY_EXPORTS.get(name)
+    if owner is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(owner), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
+def _report_export(name: str) -> Any:
+    return getattr(sys.modules[__name__], name)
 
 
 PERIODIC_REPORT_POST_WRITEBACK_HOOK_ID = "periodic_report.runtime_trigger"
@@ -118,7 +144,7 @@ def periodic_report_post_writeback_hooks_for_goal(
     preset = str(subscription.get("profile_preset") or "").strip()
     if not preset:
         return ()
-    activation = build_periodic_report_preset_activation(preset)
+    activation = _report_export("build_periodic_report_preset_activation")(preset)
     if activation.get("active") is not True:
         return ()
     profile = activation.get("profile")
@@ -159,9 +185,9 @@ def _frontier_projection(
         if isinstance(todos.get("agent_todos"), Mapping)
         else {}
     )
-    user_summary = summarize_user_todos_for_quota(raw_user_summary) or {}
-    agent_summary = summarize_user_todos_for_quota(raw_agent_summary) or {}
-    projection = build_goal_frontier_projection_from_summaries(
+    user_summary = _report_export("summarize_user_todos_for_quota")(raw_user_summary) or {}
+    agent_summary = _report_export("summarize_user_todos_for_quota")(raw_agent_summary) or {}
+    projection = _report_export("build_goal_frontier_projection_from_summaries")(
         goal_id=goal_id,
         agent_id=agent_id,
         user_todo_summary=user_summary,
@@ -210,21 +236,21 @@ def build_periodic_report_post_writeback_projection(
         if source_todos.get("status") != "loaded":
             raise ValueError("original canonical Todo source is unavailable")
         source_todos["_todo_fields"] = restore_todo_field_evaluations(readback)
-        source_runs = read_report_source_history(
+        source_runs = _report_export("read_report_source_history")(
             runtime_root=runtime_root, goal_id=goal_id, run=payload,
         )
     if (source_todos is None) != (source_runs is None):
         raise ValueError("a committed source requires both Todo and run history")
-    events = [] if source_todos is not None else load_rollout_events(
-        rollout_event_log_path(runtime_root, goal_id),
-        limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
+    events = [] if source_todos is not None else _report_export("load_rollout_events")(
+        _report_export("rollout_event_log_path")(runtime_root, goal_id),
+        limit=_report_export("MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL"),
     )
     state = payload.get("state")
     state_path = (
         state.get("path") if isinstance(state, Mapping) else None
     ) or payload.get("state_file")
     if source_todos is not None:
-        fields = source_todos.get("_todo_fields") or canonical_todo_summary_fields(
+        fields = source_todos.get("_todo_fields") or _report_export("canonical_todo_summary_fields")(
             source_todos["todos"],
             rollout_events=events,
             available_capabilities=available_capabilities,
@@ -232,7 +258,7 @@ def build_periodic_report_post_writeback_projection(
             goal_acceptance_work_guards=source_todos.get("goal_acceptance_work_guards"),
         )
     else:
-        fields, _ = read_report_todo_source(
+        fields, _ = _report_export("read_report_todo_source")(
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
@@ -265,7 +291,7 @@ def build_periodic_report_post_writeback_projection(
     # Terminal settlement follows the current history. A successor milestone is
     # only claimed below, from the exact durable refresh that carries its
     # accepted ACK and selected Vision.
-    receipt = derive_periodic_report_stage_completion_from_runs(
+    receipt = _report_export("derive_periodic_report_stage_completion_from_runs")(
         latest_runs=latest_runs,
         agent_id=normalized_agent_id,
         goal_frontier_projection=projection,
@@ -314,7 +340,7 @@ def build_periodic_report_post_writeback_projection(
         ):
             return {}
         ack["agent_id"] = attributed_agent_id
-        receipt = derive_periodic_report_stage_completion_from_runs(
+        receipt = _report_export("derive_periodic_report_stage_completion_from_runs")(
             latest_runs=source_refresh_runs,
             agent_id=normalized_agent_id,
             goal_frontier_projection=projection,
@@ -330,14 +356,14 @@ def build_periodic_report_post_writeback_projection(
     if receipt is None:
         return {}
     result: dict[str, object] = {"stage_completion": receipt}
-    goal_cursors = read_periodic_report_goal_publication_cursors(
+    goal_cursors = _report_export("read_periodic_report_goal_publication_cursors")(
         runtime_root=runtime_root,
         goal_id=goal_id,
     )
     publication_cursor = next(
         (c for c in goal_cursors if c["agent_id"] == normalized_agent_id), None
     )
-    project_progress = build_project_progress_snapshot_from_fields(
+    project_progress = _report_export("build_project_progress_snapshot_from_fields")(
         fields=fields,
         goal_id=goal_id,
         agent_id=normalized_agent_id,
@@ -376,7 +402,7 @@ def periodic_report_post_writeback_hook(
         )
         if (
             not isinstance(stage, Mapping)
-            or stage.get("schema_version") != STAGE_COMPLETION_RECEIPT_SCHEMA
+            or stage.get("schema_version") != _report_export("STAGE_COMPLETION_RECEIPT_SCHEMA")
             or not isinstance(stage.get("stage_identity"), str)
             or not stage["stage_identity"]
         ):
@@ -479,7 +505,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
             "idempotency_key"
         ) != "periodic-report:" + window["window_id"]:
             raise ValueError("cadence intent identity does not match its window")
-        return build_periodic_report_trigger_decision({
+        return _report_export("build_periodic_report_trigger_decision")({
             "schema_version": "periodic_report_trigger_request_v0",
             "evaluated_at": window["due_at"],
             "profile": {"profile_id": profile_ref.get("profile_id"),
@@ -508,7 +534,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
         }
         if (
             set(report_request) != expected
-            or report_request.get("schema_version") != REQUEST_ACTION_SCHEMA
+            or report_request.get("schema_version") != _report_export("REQUEST_ACTION_SCHEMA")
             or report_request.get("requester_kind") != "user"
             or report_request.get("addressing_source")
             not in {"provider_mention", "verified_reply"}
@@ -538,7 +564,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
                 separators=(",", ":"),
             ).encode()
         )
-        return build_periodic_report_trigger_decision(
+        return _report_export("build_periodic_report_trigger_decision")(
             {
                 "schema_version": "periodic_report_trigger_request_v0",
                 "evaluated_at": requested_at,
@@ -570,7 +596,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
         "completed_at",
     )
     if (
-        stage.get("schema_version") != STAGE_COMPLETION_RECEIPT_SCHEMA
+        stage.get("schema_version") != _report_export("STAGE_COMPLETION_RECEIPT_SCHEMA")
         or stage.get("acceptance") != "validated"
         or stage.get("outcome_checkpoint_satisfied") is not True
         or any(
@@ -618,7 +644,7 @@ def evaluate_periodic_report_trigger_evaluation_intent(
     }
     if isinstance(payload.get("last_report"), Mapping):
         request["last_report"] = dict(payload["last_report"])
-    return build_periodic_report_trigger_decision(request)
+    return _report_export("build_periodic_report_trigger_decision")(request)
 
 
 __all__ = [

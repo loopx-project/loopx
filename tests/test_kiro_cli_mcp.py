@@ -226,6 +226,8 @@ def test_completion_through_the_kiro_server_settles_once_under_its_profile(
         registry,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -263,7 +265,7 @@ def test_completion_requires_a_connected_delivery_frontier(tmp_path: Path) -> No
     assert result["settlement"]["failed_stage"] == "guard"
     assert state_file.read_bytes() == before
     code, status = _run_cli(
-        registry, "quota", "should-run", "--goal-id", GOAL_ID,
+        registry, "quota", "should-run", "--context-delivery", "off", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--runtime-profile", CONFIG.runtime_profile,
     )
     assert code == 0 and status["quota"]["spent_slots"] == 0

@@ -169,6 +169,12 @@ _REQUEST_RUNTIME_REVISION: ContextVar[_RequestRuntimeRevision | None] = (
 )
 
 
+def todo_projection_request_identity() -> object | None:
+    """Bind a source codec to its current logical request, never to a TTL."""
+    state = _REQUEST_RUNTIME_REVISION.get()
+    return state if state is not None and not state._closed else None
+
+
 class EffectRuntimeRemoteError(RuntimeError):
     """A typed exception returned by the managed TypeScript runtime."""
 
@@ -324,10 +330,11 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
-        if relative_directory == ".":
-            relative_directory = ""
+        relative_prefix = (
+            "" if relative_directory == "." else relative_directory.replace(os.sep, "/") + "/"
+        )
         for filename in sorted(filenames):
-            relative = Path(relative_directory, filename).as_posix()
+            relative = relative_prefix + filename
             dot = filename.rfind(".")
             if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
                     and relative not in _RUNTIME_SOURCE_PATHS):
@@ -1601,6 +1608,17 @@ def effect_runtime_result(
     large_local_snapshot: bool = False,
 ) -> Any:
     state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
+    def validate_result(result: Any) -> Any:
+        # A caller must explicitly request a bundle. A request scope or a small
+        # source does not establish that it will consume additional views.
+        if set(params) == {"summary_display_views"} and (not isinstance(result, dict) or any(
+            not isinstance(result.get(view), list)
+            or any(not isinstance(row, dict) for row in result[view])
+            for view in ("summary", "planning", "terminal")
+        )):
+            raise RuntimeError("invalid TypeScript Todo source views")
+        return result
+
     key = None
     if state is not None:
         # Preserve JSON order and scalar types, including bool/int, signed zero
@@ -1613,7 +1631,7 @@ def effect_runtime_result(
         if key is not None:
             prior = state.todo_context_result(key)
             if prior is not None:
-                return json.loads(prior)  # A caller cannot mutate another view.
+                return validate_result(json.loads(prior))  # A caller cannot mutate another view.
     result = effect_runtime_request(
         method,
         params,
@@ -1621,6 +1639,7 @@ def effect_runtime_result(
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
+    validate_result(result)
     if state is not None and key is not None and isinstance(result, dict):
         try:
             encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,

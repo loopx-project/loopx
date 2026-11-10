@@ -119,9 +119,11 @@ def test_turn_milestone_intent_is_replay_stable(
     author_candidate = (
         "import json, shlex, subprocess\n"
         f"candidate = {candidate!r}\n"
-        "def authored_candidate(authority):\n"
+        "def authored_candidate(request):\n"
+        "    assert request['schema_version'] == 'loopx_turn_host_request_v1'\n"
+        "    packet = request['detail_ref']['replan_action_packet']\n"
         "    review = json.loads(subprocess.check_output(\n"
-        "        shlex.split(authority['replan_action_packet']['review']), text=True))\n"
+        "        shlex.split(packet['review']), text=True))\n"
         "    writeback = json.loads(subprocess.check_output(\n"
         "        shlex.split(review['next']['writeback']), text=True))\n"
         "    vision = json.loads(candidate['agent_vision_json'])\n"
@@ -137,28 +139,27 @@ def test_turn_milestone_intent_is_replay_stable(
             "reasoning_effort, max_tokens, cordis, runtime_bin, request_timeout_seconds):\n"
             "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "    Path(workspace, 'validated-artifact.txt').write_text('validated')\n"
-            "    authority = json.loads(prompt.split('Turn authority JSON:\\n', 1)[1].split('\\n\\nWhen finished', 1)[0])\n"
-            "    return json.dumps(authored_candidate(authority))\n",
+            "    request, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
+            "    return json.dumps(authored_candidate(request))\n",
             encoding="utf-8",
         )
     else:
         host_runner.write_text(
             author_candidate + "import pathlib, sys\n"
-            "from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority\n"
             "request = json.load(sys.stdin)\n"
             "counter = pathlib.Path('host-count.txt')\n"
             "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "pathlib.Path('validated-artifact.txt').write_text('validated')\n"
             "json.dump({'schema_version':'loopx_turn_result_v0','turn_key':request['turn_key'],"
             "'completed_phases':['host_execute','typed_result'],"
-            "**authored_candidate(extract_turn_authority(request))},sys.stdout)\n",
+            "**authored_candidate(request)},sys.stdout)\n",
             encoding="utf-8",
         )
     validator = 'import pathlib; raise SystemExit(0 if pathlib.Path("validated-artifact.txt").read_text() == "validated" else 7)'
     host_args = (
         ["--host", "dsh", "--dsh-runner", str(host_runner)]
         if host_kind == "dsh"
-        else ["--host", "generic-cli", "--host-adapter-command-json", json.dumps([sys.executable, str(host_runner)])]
+        else ["--host", "generic-cli", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-adapter-command-json", json.dumps([sys.executable, str(host_runner)])]
     )
     args = [
         *base, "turn", "run-once", *host_args, "--goal-id", GOAL_ID,

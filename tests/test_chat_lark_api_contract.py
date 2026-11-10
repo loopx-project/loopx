@@ -323,7 +323,7 @@ def test_runtime_snapshot_reuses_private_goal_channel_bindings(
     )
 
 
-def test_chat_server_closes_lark_goal_topic_runtime(monkeypatch: Any) -> None:
+def test_chat_server_closes_lark_goal_topic_runtime() -> None:
     closed: list[str] = []
 
     class Closer:
@@ -333,14 +333,13 @@ def test_chat_server_closes_lark_goal_topic_runtime(monkeypatch: Any) -> None:
         def close(self) -> None:
             closed.append(self.name)
 
-    monkeypatch.setattr(ThreadingHTTPServer, "server_close", lambda _self: None)
-    server = object.__new__(ChatHTTPServer)
+    server = ChatHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler, bind_and_activate=False)
     server.lark_app_setup_manager = Closer("setup")  # type: ignore[assignment]
     server.lark_goal_topic_runtime = Closer("topics")  # type: ignore[attr-defined]
     server.runtime_controller = Closer("chat")  # type: ignore[assignment]
     server.server_close()
 
-    assert closed == ["setup", "topics", "chat"]
+    assert closed == ["topics", "setup", "chat"]
 
 
 def test_lark_apps_reports_safe_missing_cli_diagnostic() -> None:

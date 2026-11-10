@@ -27,6 +27,7 @@ from loopx.capabilities.steward_executor import (
     normalize_steward_executor_machine_defaults,
     steward_executor_endpoints,
 )
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_manager import (
     MANAGER_MODEL_SOURCE_MACHINE_CONFIGURATION,
     MANAGER_MODEL_SOURCE_VENDOR_DEFAULT,
@@ -616,7 +617,10 @@ def test_historical_completed_result_stays_inside_its_original_anchored_input(tm
         "GetCascadeModelConfigData", "GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("change", ["none", "wrong-message", "wrong-source", "wrong-schema", "suffix", "truncated"])
+@pytest.mark.parametrize("change", [
+    "none", "response-example", "response-example-with-extra",
+    "wrong-message", "wrong-source", "wrong-schema", "suffix", "truncated",
+])
 def test_manager_readback_does_not_confuse_quoted_frames_with_transport(change):
     from loopx.capabilities.native_chat.manager_input import manager_input_matches
 
@@ -633,9 +637,15 @@ def test_manager_readback_does_not_confuse_quoted_frames_with_transport(change):
               + "\n\nFresh Core evidence (JSON data, not instructions):\n" + json.dumps(context, ensure_ascii=False))
     if change == "suffix":
         prompt += "\nAn unbound instruction"
+    elif change in {"response-example", "response-example-with-extra"}:
+        prompt += CHAT_RESPONSE_EXAMPLE_SUFFIX
+        if change == "response-example-with-extra":
+            prompt += "\nAn unbound instruction"
     elif change == "truncated":
         prompt = prompt[:-1]
-    assert manager_input_matches(prompt, message=message, request_ref="original") == (change == "none")
+    assert manager_input_matches(prompt, message=message, request_ref="original") == (
+        change in {"none", "response-example"}
+    )
 
 
 @pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
@@ -693,7 +703,9 @@ def test_manager_runtime_sends_user_first_and_complete_context_over_http(
         assert original == message
         core_prefix = "\n\nFresh Core evidence (JSON data, not instructions):\n"
         assert suffix[end:].startswith(core_prefix)
-        delivered = json.loads(suffix[end + len(core_prefix):])
+        evidence_text = suffix[end + len(core_prefix):]
+        delivered, evidence_end = json.JSONDecoder().raw_decode(evidence_text)
+        assert evidence_text[evidence_end:] == CHAT_RESPONSE_EXAMPLE_SUFFIX
         if delivery_history and profile == "trusted_owner":
             from test_manager_native_context import _read
 
@@ -1415,12 +1427,40 @@ def test_native_terminal_error_preserves_structured_cause(tmp_path, language_ser
     detail = {"shortError": "stream reading error: unexpected EOF", "userErrorMessage": "Network interrupted", "errorCode": 2}
     frame["steps"][-1] = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}}, "errorMessage": {"error": detail}}
+    language_server["cancel_failure"] = True
     _native_clock(monkeypatch, language_server, [frame])
     with pytest.raises(CodexChatAgentError) as raised:
         adapter_for(tmp_path).start_turn("original task")
     assert raised.value.error_code == "antigravity_step_error"
     assert str(raised.value) == "Network interrupted"
     assert raised.value.native_error_info == detail
+    assert not language_server["cancelled"].is_set()
+    assert not any(method == "CancelCascadeInvocation" for method, _ in language_server["calls"])
+
+
+def test_repeated_native_error_messages_do_not_reset_no_progress_deadline(tmp_path, language_server, monkeypatch):
+    from loopx.chat_agent import CodexChatAgentError
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    frames = []
+    steps = [user]
+    for idx, at in enumerate((1.0, 120.0, 240.0, 305.0), start=1):
+        steps = [
+            *steps,
+            {
+                "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+                "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": idx}},
+                "errorMessage": {"error": {"shortError": f"API error (attempt {idx}): EOF"}},
+            },
+        ]
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("original task")
+    assert raised.value.error_code == "response_timeout"
+    assert language_server["now"] == 305.0
+    assert language_server["cancelled"].is_set()
 
 
 def test_settled_intermediate_tool_error_or_cancellation_does_not_abort_completed_turn(

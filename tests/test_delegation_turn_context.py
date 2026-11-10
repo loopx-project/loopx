@@ -225,6 +225,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
             required_reads = values["/interaction_contract/agent_channel/required_reads"]
         else:
+            assert packet["schema_version"] == "loopx_turn_envelope_v0"
             source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
             content, required_reads = source["content"], packet["required_reads"]
             assert packet["work_context"]["complete"] is True

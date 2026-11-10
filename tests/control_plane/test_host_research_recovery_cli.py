@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.cli import main as cli_main
 from loopx.cli_commands import turn_run_once as turn_command
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
@@ -33,7 +34,7 @@ def _cli(registry, runtime, *args, code=0):
     completed = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json", *args],
         cwd=ROOT, capture_output=True, text=True, timeout=90)
-    result = json.loads(completed.stdout)
+    result = read_cli_policy_payload(completed.stdout, returncode=completed.returncode)
     assert completed.returncode == code, json.dumps(result, ensure_ascii=False)
     return result
 
@@ -77,11 +78,12 @@ _REVIEW_HOST = r'''import json,sys
 from hashlib import sha256
 from pathlib import Path
 import subprocess
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 request=json.loads(Path(sys.argv[1]).read_text())
 def cli(*args):
     result=subprocess.run([sys.executable,"-m","loopx.cli","--registry",request["registry"],
         "--runtime-root",request["runtime"],"--format","json",*args],capture_output=True,text=True,timeout=60)
-    payload=json.loads(result.stdout)
+    payload=read_cli_policy_payload(result.stdout,returncode=result.returncode)
     if result.returncode:
         Path(request["result"]).write_text(json.dumps({"failed_command":args,"result":payload}))
     assert result.returncode==0,payload

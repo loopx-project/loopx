@@ -30,7 +30,12 @@ def todo_read_source(item: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         else:
             result = str(value or "")
         if isinstance(value, (tuple, set, float)) or not isinstance(value, (dict, list, str, bool, int, type(None))):
-            facts.append([path, str(value or ""), repr(value)])
+            scalar_integer: str | None = None
+            try:
+                scalar_integer = str(int(cast(Any, value)))
+            except (TypeError, ValueError, OverflowError):
+                pass
+            facts.append([path, str(value or ""), repr(value), scalar_integer])
         return result
 
     record = encode(item, [])

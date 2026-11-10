@@ -129,6 +129,7 @@ def test_real_turn_plan_cli_warns_without_state_writes(tmp_path, enabled):
         "json",
         "turn",
         "plan",
+        "--include-transaction-detail",
         "--goal-id",
         "loopx-turn-fixture",
         "--agent-id",
@@ -139,7 +140,9 @@ def test_real_turn_plan_cli_warns_without_state_writes(tmp_path, enabled):
     plan = json.loads(result.stdout)
     assert plan["ok"] is True
     assert plan["route"]["would_invoke_host"] is True
-    envelope = plan["turn_envelope"]
+    # The complete plan is the current source. Compatibility callers can
+    # still measure the versioned envelope from that exact decision.
+    envelope = build_turn_envelope(plan["work_contract"])
     assert bool(envelope.get("agent_context")) is enabled
     assert envelope["compaction"]["warning"]["code"] == "turn_envelope_budget_exceeded"
     assert envelope["compaction"]["envelope_utf8_bytes"] == len(_wire(envelope))
@@ -172,7 +175,7 @@ def test_installed_skill_defers_delegation_policy_to_enabled_provider(tmp_path):
     )
     contribution = enabled["contributions"][0]
     assert any(
-        "max_children is a configured ceiling" in item
+        "within max_children" in item
         for item in contribution["guidance"]
     )
     assert contribution["facts"]["capacity_contract"] == {

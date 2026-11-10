@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import socket
 import stat
 import subprocess
@@ -14,20 +13,33 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
-    context_selection_binding, write_initial_context_read_reference,
-    context_selection_view as _context_selection_view,
-    validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
+    write_initial_context_read_reference,
+    validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    read_context_read_reference, write_context_read_reference, private_capture_uid, read_turn_observation_text,
+    write_context_read_reference, private_capture_uid, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
+    NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    native_context_page_budget,
+)
+from .quota_context_reader import (
+    budgeted_ready_opening,
+    _capture_selection_transport_template,
+    bind_capture_selection_transport as bind_capture_selection_transport,
+    _saved_context_read_page,
+    _context_page_output_enabled,
+    _capture_read_reference,
+    _native_context_read_bytes,
+    _native_context_reference,
+    _native_output_bytes,
+    _validate_context_page_window,
+    model_context_reference,
+    read_context_capture,
 )
 
 
@@ -40,470 +52,13 @@ def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
         raise QuotaCommandValidationError(str(exc)) from exc
 
 
-def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int,
-                  output_limit: int | None, instruction: bool,
-                  presentation: dict[str, Any] | None = None,
-                  next_page_bytes: int | None = None,
-                  next_page_output_bytes: int | None = None,
-                  select: list[str] | None = None,
-                  selection_sha256: str | None = None,
-                  list_fields: bool = False,
-                  list_depth: int | None = None,
-                  initial_read: bool = False,
-                  reference_file: Path | None = None,
-                  reader_argv: list[str] | None = None) -> dict[str, Any]:
-    end = min(offset + size, len(raw))
-    while end < len(raw) and raw[end] & 0xC0 == 0x80:
-        end -= 1
-    content = raw[offset:end].decode("utf-8")
-
-    def page(text: str) -> dict[str, Any]:
-        cursor = offset + len(text.encode("utf-8"))
-        result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
-            "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
-            "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
-        if select is not None:
-            result["selection_sha256"] = selection_sha256
-            # The new initial view already names addresses in content; its
-            # short continuation pins that view's digest. Existing explicit
-            # selectors retain their original metadata and continuation.
-            if not initial_read:
-                result["selected_pointers"] = select
-            if list_fields:
-                result["list_fields"] = True
-            result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
-                "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
-                "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
-        elif instruction or (offset == 0 and output_limit is not None):
-            # A digest-bound native reference may be read in a fresh shell
-            # without its session lookup. Deliver paging obligations with the
-            # first bounded page rather than repeating them in file metadata.
-            # Historical unbounded readers retain their exact wire shape.
-            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
-        if reference_file is not None and select is not None:
-            # Selected pages have never been full-input receipts. Give this
-            # compact transport a distinct schema so old observers cannot
-            # mistake an omitted digest for a full capture observation.
-            result["schema_version"] = "context_capture_selection_page_v1"
-            for key in ("sha256", "selection_sha256", "selected_pointers"):
-                result.pop(key, None)
-            result["reference_file"] = str(reference_file)
-            result["read_instruction"] = ("Selected detail only. Follow next_command for contiguous bytes; "
-                "the immutable reference pins both complete digests, which the CLI verifies on every page. "
-                "Offsets and EOF describe only this selected view. "
-                "EOF is not full-context retention, authority or freshness.")
-        if cursor < len(raw):
-            result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
-                max_page_output_bytes=next_page_output_bytes or output_limit,
-                select=None if initial_read or reference_file is not None else select,
-                selection_sha256=selection_sha256 if reference_file is None else None,
-                list_fields=list_fields if reference_file is None else False,
-                list_depth=list_depth if reference_file is None else None,
-                initial_read=initial_read if reference_file is None else False, reference_file=reference_file,
-                reader_argv=reader_argv)
-        return result
-
-    def fits(result: dict[str, Any]) -> bool:
-        # Match cli_runtime.print_payload exactly, including print's newline.
-        return output_limit is None or len(json.dumps(result, ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")) + 1 <= output_limit
-
-    result = page(content)
-    if fits(result):
-        return result
-    # EOF drops next_command: test it above before searching the monotone
-    # non-EOF prefix sizes. Never return a zero-progress continuation.
-    low, high = 1, len(content) - (end == len(raw))
-    best = None
-    while low <= high:
-        middle = (low + high) // 2
-        candidate = page(content[:middle])
-        if fits(candidate):
-            best, low = candidate, middle + 1
-        else:
-            high = middle - 1
-    if best is None:
-        raise ValueError("max-page-output-bytes cannot fit page metadata and one UTF-8 character; increase the limit for this same capture")
-    return best
-
-
-
-
-
-
-
-
-def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
-                         next_page_bytes: int | None = None,
-                         next_page_output_bytes: int | None = None,
-                         reader_argv: list[str] | None = None) -> dict[str, Any]:
-    """Bounded local IO over immutable JSON, not a new context/authority owner.
-
-    Verify the complete byte digest on every page. The cursor addresses bytes
-    in that capture or its separately digest-bound selection, so a replacement
-    cannot silently mix two decisions or detail views.
-    EOF describes this page, never a model's complete-consumption receipt.
-    """
-    try:
-        digest = getattr(args, "capture_sha256", None)
-        value = getattr(args, "capture_file", None)
-        reference_file = getattr(args, "reference_file", None)
-        pinned_selection = None
-        if reference_file:
-            if value or digest or getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None):
-                raise ValueError("reference-file cannot be combined with capture or native session lookup")
-            if args.format != "json":
-                raise ValueError("reference-file requires JSON output")
-            reference_file, reference = read_context_read_reference(reference_file)
-            value, digest = reference["path"], reference["sha256"]
-            pinned_selection = reference.get("selection")
-        offset, size = args.offset, args.page_bytes
-        output_limit = getattr(args, "max_page_output_bytes", None)
-        if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
-                or getattr(args, "format", None) != "json"):
-            raise ValueError("max-page-output-bytes requires JSON output and a positive integer")
-        if size is None:
-            if args.format == "json":
-                if output_limit is None:
-                    output_limit = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
-                size = max(8192, min(NATIVE_CONTEXT_PAGE_BYTES, output_limit))
-            else:
-                size = 4096
-        from ..control_plane.turn_driver.codex_context import codex_context_directory
-
-        context_dir = codex_context_directory(directory=getattr(args, "codex_context_dir", None),
-            root=getattr(args, "codex_context_root", None))
-        if context_dir:
-            if value or digest or offset != 0:
-                raise ValueError("session lookup starts at offset zero without capture-file or capture-sha256; follow next_command afterwards")
-            from ..control_plane.turn_driver.codex_context import read_codex_context_reference
-
-            value, digest = read_codex_context_reference(context_dir,
-                goal_id=getattr(args, "goal_id", None), agent_id=getattr(args, "agent_id", None))
-        if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
-            raise ValueError("context-read requires the original capture file and its exact SHA-256")
-        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-
-        # Default JSON reads share the native large-page profile. Explicit
-        # smaller budgets can recover a truncated range of this same capture.
-        maximum = max(8192, min(output_limit or 8192, MAX_REQUEST_BYTES))
-        if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
-            raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
-                "larger pages require a sufficient max-page-output-bytes within the capture limit")
-        path, raw, payload = _read_capture(value, digest)
-        list_fields = getattr(args, "list_fields", False)
-        list_depth = getattr(args, "list_depth", None)
-        if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
-            raise ValueError("list-depth requires --list and an integer from 1 to 8")
-        selectors = getattr(args, "select", None)
-        initial_read = getattr(args, "initial_read", False)
-        selection_digest = getattr(args, "selection_sha256", None)
-        if pinned_selection is not None:
-            if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
-                raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
-            if (set(pinned_selection) - {"present_goal_narrative"} !=
-                    {"select", "initial_read", "list_fields", "list_depth", "sha256"}
-                    or type(pinned_selection["initial_read"]) is not bool or type(pinned_selection["list_fields"]) is not bool
-                    or ("present_goal_narrative" in pinned_selection and (
-                        pinned_selection["present_goal_narrative"] is not True
-                        or pinned_selection["list_fields"] or pinned_selection["initial_read"]))
-                    or not isinstance(pinned_selection["sha256"], str)
-                    or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
-                raise ValueError("reader selection reference is incomplete or unsupported")
-            if observation := reference.get("observed_read"):
-                from ..control_plane.turn_driver.native_first_read import observation_current
-
-                if not observation_current(observation, path, digest):
-                    if offset:
-                        return {"ok": False, "reason": "Observed first-read scope changed during paging.",
-                            "recovery_command": context_capture_read_command(path, digest, initial_read=True,
-                                page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
-                    # Restart in the ordinary complete view of this same capture.
-                    # Subsequent pages must pin that view even if the journal changes.
-                    pinned_selection, initial_read = None, True
-                    try:
-                        reference_file = write_context_read_reference(path, digest)
-                    except OSError:
-                        reference_file = None
-                elif offset == 0:
-                    presentation = {**(presentation or {}), "previously_delivered_fields": list(observation["fields"]),
-                        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
-                            "and the field pointer to recovery.command for its complete current body."}
-        if pinned_selection is not None:
-            selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
-            list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
-            selection_digest = pinned_selection["sha256"]
-            if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
-                raise ValueError("reader selection list-depth must be between 1 and 8 and requires list")
-        if initial_read and (selectors is not None or list_fields or list_depth is not None):
-            raise ValueError("initial-read cannot be combined with select or list")
-        if list_fields and selectors is None:
-            selectors = [""]
-        if initial_read and offset > 0 and selection_digest is None:
-            raise ValueError("initial-read continuation requires selection-sha256; follow next_command")
-        if selectors is None and not initial_read and selection_digest is not None:
-            raise ValueError("selection-sha256 requires --select")
-        if selectors is not None or initial_read:
-            if getattr(args, "format", None) != "json":
-                raise ValueError("selected context-read requires JSON output")
-            if offset > 0 and selection_digest is None:
-                raise ValueError("selected continuation requires selection-sha256; follow next_command")
-            pinned_explicit = pinned_selection is not None and not initial_read
-            plan, selected_raw, expected = _context_selection_view(payload, select=selectors,
-                initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
-                expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
-                present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
-                    if pinned_selection is not None else None))
-            if rejection := plan.get("rejected_selection"):
-                # TS alone resolves the nearest container. Reuse the original
-                # escaped tokens, without parsing diagnostic prose or traversing
-                # the payload again in Python. A failed batch delivers no body.
-                pointer = selectors[rejection["argument_index"] - 1]
-                parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
-                command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
-                    page_bytes=next_page_bytes or size,
-                    max_page_output_bytes=next_page_output_bytes or output_limit,
-                    reader_argv=reader_argv)
-                return {"ok": False, "schema_version": "context_capture_page_v1",
-                    "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
-                    "reason": rejection["message"], "recovery_command": command,
-                    "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
-                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
-            if selected_raw is None or expected is None:
-                raise ValueError("selected view is unavailable")
-            raw = selected_raw
-            selection_digest = expected
-            selectors = [item["pointer"] for item in plan["selections"]]
-            if reference_file is not None and pinned_selection is None:
-                try:
-                    # Pin the resolved addresses, not the initial navigation
-                    # recipe. Existing explicit readers can replay these exact
-                    # bytes after a navigation change, with both digests checked.
-                    reference_file = write_context_read_reference(path, digest, selection=context_selection_binding(
-                        selectors, list_fields=list_fields, list_depth=list_depth, sha256=expected,
-                        presented=bool(plan.get("presentation_pointers"))))
-                except OSError:
-                    # A verified read must not require a writable capture root.
-                    # Legacy cursors pin the same capture, selection and digest.
-                    reference_file = None
-        if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
-            raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
-        return _capture_page(path, raw, digest, offset=offset, size=size,
-            output_limit=output_limit, instruction=bool(context_dir),
-            presentation=presentation, next_page_bytes=next_page_bytes,
-            next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
-            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file,
-            reader_argv=reader_argv)
-    except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-        # Recovery is presentation-only: keep failures separate from quota's
-        # collection error path and retain the existing receipt/capture.
-        result = {"ok": False, "schema_version": "context_capture_page_v1",
-            "reason": str(exc) if isinstance(exc, (ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError))
-                else "original capture could not be read",
-            "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
-        if isinstance(exc, (EffectRuntimeRemoteError, EffectRuntimeStartupError)):
-            result["diagnostic_code"] = exc.diagnostic_code
-            result["recovery"] = ("Resolve the reported runtime failure, then retry reading the same digest-bound capture; "
-                "no guard, admission or spend was performed.")
-        if isinstance(exc, EffectRuntimeRemoteError):
-            result["error_kind"] = exc.error_kind
-            if exc.error_kind == "request_rejected":
-                result["recovery"] = ("Correct the rejected read request; for unknown fields use --list on a known parent. "
-                    "Keep the original capture and digest; no guard, admission or spend was performed.")
-        return result
-
-
-def _capture_read_reference(value: dict[str, Any], *, page_bytes: int,
-                            output_bytes: int, reader_argv: list[str] | None = None) -> dict[str, str]:
-    """Keep file identity and the budgeted reader at the transport boundary.
-
-    Navigation lives on the outer view; complete paging obligations accompany
-    the actual reader response. Neither belongs in every nested file reference.
-    """
-    return {"path": value["path"], "sha256": value["sha256"],
-        "command": context_capture_read_command(Path(value["path"]), value["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)}
-
-
-def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | None = None) -> dict[str, Any]:
-    """Present native navigation; machine references and journal bindings stay full.
-
-    The descriptor holds complete digests locally. Legacy explicit readers and
-    full-page observation receipts retain their original transport shape.
-    """
-    page_bytes, output_bytes = native_context_page_budget()
-    # Retain an explicitly smaller caller budget from the generated command.
-    words = shlex.split(view["command"])
-    for option in ("--page-bytes", "--max-page-output-bytes"):
-        if option in words:
-            if option == "--page-bytes":
-                page_bytes = int(words[words.index(option) + 1])
-            else:
-                output_bytes = int(words[words.index(option) + 1])
-
-    def reference(value: dict[str, Any], *, navigation: bool = False) -> dict[str, str]:
-        path = Path(value["path"])
-        reader = write_context_read_reference(path, value["sha256"], navigation=value if navigation else None)
-        return {"reference_file": str(reader), "command": context_capture_read_command(path, value["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, reference_file=reader,
-            reader_argv=reader_argv)}
-
-    result = {"ok": True, "schema_version": "context_capture_navigation_v1", "mode": view["mode"],
-        **reference(view, navigation=True), "total_bytes": view["total_bytes"], "recovery": reference(view["recovery"]),
-        "instruction": view["instruction"]}
-    if "context_delivery" in view:
-        result["context_delivery"] = view["context_delivery"]
-    if "baseline_reference" in view:
-        result["baseline_reference"] = reference(view["baseline_reference"])
-        result["continuity_basis"] = view["continuity_basis"]
-    if "first_read_command" in view:
-        recovery = view["recovery"]
-        if view.get("first_read_reference"):
-            # The producer already pinned this same initial selection. Keep
-            # that existing cursor instead of asking the reader to replan it.
-            result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                page_bytes=page_bytes, max_page_output_bytes=output_bytes,
-                reference_file=Path(view["first_read_reference"]), reader_argv=reader_argv)
-        else:
-            result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True,
-                reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
-    result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
-        "Reader references keep complete digests locally; the CLI checks them on every page. "
-        "A reference or digest grants no authority or freshness.")
-    if len(_native_output_bytes(result)) > min(output_bytes, 7900):
-        return view  # Preserve usable legacy recovery under a very small ceiling.
-    return result
-
-
-def _native_context_reference(projected: dict[str, Any], reference: dict[str, Any], *,
-                              mode: str, current: dict[str, Any], current_document: dict[str, Any],
-                              total_bytes: int, metadata: dict[str, Any] | None,
-                              progressive_enabled: bool, field_index: list[dict[str, Any]] | None,
-                              initial_read_pointers: list[str] | None,
-                              initial_read_reference: Path | None,
-                              page_bytes: int, output_bytes: int,
-                              page_attached: bool = False,
-                              reader_argv: list[str] | None = None) -> dict[str, Any]:
-    """Build the bounded native reference without publishing or registering it."""
-    target = projected.get("target") if projected.get("schema_version") == "context_delivery_v1" else None
-    reference = _capture_read_reference(reference, page_bytes=page_bytes, output_bytes=output_bytes,
-        reader_argv=reader_argv)
-    result = {"ok": True, **(metadata or {}), "mode": mode, **reference,
-        **({"target": target} if target else {})}
-    if isinstance(result.get("recovery"), dict):
-        result["recovery"] = _capture_read_reference(result["recovery"],
-            page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
-    current_path = Path(current["path"])
-    result.setdefault("recovery", _capture_read_reference(current,
-        page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv))
-    if mode != "full" and projected.get("continuity_basis") == "captured_file":
-        result["continuity_basis"] = "captured_file"
-        result["baseline_reference"] = dict(projected["baseline_reference"])
-    result["total_bytes"] = total_bytes
-    result["index_command"] = context_capture_read_command(current_path, current["sha256"],
-        page_bytes=min(page_bytes, 24000), max_page_output_bytes=min(output_bytes, 24000), list_fields=True,
-        reader_argv=reader_argv)
-    result["select_command"] = context_capture_read_command(current_path, current["sha256"],
-        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv) + " --select '<pointer>'"
-    # A complete scalar preview helps orientation without inventing a second
-    # decision owner. Oversized or structured values remain discoverable in the
-    # index; no prose is truncated or treated as an authorization summary.
-    result["overview"] = {key: value for key, value in current_document.items()
-        if value is None or isinstance(value, (str, bool, int, float))
-        and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= 240}
-    result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if progressive_enabled else CONTEXT_CAPTURE_READ_GUIDANCE
-    if mode != "full":
-        result["instruction"] += (" command reads the delta; baseline_reference identifies its exact saved base when file-backed. "
-            "recovery.command reads current facts directly without that baseline.")
-    # The reference must fit even under an explicit small caller ceiling.
-    def fits() -> bool:
-        return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
-    if initial_read_pointers:
-        overview = result.pop("overview")
-        instruction = result["instruction"]
-        if any(pointer.endswith("/vision_authoring/rule") for pointer in initial_read_pointers):
-            instruction = ("Before composing a Vision, select the complete vision_authoring object "
-                "at the displayed step in this capture. " + instruction)
-        first_read = ("Read the top-level content and follow next_command if eof is false. "
-            "Use first_read_command only to recover missing initial context from this capture"
-            if page_attached else
-            "Start with first_read_command for current facts and source navigation from this capture")
-        result["instruction"] = (first_read + ", without reading an older baseline. "
-            "Read each complete optional attachment from its captured step before using it. " + instruction)
-        result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True, reader_argv=reader_argv)
-        if not fits():
-            result.pop("first_read_command")  # A complete optional selection or the existing generic recovery.
-            result["overview"] = overview
-            result["instruction"] = instruction
-        elif initial_read_reference is not None:
-            result["first_read_reference"] = str(initial_read_reference)
-            if not fits():
-                result.pop("first_read_reference")  # Optional cursor must not displace the original recipe.
-    # Prefer the concrete initial read over a broad scalar preview/root index.
-    # Otherwise preserve the complete root index, bound to current recovery,
-    # never a delta's patch keys. All deeper discovery remains available.
-    if field_index is not None and "first_read_command" not in result:
-        result["field_index"] = field_index
-        if not fits():
-            result.pop("field_index")  # Optional metadata must never displace recovery or instructions.
-    if not fits():
-        result.pop("overview")
-    if not fits():
-        result.pop("select_command")  # --select also works on the current recovery command.
-    if not fits() and "baseline_reference" in result:
-        result["baseline_reference"].pop("command", None)  # Exact path/hash remain usable.
-    if not fits():
-        result.pop("index_command")
-        result["instruction"] += " Append --list or --select to recovery.command to discover or read current fields."
-    if not fits():
-        raise QuotaDecisionTransportError("Native context reference exceeds the output limit; "
-            "read the saved original decision and receipt without rerunning admission.")
-    return result
-
-
-def _native_output_bytes(value: dict[str, Any]) -> bytes:
-    """Match immutable capture publication and compact CLI JSON, including LF."""
-    return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
-
-
-def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
-                               page_bytes: int, output_bytes: int,
-                               stop_after: int | None = None,
-                               reader_argv: list[str] | None = None) -> int:
-    """Count the reference plus its explicit-file reader before publication.
-
-    Stop once this candidate cannot win. This measures one complete wire read,
-    not model tokens, retention or the caller's later selective/recovery reads.
-    """
-    from ..command_invocation import current_loopx_cli_argv
-    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-
-    if len(raw) > MAX_REQUEST_BYTES:
-        raise QuotaDecisionTransportError("Native context capture exceeds the existing reader size limit.")
-    # The reader resolves parent aliases before emitting continuation commands.
-    # Resolve only the parent: a candidate delta has not been published yet.
-    path = Path(reference["path"]).expanduser().absolute()
-    path = path.parent.resolve(strict=True) / path.name
-    total, offset = len(_native_output_bytes(reference)), 0
-    reader_argv = current_loopx_cli_argv() if reader_argv is None else reader_argv
-    while True:
-        page = _capture_page(path, raw, reference["sha256"],
-            offset=offset, size=page_bytes, output_limit=output_bytes, instruction=False,
-            reader_argv=reader_argv)
-        total += len(_native_output_bytes(page))
-        if page["eof"] or (stop_after is not None and total > stop_after):
-            return total
-        offset = page["next_offset"]
-
-
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
                                 progressive_enabled: bool = True, hook_session: str | None = None,
                                 captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
+                                first_read_page_bytes: int | None = None,
                                 page_attached: bool = False,
                                 reader_argv: list[str] | None = None,
                                 initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -521,6 +76,13 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     if max_page_output_bytes is not None:
         output_bytes = min(output_bytes, max_page_output_bytes)
         page_bytes = min(page_bytes, output_bytes)
+    # The generated opening crosses a tool boundary even when returned as a
+    # command. Keep its inferred budget out of bulk and selection recovery.
+    first_output_bytes = (output_bytes if max_page_output_bytes is not None
+        else min(output_bytes, NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES))
+    first_page_bytes = (min(page_bytes, first_output_bytes) if first_read_page_bytes is None
+        else first_read_page_bytes)
+    first_read_budget = first_page_bytes, first_output_bytes
     typed = projected.get("schema_version") == "context_delivery_v1"
     mode = projected["mode"] if typed else "full"
     ancestry = projected.get("ancestry", 0)
@@ -547,13 +109,17 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    initial_read_content = b""
+    # A stateless attached page uses the ordinary verified selector below.
+    # Its recovery recipe does not require an extra root index to be planned.
+    stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
-        nonlocal initial_read_pointers, initial_read_reference
+        nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
@@ -570,7 +136,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled:
+    elif progressive_enabled and not stateless_first_read:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -585,7 +151,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
             progressive_enabled=progressive_enabled,
             initial_read_reference=initial_read_reference,
-            page_bytes=page_bytes, output_bytes=output_bytes, page_attached=page_attached, reader_argv=reader_argv)
+            page_bytes=page_bytes, output_bytes=output_bytes, first_read_budget=first_read_budget,
+            page_attached=page_attached, first_read_requested=stateless_first_read, reader_argv=reader_argv)
 
     if typed and mode == "delta":
         result = None
@@ -623,12 +190,21 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    opening_observation = None
     if (progressive_enabled and observed and "first_read_command" in result
-            and observed["pointer_bytes"] <= output_bytes // 4):
+            and observed["pointer_bytes"] <= first_output_bytes // 4):
         first = Path(observed["path"])
         result["first_read_reference"] = str(first)
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
-            reference_file=first, page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
+            reference_file=first, page_bytes=first_page_bytes,
+            max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
+        opening_observation = (initial_read_plan or {}).get("observed_opening")
+        if opening_observation is None or opening_observation["path"] != str(first):
+            return result
+    if not page_attached and initial_read_plan and initial_read_plan.get("linked_opening_detail"):
+        return budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
+            page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
+            context_directory=context_directory, observation=opening_observation)
     return result
 
 
@@ -672,7 +248,9 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
                                      runtime_root: Path, directory: Path | None,
                                      surface: str = "quota_packet",
-                                     reader_argv: list[str] | None = None) -> dict[str, Any]:
+                                     reader_argv: list[str] | None = None,
+                                     captured_decision_path: str | None = None,
+                                     page_attached: bool = False) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
     A plain read-only should-run remains read-only. Private transport files do
@@ -684,35 +262,19 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
-    bind_capture_selection_transport(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=surface)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        surface = "complete_turn"
+    transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
+    required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
+        selection_command_args_template=transport, captured_decision_path=captured_decision_path)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
-        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=page_attached, reader_argv=reader_argv)
     readable = model_context_reference(view, reader_argv=reader_argv)
     # Small results need no extra navigation. The complete original and required
     # captures remain available; never shrink by dropping current obligations.
-    return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
-
-
-def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
-                             initial_reference: str | None, reader_argv: list[str]) -> dict[str, Any]:
-    """Use the ordinary verified reader; the first page and navigation share its output budget."""
-    recovery = navigation["recovery"]
-    pinned = initial_reference if args.initial_read else None
-    reference = pinned or recovery.get("reference_file")
-    read_args = argparse.Namespace(**{**vars(args), "quota_command": "context-read",
-        "reference_file": reference, "capture_file": None if reference else recovery["path"],
-        "capture_sha256": None if reference else recovery["sha256"],
-        "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
-    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
-    if page["ok"]:
-        # Keep the already-budgeted page and cursor ahead of recovery metadata.
-        page["navigation"] = page.pop("navigation")
-    elif "recovery_command" not in page:
-        page["recovery_command"] = recovery["command"]
-    return page
+    return readable if page_attached or len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
 
 
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
@@ -731,11 +293,19 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     try:
         activation = native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
-        if saved_page and (args.format != "json" or not activation["enabled"] or args.offset != 0
-                or args.reference_file or args.selection_sha256 or args.page_bytes is not None
-                or (args.initial_read and args.select)):
-            raise ValueError("Use an enabled native JSON context-project with either --initial-read or --select "
-                "at offset zero. Use context-read for replay or continuation.")
+        if saved_page and (args.format != "json" or not _context_page_output_enabled(args, activation) or args.offset != 0
+                or args.reference_file or args.selection_sha256 or (args.initial_read and args.select)):
+            raise ValueError("Use JSON context-project at offset zero with native delivery or progressive --initial-read. "
+                "Choose either --initial-read or --select. Use context-read for replay or continuation.")
+        caller_output_limit = getattr(args, "max_page_output_bytes", None)
+        output_limit = caller_output_limit
+        if args.initial_read:
+            # Keep the inferred limit on the attached read. Bulk recovery and
+            # same-Turn selection use only the caller's explicit options.
+            output_limit = (NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES if output_limit is None
+                else min(output_limit, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES))
+        if saved_page and args.page_bytes is not None:
+            _validate_context_page_window(args.offset, args.page_bytes, output_limit)
         path, raw, payload = _read_capture(args.capture_file, args.capture_sha256,
                                            private=hook_session is not None)
         identity = payload.get("agent_identity")
@@ -761,13 +331,23 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     native_prepared = False
     native_view = None
     initial_reference = None
+    initial_read_plan = None
     if not activation["enabled"] and activation["progressive_enabled"]:
         # Recovery is presentation of this exact saved decision, including its
         # original Turn. It does not need a supported host or a native session.
         try:
-            return progressive_context_capture_view(payload, args,
+            navigation = progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
-                directory=None, reader_argv=reader_argv)
+                directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
+            if saved_page:
+                return _saved_context_read_page(args, navigation, initial_reference=None,
+                    initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
+            return navigation
+        except EffectRuntimeRejected as exc:
+            if payload.get("schema_version") == "loopx_turn_envelope_v1":
+                failure = QuotaDecisionTransportError(str(exc))
+                return {"ok": False, "error_code": failure.error_code, "reason": str(failure),
+                    "capture_sha256": args.capture_sha256, "recovery": full_reference}
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass  # The complete original reference remains the fallback below.
     try:
@@ -776,11 +356,10 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
         page_bytes, output_bytes = native_context_page_budget()
-        output_limit = getattr(args, "max_page_output_bytes", None)
-        if output_limit is not None:
-            if output_limit <= 0:
+        if caller_output_limit is not None:
+            if caller_output_limit <= 0:
                 raise QuotaDecisionTransportError("Native context output limit must be positive.")
-            output_bytes = min(output_bytes, output_limit)
+            output_bytes = min(output_bytes, caller_output_limit)
             page_bytes = min(page_bytes, output_bytes)
 
         full_reference = _capture_read_reference(full_reference,
@@ -805,15 +384,30 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
+        complete = payload.get("schema_version") == "loopx_turn_envelope_v1"
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
-        prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+        presentation = payload
+        if args.initial_read and activation["progressive_enabled"] and not complete:
+            from .quota_presentation import _project_quota_cli_payload
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
+            # Keep the saved bytes intact. Stage unstaged readers against the
+            # exact path just verified here, including a digest-bound copy.
+            presentation = _project_quota_cli_payload(
+                project_captured_replan_cli_view(payload, captured_decision_path=str(path)),
+                argparse.Namespace(quota_command="should-run"), frozenset(), None,
+            )
+            if "host_poll_receipt" in payload:
+                presentation["host_poll_receipt"] = payload["host_poll_receipt"]
+        prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
+            goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
-            hook_session=hook_session)
+            hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
+        initial_read_plan = prepared.initial_read_plan
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
             # Native publication owns the complete required view. Keep its
@@ -822,11 +416,14 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             full_reference = _capture_read_reference(projected["recovery"],
                 page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
             reference = dict(full_reference)
+        else:
+            bind_capture_selection_transport(projected, args, capture_root=root)
         native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
-            max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=saved_page,
+            max_page_output_bytes=caller_output_limit,
+            first_read_page_bytes=args.page_bytes if args.initial_read else None, page_attached=saved_page,
             reader_argv=reader_argv)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
@@ -845,9 +442,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                     "original decision and receipt; do not rerun admission."
                 )
             page_bytes, output_bytes = native_context_page_budget()
-            output_limit = getattr(args, "max_page_output_bytes", None)
-            if isinstance(output_limit, int) and output_limit > 0:
-                output_bytes = min(output_bytes, output_limit)
+            if isinstance(caller_output_limit, int) and caller_output_limit > 0:
+                output_bytes = min(output_bytes, caller_output_limit)
                 page_bytes = min(page_bytes, output_bytes)
             recovery_index = {**full_reference, "command": context_capture_read_command(
                 Path(full_reference["path"]), full_reference["sha256"],
@@ -873,7 +469,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
     navigation = native_view or result
     if saved_page:
-        return _saved_context_read_page(args, navigation, initial_reference=initial_reference, reader_argv=reader_argv)
+        return _saved_context_read_page(args, navigation, initial_reference=initial_reference,
+            initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv)
     return navigation
 
 
@@ -946,6 +543,10 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
+        if getattr(args, "prepared_capture_reference", False):
+            # Bind the physical parent before admission: the saved selection
+            # uses it as an output root, which must not be a symlink.
+            directory = Path(os.path.realpath(directory.parent, strict=True)) / directory.name
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.
         directory.mkdir(mode=0o700)
@@ -957,13 +558,20 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
+def capture_decision(directory: Path | None, payload: dict[str, object], *,
+                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+            from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
@@ -1048,72 +656,6 @@ def budgeted_settlement_result(
         ) from exc
 
 
-def _capture_selection_transport_template(payload: dict[str, Any], args: argparse.Namespace, *,
-                                          capture_root: Path) -> str | None:
-    """Derive display argv without editing the captured decision."""
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    selection = cli.get("selection_command") if isinstance(cli, dict) else None
-    if not isinstance(selection, dict):
-        return None
-    presentation = {**payload, "interaction_contract": {**interaction,
-        "cli_channel": {**cli, "selection_command": dict(selection)}}}
-    bind_capture_selection_transport(presentation, args, capture_root=capture_root)
-    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
-
-
-def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
-                                     capture_root: Path | None = None) -> None:
-    """Retain caller display/capture options in the existing selection command.
-
-    Only transport argv is composed here; the typed quota owner still selects the
-    action and owns admission. Each selection invocation allocates a new capture.
-    """
-    root = getattr(args, "decision_output_root", None)
-    if root is None and capture_root is None:
-        return
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    selection = cli.get("selection_command") if isinstance(cli, dict) else None
-    if not isinstance(selection, dict):
-        return
-    template = selection.get("command_args_template")
-    if not isinstance(template, str):
-        return
-    words = shlex.split(template)
-    options: dict[str, str] = {}
-    # A saved guard already carries its capture root. Preserve it unless this
-    # caller explicitly selects another; otherwise use the validated cache.
-    if root is not None or "--decision-output-root" not in words:
-        selected_root = root if root is not None else capture_root
-        options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
-    if getattr(args, "decision_handoff_socket", None):
-        options["--decision-handoff-socket"] = args.decision_handoff_socket
-    # Selection is part of the same Turn, including a caller's explicit opt-out.
-    if getattr(args, "context_delivery", None) is not None:
-        options["--context-delivery"] = args.context_delivery
-    if getattr(args, "delta_delivery", None) is not None:
-        options["--delta-delivery"] = args.delta_delivery
-    if getattr(args, "codex_context_dir", None):
-        options["--codex-context-dir"] = args.codex_context_dir
-    if getattr(args, "codex_context_root", None):
-        options["--codex-context-root"] = args.codex_context_root
-    if getattr(args, "max_page_output_bytes", None) is not None:
-        options["--max-page-output-bytes"] = str(args.max_page_output_bytes)
-    replaced = set(options)
-    if replaced & {"--codex-context-dir", "--codex-context-root"}:
-        replaced.update(("--codex-context-dir", "--codex-context-root"))
-    for option in replaced:
-        while option in words:
-            index = words.index(option)
-            del words[index:index + 2]
-    for option, value in options.items():
-        words.extend((option, value))
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
-        words.append("--turn-envelope")
-    selection["command_args_template"] = shlex.join(words)
-
-
 def handoff_decision(directory: Path | None, socket_path: str | None,
                      context_delivery_enabled: bool = False) -> tuple[dict[str, Any], str] | None:
     """Withhold the original output until the Host releases these exact bytes.
@@ -1175,7 +717,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
-        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or enabled native JSON context-project"}, args.format, str)
+        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or JSON context-project"},
+                      args.format, str)
         return 1
     list_depth = getattr(args, "list_depth", None)
     if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
@@ -1189,7 +732,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     settlement_output = (args.quota_command == "spend-slot" and args.format == "json"
         and bool(getattr(args, "turn_instance_id", None)) and bool(getattr(args, "agent_id", None)))
     budget_scope_error = ("max-page-output-bytes is only supported by JSON context-read "
-        "or enabled native should-run/context-project, or Turn-bound JSON spend-slot")
+        "or enabled native should-run/context-project, progressive context-project --initial-read, "
+        "or Turn-bound JSON spend-slot")
     if has_output_limit and args.quota_command != "context-read" and not settlement_output and (
         args.quota_command not in ("should-run", "context-project") or args.format != "json"
         or (getattr(args, "context_delivery", None) == "off" and getattr(args, "delta_delivery", None) != "auto")):
@@ -1217,7 +761,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         return 1
     if has_output_limit and args.quota_command != "context-read" and not settlement_output:
         try:
-            if not native_context_activation(args)["enabled"]:
+            if not _context_page_output_enabled(args, native_context_activation(args)):
                 raise QuotaCommandValidationError(budget_scope_error)
             if args.max_page_output_bytes <= 0:
                 raise QuotaCommandValidationError("max-page-output-bytes must be positive")
@@ -1283,7 +827,9 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             record_native_execution_preparation,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
+            LegacyNativePreparationCapture,
             codex_execution_preparation_context,
+            codex_execution_preparation_readback_context,
             execute_codex_execution_preparation,
         )
 
@@ -1301,11 +847,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
+                request = None
+                preparation_context = ""
                 try:
-                    request = native_execution_preparation_request(directory, event)
+                    workspace = Path(event.get("cwd") or "")
+                    if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        workspace = Path(event.get("cwd") or "")
-                        if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        if "claim_source_sha256" not in request:
+                            raise LegacyNativePreparationCapture()
+                        if request.get("readback_only") is True:
+                            preparation_context = codex_execution_preparation_readback_context(request) or ""
+                        else:
                             capture = (
                                 Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                                 if request.get("turn_instance_id") else None
@@ -1332,6 +885,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 # pinned full recovery even if native projection
                                 # fails. It never rereads authority or admits work.
                                 digest = receipt.pop("capture_sha256")
+                                receipt.pop("capture_path", None)
                                 receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
                                     **vars(args), "quota_command": "context-project",
                                     "capture_file": str(source),
@@ -1344,24 +898,25 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
-                            existing = payload.get("hookSpecificOutput")
-                            existing_context = (
-                                str(existing.get("additionalContext") or "")
-                                if isinstance(existing, dict)
-                                else ""
-                            )
-                            payload["hookSpecificOutput"] = {
-                                "hookEventName": event["hook_event_name"],
-                                "additionalContext": " ".join(filter(None, [
-                                    existing_context,
-                                    codex_execution_preparation_context(receipt),
-                                ])),
-                            }
+                            preparation_context = codex_execution_preparation_context(receipt)
+                except LegacyNativePreparationCapture as error:
+                    preparation_context = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-                    # Preserve the original explicit action and any context
-                    # recovery output when Host-side preparation cannot prove
-                    # its postcondition.
-                    pass
+                    # Reconcile only the attempted source. A concurrent guard
+                    # can replace recovery, so it must never be reserved here.
+                    if request is not None and request.get("turn_instance_id"):
+                        readback = native_execution_preparation_request(
+                            directory, event, readback_for=request["source_sha256"],
+                        )
+                        if readback is not None:
+                            preparation_context = codex_execution_preparation_readback_context(readback) or ""
+                if preparation_context:
+                    existing = payload.get("hookSpecificOutput")
+                    existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
+                    payload["hookSpecificOutput"] = {
+                        "hookEventName": event["hook_event_name"],
+                        "additionalContext": " ".join(filter(None, [existing_context, preparation_context])),
+                    }
             else:
                 payload = {}
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):

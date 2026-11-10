@@ -31,13 +31,14 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     "surface_only cannot settle this Turn. Do not relabel preparation-only work as progress; " +
     "continue authorized work within existing limits or report a genuine typed blocker. " +
     "Set --delivery-boundary " + DELIVERY_BOUNDARIES.join("|") + " for the applicable case above. " +
-    "Typed evidence: --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
-    ". For no_followup or exploration_exhausted, also pass --progress-coverage-scope-id; " +
-    "exploration_exhausted also needs --progress-coverage-complete. " +
-    "Todo completion alone does not establish scope coverage" +
-    ". For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
-    "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for evidence. " +
-    "IDs are 1-128 characters, start with an ASCII letter/digit, then letters/digits or ._:/- " +
+    "Add typed progress flags only when this Turn's evidence supports the observation. " +
+    "Use --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
+    ". For no_followup or exploration_exhausted, pass --progress-coverage-scope-id from verified scope coverage; " +
+    "exploration_exhausted also needs --progress-coverage-complete. For a final Todo, terminal closeout follows spend " +
+    "under its own plan step. A typed no_followup requires scope coverage beyond Todo completion. " +
+    "For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
+    "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for observed evidence identifiers. " +
+    "Use opaque public-safe IDs of 1-128 characters, starting with an ASCII letter/digit, then letters/digits or ._:/- " +
     "(e.g. evidence:validation-1); an ID does not upload a file. " +
     "Use --agent-vision-json <file> for the material vision packet; " +
     "--vision-unchanged-reason <reason> only reuses an already evidence-linked vision. " +
@@ -57,6 +58,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const inFlight = params.delivery_boundary === "in_flight_continuation";
   const autonomousReplan = (params.autonomous_replan === undefined ? false
     : requireBoolean(params.autonomous_replan, "autonomous_replan")) || identity.binding_kind === "autonomous_replan";
+  const todoSemanticWriteback = identity.binding_kind === "todo" && !autonomousReplan
+    ? semanticWriteback : null;
   const mode = params.handoff_mode == null ? null
     : requireStringLiteral(params.handoff_mode, HANDOFF_MODES, "handoff_mode");
   const managedClaim = identity.binding_kind === "todo" && mode === "hard_lease";
@@ -93,9 +96,10 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open. " +
             "Bind new decision evidence from this admitted work to its artifact/input; follow the remaining plan, " +
             "then yield for freshly guarded continuation. "
-          : (inFlight ? "Choose one: command_template for ordinary in_flight_continuation without new decision evidence; "
-              : "Use command_template for semantic_closeout; ") +
-            (semanticWriteback !== null ? "semantic_closeout_command_template" : "--delivery-boundary semantic_closeout") +
+          : (inFlight ? "Use command_template for ordinary in_flight_continuation without new decision evidence. " : "") +
+            "Use " + (todoSemanticWriteback !== null
+              ? "semantic_closeout_command_template with --agent-vision-json"
+              : "--delivery-boundary semantic_closeout") +
             " for new decision evidence, route change or Todo completion. " +
             "Bind new evidence produced or obtained by this admitted work to its artifact/input in fresh Vision/path_delta " +
             "with --agent-vision-json, including continue/no_change when retaining the route. " +
@@ -111,8 +115,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "An already committed Monitor poll needs neither refresh nor spend." + inputHint,
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
-      ...(identity.binding_kind === "todo" && !autonomousReplan && semanticWriteback !== null
-        ? {semantic_closeout_command_template: semanticWriteback} : {}),
+      ...(todoSemanticWriteback !== null ? {semantic_closeout_command_template: todoSemanticWriteback} : {}),
       // The same open Todo can reach a semantic feedback checkpoint. Deliver
       // its existing authoring contract with the executable command variant.
       // Autonomous replan already carries this owner in its writeback contract.

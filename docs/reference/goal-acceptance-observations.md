@@ -132,6 +132,27 @@ runnable research and original budget/stop conditions retain precedence.
 See the [Agent workflow](../../skills/loopx-project/references/outcome-refinement.md)
 for inline context, one-call writeback and upgrade/adoption limits.
 
+When one `refresh-state` explicitly supplies both a new complete outcome review
+and an Explore result for work linked to that outcome, the review covers that
+same batch's exact additive Todo link. A result for separate same-Agent work
+does not change the reviewed outcome's basis or work links. The typed owner
+validates the complete result-link intent and ownership in either case, then
+hashes a relevant prospective link against the original CAS
+snapshot; it does not write the link or rebind an old review. The basis becomes
+current only after the Todo owner commits the expected link. Failed delivery
+remains stale and exact replay retains its original digest. Other work changes
+and additional evidence links still invalidate the review. Separately submitted
+and legacy completed reviews keep their original basis; no check result or
+independent-verification flag changes.
+
+中文：同一次 `refresh-state` 显式提交完整的新自查，以及该 outcome 关联工作的
+Explore 结果时，自查依据包含该批预期追加的精确 Todo 结果关联。同 Agent 的其他
+工作结果不改变本 outcome 的依据或关联；typed owner 在两种情况下均先验证完整
+意图和归属，再基于原 CAS 快照计算相关工作的摘要，不代替
+Todo owner 写关联，也不替旧自查更新依据。只有预期关联真实提交后依据才是 current；
+投递失败保持过期，原样重放保留原摘要。其他工作变化、额外证据关联仍使依据失效。
+分开提交或旧版本已完成的自查保持原义，独立检查与验证标记不变。
+
 中文：Goal 概览显示 Agent 登记的支撑成果：原始目的、累计要求、关联工作、来源，
 并区分 Agent 自查与独立检查。所有者可原地补充要求并读取原生结果；过期视图先
 刷新再重基，未确认写入保留原操作重试。不启动模型或执行检查命令。默认维护和

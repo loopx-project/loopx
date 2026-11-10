@@ -618,6 +618,15 @@ test("a bounded blocked retry does not invent a vision change", () => {
     delivery_outcome: "outcome_gap",
     blocked_retry: {...blockedRetry, todo_id: "todo_other"},
   })), /blocked retry does not bind/);
+  assert.throws(() => buildVisionCheckpoint(finalizeRequest({
+    delivery_outcome: "outcome_gap",
+    blocked_retry: {
+      ...blockedRetry,
+      observed_at: "2026-02-30T14:00:00Z",
+      due_at: "2026-02-30T14:05:00Z",
+      resume_when: "resume_at:2026-02-30T14:05:00Z",
+    },
+  })), /blocked retry does not bind/);
 });
 
 test("explicit in-flight progress records continuity without vision repetition", () => {

@@ -335,7 +335,7 @@ export function requiredSemanticOutcomes(obligation: JsonObject): SemanticOutcom
     ? ["fresh_vision_path_outcome", ...PROGRESS_OUTCOMES] : [...PROGRESS_OUTCOMES];
 }
 
-function writebackProjection(required: SemanticOutcome[], externalReview: boolean): JsonObject {
+function writebackProjection(required: SemanticOutcome[], externalReview: boolean, strideEnabled: boolean): JsonObject {
   // This chooses a usable refresh path, not the only legal exit. Successor and
   // terminal alternatives still have their own typed transitions and gates.
   if (externalReview) {
@@ -358,7 +358,8 @@ function writebackProjection(required: SemanticOutcome[], externalReview: boolea
       writeback_contract: {
         preferred_input: "evidence_linked_vision_path",
         vision_authoring: visionAuthoringContract(true),
-        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs"],
+        required_fields: ["vision_patch.acceptance_summary", "path_delta.outcome", "path_delta.evidence_refs",
+          ...(strideEnabled ? ["agent_vision.stride_decision"] : [])],
         path_outcomes: [...FRESH_PATH_DISPOSITIONS],
         rule: "First reuse observed evidence valid for current source/acceptance; probe missing, stale or insufficient evidence. Write a JSON file with acceptance summary and evidence-linked path outcome, then run bound refresh and spend. An unchanged reason alone is insufficient. Explicit validation gates and other required_any_of contracts apply.",
       },
@@ -473,7 +474,7 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   const externalReview = isExternalReview(obligation);
   if (request.operation === "requirements") {
     const strideControl = strideControlContract(object(obligation.replan_context), obligation.obligation_id);
-    const writeback = writebackProjection(required, externalReview);
+    const writeback = writebackProjection(required, externalReview, strideControl !== null);
     if (requiresStrideDecision(obligation)) {
       const contract = object(writeback.writeback_contract);
       writeback.cli_semantic_args = VISION_CLI_ARGS;

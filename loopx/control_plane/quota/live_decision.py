@@ -13,6 +13,7 @@ from ..runtime.time import now_utc_iso
 from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
+    TurnStartContextProjector,
     dispatch_interaction_projection_hooks,
 )
 from .effect_program import (
@@ -220,8 +221,12 @@ def _project_turn_start_required_reads(
     turn_instance_id: str | None,
     registry_path: Path,
     runtime_root: Path,
-) -> bool:
-    """Order evidence before work and report whether the decision changed."""
+    context_projector: TurnStartContextProjector | None = None,
+) -> Mapping[str, Any] | None:
+    """Order evidence after selection and retain its source dispatch."""
+
+    if context_projector is not None:
+        dispatch = context_projector(payload, dispatch)
 
     # Keep failure observations even when no evidence read was produced. The
     # typed envelope projects their cache/dependent-action policy for the host.
@@ -231,7 +236,7 @@ def _project_turn_start_required_reads(
         }
     projected = _turn_start_required_reads(dispatch)
     if not projected:
-        return False
+        return dispatch
     existing = payload.get("required_reads")
     required_reads = (
         [dict(item) for item in existing if isinstance(item, Mapping)]
@@ -270,7 +275,7 @@ def _project_turn_start_required_reads(
         registry_path=str(registry_path),
         runtime_root=str(runtime_root),
     )
-    return True
+    return dispatch
 
 
 def _fresh_operator_inbox_observation_count(
@@ -569,6 +574,29 @@ def _receipt_bound_recovery_required(
     return wait_kind not in ("", "monitor_changed", "todo_done")
 
 
+def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    if not isinstance(cli, dict) or cli.get("turn_binding_required") is not True:
+        return
+
+    # Reconcile the legacy work fields after hooks and recovery have chosen
+    # the final interaction. The selected work stays visible but unadmitted.
+    reason = cli["spend_policy"]
+    payload["normal_delivery_allowed"] = False
+    payload["recommended_action"] = cli["next_cli_actions"][0]
+    payload.pop("agent_lane_next_action", None)
+    obligation = payload.get("execution_obligation")
+    if isinstance(obligation, dict):
+        obligation.update(must_attempt_work=False, delivery_allowed=False, reason=reason)
+    lane = payload.get("work_lane_contract")
+    if isinstance(lane, dict):
+        lane.update(must_attempt_work=False, action=payload["recommended_action"])
+    recommendation = payload.get("heartbeat_recommendation")
+    if isinstance(recommendation, dict):
+        recommendation["spend_policy"] = reason
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -595,6 +623,7 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    turn_context_projector: TurnStartContextProjector | None = None,
     context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
@@ -756,7 +785,7 @@ def build_live_quota_should_run_decision(
             turn_start_hook_dispatch, registry=registry_path, runtime_root=runtime_root,
             goal_id=goal_id, agent_id=agent_id,
         )
-    _project_turn_start_required_reads(
+    turn_start_hook_dispatch = _project_turn_start_required_reads(
         payload,
         turn_start_hook_dispatch,
         available_capabilities=available_capabilities,
@@ -764,6 +793,7 @@ def build_live_quota_should_run_decision(
         turn_instance_id=turn_instance_id,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        context_projector=turn_context_projector,
     )
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
     projections = hook_dispatch["projections"]
@@ -834,6 +864,7 @@ def build_live_quota_should_run_decision(
         payload["capability_hook_dispatch"] = {
             key: value for key, value in hook_dispatch.items() if key != "projections"
         }
+    _project_unbound_work_fields(payload)
     interaction = payload.get("interaction_contract")
     if isinstance(interaction, dict) and goal_id and agent_id:
         scope = {
