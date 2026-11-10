@@ -168,10 +168,16 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     captured_only = build_heartbeat_prompt(**no_memory, decision_output_root=tmp_path)
     assert ordinary['interface_budget']['max_chars'] == 5_100
     assert captured_only['interface_budget']['max_chars'] == 5_100
+    # Legal, distinct scopes alone exceed the captured allowance, independent
+    # of temporary-path length or how compact the fixed dispatcher becomes.
+    scopes = [letter * 320 for letter in 'abcdefghijklmnopqr']
+    assert sum(map(len, scopes)) > 5_500
     oversized = build_heartbeat_prompt(
         **no_memory, decision_output_root=tmp_path, turn_envelope=True,
-        agent_scopes=[letter * 320 for letter in 'stuv'],
+        agent_scopes=scopes,
     )
+    assert all(scope in oversized['task_body'] for scope in scopes)
+    assert len(oversized['task_body']) > 5_500
     assert oversized['interface_budget']['max_chars'] == 5_500
     assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),

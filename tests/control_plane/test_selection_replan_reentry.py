@@ -426,7 +426,7 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery, con
         first = read_cli_policy_payload(json.dumps(first), returncode=rc)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, envelope = _run_cli(registry, runtime, *guard,
-                            "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
+                            "--todo-id", SELECTED_REPLAN_TODO_ID)
     assert rc == 0, envelope
     from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
     if context_delivery == "on":
