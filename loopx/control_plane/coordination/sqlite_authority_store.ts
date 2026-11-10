@@ -146,10 +146,12 @@ export function sqliteAuthorityPath(directory: string, goalId: string): string {
 function protocol(message: string): never { throw new AuthorityStoreProtocolError(message); }
 
 function readFailure(error: unknown): AuthorityStoreReadFailure {
-  return error instanceof AuthorityStoreProtocolError || error instanceof SyntaxError
-    ? {status: "failed", reason_code: "provider_protocol_violation", reason: error.message}
-    : {status: "unavailable", reason_code: "provider_read_unavailable",
-      reason: "SQLite authority store could not be read; check database availability and lock contention"};
+  if (error instanceof AuthorityStoreProtocolError || error instanceof SyntaxError) {
+    return {status: "failed", reason_code: "provider_protocol_violation", reason: error.message};
+  }
+  // For other errors, include the original error message if available
+  const reason = error instanceof Error ? error.message : "SQLite authority store could not be read; check database availability and lock contention";
+  return {status: "unavailable", reason_code: "provider_read_unavailable", reason};
 }
 
 function fileBytes(path: string): number {

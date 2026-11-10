@@ -54,6 +54,37 @@ export function selectQueuedChatTurns(input: JsonObject): JsonObject {
   return {turn_ids: ids};
 }
 
+/** Select delivery for a provider-verified native mention in an exact Session.
+ * A recorded ingress owns retries, even after the observed Turn has changed.
+ */
+export function planNativeMentionIngress(input: JsonObject): JsonObject {
+  if (input.mentioned !== true) return {action: "configured"};
+  if (input.binding_matches !== true) return {action: "reject", error_code: "live_steering_session_not_attached"};
+  if (input.text_only !== true) return {action: "reject", error_code: "queue_steering_attachments_unavailable"};
+
+  if (input.receipt != null) {
+    const receipt = requireJsonObject(input.receipt, "mention ingress receipt");
+    if (input.receipt_message_matches !== true) return {action: "unresolved"};
+    if (receipt.mode === "session_queue") return {action: "enqueue"};
+    if (receipt.mode !== "live_steering") return {action: "unresolved"};
+    if (receipt.status === "delivered" && typeof receipt.active_turn_id === "string" &&
+        receipt.active_turn_id && (receipt.expected_turn_id == null || receipt.expected_turn_id === receipt.active_turn_id)) {
+      return {action: "delivered", target_turn_id: receipt.active_turn_id};
+    }
+    if (receipt.status === "failed" && NOT_DELIVERED.has(String(receipt.error_code))) {
+      return {action: "reject", error_code: receipt.error_code};
+    }
+    return {action: "unresolved"};
+  }
+
+  if (input.queued_turn_exists === true) return {action: "enqueue"};
+  // A recovered source event without a Chat receipt cannot bind to a newer
+  // active Turn. Keep the original message available for explicit recovery.
+  if (input.may_deliver_new !== true) return {action: "unresolved"};
+  if (input.target_turn_id === null) return {action: "enqueue"};
+  return {action: "steer", target_turn_id: requireNonEmptyString(input.target_turn_id, "target_turn_id")};
+}
+
 export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
   const session = requireJsonObject(input.session, "session");
   const turn = requireJsonObject(input.turn, "queued turn");
@@ -109,6 +140,36 @@ export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
     schema_version: QUEUE_STEERING_SCHEMA, client_ingress_id: id,
     target_turn_id: target, operation_id: requireNonEmptyString(request.operation_id, "operation_id"), status: "pending",
   }};
+}
+
+/** Positive native evidence can settle an uncertain send, never authorize a retry. */
+export function planChatSteeringReadback(input: JsonObject): JsonObject {
+  const receipt = requireJsonObject(input.receipt, "steering receipt");
+  const capture = receipt.native_steering;
+  if (capture == null) return {action: "unresolved"};
+  const native = requireJsonObject(capture, "native steering capture");
+  const turn = requireJsonObject(input.turn, "original steering Turn");
+  const validIds = [native.local_turn_id, native.thread_id, native.turn_id, native.client_message_id]
+    .every(value => typeof value === "string" && value.length > 0);
+  if (!validIds || receipt.mode !== "live_steering" ||
+      !["pending", "failed"].includes(String(receipt.status)) ||
+      typeof receipt.message !== "string" || !receipt.message.trim() ||
+      turn.turn_id !== native.local_turn_id || turn.upstream_turn_id !== native.turn_id ||
+      (receipt.expected_turn_id != null && receipt.expected_turn_id !== native.local_turn_id) ||
+      input.session_thread_id !== native.thread_id || input.adapter_thread_id !== native.thread_id) {
+    return {action: "unresolved"};
+  }
+  if (input.items == null) return {action: "read", turn_id: native.turn_id};
+  if (input.inventory_complete !== true || !Array.isArray(input.items)) return {action: "unresolved"};
+  const items = input.items.map(value => requireJsonObject(value, "native Turn entry"));
+  if (items.some(entry => entry.turnId !== native.turn_id)) return {action: "unresolved"};
+  const matches = items.map(entry => requireJsonObject(entry.item, "native Turn item"))
+    .filter(item => item.type === "userMessage" && item.clientId === native.client_message_id);
+  if (matches.length !== 1 || !Array.isArray(matches[0].content) || matches[0].content.length !== 1) {
+    return {action: "unresolved"};
+  }
+  const text = requireJsonObject(matches[0].content[0], "native user text");
+  return {action: text.type === "text" && text.text === receipt.message.trim() ? "confirmed" : "unresolved"};
 }
 
 /** Pending input changes share the queue consumer's Session/Turn fence.

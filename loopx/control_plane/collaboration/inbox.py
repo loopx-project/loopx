@@ -13,7 +13,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from ...file_lock import exclusive_cross_runtime_file_lock, write_bytes_atomic
+from ...file_lock import (
+    exclusive_cross_runtime_file_lock,
+    exclusive_file_lock,
+    exclusive_mutation_file_lock,
+    try_exclusive_file_lock,
+    write_bytes_atomic,
+)
 from ..runtime.file_paths import windows_extended_path
 from ..content_digest import BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN
 from ..todos.contract import TODO_ID_PATTERN
@@ -127,15 +133,28 @@ def _request_lock(
     request_id: str,
     scope: CollaborationGoalScope | None,
     legacy_path: Path,
-    *, force_exact: bool = False,
+    *,
+    force_exact: bool = False,
+    preserve_holder: bool = False,
 ):
     lock = (
         _root(root) / "request-locks" / request_id
         if force_exact or scope is not None and scope.exact
         else legacy_path
     )
-    with exclusive_cross_runtime_file_lock(lock):
-        yield
+    if not preserve_holder:
+        with exclusive_cross_runtime_file_lock(lock):
+            yield
+        return
+    # Inventory needs both fences but can keep the prior holder record when
+    # the kernel fence is free. A busy legacy writer gets the usual timed wait.
+    with exclusive_mutation_file_lock(lock):
+        with try_exclusive_file_lock(lock, preserve_holder=True) as held:
+            if held is not None:
+                yield
+                return
+        with exclusive_file_lock(lock):
+            yield
 
 
 def normalize_request(value: Any) -> dict | None:
@@ -538,7 +557,7 @@ DELIVERY_STATUSES = set(_delivery_contract["delivery_statuses"])
 DELIVERY_ERRORS = set(_delivery_contract["delivery_errors"])
 
 
-def reply_status(root, row, *, include_result_key=None):
+def reply_status(root, row, *, include_result_key=None, observe_result=None):
     """Read current delivery state, optionally selecting result identities first.
 
     The selector narrows IO only; retained results use the same validation and
@@ -578,6 +597,8 @@ def reply_status(root, row, *, include_result_key=None):
             "delivered_at": delivered_at,
             "error": error,
         }
+        if observe_result is not None:
+            observe_result(path, reply)
         if state.get("verification") == "reconciled_after_restart":
             item["verification"] = "reconciled_after_restart"
         result.append(item)
