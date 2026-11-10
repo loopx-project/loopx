@@ -37,7 +37,7 @@ class Source(GoalSource):
         for i in range(23):
             rows.append(dict(goal_id=self.goal_id,agent_id='source-worker',classification='state_recorded',
                 json_path='native-record-'+str(i)+'.json',
-                generated_at=(datetime(2026,1,1,tzinfo=timezone.utc)+timedelta(minutes=41*i)).isoformat(),
+                generated_at='' if i == 7 else (datetime(2026,1,1,tzinfo=timezone.utc)+timedelta(minutes=41*i)).isoformat(),
                 agent_vision=dict(schema_version='goal_vision_replan_contract_v0',agent_id='source-worker',
                     vision_patch=dict(vision_summary=self.id+' original objective '+str(i),acceptance_summary='Compare independently checked outcomes.'),
                     path_delta=dict(prior_assumption='A candidate might improve the original outcome.',
@@ -143,12 +143,21 @@ try {
     await page.screenshot({path:resolve(output,"strategies-before-desktop.png")});
     await page.locator(".research-strategy-entry").click();
     const strategies = page.getByRole("region",{name:"策略历史",exact:true});
-    await strategies.getByText("Retained original objective 22",{exact:true}).waitFor();
+    const chronology = strategies.getByRole("list",{name:"全部策略记录",exact:true});
+    await chronology.getByText("Retained original objective 22",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),"all","Opening history keeps the whole chronology instead of selecting the latest record");
+    assert.equal(await chronology.locator("li").count(),23,"The overview retains every version beyond the status window");
+    assert.match(await chronology.locator("li").first().innerText(),/Retained original objective 0/);
+    assert.match(await chronology.locator("li").last().innerText(),/时间未记录[\s\S]*Retained original objective 7/,"Unknown recorded times stay readable without inventing a date");
+    const span = await strategies.locator(".source-strategies-meta").first().locator("time").evaluateAll(elements=>elements.map(element=>element.getAttribute("datetime")));
+    assert.equal(Date.parse(span[1])-Date.parse(span[0]),15*3600000+2*60000,"The overview spans the complete fifteen-hour record window");
+    const earliestStrategy = await chronology.locator("button").first().getAttribute("data-strategy-id");
+    await page.screenshot({path:resolve(output,"strategies-overview-desktop.png")});
+    await chronology.getByRole("button").filter({hasText:"Retained original objective 22"}).click();
     assert.ok(await strategies.getByText("Retained original objective 22",{exact:true}).evaluate(element=>parseFloat(getComputedStyle(element).fontSize)>=16),"Original prose keeps the reading-body size");
     const strategySelect = strategies.getByRole("combobox",{name:"策略记录",exact:true});
     assert.equal(await strategySelect.locator("option").count(),23);
     const newestStrategy = new URL(page.url()).searchParams.get("research_state");
-    const earliestStrategy = await strategySelect.locator("option").last().getAttribute("value");
     assert.notEqual(newestStrategy,earliestStrategy);
     await page.screenshot({path:resolve(output,"strategies-desktop.png")});
     await strategySelect.selectOption(earliestStrategy);
@@ -190,6 +199,9 @@ try {
     await strategies.getByText("原来源中找不到所选版本。可选择其他记录。",{exact:true}).waitFor();
     assert.equal(await strategies.getByRole("article",{name:"策略原文",exact:true}).count(),0,"Missing exact versions never substitute the latest one");
     await strategySelect.selectOption(earliestStrategy);
+    await strategies.getByRole("button",{name:"返回策略总览",exact:true}).click();
+    await page.waitForFunction(id=>document.activeElement?.dataset.strategyId===id,earliestStrategy);
+    await page.screenshot({path:resolve(output,"strategies-overview-phone.png")});
     await strategies.getByRole("button",{name:"返回研究历程",exact:true}).focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(()=>document.activeElement?.classList.contains("research-strategy-entry"));
@@ -255,11 +267,16 @@ try {
     await page.getByRole("heading",{name:"Distinct research",exact:true}).waitFor();
     await page.locator(".personal-goal-tabs").getByRole("button",{name:"研究",exact:true}).click();
     await page.getByText("这份来源没有可读的 Explore 记录。",{exact:true}).waitFor();
-    await page.locator(".research-strategy-entry").click();
-    await strategies.getByText("Distinct original objective 22",{exact:true}).waitFor();
+    await chronology.getByText("Distinct original objective 22",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),null,"A proven-empty Explore source shows all original strategies without another interaction");
+    assert.equal(await chronology.locator("li").count(),23);
     assert.equal(await strategies.getByText("Retained original objective 22",{exact:true}).count(),0);
     assert.equal(await page.locator(".research-history-node").count(),0,"Native strategies do not fabricate Explore nodes");
-    await strategies.getByRole("button",{name:"返回研究历程",exact:true}).click();
+    await page.screenshot({path:resolve(output,"empty-explore-strategies-desktop.png")});
+    await chronology.getByRole("button").filter({hasText:"Distinct original objective 0"}).click();
+    await strategies.getByRole("article",{name:"策略原文",exact:true}).getByText("Distinct original objective 0",{exact:true}).waitFor();
+    await strategies.getByRole("button",{name:"返回策略总览",exact:true}).click();
+    await page.waitForFunction(()=>document.activeElement?.dataset.strategyId);
     await page.getByLabel("选择控制面来源",{exact:true}).click();
     await page.getByRole("option",{name:"Retained",exact:true}).click();
     await page.getByRole("button",{name:/Retained research/}).first().waitFor();
