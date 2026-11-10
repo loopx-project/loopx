@@ -214,9 +214,12 @@ def _display_git_path(path: bytes) -> tuple[str, bool]:
 
 
 def _git_untracked_paths(workspace: Path) -> list[bytes]:
-    """Return the untracked byte pathnames exactly as Git recorded them."""
+    """Return every untracked file, not Git's directory summary."""
 
-    result = _run_git_paths(workspace, ["status", "--porcelain", "-z"])
+    result = _run_git_paths(
+        workspace,
+        ["status", "--porcelain", "-z", "--untracked-files=all"],
+    )
     if result.returncode != 0:
         raise RuntimeError("git status --porcelain -z failed")
     entries = result.stdout.split(b"\0")

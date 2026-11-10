@@ -298,7 +298,11 @@ def test_untracked_byte_paths_keep_three_distinct_records(
     )
 
     def fake_run_git_paths(workspace: Path, args: list[str], *, timeout: int = 10):
-        stdout = output if args == ["status", "--porcelain", "-z"] else b""
+        stdout = (
+            output
+            if args == ["status", "--porcelain", "-z", "--untracked-files=all"]
+            else b""
+        )
         return subprocess.CompletedProcess(args, 0, stdout, b"")
 
     monkeypatch.setattr(acceptance_loop, "_run_git_paths", fake_run_git_paths)
@@ -407,3 +411,52 @@ def test_truncated_packet_checks_every_path_regardless_of_diff_order(
     assert recovered["review_packet"]["files_changed_unrepresentable_count"] == 0
     assert len(recovered["caller_repo_branch"]["changed_files"]) == 20
     assert recovered["review_packet"]["ready"] is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the fixture uses the POSIX true command")
+def test_untracked_directories_are_expanded_before_counting(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    nested = repo / "nested"
+    nested.mkdir()
+    for index in range(26):
+        (nested / f"file-{index:02d}.txt").write_text(
+            "untracked\n", encoding="utf-8"
+        )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "status.showUntrackedFiles", "normal"],
+        check=True,
+    )
+    summary = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "-z"],
+        stdout=subprocess.PIPE, check=True,
+    ).stdout
+    assert summary == b"?? nested/\0"
+
+    command = [
+        "--format", "json", "issue-fix", "caller-repo-branch",
+        "--repo-path", str(repo), "--base-branch", "main",
+        "--issue-branch", "issue", "--validation-command", "true",
+        "--execute",
+    ]
+
+    def run_packet() -> dict:
+        completed = run_source_cli(command, cwd=repo, timeout=60)
+        return json.loads(completed.stdout)
+
+    default = run_packet()
+    assert default["ok"] is True
+    assert default["caller_repo_branch"]["changed_file_count"] == 26
+    assert default["caller_repo_branch"]["changed_files_truncated"] is True
+    assert len(default["caller_repo_branch"]["changed_files"]) == 20
+    assert default["review_packet"]["ready"] is True
+
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "status.showUntrackedFiles", "no"],
+        check=True,
+    )
+    hidden = run_packet()
+    assert hidden["ok"] is True
+    assert hidden["caller_repo_branch"]["changed_file_count"] == 26
+    assert hidden["caller_repo_branch"]["changed_files_truncated"] is True
+    assert len(hidden["caller_repo_branch"]["changed_files"]) == 20
+    assert hidden["review_packet"]["ready"] is True
