@@ -28,7 +28,10 @@ _RUN_STATUS_TRANSITIONS = {
     "planned": _RUN_STATUSES,
     "running": {"running", "completed", "runner_invalid", "cancelled"},
     "completed": {"completed"},
-    "runner_invalid": {"runner_invalid"},
+    # A runner may fail closed before post-run evidence is fully reconciled.
+    # Permit the same stable run to advance once to a validated completed row;
+    # completed and cancelled rows remain immutable.
+    "runner_invalid": {"runner_invalid", "completed"},
     "cancelled": {"cancelled"},
 }
 _TERMINAL_RUN_STATUSES = {"completed", "runner_invalid", "cancelled"}

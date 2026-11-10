@@ -486,6 +486,12 @@ WORK_RESULT_VERIFICATION_INSTRUCTION = (
 )
 
 
+COLLABORATION_INPUTS_GUIDANCE = (
+    "Use inputs only for shared-workspace relative file refs with a description and an optional verified sha256. "
+    "Put PR, issue and other URLs and their exact revisions in context, never in inputs. If there are no shared files, use inputs=[]. "
+)
+
+
 def _turn_prompt(
     user_message: str,
     *,
@@ -601,7 +607,9 @@ def _turn_prompt(
         "for ordinary work that belongs to a qualified existing responsible Agent, or to forward context for that Agent to assess/replan, emit context_handoff={goal_id,agent_id,brief} using "
         ) +
         "one exact catalog recipient, proposals=[], and no confirmation gate. Otherwise context_handoff=null. For one request involving several authorized Agents, context_handoff may instead be an array of at most 32 entries, each with its own exact goal_id/agent_id and complete recipient-specific brief. Resolve each recipient independently; do not force one to relay for the others. Never broadcast a private brief or another recipient's reply beyond the original audience grant. Each request is independently authorized, delivered and returned to this conversation; a partial failure is not batch success. Reuse delivered requests after checking receipts; include only remaining work or new corrections. "
-        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; then preserve relevant earlier corrections and rejected approaches, explicit constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. inputs are shared-workspace relative files {ref,description,sha256?}; include a digest only when actually read. This is semantic context, never a priority, task edit or new authority. "
+        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; preserve relevant corrections, rejected approaches, constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. "
+        + COLLABORATION_INPUTS_GUIDANCE
+        + "The envelope requests submission; claim delivery only after a host receipt. A brief is context, not a priority, task edit or new authority. "
         "Before preparing a new Goal, resolve the current conversation and permitted existing work by semantic relevance, not words like goal, research or continue. "
         "A continuation, correction or status question belongs to the established Goal/owner. Preserve its constraints; do not restart, create a duplicate Goal or ask for permission already granted. "
         "For requested work, inspect the supplied Goal directory and relevant work/Agent evidence (using the declared read tool when incomplete). An empty delivery-grant list does not prove there is no existing work. "
@@ -819,19 +827,18 @@ class CodexChatAgentSession:
             if not execution_mode else ""
         )
         account_base_config = host_config
-        from .capabilities.native_chat.codex_auth import prepare_api_transport, authenticate_isolated
-        api_transport = prepare_api_transport(account_runtime_root, base_home,
-            isolated_home=runtime_home if runtime_home != base_home else None,
-            eligible=not execution_mode and not provider_override and not (host_config or {}).get("model_provider"),
-            consumer=account_consumer, model=model)
-        if api_transport is not None:
-            runtime_env[api_transport.env_key] = api_transport.token
-            host_config, provider_override = api_transport.configuration(host_config or {}), api_transport.provider
+        from .capabilities.native_chat import codex_auth
+        host_config, provider_override, api_transport, retain_transport = codex_auth.prepare_conversation_transport(
+            account_runtime_root, base_home, runtime_home, existing_thread_id, current=host_config or {},
+            provider=provider_override, eligible=not execution_mode, consumer=account_consumer,
+            model=model, environment=runtime_env)
         command = [resolved, "app-server"]
         if permissions_profile:
             # Keep this native store independent even when the account's
             # default credential backend is a shared OS keychain.
             command.extend(["-c", 'cli_auth_credentials_store="file"'])
+        if api_transport is not None or retain_transport:
+            command.extend(codex_auth.transport_arguments(host_config))
         if _compatibility_catalog_path is not None:
             command.extend(
                 [
@@ -916,8 +923,9 @@ class CodexChatAgentSession:
                 request_id=1,
             )
             session._notify("initialized", {})
+            codex_auth.authenticate_api_transport(session, api_transport)
             if permissions_profile:
-                session._host_model_auth = authenticate_isolated(session, base_home, runtime_home, resolved, api_transport=api_transport)
+                session._host_model_auth = codex_auth.authenticate_isolated(session, base_home, runtime_home, resolved, api_transport=api_transport)
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
@@ -927,21 +935,24 @@ class CodexChatAgentSession:
             # copying auth, restarting clients or replacing the original thread.
             follow_native_provider = bool(existing_thread_id and not execution_mode
                 and (not permissions_profile or metadata_review_context is not None) and not provider_override)
-            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None
+            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None or retain_transport
             if read_native_config:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
                 # Let Codex resolve trusted layers; never copy sandbox or approval
                 # settings from project files over the existing Core grant.
                 config_result = session._request(
-                    "config/read", {"cwd": str(root), "includeLayers": False},
+                    "config/read", {"cwd": str(root), "includeLayers": bool(api_transport or retain_transport)},
                     request_id=3,
                 )
                 effective = config_result.get("config", {})
                 if not isinstance(effective, dict):
                     raise session._runtime_error("Codex returned an invalid project configuration.")
+                lower_transport = codex_auth.lower_transport_configuration(config_result)
                 if api_transport is not None:
-                    host_config = api_transport.configuration(host_config or {}, effective)
+                    host_config = api_transport.configuration(host_config or {}, lower_transport)
+                elif retain_transport and provider_override in lower_transport.get("model_providers", {}):
+                    raise session._runtime_error("Native host ChatGPT transport conflicts with project configuration.")
                 if owner_git_write:
                     # Preserve the native workspace policy (including network
                     # and temporary-directory settings). A separate named
@@ -1107,7 +1118,7 @@ class CodexChatAgentSession:
             # for autonomous execution; enabling it here causes conversational messages
             # to be treated as continuation ticks instead of the current user task.
             session.next_request_id = 4 if read_native_config else 3
-            if session._host_model_auth is not None:
+            if session._host_model_auth is not None or api_transport is not None and api_transport.provider == "openai":
                 session.next_request_id = 5
             if read_only_review:
                 session.next_request_id = max(session.next_request_id, 6)
@@ -1140,7 +1151,7 @@ class CodexChatAgentSession:
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
-                    host_config=account_base_config if api_transport is not None else host_config,
+                    host_config=account_base_config if api_transport is not None or retain_transport else host_config,
                     launch_guard=launch_guard,
                     account_runtime_root=account_runtime_root,
                     account_consumer=account_consumer,
@@ -1476,7 +1487,8 @@ class CodexChatAgentSession:
         from .capabilities.native_chat.codex_adapter import compact_native_history
         compact_native_history(self, check=check)
 
-    def steer(self, user_message: str, *, expected_turn_id: str) -> str:
+    def steer(self, user_message: str, *, expected_turn_id: str,
+              client_message_id: str | None = None) -> str:
         """Inject one user message into the exact active Codex Turn."""
 
         text = str(user_message or "").strip()
@@ -1488,6 +1500,7 @@ class CodexChatAgentSession:
             {
                 "threadId": self.thread_id,
                 "expectedTurnId": selected_turn_id,
+                **({"clientUserMessageId": client_message_id} if client_message_id is not None else {}),
                 # The native Turn already has its task and policy. Replaying
                 # the start prompt would reframe this update as a new task.
                 "input": [{"type": "text", "text": text}],

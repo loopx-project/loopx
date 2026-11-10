@@ -85,6 +85,35 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
     const decision = decideTaskLeaseAcquire({handoff_mode: mode!, registered_agents: input.registered_agents,
       ...facts, command: input});
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
+      const conflictLeases = decision.conflict_indexes.map(i => facts.other_leases[i]);
+      const ownConflicts = conflictLeases.filter(lease => lease.owner === input.owner);
+      const foreignConflictCount = conflictLeases.length - ownConflicts.length;
+      const ownConflict = ownConflicts.length === 1 ? ownConflicts[0] : null;
+      const ownConflictLease = ownConflict === null ? null : canonicalTaskLease(
+        indexCoordinationProjection(head.head, input.goal_id).leases.get(String(ownConflict.todo_id))!,
+        input.goal_id, String(ownConflict.todo_id));
+      const ownConflictRecovery = ownConflict === null || ownConflictLease === null ? {} : {
+        own_conflicting_lease: {
+          todo_id: ownConflict.todo_id,
+          owner: ownConflict.owner,
+          write_scopes: ownConflict.write_scopes,
+          version: leaseVersion(ownConflictLease),
+        },
+        recovery: {
+          action: "inspect_own_conflicting_lease",
+          execution_authority_granted: false,
+          reason: foreignConflictCount > 0
+            ? "Inspect the active lease for your other Todo. Releasing it after execution has stopped will not clear the other listed conflicting holder(s); coordinate shared writes or use an isolated worktree for independent code edits."
+            : "Inspect the active lease for your other Todo. Release it only after confirming that execution has stopped; otherwise keep it and use an isolated worktree for independent code edits.",
+          inspect: {command: "loopx task-lease inspect", cli_args: ["task-lease", "inspect",
+            "--goal-id", input.goal_id, "--todo-id", String(ownConflict.todo_id)]},
+          release: {command: "loopx task-lease release", cli_args: ["task-lease", "release",
+            "--goal-id", input.goal_id, "--todo-id", String(ownConflict.todo_id),
+            "--owner", input.owner, "--idempotency-key", String(ownConflictLease.idempotency_key),
+            "--expected-version", String(leaseVersion(ownConflictLease))]},
+        },
+        ...(foreignConflictCount > 0 ? {foreign_conflict_count: foreignConflictCount} : {}),
+      };
       return failed(decision.code, decision.code === "handoff_mode_retired"
         ? "Legacy ownership cannot grant new execution; release retained leases and review handoff-mode plan-migration/migrate before acquiring again."
         : `canonical task lease acquire rejected: ${decision.code}`, {
@@ -92,7 +121,8 @@ export async function executeCanonicalTaskLeaseAcquire(store: AuthorityStore, ra
           "Coordinate shared writes with the listed holders. For isolated code edits, use your own separate Git worktree and acquire with --write-worktree; file overlaps become integration advisories. A known same-checkout collision remains rejected. Never take over a foreign lease or use code-edit mode for shared runtime state."} : {}),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(facts.current),
         ...(facts.todo ? {todo_status: facts.todo.status, claimed_by: facts.todo.claimed_by, excluded_agents: [...facts.todo.excluded_agents]} : {}),
-        ...(decision.conflict_indexes.length ? {conflicts: decision.conflict_indexes.map(i => facts.other_leases[i])} : {})});
+        ...ownConflictRecovery,
+        ...(conflictLeases.length ? {conflicts: conflictLeases} : {})});
     }
     const objective = decision.outcome === "apply" ? goalObjectiveWorkGuard(head.head, input.owner) : null;
     if (objective !== null) return failed(String(objective.reason_code), String(objective.reason), {goal_objective_guard: objective});

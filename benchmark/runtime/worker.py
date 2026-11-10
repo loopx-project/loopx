@@ -27,6 +27,11 @@ def read_json(text: str) -> dict:
     return payload
 
 
+def host_output_paths(wake: Path) -> tuple[Path, Path]:
+    """Paths written by a native Host attempt, in stdout/stderr order."""
+    return wake / "stdout.jsonl", wake / "stderr.log"
+
+
 def heartbeat_host_failure(wake: Path, receipt: dict) -> dict:
     """Adapt completed native process errors to the existing Host policy record.
 
@@ -45,11 +50,10 @@ def heartbeat_host_failure(wake: Path, receipt: dict) -> dict:
         if line.strip() and not failure.observe_stdout(line):
             complete = False
 
-    for filename, consume in (("stdout.jsonl", observe_stdout),
-                              ("stderr.log", failure.observe_stderr)):
+    for path, consume in zip(host_output_paths(wake), (observe_stdout, failure.observe_stderr)):
         lines = HostOutputLines(consume)
         try:
-            with (wake / filename).open(encoding="utf-8") as stream:
+            with path.open(encoding="utf-8") as stream:
                 while chunk := stream.read(65536):
                     lines.feed(chunk)
             lines.finish()
@@ -525,6 +529,7 @@ def run_once(env: dict[str, str]) -> dict:
     log_root = Path(env["LOOPX_WAKE_LOG_DIR"])
     wake = log_root / turn_id
     wake.mkdir(parents=True, exist_ok=False)
+    stdout_path, stderr_path = host_output_paths(wake)
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
     # Preserve this trial's resolved off/on choice in both preflight and solver
@@ -671,7 +676,7 @@ def run_once(env: dict[str, str]) -> dict:
         if phase_work_deadline is not None and time.time() >= phase_work_deadline:
             receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
             return receipt
-        with (wake / "stderr.log").open("w") as stderr:
+        with stderr_path.open("w") as stderr:
             if execution.native_goal and stage == "execute":
                 run_native_goal(env, execution, body, receipt, stderr,
                                 process_evidence_path=wake / "native-process.json")
@@ -694,7 +699,7 @@ def run_once(env: dict[str, str]) -> dict:
                     if execution.mode == "turn" and stage == "execute"
                     else native_command(env, execution, stage, wake, session_wake)
                 )
-                with (wake / "stdout.jsonl").open("w") as stdout:
+                with stdout_path.open("w") as stdout:
                     allowance = 150 if execution.mode == "turn" and stage == "execute" else 0
                     if stage == "plan":
                         # Planning and execution consume the same phase budget.
@@ -737,7 +742,7 @@ def run_once(env: dict[str, str]) -> dict:
                     temporary.write_text(json.dumps(receipt["planning"]))
                     temporary.replace(target)
                 elif execution.mode == "turn" and stage == "execute":
-                    result = read_json((wake / "stdout.jsonl").read_text())
+                    result = read_json(stdout_path.read_text())
                     receipt["turn_execution"] = result
                     receipt["ok"] = receipt["ok"] and result.get("ok") is True
                     if receipt["ok"]:
@@ -760,7 +765,7 @@ def run_once(env: dict[str, str]) -> dict:
         checkpoint_context.close()
         try:
             if session_wake is not None and receipt.get("host_invoked") is True:
-                session_wake.observe(wake / "stdout.jsonl")
+                session_wake.observe(stdout_path)
         except BaseException as exc:
             receipt.update(ok=False, **_error_tail(exc))
             raise

@@ -166,6 +166,44 @@ try {
     child.stdin.write("slow-history-cancel\n");
     assert.equal((await next()).slow_history, true);
     await assert.rejects(() => fetchChatSessionHistory(original.session, AbortSignal.timeout(50)));
+    const readRequests = () => calls.filter(row => new URL(row.path, origin).pathname === "/api/chat/sessions/" + sessionId)
+      .map(row => new URL(row.path, origin));
+    child.stdin.write("history-extra\n");
+    const added = await next();
+    calls.length = 0;
+    const resumed = await fetchChatHistory(options, recovered);
+    assert.equal(readRequests().length, 1, "A proven append must not download the old complete transcript");
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.deepEqual(resumed.messages.slice(0, -1), recovered.messages);
+    assert.equal(resumed.messages.length, added.history_rows);
+    assert.equal(resumed.messages.at(-1)?.text, "A full new original result. ".repeat(150));
+    assert.equal(calls.filter(row => new URL(row.path, origin).pathname === "/api/chat/sessions").length, 2,
+      "The original source is verified again after a suffix read");
+
+    child.stdin.write("history-rewrite\n");
+    assert.equal((await next()).history_rows, added.history_rows);
+    calls.length = 0;
+    const rewritten = await fetchChatHistory(options, resumed);
+    assert.ok(readRequests().length > 2);
+    assert.equal(readRequests()[0].searchParams.has("known_history"), true);
+    assert.equal(readRequests()[1].searchParams.has("message_cursor"), false, "A changed prefix restarts at page zero");
+    assert.ok(rewritten.messages.some(row => row.text === "Changed earlier original row 10"));
+    assert.ok(!rewritten.messages.some(row => row.text === "Paged bound row 10"));
+
+    child.stdin.write("history-extra\n");
+    await next();
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (new URL(String(input), origin).searchParams.has("known_history")) {
+        child.stdin.write("deny\n");
+        assert.equal((await next()).source_verified, false);
+      }
+      return response;
+    };
+    await assert.rejects(() => fetchChatHistory(options, rewritten), "A revoked original binding cannot publish a suffix");
+    globalThis.fetch = routedRead;
+    child.stdin.write("recover\n");
+    assert.equal((await next()).source_verified, true);
   }
   let updated = history;
   if (!fallback) {

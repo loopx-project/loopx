@@ -79,6 +79,7 @@ def record_quota_monitor_poll_for_cli(
         target_key=args.target_key,
         result_hash=args.result_hash,
         material_change=bool(args.material_change),
+        material_change_scope=getattr(args, "material_change_scope", None),
         cadence=args.cadence,
         next_due_at=args.next_due_at,
         next_agent_todo=args.next_agent_todo,

@@ -14,6 +14,7 @@ const temporary = await mkdtemp(resolve(tmpdir(), "loopx-runtime-reader-"));
 const failFile = resolve(temporary, "unavailable");
 const backend = spawn(resolveTestPython(), ["-u", "-c", `
 import json, pathlib, sys, threading
+from datetime import datetime, timedelta, timezone
 from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 from loopx.control_plane.status.goal_source import GoalSource
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_edge_event
@@ -30,8 +31,26 @@ class Source(GoalSource):
             run_history=dict(available=True,goal_count=1,run_count=0,recent_runs=[],goals=[dict(
                 id=self.goal_id, display_name=self.id+' research',goal_objective='Compare two candidate routes against recorded evidence.',
                 registry_member=True,activation_state='active')]))
+    def read_run_history(self, goal_id):
+        self.check_access(goal_id)
+        rows=[]
+        for i in range(23):
+            rows.append(dict(goal_id=self.goal_id,agent_id='source-worker',classification='state_recorded',
+                json_path='native-record-'+str(i)+'.json',
+                generated_at='' if i == 7 else (datetime(2026,1,1,tzinfo=timezone.utc)+timedelta(minutes=41*i)).isoformat(),
+                agent_vision=dict(schema_version='goal_vision_replan_contract_v0',agent_id='source-worker',
+                    vision_patch=dict(vision_summary=self.id+' original objective '+str(i),acceptance_summary='Compare independently checked outcomes.'),
+                    path_delta=dict(prior_assumption='A candidate might improve the original outcome.',
+                        observed_reality='Negative result retained. Actual benefit remains unknown. '+('完整原文。 '*80),
+                        changed=['Revisit the candidate against the same acceptance.'],retained=['Original outcome and cost boundary.'],
+                        stopped=['Rejected candidate: negative evidence.'],unresolved_questions=['Did the next action adopt this plan?']),
+                    stride_decision=dict(next_probe=dict(scope='Record a discriminating next probe.',prediction='No gain without new evidence.',
+                        adoption_criterion='Independent acceptance.',cost_bound='Existing authorized bound.',minimum_evidence='Original result and complete cost.'),
+                        previous_review=dict(lesson='A replan record does not demonstrate adoption.')))))
+        return dict(ok=True,goal_filter=self.goal_id,goals=[dict(id=self.goal_id,registry_member=True,unique_runs=len(rows),latest_runs=rows)])
     def read_events(self, goal_id):
         self.check_access(goal_id)
+        if self.id == 'Distinct': return []
         events = [build_explore_node_event(goal_id=self.goal_id,node_id='route'+str(i%9),
             title=self.id+' route '+str(i%9),node_kind='question',status='exploring',
             summary='Recorded comparison; native benefit is unknown.',recorded_at='2026-01-01T%02d:%02d:00Z'%(i//4,i%4*15)) for i in range(90)]
@@ -64,6 +83,12 @@ try {
     messageSession: "saved-session", message: "saved-answer" });
   let holdAnalysis = true, failAnalysis = false, releaseAnalysis, readStarted;
   let analysisWrites = 0;
+  let strategyReads = 0, failStrategies = false;
+  await page.route("**/api/chat/goal-source-strategies?*", async route => {
+    assert.equal(route.request().method(), "GET"); strategyReads++;
+    if (failStrategies) return route.fulfill({status:503,json:{error:"Synthetic source failure"}});
+    return route.continue();
+  });
   await page.route("**/api/chat/research-analysis?*", async route => {
     if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
     if (holdAnalysis) {readStarted(); await new Promise(resolve => {releaseAnalysis = resolve;});}
@@ -113,6 +138,73 @@ try {
     await failure.waitFor({state:"hidden"});
     await history.locator(".analysis-read-loading").waitFor({state:"hidden"});
     assert.equal(analysisWrites,0,"Read recovery never starts an analysis");
+    await page.setViewportSize({width:1512,height:982});
+    assert.equal(strategyReads,0,"Normal Explore reading does not eagerly read strategy history");
+    await page.screenshot({path:resolve(output,"strategies-before-desktop.png")});
+    await page.locator(".research-strategy-entry").click();
+    const strategies = page.getByRole("region",{name:"策略历史",exact:true});
+    const chronology = strategies.getByRole("list",{name:"全部策略记录",exact:true});
+    await chronology.getByText("Retained original objective 22",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),"all","Opening history keeps the whole chronology instead of selecting the latest record");
+    assert.equal(await chronology.locator("li").count(),23,"The overview retains every version beyond the status window");
+    assert.match(await chronology.locator("li").first().innerText(),/Retained original objective 0/);
+    assert.match(await chronology.locator("li").last().innerText(),/时间未记录[\s\S]*Retained original objective 7/,"Unknown recorded times stay readable without inventing a date");
+    const span = await strategies.locator(".source-strategies-meta").first().locator("time").evaluateAll(elements=>elements.map(element=>element.getAttribute("datetime")));
+    assert.equal(Date.parse(span[1])-Date.parse(span[0]),15*3600000+2*60000,"The overview spans the complete fifteen-hour record window");
+    const earliestStrategy = await chronology.locator("button").first().getAttribute("data-strategy-id");
+    await page.screenshot({path:resolve(output,"strategies-overview-desktop.png")});
+    await chronology.getByRole("button").filter({hasText:"Retained original objective 22"}).click();
+    assert.ok(await strategies.getByText("Retained original objective 22",{exact:true}).evaluate(element=>parseFloat(getComputedStyle(element).fontSize)>=16),"Original prose keeps the reading-body size");
+    const strategySelect = strategies.getByRole("combobox",{name:"策略记录",exact:true});
+    assert.equal(await strategySelect.locator("option").count(),23);
+    const newestStrategy = new URL(page.url()).searchParams.get("research_state");
+    assert.notEqual(newestStrategy,earliestStrategy);
+    await page.screenshot({path:resolve(output,"strategies-desktop.png")});
+    await strategySelect.selectOption(earliestStrategy);
+    await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
+    assert.equal(strategyReads,1,"Switching original versions reuses the qualified snapshot");
+    await page.goBack();
+    await strategies.getByText("Retained original objective 22",{exact:true}).waitFor();
+    await page.goForward();
+    await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
+    await page.reload();
+    await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),earliestStrategy);
+    await page.getByLabel("选择控制面来源",{exact:true}).click();
+    await page.getByRole("option",{name:"Fresh",exact:true}).click();
+    await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),null);
+    assert.equal(await strategies.count(),0,"A source switch clears the old strategy reading selection");
+    await page.goBack();
+    await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
+    await page.setViewportSize({width:390,height:844});
+    await strategies.getByRole("heading",{name:"策略历史",exact:true}).scrollIntoViewIfNeeded();
+    await page.screenshot({path:resolve(output,"strategies-phone.png")});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await strategies.getByText("完整原始记录与来源",{exact:true}).click();
+    await strategies.locator("details pre").filter({hasText:"Rejected candidate: negative evidence."}).waitFor();
+    assert.match(await strategies.locator("details pre").innerText(),/A replan record does not demonstrate adoption/);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    failStrategies = true;
+    await strategies.getByRole("button",{name:"刷新策略历史",exact:true}).click();
+    await strategies.getByRole("alert").waitFor();
+    await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
+    await strategies.getByRole("alert").scrollIntoViewIfNeeded();
+    await page.screenshot({path:resolve(output,"strategies-failure-phone.png")});
+    failStrategies = false;
+    await strategies.getByRole("button",{name:"重试",exact:true}).click();
+    await strategies.getByRole("alert").waitFor({state:"hidden"});
+    const absentStrategy = new URL(page.url()); absentStrategy.searchParams.set("research_state","f".repeat(64));
+    await page.goto(absentStrategy.href);
+    await strategies.getByText("原来源中找不到所选版本。可选择其他记录。",{exact:true}).waitFor();
+    assert.equal(await strategies.getByRole("article",{name:"策略原文",exact:true}).count(),0,"Missing exact versions never substitute the latest one");
+    await strategySelect.selectOption(earliestStrategy);
+    await strategies.getByRole("button",{name:"返回策略总览",exact:true}).click();
+    await page.waitForFunction(id=>document.activeElement?.dataset.strategyId===id,earliestStrategy);
+    await page.screenshot({path:resolve(output,"strategies-overview-phone.png")});
+    await strategies.getByRole("button",{name:"返回研究历程",exact:true}).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(()=>document.activeElement?.classList.contains("research-strategy-entry"));
     await page.setViewportSize({width:1512,height:982});
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     assert.equal(new URL(new URL(page.url()).searchParams.get("statusUrl")).searchParams.get("source_namespace"),new URL(catalog[0].status_url).searchParams.get("source_namespace"),"the initial relative entry binds its physical source before subsequent navigation");
@@ -173,6 +265,18 @@ try {
     assert.equal(new URL(page.url()).searchParams.get("goalId"),"other-goal");
     await page.reload();
     await page.getByRole("heading",{name:"Distinct research",exact:true}).waitFor();
+    await page.locator(".personal-goal-tabs").getByRole("button",{name:"研究",exact:true}).click();
+    await page.getByText("这份来源没有可读的 Explore 记录。",{exact:true}).waitFor();
+    await chronology.getByText("Distinct original objective 22",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("research_state"),null,"A proven-empty Explore source shows all original strategies without another interaction");
+    assert.equal(await chronology.locator("li").count(),23);
+    assert.equal(await strategies.getByText("Retained original objective 22",{exact:true}).count(),0);
+    assert.equal(await page.locator(".research-history-node").count(),0,"Native strategies do not fabricate Explore nodes");
+    await page.screenshot({path:resolve(output,"empty-explore-strategies-desktop.png")});
+    await chronology.getByRole("button").filter({hasText:"Distinct original objective 0"}).click();
+    await strategies.getByRole("article",{name:"策略原文",exact:true}).getByText("Distinct original objective 0",{exact:true}).waitFor();
+    await strategies.getByRole("button",{name:"返回策略总览",exact:true}).click();
+    await page.waitForFunction(()=>document.activeElement?.dataset.strategyId);
     await page.getByLabel("选择控制面来源",{exact:true}).click();
     await page.getByRole("option",{name:"Retained",exact:true}).click();
     await page.getByRole("button",{name:/Retained research/}).first().waitFor();
@@ -218,6 +322,13 @@ try {
     assert.deepEqual(errors,[]);
   }
   console.log("runtime source workspace browser smoke: ok");
+} catch (error) {
+  const failedPage = browser?.contexts()[0]?.pages()[0];
+  if (failedPage) {
+    await failedPage.screenshot({path:resolve(output,"failure.png")}).catch(()=>{});
+    await writeFile(resolve(output,"failure.txt"),await failedPage.locator("body").innerText()).catch(()=>{});
+  }
+  throw error;
 } finally {
   await browser?.close();
   backend.kill("SIGTERM");

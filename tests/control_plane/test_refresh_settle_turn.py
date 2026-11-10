@@ -548,7 +548,8 @@ def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_owed_command_identity_and_lost_response_recover_without_another_debit(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("response", ["complete", "lost", "missing_receipt", "wrong_turn", "wrong_writeback", "wrong_event"])
+def test_owed_command_checks_child_receipts_or_recovers_without_another_debit(tmp_path, monkeypatch, provider, response):
     from loopx.cli_commands import refresh_settlement
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -566,22 +567,46 @@ def test_owed_command_identity_and_lost_response_recover_without_another_debit(t
             runtime_root=runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             replan_obligation_id=None, turn_instance_id=TURN_ID, goal_ref=None)
     real_run = subprocess.run
+    real_read = refresh_settlement.read_heartbeat_settlement
     calls = []
-    def lose_response(command, **kwargs):
+    readbacks = []
+    def observe_readback(*args, **kwargs):
+        readbacks.append(kwargs["turn_instance_id"])
+        return real_read(*args, **kwargs)
+    def observe_child(command, **kwargs):
         calls.append(command)
-        real_run(command, **kwargs)
-        raise OSError("Synthetic response loss after the real commitment")
-    monkeypatch.setattr(refresh_settlement.subprocess, "run", lose_response)
+        result = real_run(command, **kwargs)
+        assert result.returncode == 0
+        if response == "lost":
+            raise OSError("Synthetic response loss after the real commitment")
+        child = json.loads(result.stdout)
+        receipts = child["settlement_result"]["receipts"]
+        if response == "missing_receipt":
+            receipts.pop()
+        elif response == "wrong_turn":
+            child["settlement_identity"]["turn_instance_id"] = "different-turn"
+        elif response == "wrong_writeback":
+            receipts[1]["source_ref"] = "rollout_event:foreign-writeback"
+        elif response == "wrong_event":
+            child["rollout_event"]["event_id"] = "different-event"
+        return subprocess.CompletedProcess(command, result.returncode, json.dumps(child), result.stderr)
+    monkeypatch.setattr(refresh_settlement, "read_heartbeat_settlement", observe_readback)
+    monkeypatch.setattr(refresh_settlement.subprocess, "run", observe_child)
     wrong = copy.deepcopy(original)
     wrong["settlement_owed"]["command"] = wrong["settlement_owed"]["command"].replace(TURN_ID, "different-turn")
     settle(wrong)
-    assert not wrong["ok"] and not calls and _spend_run_count(runtime) == 0
+    assert not wrong["ok"] and not calls and readbacks == [TURN_ID] and _spend_run_count(runtime) == 0
+    readbacks.clear()
     result = copy.deepcopy(original)
     settle(result)
     assert result["ok"] and result["settlement_progress"]["state"] == "settled", result
-    assert "Synthetic response loss" in result["quota_spend"]["transport_warning"]
+    assert readbacks == ([] if response == "complete" else [TURN_ID])
+    if response == "lost":
+        assert "Synthetic response loss" in result["quota_spend"]["transport_warning"]
     assert len(calls) == 1 and _spend_run_count(runtime) == 1
     monkeypatch.setattr(refresh_settlement.subprocess, "run", real_run)
     replay = copy.deepcopy(original)
     settle(replay)
     assert replay["ok"] and replay["quota_spend"]["idempotent_replay"] and _spend_run_count(runtime) == 1
+    assert readbacks == ([TURN_ID] if response == "complete" else [TURN_ID, TURN_ID])
+    assert result["settlement_result"] == replay["settlement_result"]
