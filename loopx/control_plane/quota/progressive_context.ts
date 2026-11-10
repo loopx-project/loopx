@@ -718,7 +718,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
 }
 
 /** A pending Manager Inbox read already delivers these scoped request rows. */
-function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolean {
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -726,18 +726,25 @@ function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolea
       || read.ordering !== "before_work" || typeof read.command !== "string" || !read.command
       || source?.ok !== true || source.read_complete !== false
       || !agenda || agenda.read_command !== read.command || agenda.count_unit !== "request"
-      || agenda.scan_complete !== true || agenda.omitted_count !== 0 || agenda.unavailable_count !== 0
+      || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
         "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
-      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return false;
-  const {incoming_count: incoming, outgoing_count: outgoing, items} = agenda;
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
-      || incoming + outgoing !== items.length) return false;
-  // Keep small agendas inline. Three pointers retain the starting counts and
-  // scan status without repeating the required read's details or guidance.
-  return Buffer.byteLength(JSON.stringify(items), "utf8") >= 2048;
+      || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
+      || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
+  const fields = ["incoming_count", "outgoing_count", "scan_complete"];
+  if (omitted === 0) return fields;
+  // A complete scan can have a bounded display. Preserve the omission count
+  // and reconciliation guidance while leaving the rows to the required read.
+  if (typeof agenda.instruction === "string" && agenda.instruction.trim()) {
+    return [...fields, "omitted_count", "instruction"];
+  }
+  return undefined;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -876,8 +883,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include(...source, "content", field);
     include(...source, "content", "read_complete");
     const agendaPath = [...source, "content", "unfinished_delegations"];
-    if (canDeferManagerAgenda(_source, requiredInboxReads)) {
-      for (const field of ["incoming_count", "outgoing_count", "scan_complete"]) include(...agendaPath, field);
+    const agendaFields = managerAgendaOpeningFields(_source, requiredInboxReads);
+    if (agendaFields) {
+      for (const field of agendaFields) include(...agendaPath, field);
     } else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.

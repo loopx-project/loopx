@@ -816,7 +816,8 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
 
 
 @pytest.mark.parametrize("route", [
-    "matching", "different", "missing", "incomplete", "omitted", "unknown", "bad_counts", "small", "held",
+    "matching", "bounded", "different", "missing", "incomplete", "omitted", "unknown",
+    "bad_counts", "small", "held", "missing_instruction",
 ])
 def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
     command = "loopx manager-inbox read --goal-id fixture --agent-id author"
@@ -824,13 +825,17 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         "capability_id": "manager-context", "hook_id": "manager.context_inbox",
         "ordering": "before_work", "command": command}
     purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
-    agenda = {"count_unit": "request", "incoming_count": 3 if route == "bad_counts" else 2, "outgoing_count": 1,
+    bounded = route in {"bounded", "missing_instruction"}
+    agenda = {"count_unit": "request", "incoming_count": 3 if bounded or route == "bad_counts" else 2,
+        "outgoing_count": 1,
         "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
-        "omitted_count": int(route == "omitted"), "scan_complete": route != "incomplete",
+        "omitted_count": int(bounded or route == "omitted"), "scan_complete": route != "incomplete",
         "unavailable_count": int(route == "incomplete"), "read_command": command,
         "instruction": "Read the full current request before acting."}
     if route == "unknown":
         agenda["future_gate"] = "Check the retained restriction."
+    if route == "missing_instruction":
+        del agenda["instruction"]
     decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
     channel = decision["interaction_contract"]["agent_channel"]
     channel.update(delivery_allowed=route != "held", must_attempt=True)
@@ -846,11 +851,15 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
     assert values[prefix + "/read_complete"] is False
     agenda_path = prefix + "/unfinished_delegations"
-    if route == "matching":
+    if route in {"matching", "bounded"}:
         assert agenda_path not in values and agenda_path + "/items" not in values
         for field in ("incoming_count", "outgoing_count", "scan_complete"):
             assert values[f"{agenda_path}/{field}"] == agenda[field]
-        assert agenda_path + "/instruction" not in values
+        if bounded:
+            assert values[agenda_path + "/omitted_count"] == 1
+            assert values[agenda_path + "/instruction"] == agenda["instruction"]
+        else:
+            assert agenda_path + "/instruction" not in values
         assert read in values["/interaction_contract/agent_channel/required_reads"]
     else:
         assert values[agenda_path] == agenda

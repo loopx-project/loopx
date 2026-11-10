@@ -214,12 +214,14 @@ revision and advisory authority. This captured pre-work view does not replace th
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
 The initial read includes the bounded `unfinished_delegations` projection and
-`read_complete` flag. For an admitted normal work Turn with a large, complete
-agenda and a matching required Manager Inbox read, the initial view keeps the
-incoming and outgoing request counts, scan status and required command. The
-required read delivers the rows and their guidance. The original rows remain
-available from the same capture. Adoption and
-queued returns are intermediate states. Read the full current request before
+`read_complete` flag. For an admitted normal work Turn with a large
+agenda, a complete scan and a matching required Manager Inbox read, the initial
+view keeps the incoming and outgoing request counts, scan status and required
+command. A complete scan can still hit the summary's display limit. The initial
+view then also keeps the exact omitted count and reconciliation guidance. The
+required read and its existing cursor deliver the scoped request rows. The
+captured summary remains available at its original address. An incomplete scan, unavailable scan records or an unmatched read keeps the whole summary inline.
+Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.
 It also exposes existing outcome material addresses and the current settlement
@@ -387,10 +389,12 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
 首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
-工作 Turn 若有完整的大型委派摘要，且必读列表中有同一条管家收件箱命令，首读保留
-收发请求计数、扫描状态和必读命令，逐条记录及其说明由必做的收件箱读取交付。原记录仍可从
-同一捕获回读。采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，
-并沿已有范围约束和消费入口办理。
+工作 Turn 若有大型委派摘要、扫描完整，且必读列表中有同一条管家收件箱命令，首读保留
+收发请求计数、扫描状态和必读命令。扫描完整但摘要达到展示上限时，首读同时保留精确的
+省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。原摘要仍可从同一
+捕获取回。扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
+采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，并沿已有范围约束和
+消费入口办理。
 
 既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
 Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
