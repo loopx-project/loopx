@@ -14,8 +14,10 @@ changing the default quota path.
 
 One qualification case runs the same actor against two public-safe inputs:
 
-1. `full_packet`: the current full `quota should-run` decision;
-2. `candidate_packet`: the candidate `loopx_turn_envelope_v0` projection.
+1. `full_packet`: the full `quota should-run` decision or an explicitly supplied
+   complete `loopx_turn_envelope_v1` source;
+2. `candidate_packet`: a `loopx_turn_envelope_v0` projection or a complete v1
+   source from that same decision.
 
 Both arms share `qualification_id` and `actor_ref`. Before either actor call,
 the pair runner verifies that the candidate's action signature matches and its
@@ -23,7 +25,20 @@ the pair runner verifies that the candidate's action signature matches and its
 unrelated candidate from producing a false equivalence result. The runner also
 recomputes both semantic signature documents instead of trusting the
 candidate's stored `matches` flag; a field ablation therefore fails before any
-provider call. The comparator then checks these hard behavior dimensions:
+provider call. A complete source instead passes the production version,
+content-integrity and source-integrity reader. A raw full packet is composed
+through the existing owner for comparison; a captured v1 full packet retains
+its recorded host and settlement binding without recomposition. The pair must
+match the entire composed source, including unknown fields and exact numeric
+values, as well as its action semantics. Invalid new versions never fall back
+to the historical reader.
+
+Schema and confidentiality checks for **both** arms finish before the first
+actor call, regardless of arm order. A private or malformed second input must
+not consume a first provider call. The validated requests are then used by the
+existing actor/result/receipt path. These checks qualify packet fidelity and
+the no-write boundary; they do not prove model understanding or task outcomes.
+The comparator checks these hard behavior dimensions:
 
 - decision: execute, wait, ask the user, or stop;
 - selected todo;
@@ -106,7 +121,11 @@ matches.
 
 The store is never populated automatically. It contains no model response,
 conversation, credential metadata, or candidate packet; a current candidate is
-rebuilt in memory when the case is loaded into a corpus. Store receipts expose
+rebuilt in memory when the case is loaded into a corpus. Raw quota cases retain
+the existing v0 candidate by default. An explicitly retained complete capture
+stays complete in both arms, preserving its original binding. This support
+does not change the actual-default portfolio, frozen state matrix, scenario
+scoring, live-run permissions or promotion requirements. Store receipts expose
 only case id, digest, created/idempotent status, and count, never the packet or
 local path.
 
@@ -160,6 +179,14 @@ response-contract metadata are validated locally but are not repeated in the
 model prompt. The actor disables provider deep thinking for this deterministic
 extraction task and reserves 4096 output tokens so the bounded semantic
 contract is not constrained by the former 1200-token response budget.
+
+The adapter selects field-reading instructions from the validated packet
+schema, independently of the experimental arm label. A complete v1 source uses
+the full-source `interaction_contract`, `agent_identity`, `selected_todo`,
+`goal_boundary` and `scheduler_hint` paths even in `candidate_packet`; a v0
+projection retains its historical paths. The original packet reaches the
+provider unchanged, without an adapter-generated action projection or answer
+key.
 
 The model must derive `selected_todo_id` from the canonical selected-todo field:
 top-level `selected_todo.todo_id` in a full packet or
