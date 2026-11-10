@@ -171,9 +171,12 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 argv = shlex.split(action)
                 assert argv[argv.index("quota"):][:2] == ["quota", "should-run"]
                 assert argv[argv.index("--turn-instance-id") + 1] == "<unique-work-iteration-id-reuse-on-retry>"
-                assert contract["mcp_channel"]["delivery_executor"] == "complete_task"
-                assert contract["mcp_channel"]["delivery_todo_id"] is None
-                assert contract["mcp_channel"]["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420
+                assert "mcp_channel" not in contract
+                host = json.loads(guard.content[1].text)
+                assert host["schema_version"] == "host_mcp_interaction_v0"
+                assert host["delivery_executor"] == "complete_task"
+                assert host["delivery_todo_id"] is None
+                assert host["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420
                 rejected = await session.call_tool("claim_task", {"todo_id": "todo_reducer", "agent_id": "other-agent"})
                 assert json.loads(rejected.content[0].text)["ok"] is False
     asyncio.run(exercise())

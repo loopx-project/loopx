@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from .effect_program import SettlementIdentity
-from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from .effect_runtime import EffectRuntimeRejected, effect_runtime_result, source_number_tokens
 from .goals.vision_checkpoint import prepare_vision_refresh
 
 
@@ -153,7 +153,15 @@ def refresh_host_todo_vision(request: HostTodoSettlementRequest, *, run_cli: Hos
     return run_cli(args)
 
 
-def project_host_interaction(output: str) -> str:
+@dataclass(frozen=True, slots=True)
+class McpGuardContent:
+    """Local transport: unchanged Core source and its separate existing host channel."""
+
+    source: str
+    channel: Mapping[str, Any]
+
+
+def project_host_interaction(output: str) -> str | McpGuardContent:
     """Keep admission facts; let the typed host lens choose the transport instructions."""
     try:
         packet = json.loads(output)
@@ -164,10 +172,14 @@ def project_host_interaction(output: str) -> str:
     projection = _runtime_reduction({
         "schema_version": "loopx_host_todo_completion_transaction_v1",
         "phase": "project_guard", "packet": packet,
+        "source_number_tokens": source_number_tokens(packet),
     }, phase="project_guard")
     if not isinstance(projection.get("packet"), dict):
         raise RuntimeError("TypeScript host interaction projection shape mismatch")
-    return json.dumps(projection["packet"], ensure_ascii=False)
+    projected = projection["packet"]
+    if projected.get("schema_version") == "host_mcp_interaction_v0":
+        return McpGuardContent(source=output, channel=projected)
+    return json.dumps(projected, ensure_ascii=False)
 
 
 def _runtime_reduction(params: Mapping[str, Any], *, phase: str) -> dict[str, Any]:

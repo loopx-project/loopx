@@ -80,6 +80,7 @@ def _source_digest(value):
 @pytest.mark.parametrize("original,changed", [(1, 1.0), (1.0, 1),
     (2**60, 2**60 + 1), (-0.0, 0), (0, -0.0)])
 def test_complete_numeric_integrity_rejects_changes_across_consumers(original, changed):
+    from loopx.control_plane.host_adapter_settlement import McpGuardContent, project_host_interaction
     from loopx.control_plane.quota.turn_envelope import (
         assert_complete_turn_decision, build_turn_envelope, bind_turn_decision_capture,
     )
@@ -90,6 +91,9 @@ def test_complete_numeric_integrity_rejects_changes_across_consumers(original, c
     contract = compose_turn_decision(source)
     before = copy.deepcopy(contract)
     assert_complete_turn_decision(contract)
+    original_text = json.dumps(contract, ensure_ascii=False)
+    mcp = project_host_interaction(original_text)
+    assert isinstance(mcp, McpGuardContent) and mcp.source == original_text
     envelope = build_turn_envelope(contract)
     assert compose_turn_decision(contract) == contract
     tampered = copy.deepcopy(contract)
@@ -107,11 +111,14 @@ def test_complete_numeric_integrity_rejects_changes_across_consumers(original, c
     ):
         with pytest.raises(RuntimeError, match="integrity mismatch"):
             read()
+    with pytest.raises(ValueError, match="integrity mismatch"):
+        project_host_interaction(json.dumps(tampered))
     assert contract == before
 
 
 @pytest.mark.parametrize("codec", [None, "future_source_codec"])
 def test_complete_readers_refuse_an_unsupported_numeric_codec_without_fallback(codec):
+    from loopx.control_plane.host_adapter_settlement import project_host_interaction
     from tests.control_plane.test_replan_host_context_projection import _quota_payload
 
     contract = compose_turn_decision(_quota_payload())
@@ -119,6 +126,20 @@ def test_complete_readers_refuse_an_unsupported_numeric_codec_without_fallback(c
     contract, _ = _resign_contract(contract)
     with pytest.raises(RuntimeError, match="unsupported complete Turn decision hash codec"):
         _turn_envelope_result("complete_consumer", payload=contract)
+    with pytest.raises(ValueError, match="unsupported complete Turn decision hash codec"):
+        project_host_interaction(json.dumps(contract))
+
+
+def test_complete_mcp_non_success_keeps_original_source_without_delivery_ownership():
+    from loopx.control_plane.host_adapter_settlement import McpGuardContent, project_host_interaction
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    source = _quota_payload()
+    source.update(ok=False, normal_delivery_allowed=False, future_measurement=1.0)
+    original = json.dumps(compose_turn_decision(source), ensure_ascii=False)
+    result = project_host_interaction(original)
+    assert isinstance(result, McpGuardContent) and result.source == original
+    assert result.channel["delivery_todo_id"] is None
 
 
 def test_complete_reader_requires_original_numeric_transport_before_validation():
@@ -696,6 +717,102 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
     assert changed_surface["mode"] == "full"
     assert (capture / "decision.json").read_bytes() == original
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("bound_turn", [False, True])
+@pytest.mark.parametrize("source_fault", [None, "binding", "version"])
+def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, monkeypatch, provider, bound_turn, source_fault):
+    """Provider content must retain the original decision, beyond the CLI alone."""
+    import asyncio
+    import os
+    import loopx
+
+    pytest.importorskip("mcp.server.fastmcp")
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    from loopx.claude_goal_mode.scripts.goalmode_cmd import write_loop_md
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, read_fixture_todos
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state)),
+        state_path=state, provider=provider)
+    write_loop_md(project, GOAL_ID, AGENT_ID)
+    before = state.read_bytes()
+    package = Path(loopx.__file__).resolve().parent
+    launcher = tmp_path / "bin/loopx"
+    launcher.parent.mkdir()
+    source_file = tmp_path / "original.json"
+    calls = tmp_path / "guard-calls.txt"
+    extras = ["--available-capability", "shell", "--available-capability", "filesystem_read"]
+    if bound_turn:
+        extras += ["--turn-instance-id", "mcp-original-turn"]
+    launcher.write_text(f"#!{sys.executable}\n" +
+        "import json, pathlib, subprocess, sys\n" +
+        f"command = [sys.executable, '-m', 'loopx.entrypoint', '--runtime-root', {str(runtime)!r}, *sys.argv[1:], *{extras!r}]\n" +
+        "result = subprocess.run(command, capture_output=True)\n" +
+        f"pathlib.Path({str(source_file)!r}).write_bytes(result.stdout)\n" +
+        f"with pathlib.Path({str(calls)!r}).open('a') as log: log.write('guard\\n')\n" +
+        f"fault = {source_fault!r}\n" +
+        "if fault:\n"
+        "    packet = json.loads(result.stdout)\n"
+        "    if fault == 'binding': packet['interaction_contract']['cli_channel']['next_cli_actions'].append('changed procedure')\n"
+        "    else: packet['schema_version'] = 'loopx_turn_envelope_v99'\n"
+        "    sys.stdout.write(json.dumps(packet))\n"
+        "else: sys.stdout.buffer.write(result.stdout)\n"
+        "sys.stderr.buffer.write(result.stderr)\nsys.exit(result.returncode)\n")
+    launcher.chmod(0o700)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {"PATH": str(launcher.parent) + os.pathsep + os.environ.get("PATH", os.defpath),
+        "HOME": str(home), "PYTHONPATH": str(package.parent), "TMPDIR": str(tmp_path),
+        "NODE_OPTIONS": "--experimental-sqlite", "LOOPX_USAGE_PING": "0"}
+    params = StdioServerParameters(command=sys.executable,
+        args=[str(package / "claude_goal_mode/mcp/loopx_mcp.py")], cwd=str(project), env=env)
+
+    async def exercise():
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                for name in ("should_run", "list_todos"):
+                    response = await session.call_tool(name, {})
+                    original = source_file.read_text()
+                    source = json.loads(original)
+                    assert_complete_turn_decision(source)
+                    if source_fault:
+                        assert response.isError
+                        error = response.content[0].text
+                        assert ("integrity mismatch" if source_fault == "binding"
+                                else "unsupported complete Turn decision version") in error
+                        continue
+                    assert not response.isError
+                    assert response.structuredContent == {"result": response.content[0].text}
+                    received = json.loads(response.content[0].text)
+                    assert_complete_turn_decision(received)
+                    assert response.content[0].text == original
+                    assert received == source
+                    assert type(received["quota"]["compute"]) is float
+                    assert received["normal_delivery_allowed"] is bound_turn
+                    assert "mcp_channel" not in received["interaction_contract"]
+                    assert len(response.content) == 2
+                    channel = json.loads(response.content[1].text)
+                    assert channel["schema_version"] == "host_mcp_interaction_v0"
+                    assert channel["delivery_executor"] == "complete_task"
+                    assert channel["delivery_todo_id"] == (TODO_ID if bound_turn else None)
+                    if bound_turn:
+                        identity = received["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+                        assert identity == received["heartbeat_receipt"]["settlement_identity"]
+                        assert identity["turn_instance_id"] == "mcp-original-turn"
+
+    asyncio.run(exercise())
+    assert calls.read_text().splitlines() == ["guard", "guard"]
+    assert _spend_run_count(runtime) == 0
+    assert state.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

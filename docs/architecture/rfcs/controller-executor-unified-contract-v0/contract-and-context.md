@@ -969,6 +969,37 @@ nor successful fixtures prove retention or authorize fresh admission.
 Original-quota single-session outcomes/full costs, real caller retirement,
 maintenance qualification and independent review remain open before dual runs.
 
+#### MCP final-consumer boundary
+
+Complete-v1 MCP delivery validates the original source with the existing complete
+contract owner and numeric transport tokens. It sends the exact CLI JSON as the
+first native text block, with the existing `host_mcp_interaction_v0` channel in a
+separate block. The string structured result still carries that same original
+source. The shared Claude/Kiro/Kunlun MCP adapter owns this transport; it does not
+add a decision schema, change admission or re-sign a host-modified source.
+
+For this consumer, the complete-v1 branch that inserted `mcp_channel` and removed
+CLI settlement fields after binding is retired. The full original settlement
+recipe and identity remain source facts. The host channel specifies that
+`complete_task` executes that recipe instead of a second manual refresh/spend;
+independent replan still follows the live original CLI actions. Unversioned and
+recorded v0 inputs retain their compatibility projection. An invalid declared new
+version, binding or numeric representation fails before successful MCP delivery,
+without falling back to that historical branch or requesting fresh admission.
+
+Real stdio checks cover both `should_run` and `list_todos`, File/SQLite authority,
+unbound and bound Turns, exact source text, original settlement identity, and
+invalid-source refusal. Completion/recovery checks separately protect claims,
+writeback and once-only spend; a successful read is not settlement. Main's poll
+recovery qualification is reused: a supported v0 display may differ from the
+complete captured source, while its reader must recover that original source
+without a second poll or Host dispatch.
+
+This is final-consumer integrity qualification. Restoring complete source content
+can increase bytes relative to the invalid pruned response; compare total MCP
+content and structured result, not the first block alone. Natural-model adoption,
+original-quota outcome/full-cost benefit and installed rollout remain unqualified.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw

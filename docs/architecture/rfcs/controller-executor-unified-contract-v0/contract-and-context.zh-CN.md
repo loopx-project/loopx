@@ -698,6 +698,30 @@ navigation 负责所需分节与同 capture 恢复；受支持的 v0 capture 引
 引用式指令；措辞和成功 fixture 都不证明 retention，也不授权重新准入。原 quota 单会话的成果／完整
 成本、真实 caller 退役、维护资格及独立审阅仍开放，之后才考虑双会话实验。
 
+#### MCP 最终消费者边界
+
+完整 v1 的 MCP 交付沿既有完整契约 owner 和数值传输 tokens 验证原来源，将 CLI
+原始 JSON 原样放在第一段原生文本块，既有 `host_mcp_interaction_v0` channel 放在
+另一段。字符串 structured result 仍承载同一原来源。Claude／Kiro／Kunlun 共用的
+MCP adapter 负责这层传输，不新增决策 schema、不改变准入，也不给宿主改写后的
+来源重新签名。
+
+针对该消费者，退役完整 v1 在绑定后插入 `mcp_channel`、删除 CLI 结算字段的分支。
+原始完整结算步骤与身份继续作为来源事实保留；host channel 指定由 `complete_task`
+执行这些步骤，而非再次手工 refresh／spend。独立 replan 仍遵守当前原始 CLI 动作。
+无版本输入和已记录 v0 保留兼容投影。显式新版本、绑定或数值表示无效时，在 MCP
+成功交付前拒绝，不降级到历史分支，也不为此重新准入。
+
+真实 stdio 检查覆盖 `should_run` 和 `list_todos`、File／SQLite authority、未绑定
+和已绑定 Turn、原样来源正文、原始结算身份及无效来源拒绝。完成／恢复检查另行保护
+claim、writeback 与只 spend 一次；成功读取不等于结算。复用 main 的 poll 恢复资格：
+受支持的 v0 展示可不同于完整 capture，但其 reader 必须恢复同一原来源，且不再次
+poll 或 dispatch Host。
+
+这是最终消费者完整性资格。恢复完整来源内容可能比先前无效的裁剪响应增加字节；
+须计入 MCP 全部 content 和 structured result，不能只计第一块。自然模型采用、
+原 quota 成果／完整成本收益及已安装版本推广仍未获得资格。
+
 ### C1 基线边界与复用盘点
 
 基线是**原路径中调用者实际收到的 quota 交付**，不是内部原始 decision。
