@@ -312,11 +312,25 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("change", ["unrelated-registration", "review-order"])
+@pytest.mark.parametrize("change", ["unrelated-registration", "review-order", "mirror-review-order"])
 def test_running_operation_survives_non_authority_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, change: str,
 ) -> None:
     runtime, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
+    mirror = None
+    original_sync_stamp = "2026-01-01T00:00:00+00:00"
+    if change == "mirror-review-order":
+        synced = sync_project_registry_to_global(
+            registry_path=registry, runtime_root_override=str(runtime), goal_id="loopx-turn-fixture",
+        )
+        assert synced["ok"], synced
+        mirror = runtime / "registry.global.json"
+        # Make the mirror refresh observable even when both writes land in one second.
+        with project_registry_transaction(mirror, operation="prepare_fixture_mirror") as transaction:
+            original = transaction.payload_copy()
+            original["goals"][0]["synced_at"] = original_sync_stamp
+            assert transaction.commit(original)
+        arguments[arguments.index("--registry") + 1] = str(mirror)
     executable = Path(arguments[arguments.index("--codex-bin") + 1])
     waiting, proceed = tmp_path / "native-waiting", tmp_path / "native-proceed"
     after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
@@ -336,9 +350,17 @@ def test_running_operation_survives_non_authority_change(
             while not waiting.exists() and not host.done() and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert waiting.exists(), host.result() if host.done() else "native Turn was not acknowledged"
-            if change == "review-order":
+            if change != "unrelated-registration":
                 configured = _configure_fixture_goal(registry, runtime, "--pr-review-order", "reverse")
                 assert configured["after"]["pull_request_review"]["review_order"] == "reverse"
+                if mirror is not None:
+                    synced = sync_project_registry_to_global(
+                        registry_path=registry, runtime_root_override=str(runtime), goal_id="loopx-turn-fixture",
+                    )
+                    assert synced["ok"], synced
+                    projected = json.loads(mirror.read_text())["goals"][0]
+                    assert projected["synced_at"] != original_sync_stamp
+                    assert projected["source_registry"] == str(registry.resolve())
             else:
                 with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
                     registry_payload = transaction.payload_copy()

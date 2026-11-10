@@ -251,7 +251,9 @@ def _legacy_goal_authority(registry: Mapping[str, Any], goal_id: str) -> dict[st
     # Legacy registration carries both launch authority and capability settings.
     # Keep the core policies used by admission and the original registration,
     # workspace, and source route. Capability settings have their own owners.
-    running_authority = dict(goal)
+    # Global registry sync stamps the projection even when its source binding
+    # and authority are unchanged.
+    running_authority = {key: value for key, value in goal.items() if key != "synced_at"}
     control_plane = running_authority.get("control_plane")
     if isinstance(control_plane, dict):
         core_policy = compact_control_plane_policy(control_plane)
