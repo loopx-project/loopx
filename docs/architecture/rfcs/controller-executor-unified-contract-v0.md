@@ -1017,6 +1017,24 @@ on an authorized retry by the original read-only Controller. Preserve the Worker
 completed work, bound automatic corrections and read back a lost reply.
 A later admission can switch topology or roll back to single worker.
 
+**What the roles exchange.** One admitted Turn can contain up to three Worker
+segments. The following shortened example illustrates the wire fields. The Host
+owns both session IDs and delivers the actual grants. A narrower instruction
+such as “write only under `results/`” further scopes the task in prose. The
+native sandbox enforces the configured workspace boundary.
+
+| Sender → receiver | Message | What happens next |
+| --- | --- | --- |
+| Controller → Worker | `{"instruction":"Compare the measured candidates, write the best result under results/, and read it back.","result":null}` | The Host sends the instruction to the Worker's session. The Worker uses its scoped tools. |
+| Worker → Controller | `{"finding":"Candidate B had the lowest observed cost. Readback found a missing row.","artifacts":["results/best.txt"]}` | The Host resumes the original Controller with the finding and artifact paths. |
+| Controller → Worker, if needed | `{"instruction":"Regenerate the missing row and check the complete file.","result":null}` | The same Worker resumes. Its next return uses the same `finding` and `artifacts` fields. |
+| Controller → Core | `instruction=null`, with a complete typed Turn `result` containing `result_kind`, `work_evidence` and `validation_evidence` | Core checks the receipt, runs the independent validator for a material outcome and settles the original admission. |
+
+A Worker readback is evidence for the Controller's decision. Core's validator
+provides independent acceptance. The private Turn record binds the role steps
+and message digests to their native sessions. An operator can match those
+digests to retained native messages without duplicating transcripts in Core.
+
 **Same effective budget.** Give all three arms the full standard heartbeat
 phase deadline, including preparation, dispatch, work, validation and settlement.
 An expired phase stops new work and interrupts the active Host. Preserve its

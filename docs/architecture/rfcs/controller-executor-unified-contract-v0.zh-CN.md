@@ -828,6 +828,21 @@ journal 中捕获的原件，两个角色的沙箱均隔离 Core 私有文件。
 回执被拒绝后，经授权可由原只读 Controller 修正；保留 Worker 已完成的工作，限制自动
 修正次数，回包丢失时回读原记录。下一次新准入可以切换拓扑或回退到单 Worker。
 
+**两个角色实际交换什么。** 一次准入最多包含三段 Worker 工作。下表用缩短的示例说明
+消息字段。Host 持有两个会话 ID，并告知各角色本次的实际权限。指令中可以进一步限定
+“只写 `results/`”。具体任务范围由指令说明，原生沙箱强制执行已配置的工作区边界。
+
+| 发送方 → 接收方 | 消息 | 后续动作 |
+| --- | --- | --- |
+| Controller → Worker | `{"instruction":"比较实测候选，将最佳结果写入 results/ 并回读。","result":null}` | Host 把指令交给 Worker 会话，Worker 使用其权限内的工具执行。 |
+| Worker → Controller | `{"finding":"候选 B 的实测成本最低，回读时发现缺一行。","artifacts":["results/best.txt"]}` | Host 将发现和产物路径送回原 Controller 会话。 |
+| Controller → Worker，需要返工时 | `{"instruction":"补齐缺行，重新检查整个文件。","result":null}` | 同一个 Worker 续跑，仍用 `finding` 和 `artifacts` 返回。 |
+| Controller → Core | `instruction=null`，`result` 是完整的类型化 Turn 回执，包含 `result_kind`、`work_evidence` 和 `validation_evidence` | Core 检查回执，对实质性成果运行独立 validator，再结算原准入。 |
+
+Worker 的回读为 Controller 判断是否返工提供证据，独立验收由 Core 的 validator 完成。
+私有 Turn 记录把角色步骤、消息摘要绑定到原生会话。原生记录仍在时，操作者可以按摘要核对
+原文，Core 无需再存一份完整对话。
+
 **相同的有效预算。** 三组均可用到标准 heartbeat 的阶段截止，包括准备、派发、工作、
 验证和结算。到期停止发起新工作并中断运行中的 Host，保留待恢复身份。固定任务入口、
 模型及推理强度、沙箱、CPU、反馈与评测频率、提交冷却、评测器、验证器及外部调度器。
