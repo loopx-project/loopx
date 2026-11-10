@@ -66,6 +66,41 @@ def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: st
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
 
 
+def project_work_yardstick_sources(
+    *, events: list[dict[str, Any]], projection: Mapping[str, Any],
+    goal_id: str, agent_id: str, work_todos: list[dict[str, Any]],
+    enabled: bool, todo_id: str | None = None, result_node: str | None = None,
+) -> list[dict[str, Any]]:
+    """Replay typed-owner-selected prefixes from one already-read canonical log.
+
+    Ordinary reads and immediate finding receipts share this I/O adapter; the
+    typed owner selects current captures, verifies their prefixes and scopes
+    the resulting measurements. This performs no write or additional log read.
+    """
+    if not enabled:
+        return []
+    requests = effect_runtime_result("work_item.yardstick.sources", {
+        "yardstick_enabled": enabled, "work_todos": work_todos,
+        "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id, "result_node": result_node,
+        "findings": projection.get("findings", []),
+        "source_events": [{"goal_id": row["goal_id"], "event_id": row["event_id"]} for row in events],
+    })
+    sources, prefixes = [], {}
+    for request in requests["sources"]:
+        count = request["source_snapshot"]["event_count"]
+        if count not in prefixes:
+            prefixes[count] = build_explore_result_projection(
+                events[:count], goal_id=goal_id, finding_limit=count, mermaid_node_limit=1,
+            )["findings"]
+        sources.append({**request, "findings": prefixes[count]})
+    return sources
+
+
+def explore_read_route(*, registry_path: Path, runtime_root: Path) -> list[str]:
+    """Retain the caller's exact source when a bounded result needs more detail."""
+    return ["loopx", "--registry", str(registry_path), "--runtime-root", str(runtime_root), "--format", "json"]
+
+
 @effect_runtime_request_scope()
 def explore_turn_context(
     *, registry_path: Path, runtime_root: Path, goal_id: str, agent_id: str,
@@ -122,15 +157,15 @@ def explore_turn_context(
         # Reuse the canonical open-task snapshot, including waiting tasks
         # omitted by the independent planner. The typed owner checks scope.
         focus = {"todo_id": todo_id, "focus_todo": scopes.get(todo_id)}
-    route = [
-        "loopx",
-        "--registry",
-        str(registry_path),
-        "--runtime-root",
-        str(runtime_root),
-        "--format",
-        "json",
-    ]
+    route = explore_read_route(registry_path=registry_path, runtime_root=runtime_root)
+    work_todos = [{key: row[key] for key in (
+        "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
+        for row in todos.get("todos", [])] if yardstick else []
+    sources = []
+    if yardstick and graph:
+        sources = project_work_yardstick_sources(events=events, projection=projection,
+            goal_id=goal_id, agent_id=agent_id, work_todos=work_todos, enabled=yardstick,
+            todo_id=todo_id, result_node=result_node)
     return cast(dict[str, Any], effect_runtime_result(
         "explore.turn_context",
         {
@@ -140,9 +175,7 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
-            **({"yardstick_enabled": True, "work_todos": [{key: row[key] for key in (
-                "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
-                for row in todos.get("todos", [])]} if yardstick else {}),
+            **({"yardstick_enabled": True, "work_todos": work_todos, "yardstick_sources": sources} if yardstick else {}),
             **focus,
             **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,

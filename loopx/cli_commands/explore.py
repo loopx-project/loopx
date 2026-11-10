@@ -129,7 +129,11 @@ def register_explore_commands(
     )
     add_subcommand_format(finding)
     finding.add_argument("--goal-id", required=True)
-    finding.add_argument("--title", required=True, help="Compact public-safe finding statement.")
+    finding_input = finding.add_mutually_exclusive_group(required=True)
+    finding_input.add_argument("--title", help="Compact public-safe finding statement.")
+    finding_input.add_argument("--result-json", help="Record a Todo-bound result attachment and return its measurement feedback.")
+    finding.add_argument("--todo-id", help="Open claimed Todo for --result-json.")
+    finding.add_argument("--turn-instance-id", help="Current Turn identity for --result-json.")
     finding.add_argument("--finding-id", help="Stable finding id; reuse it to update the same finding.")
     finding.add_argument("--node", dest="node_id", help="Node id this finding belongs to.")
     finding.add_argument("--status", choices=sorted(FINDING_STATUSES))
@@ -295,6 +299,20 @@ def _append_event_payload(event: dict[str, object], *, runtime_root: Path, goal_
     return payload
 
 
+def _record_work_finding(args: argparse.Namespace, *, registry_path: Path, runtime_root: Path) -> dict[str, object]:
+    from ..capabilities.explore.result_writeback import record_work_finding
+
+    if any(getattr(args, field) not in (None, [])
+           for field in ("finding_id", "node_id", "status", "summary", "confidence", "run_id",
+                         "measurements_json", "measurement_context_json", "evidence_ref", "tag", "supersedes")):
+        raise ValueError("--result-json cannot be combined with unscoped finding fields")
+    return record_work_finding(
+        json.loads(Path(args.result_json).expanduser().read_text(encoding="utf-8")),
+        registry_path=registry_path, runtime_root=runtime_root, goal_id=args.goal_id,
+        agent_id=args.agent_id, todo_id=args.todo_id, turn_instance_id=args.turn_instance_id,
+    )
+
+
 def _goal_orchestration_boundary(registry: dict[str, object], *, goal_id: str, runtime_root: Path | None = None) -> dict[str, object] | None:
     """Read the Goal boundary with the same live Explore preference as quota.
 
@@ -342,6 +360,8 @@ def render_explore_markdown(payload: dict[str, object]) -> str:
         "event_kind",
         "result_id",
         "event_id",
+        "finding_id",
+        "node_id",
         "sink_visibility",
         "message_id",
         "card_file",
@@ -351,6 +371,19 @@ def render_explore_markdown(payload: dict[str, object]) -> str:
     ):
         if payload.get(key) not in (None, ""):
             lines.append(f"- {key}: `{payload.get(key)}`")
+    feedback = payload.get("measurement_feedback")
+    if isinstance(feedback, list):
+        for group in feedback:
+            measurement = group["latest"]["measurement"]
+            previous = group["previous_best"]
+            lines.append(
+                f"- {group['metric']}: {measurement['value']} {group['unit']} "
+                f"(previous best: {previous['value'] if previous else 'unknown'}, "
+                f"improvement: {group['improvement']})"
+            )
+    comparison = payload.get("search_comparison")
+    if isinstance(comparison, dict):
+        lines.append(f"- {comparison['guidance']}")
     counts = payload.get("counts")
     research = payload.get("research_frontier")
     live_research = payload.get("research_execution_frontier")
@@ -567,7 +600,11 @@ def handle_explore_command(
                 run_id=args.run_id,
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
+        elif args.explore_command == "finding" and args.result_json:
+            payload = _record_work_finding(args, registry_path=source_registry, runtime_root=runtime_root)
         elif args.explore_command == "finding":
+            if args.todo_id or args.turn_instance_id:
+                raise ValueError("--todo-id and --turn-instance-id require --result-json")
             measurements = (json.loads(Path(args.measurements_json).read_text(encoding="utf-8"))
                             if args.measurements_json else None)
             if args.measurement_context_json:

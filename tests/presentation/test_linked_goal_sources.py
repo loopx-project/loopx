@@ -83,6 +83,134 @@ def native_source(w, name='original', task_text='Check the original question aga
     return raw, request, {path: path.read_bytes() for path in (registry, state, log)}
 
 
+def strategy_runs(raw):
+    """Independent native index fixture: old strategies survive the status window."""
+    from datetime import datetime, timedelta, timezone
+
+    runs = Path(raw['runtime_root']) / 'goals' / 'solver-goal' / 'runs'
+    runs.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index in range(23):
+        vision = {'schema_version': 'goal_vision_replan_contract_v0', 'agent_id': 'source-worker',
+            'vision_patch': {'vision_summary': f'Original objective version {index}',
+                             'acceptance_summary': 'Compare independently checked outcomes.'},
+            'path_delta': {'observed_reality': f'Observation {index}',
+                           'stopped': ['Rejected candidate: negative result retained.'],
+                           'unresolved_questions': ['Actual subsequent adoption remains unknown.']}}
+        rows.append({'goal_id': 'solver-goal', 'agent_id': 'source-worker',
+            'generated_at': (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=41 * index)).isoformat(),
+            'classification': 'state_recorded', 'json_path': str(runs / f'record-{index}.json'),
+            'agent_vision': vision})
+    # Accounting records are not fabricated strategy versions.
+    rows.append({'goal_id': 'solver-goal', 'agent_id': 'source-worker',
+                 'generated_at': '2026-01-02T00:00:00Z', 'classification': 'accounting',
+                 'json_path': str(runs / 'accounting.json')})
+    index_file = runs / 'index.jsonl'
+    index_file.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    return index_file, rows
+
+
+def test_strategy_history_reads_every_original_version_without_writing(workspace):
+    raw, request, before = native_source(workspace)
+    index_file, rows = strategy_runs(raw)
+    before[index_file] = index_file.read_bytes()
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    query = {'goal_id': 'solver-goal', 'source_namespace': namespace}
+    endpoint = '/api/chat/goal-source-strategies?'
+    value = request(endpoint + urlencode(query))
+    assert value['total'] == 23 and value['native_run_count'] == 24
+    assert value['goal_id'] == 'solver-goal' and value['source']['namespace'] == namespace
+    assert [item['agent_vision'] for item in value['items']] == [row['agent_vision'] for row in rows[-2::-1]]
+    assert value['items'] == request(endpoint + urlencode(query))['items']
+    for changed, status in (({'goal_id': 'other-owner'}, 404), ({'source_namespace': 'f' * 64}, 409),
+                            ({'cursor': 'invented'}, 400), ({'goal_id': ''}, 404)):
+        with pytest.raises(HTTPError) as error:
+            request(endpoint + urlencode({**query, **changed}))
+        assert error.value.code == status
+    with pytest.raises(HTTPError) as error:
+        request(endpoint + urlencode(query), origin='https://untrusted.invalid')
+    assert error.value.code == 403
+    assert {path: path.read_bytes() for path in before} == before
+    assert not list(Path(raw['runtime_root']).rglob('research-analysis'))
+
+
+def test_strategy_history_rechecks_source_after_unlink_without_blocking_status(workspace, monkeypatch):
+    from threading import Event
+
+    raw, request, _ = native_source(workspace)
+    strategy_runs(raw)
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    started, release = Event(), Event()
+    original = GoalSource.read_run_history
+
+    def delayed(source, goal_id):
+        started.set()
+        assert release.wait(15)
+        return original(source, goal_id)
+
+    monkeypatch.setattr(GoalSource, 'read_run_history', delayed)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pending = executor.submit(request, '/api/chat/goal-source-strategies?' + urlencode({
+            'goal_id': 'solver-goal', 'source_namespace': namespace}))
+        try:
+            assert started.wait(15)
+            status = executor.submit(request, '/status.json?goal_id=solver-goal')
+            assert status.result(timeout=10)['ok']
+            request('/api/chat/goal-sources', {'goal_id': 'solver-goal',
+                'source_namespace': namespace, 'parent_goal_id': 'research-owner'})
+        finally:
+            release.set()
+        with pytest.raises(HTTPError) as error:
+            pending.result(timeout=20)
+        assert error.value.code == 409
+
+
+def test_strategy_history_failure_is_explicit_and_recovers(workspace, monkeypatch):
+    raw, request, _ = native_source(workspace)
+    strategy_runs(raw)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    url = '/api/chat/goal-source-strategies?' + urlencode({
+        'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace})
+    original = GoalSource.read_run_history
+    monkeypatch.setattr(GoalSource, 'read_run_history', lambda *_: (_ for _ in ()).throw(OSError('private transport detail')))
+    with pytest.raises(HTTPError) as error:
+        request(url)
+    assert error.value.code == 503
+    assert b'private transport detail' not in error.value.read()
+    monkeypatch.setattr(GoalSource, 'read_run_history', original)
+    assert request(url)['total'] == 23
+
+
+def test_prepared_workspace_and_cli_read_the_same_native_strategies(workspace):
+    import subprocess
+    from test_runtime_workspace import serving, get
+    from loopx.control_plane.status.goal_source import read_endpoint
+
+    raw, _, _ = native_source(workspace)
+    index_file, _ = strategy_runs(raw)
+    before = index_file.read_bytes()
+    source = GoalSource.parse(raw)
+    with serving(source, workspace['tmp_path']) as server:
+        code, status = get(server, '/status.json?goal_id=solver-goal')
+        assert code == 200
+        goal = status['run_history']['goals'][0]
+        assert goal['id'] == 'solver-goal' and 'source_access' not in goal
+        path = '/api/chat/goal-source-strategies?' + urlencode({
+            'goal_id': 'solver-goal', 'source_namespace': source.namespace})
+        code, browser = get(server, path, timeout=30)
+        assert code == 200 and browser['total'] == 23
+        client = read_endpoint(server.status_url, 'strategies', goal_id='solver-goal')
+        assert browser == client
+        cli = subprocess.run([sys.executable, '-m', 'loopx.control_plane.status.goal_source',
+            'strategies', '--endpoint', server.status_url, '--goal-id', 'solver-goal'],
+            capture_output=True, text=True, check=True, timeout=30)
+        assert json.loads(cli.stdout) == browser
+        assert get(server, path + '&cursor=unrelated')[0] == 409
+    assert index_file.read_bytes() == before
+
+
 @pytest.mark.parametrize('done', [False, True])
 def test_linked_task_details_keep_complete_evidence_and_notes(workspace, done):
     evidence = 'Independent verification. ' + '证据🙂 ' * 180 + ' Retained baseline: reference-v2.'

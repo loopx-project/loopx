@@ -60,11 +60,13 @@ from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
-from .extensions.lark.private_conversations import LarkPrivateConversations, project_private_reply_history
+from .extensions.lark.private_conversations import (LarkPrivateConversations, PrivateUnsupportedMediaHistory,
+    project_private_reply_history)
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
-    project_chat_session_snapshot,
+    parse_chat_history_selection,
+    read_chat_history_selection,
 )
 from .control_plane.goals.active_state_metadata import active_state_section_text
 from .control_plane.effect_runtime import effect_runtime_request_scope
@@ -105,7 +107,7 @@ from .extensions.runtime import (
 from .chat.completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
-from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
+from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GOAL_SOURCE_STRATEGIES_PATH, GoalSourceRequestMixin
 from .chat.todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
@@ -480,6 +482,7 @@ class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTP
         self.runtime_identity = release_runtime_identity()
         super().__init__(*args, **kwargs)
         self.completed_todo_pages = CompletedTodoPages()
+        self.private_media_history = PrivateUnsupportedMediaHistory()
 
     def server_close(self) -> None:
         background_api.close_chat_background_services(self)
@@ -923,29 +926,24 @@ class ChatRequestHandler(
     @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
-            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"message_limit", "message_cursor", "turn_id"}
-                    or any(len(values) != 1 or not values[0] for values in query.values())
-                    or (any(key in query for key in ("message_cursor", "turn_id")) and "message_limit" not in query)):
-                raise ValueError("invalid history page arguments")
-            message_limit = int(query["message_limit"][0]) if "message_limit" in query else None
-            if message_limit is not None and not 1 <= message_limit <= 200:
-                raise ValueError("message_limit must be between 1 and 200")
-            # Reading one historical Turn must not recover an unrelated active
-            # execution. Ordinary Chat refresh keeps its existing recovery path.
-            if "turn_id" not in query:
+            selection = parse_chat_history_selection(parse_qs(urlparse(self.path).query, keep_blank_values=True))
+            # A historical Turn read must not recover an unrelated execution.
+            if selection["turn_id"] is None:
                 self.server.runtime_controller.recover_exited_turn(session_id)
-            snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
-            payload = snapshot(
-                self.server.runtime_controller.coordination_runtime_root,
-                self.server.chat_store, session_id,
-                registry=self.server.registry_path, message_limit=message_limit,
-                message_cursor=query.get("message_cursor", [None])[0],
-                turn_id=query.get("turn_id", [None])[0])
-            # The HTTP composition root joins provider history onto the selected page.
-            payload["messages"] = project_private_reply_history(
-                self.server.chat_store, self.server.chat_store.load_session(session_id) or {},
-                payload["messages"])
+            store = self.server.chat_store
+            session = store.load_session(session_id) or {}
+            media = self.server.private_media_history
+            contexts = getattr(self.server.runtime_controller, "project_contexts", None)
+            bindings = getattr(contexts, "conversation_bindings", None)
+            markers = [] if selection["turn_id"] is not None else media.read(store, bindings, session)
+            payload = read_chat_history_selection(
+                self.server.runtime_controller.coordination_runtime_root, store, session_id,
+                registry=self.server.registry_path, selection=selection,
+                project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
+                project_provider=lambda rows: project_private_reply_history(
+                    store, session, rows))
+            if markers and "session" in payload:
+                payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)
@@ -1021,6 +1019,10 @@ class ChatRequestHandler(
                 if bindings is None:
                     raise ValueError("conversation bindings unavailable")
                 snapshot = bindings.local_session_snapshot(query["conversation_binding_id"][0])
+                media = self.server.private_media_history
+                store = self.server.chat_store
+                snapshot["sessions"] = [media.summary(row, media.read(store, bindings,
+                    store.load_session(row["session_id"]) or {})) for row in snapshot["sessions"]]
             except (ValueError, OSError, KeyError):
                 # A failed provider/store read may contain private diagnostics.
                 # Refuse this selector; never fall back to an unfiltered list.
@@ -1705,6 +1707,7 @@ class ChatRequestHandler(
             background_api.BACKGROUND_SERVICES_PATH: self._background_services_read,
             "/api/chat/request-inventory": self._request_inventory_read,
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
+            GOAL_SOURCE_STRATEGIES_PATH: self._goal_source_strategies,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/explore-results": self._explore_results,
