@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import time
 from typing import Any
@@ -127,6 +128,7 @@ def execute(
     os.close(fd)
     process: subprocess.Popen[str] | None = None
     attempt_started = False
+    prior_archive: Path | None = None
     started = time.monotonic()
     try:
         if (directory / "receipt.json").exists():
@@ -159,6 +161,7 @@ def execute(
             # explicitly retrying the same complete analysis job.
             archive = directory / f"attempt-{prior['attempt']}"
             archive.mkdir(exist_ok=False)
+            prior_archive = archive
             for name in (
                 "receipt.json",
                 "events.jsonl",
@@ -168,7 +171,12 @@ def execute(
             ):
                 path = directory / name
                 if path.exists():
-                    path.rename(archive / name)
+                    if name == "receipt.json":
+                        # Status stays readable until the next running receipt
+                        # commits; a process exit cannot look like a fresh job.
+                        shutil.copyfile(path, archive / name)
+                    else:
+                        path.rename(archive / name)
             attempt = prior["attempt"] + 1
         else:
             attempt = 1
@@ -330,6 +338,14 @@ def execute(
                 usage=_observed_usage(directory),
             )
             _write(directory / "receipt.json", receipt)
+        elif prior_archive is not None:
+            # Preparation did not create a new attempt. Restore its original
+            # artifacts as well as its unchanged status, cost and clock.
+            for path in prior_archive.iterdir():
+                if path.name != "receipt.json":
+                    path.replace(directory / path.name)
+            (prior_archive / "receipt.json").unlink(missing_ok=True)
+            prior_archive.rmdir()
         raise
     finally:
         lock.unlink(missing_ok=True)

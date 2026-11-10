@@ -286,6 +286,41 @@ def test_failure_after_starting_a_new_attempt_is_still_recorded(prepared, tmp_pa
     assert not (directory / "execution.lock").exists()
 
 
+def test_cli_retry_preparation_preserves_status_and_attempt_sequence(prepared, tmp_path, monkeypatch):
+    with pytest.raises(Exception, match="missing eligible"):
+        execute(prepared, tmp_path / "jobs", codex=provider(tmp_path, invalid=True))
+    directory = tmp_path / "jobs" / prepared["analysis_key"]
+    original = {name: path.read_bytes() for name in ("receipt.json", "events.jsonl", "model-output.json")
+                if (path := directory / name).exists()}
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "codex").symlink_to(provider(tmp_path))
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    registry = tmp_path / "registry.json"
+    registry.write_text('{"projects":{}}')
+    prefix = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+              "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "benchmark"]
+    command = [*prefix, "trajectory-assess", "--input-json", str(tmp_path / "input.json"),
+               "--output-dir", str(tmp_path / "jobs"), "--model", "fixture", "--execute"]
+    obstruction = directory / "input.tmp"
+    obstruction.mkdir()
+    rejected = subprocess.run([*command, "--retry"], capture_output=True, text=True)
+    assert rejected.returncode != 0
+    status = subprocess.run([*prefix, "trajectory-assessment-status", "--directory", str(directory)],
+                            capture_output=True, text=True)
+    assert json.loads(status.stdout) == json.loads(original["receipt.json"])
+    assert all((directory / name).read_bytes() == raw for name, raw in original.items())
+    obstruction.rmdir()
+    ordinary = subprocess.run(command, capture_output=True, text=True)
+    assert json.loads(ordinary.stdout)["attempt"] == 1
+    assert "Explicit retry" in json.loads(ordinary.stdout)["reason"]
+    assert (directory / "receipt.json").read_bytes() == original["receipt.json"]
+    retry = subprocess.run([*command, "--retry"], capture_output=True, text=True, check=True)
+    assert json.loads(retry.stdout)["attempt"] == 2
+    assert json.loads(retry.stdout)["status"] == "succeeded"
+    assert all((directory / "attempt-1" / name).read_bytes() == raw for name, raw in original.items())
+
+
 def test_cli_rejected_reuse_and_source_recovery_preserve_original_receipt(prepared, tmp_path, monkeypatch):
     first = execute(prepared, tmp_path / "jobs", codex=provider(tmp_path))
     directory = Path(first["directory"])
