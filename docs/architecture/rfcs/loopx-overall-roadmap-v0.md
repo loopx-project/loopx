@@ -5,7 +5,8 @@
 - Scope baseline: architecture audit at 2026-09-16, `0aa6179de`; RFC inventory
   updated through 2026-10-11 against `5c62c5c03`; controller/contract refinement
   uses `08e290fb5` on 2026-10-27. Steward reproduction baseline is preserved
-  separately in Section 8.
+  separately in Section 8. The history working-set RFC inventory addition uses
+  `701795db2` on 2026-11-09; it does not re-audit the whole roadmap.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
@@ -607,6 +608,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md) | S2/S3/S10 | Design only; local conformance is reusable evidence | P1: one typed boundary, then ownership/writeback/settlement fault sequences and conditional progress; production entrypoint and real-backend evidence |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | S2 | Accepted; core implemented, adoption continues | P0: reuse effect/recovery, cover R1 partial commits; retain domain-local replan ACK |
 | [Controller / Executor and Unified Work Contract](controller-executor-unified-contract-v0.md) | S2/S4/S6/S7/S11 | Design only; schema cutover and dual-session behavior unimplemented | P1: C1–C9 converge one contract, exact differential context, role binding, shared lifecycle and benchmark/App adoption; require independent outcomes and complete costs before default promotion |
+| [Recoverable History Working Sets and Context Policy Extensions v0](history-working-set-context-policy-v0.md) | S2/S4/S6/S8/S11 | Proposal only; #8450 details T02, with no history policy or plugin port shipped | Coordinate with active C1; qualify one final model-input consumer and same-capture recovery, then source-bound optional history views, extension lifecycle and matched outcome/complete-cost evidence before promotion |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | S2 | Accepted; whole-transaction migration active | P0/P1: R1–R4 hot transactions first; T0–T4 caller/deletion/cost evidence; no full rewrite prerequisite |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | S2 | Accepted; registry/inventory/drift and subsequent typed slices exist | P1: converge by semantic role and active producer/consumer; no name-based enum merging; review schema changes separately |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | S2/S3/S7 | Accepted; stores, local transactions and service-admission foundations exist | P1→P2: R5 local D1–D3, R6 authenticated hosts; real backend/soak/recovery before promotion |

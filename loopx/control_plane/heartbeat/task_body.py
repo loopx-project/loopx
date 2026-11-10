@@ -10,6 +10,7 @@ from .rules import (
     DEFAULT_MATERIAL_QUEUE_RULE,
     DEFAULT_PERMISSION_RULE,
     HEARTBEAT_NOTIFICATION_RULE_SHORT,
+    HEARTBEAT_QUIET_COMPLETION_RULE,
     HEARTBEAT_TURN_BOOTSTRAP_RULE,
     HEARTBEAT_VISION_WRITEBACK_RULE_SHORT,
     HOST_LOOP_QUOTA_DISPATCH_RULE,
@@ -165,8 +166,7 @@ If the result says `should_run=false`:
   Still do not launch/stop/restart/sync/design code or mutate production unless
   `should_run=true` or the user explicitly authorizes it.
 - Otherwise, do not do implementation work, adapter work, file edits, research,
-  or project exploration in this turn. Return a quiet heartbeat `DONT_NOTIFY`
-  response with the skip reason.
+  or project exploration in this turn. Follow the user-channel rule above.
 
 If the result says `should_run=true`:
 
@@ -371,12 +371,13 @@ Preflight fail: quiet; no work/spend.
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
 Output policy: authority=`interaction_contract.user_channel.notify`;
-external=`NOTIFY`; quiet=`DONT_NOTIFY`; quiet_missing_action=`internal_repair`.
+external=`NOTIFY`; quiet_missing_action=`internal_repair`.
+{HEARTBEAT_QUIET_COMPLETION_RULE}
 
 If `should_run=false`: `monitor_quiet_skip` -> receipt/stall; quiet unless
 replan; failed write -> retry id; no edits/spend; receipts do not self-stop.
 Only under `NOTIFY`, `state=operator_gate`/`notify_user_on_open_todo=true`
-permit concrete blocker-push; else quiet.
+permit concrete blocker-push.
 Honor repeat/cooldown. `safe_bypass_allowed=true`: validate/settle its allowed work.
 Wait: one allowed read-only poll; unchanged quiet, new evidence follows the
 current monitor/auxiliary contract.

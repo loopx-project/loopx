@@ -731,9 +731,11 @@ For every automatic heartbeat turn, the agent-facing checklist is:
    Every heartbeat guard commits one idempotent receipt. If
    `effective_action=monitor_quiet_skip`, it also commits the no-spend stall
    observation and returns the follow-up decision; do not append another manual
-   poll. Return quiet `DONT_NOTIFY` if it remains monitor-only. Keep monitor
-   todos visible but do no delivery edits and no spend until material evidence
-   changes or the guard exposes `autonomous_replan_required` /
+   poll. For a monitor-only turn with `DONT_NOTIFY`, leave chat quiet. If the
+   host requires a completion result, use its complete quiet result without
+   additional chat text. A bare decision or skip explanation is not a host
+   result. Keep monitor todos visible and do no delivery edits or spend until
+   material evidence changes or the guard exposes `autonomous_replan_required` /
    `execution_obligation.must_attempt_work=true`.
 3. For `notify_user_on_open_todo=true`, follow the current
    `interaction_contract.user_channel` for the concrete notice and cooldown.
