@@ -89,8 +89,11 @@ function currentAgentBlockers(rows: unknown, agentId: string | null): JsonObject
     const blocker = rawRow as JsonObject;
     const excludedRows = Array.isArray(blocker.excluded_agents) ? blocker.excluded_agents
       : typeof blocker.excluded_agents === "string" ? blocker.excluded_agents.split(",") : [];
-    return blocker.task_class === "blocker" && blocker.status === "blocked" &&
-      normalizedAgentId(blocker.claimed_by) === agentId && !excludedRows.some(id => normalizedAgentId(id) === agentId);
+    const claim = normalizedAgentId(blocker.claimed_by);
+    return ["blocker", "advancement_task"].includes(String(blocker.task_class)) &&
+      blocker.status === "blocked" && blocker.resume_ready !== true &&
+      (blocker.claimed_by == null || blocker.claimed_by === "" || claim === agentId) &&
+      !excludedRows.some(id => normalizedAgentId(id) === agentId);
   });
 }
 
@@ -162,7 +165,10 @@ function projectVisionWaitFromFacts(input: {request: JsonObject; gaps: JsonObjec
   const basis = request.wait_basis == null ? null : requireJsonObject(request.wait_basis, "wait basis");
   const resumePlan = basis === null ? projectTodoResumePlanning(requireJsonObject(request.resume_planning_request, "resume_planning_request")) :
     requireJsonObject(basis.resume_planning, "prepared resume planning");
-  const blockers = currentAgentBlockers(summary.current_agent_blocker_items, agentId);
+  const blockerContext = new Map(currentAgentBlockers(summary.current_agent_blocker_items, agentId)
+    .map(blocker => [blocker.todo_id, blocker]));
+  const blockers = currentAgentBlockers(resumePlan.blocked_wait_items ?? summary.current_agent_blocker_items, agentId)
+    .map(blocker => ({...blockerContext.get(blocker.todo_id), ...blocker}));
   const candidates = Array.isArray(resumePlan.blocked_successor_items) ? resumePlan.blocked_successor_items as JsonObject[] : [];
   const lineageRows = Array.isArray(request.lineage_source_items) ? request.lineage_source_items :
     basis !== null && Array.isArray(basis.lineage_source_items) ? basis.lineage_source_items : candidates;

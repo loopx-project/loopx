@@ -212,3 +212,28 @@ test("wire faults fail closed before selection instead of inventing readiness", 
     assert.throws(() => projectTodoResumePlanning(input));
   }
 });
+
+test("explicit blocked work waits in scope regardless of class or resume metadata", () => {
+  for (const taskClass of ["blocker", "advancement_task"]) {
+    const blocked = (id: string, overrides: JsonObject = {}) => fact(id, {
+      status: "blocked", resume: null, ready: null,
+      payload: {todo_id: id, text: "Wait for external input", task_class: taskClass, status: "blocked"},
+      ...overrides,
+    });
+    const current = blocked("todo_current", {claim: "agent-a"});
+    const unclaimed = blocked("todo_unclaimed");
+    const input = request({item_limit: 1});
+    (input.sources as JsonObject).items = [current, unclaimed,
+      blocked("todo_peer", {claim: "agent-b"}),
+      blocked("todo_excluded", {excluded: ["agent-a"]}),
+      blocked("todo_ready", {ready: true}),
+      blocked("todo_open", {status: "open"})];
+    (input.sources as JsonObject).backlog_items = [current];
+    const before = structuredClone(input);
+    const result = projectTodoResumePlanning(input);
+    assert.deepEqual((result.blocked_wait_items as JsonObject[]).map(row => row.todo_id),
+      ["todo_current", "todo_unclaimed"]);
+    assert.deepEqual(input, before);
+    assert.deepEqual(projectTodoResumePlanning({...input, agent_id: null}).blocked_wait_items, []);
+  }
+});
