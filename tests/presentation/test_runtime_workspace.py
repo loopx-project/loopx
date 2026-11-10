@@ -1,12 +1,13 @@
 """Real HTTP boundary: source identity, read-only access and full history."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Thread
+from threading import Event, Thread
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -120,9 +121,9 @@ def test_failed_refresh_does_not_serve_old_success_and_recovers(tmp_path):
         assert get(server, f"/api/chat/explore-results?view=history&goal_id=shared-goal&cursor={cursor}")[0] == 409
 
 
-@pytest.mark.parametrize("invalid_kind", ["null", "event-pairs"])
-def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, invalid_kind):
-    """Exercise actual native CLI/log IO through both shared HTTP consumers."""
+@pytest.fixture
+def native_history(tmp_path):
+    """A pinned source backed by the native CLI and a disposable SQLite Goal."""
     project, runtime = tmp_path / "project", tmp_path / "runtime"
     project.mkdir()
     (project / "goal.md").write_text(
@@ -145,8 +146,16 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
                                      title=f"Question {i}") for i in range(43)]
     log = runtime / "goals" / "shared-goal" / "explore-result-log.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
-    valid = "\n".join(json.dumps(event) for event in events).encode()
-    log.write_bytes(valid)
+    log.write_text("\n".join(json.dumps(event) for event in events))
+    return source, log, events
+
+
+@pytest.mark.parametrize("invalid_kind", ["null", "event-pairs"])
+def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, invalid_kind, native_history):
+    """Exercise actual native CLI/log IO through both shared HTTP consumers."""
+    source, log, events = native_history
+    project = Path(source.registry).parent
+    valid = log.read_bytes()
     routes = ("/api/goal-source/history?goal_id=shared-goal",
               "/api/chat/explore-results?view=history&goal_id=shared-goal")
     with serving(source, tmp_path) as server, serving(Source("untouched"), tmp_path) as other:
@@ -176,6 +185,54 @@ def test_invalid_native_history_clears_only_its_source_and_recovers(tmp_path, in
         assert {row["event_id"] for row in restored["items"] + tail["items"]} == {
             event["event_id"] for event in events}
         assert log.read_bytes() == valid
+
+
+@pytest.mark.parametrize("wrong_goal", ["another-goal", ""])
+@pytest.mark.parametrize("scope", ["fixed", "all_registered"])
+@pytest.mark.parametrize("route", ["/api/goal-source/history?goal_id=shared-goal",
+                                  "/api/chat/explore-results?view=history&goal_id=shared-goal"])
+def test_invalid_selector_does_not_invalidate_authorized_history(
+    tmp_path, native_history, monkeypatch, wrong_goal, scope, route,
+):
+    source, log, events = native_history
+    if scope == "all_registered":
+        from dataclasses import replace
+        source = replace(source, goal_id=None)
+    registry = Path(source.registry)
+    original = {path: path.read_bytes() for path in (log, registry)}
+    history = route
+    entered, release = Event(), Event()
+    read_events = GoalSource.read_events
+
+    def hold_after_native_read(self, goal_id):
+        rows = read_events(self, goal_id)
+        if self is source:
+            entered.set()
+            assert release.wait(20)
+        return rows
+
+    with serving(source, tmp_path) as server:
+        code, first = get(server, history, timeout=30)
+        assert code == 200 and first["total"] == 43 and first["next_cursor"]
+        monkeypatch.setattr(GoalSource, "read_events", hold_after_native_read)
+        with ThreadPoolExecutor(max_workers=1) as clients:
+            pending = clients.submit(get, server, history, timeout=30)
+            try:
+                assert entered.wait(12)
+                code, error = get(server, "/status.json?" + urlencode({"goal_id": wrong_goal}))
+                assert code == 404 and error["ok"] is False and "items" not in error
+                assert not pending.done()
+            finally:
+                release.set()
+            code, latest = pending.result(timeout=15)
+        assert code == 200 and latest["total"] == first["total"]
+        assert latest["items"] == first["items"] and latest["next_cursor"]
+        for page in (first, latest):
+            code, tail = get(server, f'{history}&cursor={page["next_cursor"]}', timeout=30)
+            assert code == 200 and tail["next_cursor"] is None
+            assert {row["event_id"] for row in page["items"] + tail["items"]} == {
+                event["event_id"] for event in events}
+    assert all(path.read_bytes() == data for path, data in original.items())
 
 
 def test_cli_agent_and_app_use_the_same_reader_and_source_binding(tmp_path):

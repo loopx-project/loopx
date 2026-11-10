@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
-from threading import RLock
+from threading import Lock, RLock
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -56,7 +56,11 @@ print(json.dumps({'text': data.decode('utf-8')}))
 
 
 class SourceScopeError(ValueError):
-    """A request is outside this prepared source, before any IO."""
+    """A request is outside this prepared source's read authority."""
+
+
+class SourceGoalNotFoundError(SourceScopeError):
+    """Native readback has no registered match for this one Goal selector."""
 
 
 def _text(value, field, limit=4096):
@@ -232,9 +236,13 @@ class GoalSource:
                 or any(not isinstance(goal, dict) or not isinstance(goal.get("id"), str)
                        or not _GOAL_ID.fullmatch(goal["id"]) for goal in goals)):
             raise ValueError("Invalid native source status")
+        if selected is not None and not goals:
+            raise SourceGoalNotFoundError("The source no longer exposes the selected Goal")
         if selected is not None and (len(goals) != 1 or goals[0]["id"] != selected):
             raise SourceScopeError("The source no longer exposes the selected Goal")
         if self.goal_id is None and (any(goal.get("registry_member") is not True for goal in goals)):
+            if selected is not None:
+                raise SourceGoalNotFoundError("Only registered Goals are in this source scope")
             raise SourceScopeError("Only registered Goals are in this source scope")
         return status
 
@@ -309,6 +317,7 @@ class GoalSourceReader:
         self.source = source
         self._history_projector = history_projector
         self._lock = RLock()
+        self._page_lock = Lock()
         self._status = None
         self._read_at = 0.0
         self._selected = None
@@ -319,15 +328,23 @@ class GoalSourceReader:
         self._pages = CompletedTodoPages()
 
     def status(self, goal_id=None, *, fresh=False):
+        # A bad selector belongs to this request, not the source's page snapshot.
+        selected = self.source.check_scope(goal_id)
         with self._lock:
             try:
-                selected = self.source.check_access(goal_id)
+                self.source.check_access(selected)
                 if (fresh or self._status is None or selected != self._selected
                         or monotonic() - self._read_at >= 2):
-                    self._status = None
-                    self._status = self.source.read_status(selected)
+                    status = self.source.read_status(selected)
+                    self._status = status
                     self._selected, self._read_at = selected, monotonic()
                 return deepcopy(self._status)
+            except SourceGoalNotFoundError:
+                # Missing another selector is not a failed source read. A
+                # known loss of the current Goal still revokes its cache.
+                if selected == self._selected:
+                    self._invalidate()
+                raise
             except (ValueError, OSError, subprocess.SubprocessError):
                 self._invalidate()
                 raise
@@ -354,22 +371,31 @@ class GoalSourceReader:
         return {"ok": True, "source": self.source.describe(),
                 "items": status["run_history"]["goals"]}
 
-    def history(self, goal_id, cursor=""):
-        with self._lock:
-            if goal_id is None:
-                raise SourceScopeError("Choose a Goal before reading history")
-            if not isinstance(cursor, str) or len(cursor) > 512:
-                raise ValueError("history_cursor_expired")
-            # Membership/SSH access is rechecked before any saved cursor is used.
-            self.status(goal_id)
+    def _read_page(self, goal_id, cursor, *, scope, load):
+        # Keep page loads ordered without holding up an independent status read.
+        with self._page_lock:
+            with self._lock:
+                self.status(goal_id)
+                pages = self._pages
             try:
-                page = self._pages.page(scope=(self.source.namespace, goal_id), cursor=cursor,
-                    load=lambda: self._history_projector(self.source.read_events(goal_id), goal_id=goal_id))
-                return {**page, "source": self.source.describe(), "goal_id": goal_id}
+                page = pages.page(scope=scope, cursor=cursor, load=load)
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
-                if str(exc) != "history_cursor_expired":
-                    self._invalidate()
+                with self._lock:
+                    if pages is self._pages and str(exc) != "history_cursor_expired":
+                        self._invalidate()
                 raise
+            with self._lock:
+                if pages is not self._pages:
+                    raise SourceScopeError("The original Goal source became unavailable during the read")
+            return {**page, "source": self.source.describe(), "goal_id": goal_id}
+
+    def history(self, goal_id, cursor=""):
+        if goal_id is None:
+            raise SourceScopeError("Choose a Goal before reading history")
+        if not isinstance(cursor, str) or len(cursor) > 512:
+            raise ValueError("history_cursor_expired")
+        return self._read_page(goal_id, cursor, scope=(self.source.namespace, goal_id),
+            load=lambda: self._history_projector(self.source.read_events(goal_id), goal_id=goal_id))
 
     def strategies(self, goal_id):
         if goal_id is None:
@@ -410,22 +436,12 @@ class GoalSourceReader:
 
     def findings(self, goal_id, cursor="", *, projector):
         """Read saved evidence; this transport has no complete task-list view."""
-        with self._lock:
-            if goal_id is None:
-                raise SourceScopeError("Choose a Goal before reading findings")
-            if not isinstance(cursor, str) or len(cursor) > 512:
-                raise ValueError("history_cursor_expired")
-            self.status(goal_id)
-            try:
-                page = self._pages.page(
-                    scope=(self.source.namespace, goal_id, "findings"), cursor=cursor,
-                    load=lambda: projector(self.source.read_events(goal_id),
-                                           None, goal_id=goal_id))
-                return {**page, "source": self.source.describe(), "goal_id": goal_id}
-            except (ValueError, OSError, subprocess.SubprocessError) as exc:
-                if str(exc) != "history_cursor_expired":
-                    self._invalidate()
-                raise
+        if goal_id is None:
+            raise SourceScopeError("Choose a Goal before reading findings")
+        if not isinstance(cursor, str) or len(cursor) > 512:
+            raise ValueError("history_cursor_expired")
+        return self._read_page(goal_id, cursor, scope=(self.source.namespace, goal_id, "findings"),
+            load=lambda: projector(self.source.read_events(goal_id), None, goal_id=goal_id))
 
 
 class _NoRedirect(HTTPRedirectHandler):

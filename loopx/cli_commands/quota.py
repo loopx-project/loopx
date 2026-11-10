@@ -5,13 +5,14 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 from importlib import import_module
+from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .quota_presentation import (
+    _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
-    attach_quota_settlement_guidance,
     project_scheduler_observation,
 )
 from .quota_capture import (
@@ -25,6 +26,7 @@ from ..control_plane.turn_driver.decision_capture import (
 from ..usage_goal import observe_quota_result
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -325,6 +327,32 @@ def _emit_bounded_settlement(payload, args, *, runtime_root, reader_argv, print_
     return 0 if payload.get("ok") is True else 1
 
 
+def _prepare_quota_result_context(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    registry_path: Path, heartbeat_turn_id: str | None, capture_directory: Path | None,
+) -> tuple[dict[str, object], dict[str, Any]]:
+    """Prepare current settlement and capability binding before publishing it."""
+    try:
+        activation = native_context_activation(args)
+    except QuotaCommandValidationError:
+        if payload.get("ok") is True:
+            raise
+        # Keep the original diagnostic on a refused guard.
+        activation = {"progressive_enabled": False, "enabled": False}
+    if args.quota_command == "should-run":
+        if (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
+                and activation.get("scenario") == "codex_app_heartbeat"
+                and (getenv("CODEX_THREAD_ID") or getattr(args, "prepared_capture_reference", False))
+                and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+                and not getattr(args, "turn_envelope", False)
+                and payload.get("ok") is True and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
+                and payload.get("normal_delivery_allowed") is True):
+            payload = _project_native_cli_settlement(payload)
+        attach_reward_memory_recall_after_should_run(payload, quota_command=args.quota_command,
+            heartbeat_turn_id=heartbeat_turn_id, registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
+    return payload, activation
+
+
 def _emit_quota_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -341,9 +369,26 @@ def _emit_quota_result(
     from ..command_invocation import current_loopx_cli_argv
 
     scheduler_observation = getattr(args, "scheduler_observation", False)
+    reader_argv = current_loopx_cli_argv()
+    budgeted_spend = (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+        and getattr(args, "max_page_output_bytes", None) is not None)
+    activation = None
     if not scheduler_observation:
-        attach_quota_settlement_guidance(payload, registry_path=registry_path,
-            runtime_root=context.runtime_root if context is not None else None)
+        if not budgeted_spend:
+            payload, activation = _prepare_quota_result_context(
+                payload, args, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
+                capture_directory=capture_directory,
+            )
+        # Compose optional capability guidance after recovery has chosen the plan,
+        # before capture/compaction. The observer is not a model-facing capture.
+        cli = (payload.get("interaction_contract") or {}).get("cli_channel")
+        if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
+            from ..capabilities.explore.turn_context import project_settlement_attachment
+
+            cli["settlement_plan"] = project_settlement_attachment(
+                cli["settlement_plan"], registry_path=registry_path,
+                runtime_root=context.runtime_root if context is not None else None,
+            )
     if context is not None:
         observe_quota_result(
             args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
@@ -354,20 +399,12 @@ def _emit_quota_result(
         succeeded = payload.get("ok") is True
         print_payload(project_scheduler_observation(payload), args.format, _quota_renderer(args, failure=not succeeded))
         return 0 if succeeded else 1
-    reader_argv = current_loopx_cli_argv()
-    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
-            and getattr(args, "max_page_output_bytes", None) is not None):
+    if budgeted_spend:
+        assert context is not None
         return _emit_bounded_settlement(payload, args, runtime_root=context.runtime_root,
             reader_argv=reader_argv, print_payload=print_payload)
-    try:
-        activation = native_context_activation(args)
-        context_delivery_enabled = activation["enabled"]
-    except QuotaCommandValidationError:
-        if payload.get("ok") is True:
-            raise
-        # Preserve the original validation error when activation itself failed.
-        context_delivery_enabled = False
-        activation = {"progressive_enabled": False}
+    assert activation is not None
+    context_delivery_enabled = activation["enabled"]
     bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
     delivery_request = None
     decision_identity = ("", "")
@@ -967,14 +1004,6 @@ def handle_quota_command(
                 spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
-    attach_reward_memory_recall_after_should_run(
-        payload,
-        quota_command=args.quota_command,
-        heartbeat_turn_id=heartbeat_turn_id,
-        registry_path=registry_path,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-    )
     return _emit_quota_result(
         payload,
         args,
