@@ -14,6 +14,52 @@ def queue_input_body(action="edit", revision=0, operation="input-1", message="Co
             **({"message": message} if action == "edit" else {})}
 
 
+@pytest.mark.parametrize("delivery", [None, "queue"])
+@pytest.mark.parametrize("warm", [False, True])
+def test_http_replay_read_failure_preserves_one_dispatch(ordinary, monkeypatch, delivery, warm):  # noqa: F811
+    import errno
+    from pathlib import Path
+    from loopx.chat_store import ChatSessionStore
+
+    store, runtime, contexts, request, capture, *_ = ordinary
+    sid = request("/api/chat/sessions", {"context_kind": "project",
+                  "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
+    endpoint = f"/api/chat/sessions/{sid}/turns"
+    body = {"message": "Return the original answer", "client_turn_id": "same-request"}
+    if delivery:
+        body["delivery"] = delivery
+    try:
+        code, first = request(endpoint, body)
+        assert code == 202
+        assert runtime.wait_for_turn(session_id=sid, turn_id=first["turn_id"], timeout_sec=10)["status"] == "completed"
+        if warm:
+            store.queued_turns(sid, strict=True)
+        else:
+            store.__dict__.pop("_terminal_turn_discovery", None)
+        path, messages = store._turn_path(sid, first["turn_id"]), store.messages(sid)
+        original_read, count = Path.read_text, 0
+
+        def fail_once(candidate, *args, **kwargs):
+            nonlocal count
+            if candidate == path:
+                count += 1
+                if count == (1 if warm else 2):
+                    raise OSError(errno.EIO, "synthetic transient read failure")
+            return original_read(candidate, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", fail_once)
+            code, response = request(endpoint, body)
+            assert code in {202, 400}
+            if code == 202:
+                assert response["turn_id"] == first["turn_id"] and not response["created"]
+        assert ChatSessionStore(store.root.parent).messages(sid) == messages
+        assert request(endpoint, body)[1]["turn_id"] == first["turn_id"]
+        assert sum(json.loads(line).get("method") == "turn/start" for line in capture.read_text().splitlines()) == 1
+    finally:
+        runtime.close()
+
+
 def test_edit_cancel_and_admission_retries_keep_exact_input_history_and_active_turn(ordinary):  # noqa: F811
     store, runtime, contexts, request, capture, *_ = ordinary
     sid, active, queued, original = held_queue(ordinary)
