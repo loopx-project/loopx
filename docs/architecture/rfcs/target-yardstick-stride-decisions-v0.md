@@ -552,6 +552,17 @@ missing producer/consumer fact, extend the existing versioned owner, and qualify
 readback/recovery/off behavior. Controller–Worker composition can later consume
 the same decision; it neither grants additional authority nor proves benefit.
 
+Native measurement adapters record service-owned result/receipt/conditions
+independently of local execution. An accepted archive digest is its stable
+subject even without retained upload bytes; optional file-content proof keeps
+its narrower coverage and does not relabel a prior measurement. Each outcome
+or proxy profile preserves its actual workload revision and evaluator. The
+existing typed comparison owner pairs only applicable declared subjects; producer
+location and equal path/byte content do not establish execution equivalence.
+Ordinary current-work evidence also keeps its original commit chronology and
+canonical-prefix boundary; a late old delivery cannot become a newer decision's
+uncited evidence. Explicitly cited verified history remains available.
+
 ## 6. Alternatives and design choices
 
 | Alternative | Decision / trade-off |
@@ -728,6 +739,28 @@ immutable attribution of execution to that Todo. Recording the first decision
 remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
+
+During an open Turn, an explicit Explore finding can use the ordinary result
+attachment and the same canonical Todo question as refresh-state. Its write
+receipt includes the changed measurement groups and an advisory comparison
+when the confirmed evidence covers the same two candidates on both declared
+profiles. The native adapter verifies the submission and supplies measurement
+facts. Explore and Yardstick own the association, comparison and readback.
+
+A new work-bound finding has no earlier primary commit to authorize its graph
+effect. In the local File/SQLite, legacy source-registry profile, its graph
+append holds the existing canonical writer guard together with source-registry
+and machine-policy locks. The typed admission owner rechecks the original
+claim/lease generation, open Todo, registered actor, Goal Stop and enabled
+evidence policy under those guards. A release or transfer cannot cross that
+commit. Lease admission uses a fresh runtime clock after the log-lock wait and
+graph CAS, so expiry while queued is rejected. Completing that one admitted
+append does not renew execution authority. A later association failure can still be retried without rewriting the
+committed finding. Source-session incarnations and remote-provider fences are
+not qualified for this entrypoint and are refused before append. A local mutex
+does not establish a distributed PostgreSQL fence. Recovery of an attachment
+whose ordinary primary already committed retains its existing delivery contract.
+
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

@@ -167,6 +167,8 @@ function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undef
       typeof identity.todo_id !== "string" || identity.todo_id !== jsonObject(context.selected_todo)?.todo_id ||
       identity.goal_id !== context.goal_id || typeof identity.agent_id !== "string" ||
       typeof identity.turn_instance_id !== "string" || identity.turn_instance_id !== receipt.turn_instance_id ||
+      typeof context.registry !== "string" || !context.registry ||
+      typeof context.runtime_root !== "string" || !context.runtime_root ||
       !isDeepStrictEqual(identity, receipt.settlement_identity) ||
       (plan?.schema_version !== "quota_settlement_plan_v1" && plan?.schema_version !== "quota_settlement_plan_v2") ||
       !Array.isArray(plan.ordered_steps)) return undefined;
@@ -177,7 +179,9 @@ function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undef
       steps.slice(index + 1).some(other => other?.kind === "durable_writeback") ||
       typeof step.semantic_closeout_command_template !== "string" || !step.semantic_closeout_command_template) return undefined;
   return {path: [...path, "ordered_steps", index, "vision_authoring"],
-    freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES};
+    freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+    sourceIdentity: JSON.stringify([context.registry, context.runtime_root, context.goal_ref ?? null,
+      plan.schema_version, identity.goal_id, identity.agent_id, identity.todo_id, step.kind, step.owner])};
 }
 
 function observedSectionDigest(body: string, field?: ReusableReadField): string {

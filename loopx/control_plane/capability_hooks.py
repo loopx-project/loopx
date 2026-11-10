@@ -288,6 +288,13 @@ def dispatch_turn_context_hooks(
                     "source": _turn_context_binding_source(payload),
                 }
             )
+            source = binding.get("source")
+            if isinstance(source, Mapping) and isinstance(source.get("heartbeat_receipt"), Mapping):
+                from .quota.turn_envelope import pack_turn_source
+
+                transport = pack_turn_source(source)
+                if transport is not None:
+                    binding = {"source_transport": transport}
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {

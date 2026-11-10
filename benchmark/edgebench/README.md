@@ -429,6 +429,82 @@ resource policy in the study manifest before launching a new comparison.
 Use explicit `--feedback best-only` to retain strict-improvement publication, or
 `--feedback blind` as an evaluator-feedback-free control. Harbor is unchanged.
 
+### Native artifact evidence and independent measurements
+
+Native heartbeat workers with `--execution-observation local_probe` expose
+`loopx-bind-native-candidate` as an artifact reader. Native results do not need
+a preceding successful local execution:
+
+```sh
+loopx-bind-native-candidate --result native-result.json
+```
+
+The original receipt names the accepted upload as `archive:<sha256>` and records
+its size. This offline command checks the receipt shape, not service identity.
+For additional file-content evidence, pass `--archive submission.tar.gz`. It
+checks the original receipt against the bytes and safely reads the complete
+ordinary gzip tar without extracting files, bounded to 256 members and 64 MiB
+compressed/expanded. The returned `submitted_file_set_ref` uses the shared
+Explore `candidate_content` path-and-byte manifest. File mode, packing, build
+lineage and execution conditions remain separate; equal content refs alone do
+not prove equivalent execution. Generated outputs belong to the full file set,
+and a probe's selected subset or extra fixtures are a different subject.
+
+Local and native producers each retain their own actual workload, evaluator,
+subject and evidence through ordinary Explore measurements. There is no
+required local-to-native work order. Missing content evidence limits pairing,
+not retention of an otherwise valid result. Never rewrite an earlier
+measurement or resubmit merely to force a candidate match. When the installed
+native client advertises `--retain-archive` and `--json`, it can retain bytes of
+a planned upload; this is optional evidence, not an extra evaluation.
+
+The old `--observation`, `--snapshot` and `--generated-file` options remain an
+explicit offline diagnostic for sealed probe artifacts. They keep their strict
+original correspondence checks and do not gate ordinary native facts.
+
+For an explicit native Explore trial, opt in with `--native-result-comparison`.
+`local_probe` is an independent option. Split source pins must also include the
+product's existing `record_work_finding` and `explore finding --result-json`
+entrypoint. Preflight rejects an older product explicitly; startup checks the
+actual staged product APIs before qualifying the service context. Use `--submission-id ID` instead of
+`--result FILE` to read one existing result. A single GET supplies native feedback
+and, when its service receipt/context are valid, a formal `native_measurement`
+with the stable accepted `archive:<sha256>` subject. No local execution or local
+archive is required. Optional `--archive` adds file-content evidence; its absence
+or mismatch does not erase a valid formal measurement or change its subject.
+Pending or unverified service results retain raw feedback with no measurement.
+
+This opt-in requires the native service's run-scoped `/context` route. Before
+the solver starts, the runner checks the task and benchmark digests and score
+direction against that service's fixed registration. The installed
+`evaluation_ref` fingerprints the service's task specification, grading source,
+immutable judge image, execution configuration and selection policy; use it for
+the native Yardstick. The result receipt must carry that exact registration and
+conditions. A local checkout label does not identify the running evaluator.
+Older services without this context require ordinary native feedback instead;
+older results without those conditions remain unpaired. Qualification adds one
+startup request and no extra request to each result read. The conditions do not
+claim to freeze external services or mutable external data.
+
+Record local and native measurements on the same claimed Todo with
+[`loopx explore finding --result-json`](../../loopx/capabilities/explore/README.md#quantitative-findings).
+Reuse the applicable question; each producer keeps its original workload, evaluator
+and subject. Different profile revisions are valid. Pair only the same subject
+under applicable conditions; content equality alone does not alias an archive or
+prove execution equivalence. Explore returns
+the comparable change in the write receipt. With a declared Yardstick, the
+receipt can show that the two evaluators prefer different candidates. The
+native read creates no finding and spends no submission opportunity.
+
+
+The common content capture lives in the product's existing Explore producer
+neighborhood; benchmark runtime only adapts native receipt/archive fields. A
+split product/runner install selecting capture must pin a product revision with
+`loopx.capabilities.explore.candidate_content`. Preflight rejects an older
+product before worker staging; it never overlays product code or falls back to
+a benchmark copy. Omitted capture preserves the historical source-pin behavior.
+
+
 For native archive submission, start `python -m benchmark.edgebench.serve` and use the runner
 without `--feedback` to select the defaults. Explicit
 `--feedback native --submission-cooldown 120 --eval-interval 300` restores the
