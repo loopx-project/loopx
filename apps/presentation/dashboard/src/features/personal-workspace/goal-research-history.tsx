@@ -1,4 +1,5 @@
 import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {evaluateScopedYardstickFidelity, type ScopedYardstickFidelity} from "../../../../../../loopx/control_plane/capabilities/yardstick_fidelity.js";
 import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
@@ -102,6 +103,46 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     && JSON.stringify(analysis.pack.result.scope) === JSON.stringify(analysis.pack.scope)
     && display?.snapshot_key === displayKey && display.source_namespace === displayNamespace && display.language === (zh ? "zh" : "en") ? display : undefined;
   const originals = useMemo(() => new Map(read.events.map(event => [event.event_id, event])), [read.events]);
+  const yardstickFidelityByEvent = useMemo(() => {
+    const result = new Map<string, ScopedYardstickFidelity>();
+    if (!read.events.length) return result;
+    const byNode = new Map<string, Array<Record<string, unknown>>>();
+    read.events.forEach((ev, idx) => {
+      if (ev.event_kind !== "finding" || !ev.node_id) return;
+      const list = byNode.get(ev.node_id) ?? [];
+      list.push({
+        finding_id: ev.result_id || ev.event_id,
+        node_id: ev.node_id,
+        status: ev.status,
+        recorded_order: idx,
+        ...(ev.measurements ? {measurements: ev.measurements} : {}),
+        ...(ev.execution_observation ? {execution_observation: ev.execution_observation} : {}),
+      });
+      byNode.set(ev.node_id, list);
+    });
+    const cache = new Map<string, ScopedYardstickFidelity>();
+    for (const ev of read.events) {
+      if (!ev.work_yardstick || !ev.node_id || !ev.work_yardstick.decision.proxy) continue;
+      const {authoritative, proxy} = ev.work_yardstick.decision;
+      const key = JSON.stringify([ev.node_id, authoritative, proxy]);
+      let evaluated = cache.get(key);
+      if (!evaluated) {
+        try {
+          evaluated = evaluateScopedYardstickFidelity({
+            node_id: ev.node_id,
+            authoritative,
+            proxy,
+            findings: byNode.get(ev.node_id) ?? [],
+          });
+          cache.set(key, evaluated);
+        } catch {
+          continue;
+        }
+      }
+      result.set(ev.event_id, evaluated);
+    }
+    return result;
+  }, [read.events]);
   const displayProjection = useMemo(() => projectTrajectoryDisplay(read.events, originalDisplay ? undefined : currentDisplay, displayKey, zh ? "zh" : "en"),
     [read.events, currentDisplay, displayKey, originalDisplay, zh]);
   const findingSections = (event: ExploreHistoryEvent) => currentDisplay && !originalDisplay
@@ -169,7 +210,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const findingBody = (finding: ExploreHistoryEvent) => {
     const execution = finding.execution_observation;
     const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} zh={zh}/> : null}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{finding.work_yardstick ? <WorkYardstickReadback capture={finding.work_yardstick} fidelity={yardstickFidelityByEvent.get(finding.event_id)} zh={zh}/> : null}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
       <dl className="research-finding-sections">
         <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
         {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}

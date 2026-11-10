@@ -1,12 +1,17 @@
 /** One work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
 import decisionSchema from "../stride_decision_schema.json" with {type: "json"};
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "../runtime_decode.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
+import {
+  evaluateMethodologyActivation,
+  isValidContentSha256,
+  projectBoundedMethodologyItems,
+  requireExactFields,
+} from "../capabilities/stage_methodology_operator.ts";
 import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
 export function normalizeStrideStrategy(value: unknown): string {
@@ -50,7 +55,7 @@ function text(field: string, value: unknown, limit: number): string {
   return result;
 }
 function exactFields(value: JsonObject, fields: string[], label: string): void {
-  if (Object.keys(value).some(key => !fields.includes(key))) throw new EffectRuntimeRequestError(`${label} contains unsupported fields`);
+  requireExactFields(value, fields, [], label, `${label} contains unsupported fields`);
 }
 function refs(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.length > STRIDE_REVIEW_REFERENCE_LIMIT || value.some(ref => typeof ref !== "string" ||
@@ -67,7 +72,7 @@ function selectedCandidate(value: unknown): JsonObject {
   const node = refs([input.node_id], "selected_candidate.node_id")[0];
   const finding = refs([input.finding_id], "selected_candidate.finding_id")[0];
   const digest = requireNonEmptyString(input.source_sha256, "selected_candidate.source_sha256");
-  if (!BARE_SHA256_PATTERN.test(digest)) throw new EffectRuntimeRequestError("selected_candidate requires the exact source digest");
+  if (!isValidContentSha256(digest)) throw new EffectRuntimeRequestError("selected_candidate requires the exact source digest");
   return {todo_id: todo, node_id: node, finding_id: finding, source_sha256: digest};
 }
 function comparisonCandidates(value: unknown): JsonObject[] {
@@ -168,7 +173,7 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
   if (input.explore_review != null) {
     const review = requireJsonObject(input.explore_review, "stride_decision.explore_review");
     exactFields(review, ["revision", "disposition", "considered_refs", "reason", ...(!historical ? ["result_pages", "selected_candidate"] : [])], "explore_review");
-    if (review.revision !== null && !BARE_SHA256_PATTERN.test(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
+    if (review.revision !== null && !isValidContentSha256(requireNonEmptyString(review.revision, "explore_review.revision"))) throw new EffectRuntimeRequestError("explore_review requires a delivered revision or null when unavailable");
     requireStringLiteral(review.disposition, decisionSchema.explore_dispositions, "explore_review.disposition");
     const considered = refs(review.considered_refs, "explore_review.considered_refs");
     if (review.disposition === "used" && !considered.length) throw new EffectRuntimeRequestError("used Explore evidence requires a delivered reference");
@@ -240,9 +245,11 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
   const harness = source.harness as JsonObject | undefined;
   const findings = Array.isArray(graph?.writeback_results) ? graph.writeback_results as JsonObject[] : [];
   const recent = Array.isArray(graph?.recent_findings) ? graph.recent_findings as JsonObject[] : [];
-  const measurementFeedback = (Array.isArray(graph?.measurement_feedback) ? graph.measurement_feedback : [])
-    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)))
-    .map(row => {
+  const measurementFeedback = projectBoundedMethodologyItems(
+    (Array.isArray(graph?.measurement_feedback) ? graph.measurement_feedback : [])
+      .filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item))),
+    3,
+  ).visible.map(row => {
       // The profile is already on the group. Keep candidate/value comparisons
       // inline; the existing source reader retains full point provenance.
       const latest = row.latest as JsonObject | undefined;
@@ -252,8 +259,11 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
       return {...row, best: point(row.best), previous_best: point(row.previous_best),
         ...(latest && measurement ? {latest: point(measurement)} : {})};
     });
-  const workYardsticks = (Array.isArray(graph?.work_yardsticks) ? graph.work_yardsticks : [])
-    .slice(0, 3).filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const workYardsticks = projectBoundedMethodologyItems(
+    (Array.isArray(graph?.work_yardsticks) ? graph.work_yardsticks : [])
+      .filter((item): item is JsonObject => Boolean(item && typeof item === "object" && !Array.isArray(item))),
+    3,
+  ).visible;
   const branches = Array.isArray(harness?.selected_branches) ? harness.selected_branches as JsonObject[] : [];
   const candidates = source.harness_enabled === true ? comparisonCandidates(harness?.comparison_candidates) : [];
   const audits = branches.flatMap(branch => {
@@ -268,12 +278,14 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
       source_sha256: typeof row.source_sha256 === "string" ? row.source_sha256
         : createHash("sha256").update(JSON.stringify(row)).digest("hex")});
   }
+  const boundedFindings = projectBoundedMethodologyItems([...byId.values()], 6);
+  const boundedBranches = projectBoundedMethodologyItems(branches, 3);
   return {availability: "available", graph_enabled: source.graph_enabled, harness_enabled: source.harness_enabled,
     // Planner scores/counts and unrelated pool churn do not alter a cited
     // finding's source. Bind the actual bounded evidence, not the whole view.
     revision: createHash("sha256").update(JSON.stringify([goal, agent, source.graph_enabled,
-      source.harness_enabled, [...byId.values()].slice(0, 6), ...(candidates.length ? [candidates] : [])])).digest("hex"),
-    finding_refs: [...byId.values()].slice(0, 6),
+      source.harness_enabled, boundedFindings.visible, ...(candidates.length ? [candidates] : [])])).digest("hex"),
+    finding_refs: boundedFindings.visible,
     ...(measurementFeedback.length ? {measurement_feedback: measurementFeedback} : {}),
     ...(graph?.measurement_feedback_page ? {measurement_feedback_page: graph.measurement_feedback_page} : {}),
     ...(typeof graph?.omitted_measurement_feedback === "number" && graph.omitted_measurement_feedback > 0
@@ -284,9 +296,9 @@ export function projectStrideExploreBasis(value: unknown, goal: string, agent: s
     ...(candidates.length ? {comparison_candidates: candidates} : {}),
     ...(harness?.omitted_comparison_candidates !== undefined ? {
       omitted_comparison_candidates: harness.omitted_comparison_candidates} : {}),
-    branches: branches.slice(0, 3).map(branch => ({todo_id: branch.todo_id,
+    branches: boundedBranches.visible.map(branch => ({todo_id: branch.todo_id,
       selection_status: branch.selection_status, actionable_open: branch.actionable_open})),
-    omitted_finding_refs: Math.max(0, byId.size - 6),
+    omitted_finding_refs: boundedFindings.omitted_count,
     result_page: graph?.result_page ?? null,
     rule: "Use the existing Explore view for scope/applicability, counterevidence and omitted-result reads. " +
       "For considered findings outside this list, copy revision/offset/limit from up to three global result pages you read into explore_review.result_pages; writeback replays them against the source. Keep explore_review.revision unchanged. " +
@@ -385,7 +397,10 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
 }
 
 export function strideControlContract(context: JsonObject, obligationId: unknown = null): JsonObject | null {
-  if (normalizeStrideStrategy(context.stride_strategy) === "off") return null;
+  const strategy = normalizeStrideStrategy(context.stride_strategy);
+  if (!evaluateMethodologyActivation({enabled: strategy !== "off", quiet_turn_policy: "due_obligation_only"}).active) {
+    return null;
+  }
   const follow = context.decision_followthrough as JsonObject | undefined;
   const previous = (follow?.previous_decision as JsonObject | undefined)?.evidence_ref ?? null;
   const basis = context.explore_basis as JsonObject | undefined;

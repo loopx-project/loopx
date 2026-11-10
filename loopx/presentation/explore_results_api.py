@@ -58,7 +58,7 @@ def _finding_rows(events, todos, *, goal_id):
          "question": nodes.get(finding["node_id"], {}).get("title", ""),
          "scope": nodes.get(finding["node_id"], {}).get("summary", "")}
         for finding in projection["findings"]
-    ], goal_id=goal_id)
+    ], goal_id=goal_id, findings=projection["findings"])
 
 
 def _history_rows(runtime_root, goal_id):

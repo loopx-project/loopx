@@ -28,5 +28,9 @@
   "progress_review.context.qualify",
   "state.recovery.archive.verify",
   "state.recovery.manifest.verify",
-  "runtime.checkpoint_artifacts"
+  "runtime.checkpoint_artifacts",
+  "explore.yardstick_fidelity.evaluate",
+  "explore.counterfactual_continuation.evaluate",
+  "explore.evolutionary_population.evaluate",
+  "work_item.yardstick.presentation"
 ]

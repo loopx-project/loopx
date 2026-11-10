@@ -11,6 +11,7 @@ import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTur
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectWorkMeasurementFacts, projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
+import {evaluateMethodologyActivation, projectBoundedMethodologyItems} from "./stage_methodology_operator.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
  * selection, eligibility, source revisions and pagination stay outside this
@@ -131,19 +132,24 @@ function branchContext(row: JsonObject, findingSources?: Map<string, JsonObject>
   const nodes = rows(audit.nodes), findings = rows(audit.findings), edges = rows(audit.relevant_edges);
   const requested = requireStringArray(audit.requested_node_refs ?? [], "requested_node_refs");
   const unknown = requireStringArray(audit.unknown_node_refs ?? [], "unknown_node_refs");
+  const boundedRequested = projectBoundedMethodologyItems(requested, 8);
+  const boundedUnknown = projectBoundedMethodologyItems(unknown, 8);
+  const boundedNodes = projectBoundedMethodologyItems(nodes, 3);
+  const boundedFindings = projectBoundedMethodologyItems(findings, 3);
+  const boundedEdges = projectBoundedMethodologyItems(edges, 3);
   // Preserve the existing diagnostic owner: no score change, inferred links or
   // new execution gate. Full status counts include details omitted upstream.
   result.typed_evidence_audit = {
     ...compact(audit, ["mode", "score_delta", "hazards"]),
-    requested_node_refs: requested.slice(0, 8),
-    unknown_node_refs: unknown.slice(0, 8),
-    omitted_requested_node_refs: Math.max(0, requested.length - 8),
-    omitted_unknown_node_refs: Math.max(0, unknown.length - 8),
-    nodes: nodes.slice(0, 3).map(node => compact(node, ["node_id", "title", "status"])),
-    findings: findings.slice(0, 3).map(finding => ({...compact(finding, ["finding_id", "node_id", "finding", "status"]),
+    requested_node_refs: boundedRequested.visible,
+    unknown_node_refs: boundedUnknown.visible,
+    omitted_requested_node_refs: boundedRequested.omitted_count,
+    omitted_unknown_node_refs: boundedUnknown.omitted_count,
+    nodes: boundedNodes.visible.map(node => compact(node, ["node_id", "title", "status"])),
+    findings: boundedFindings.visible.map(finding => ({...compact(finding, ["finding_id", "node_id", "finding", "status"]),
       ...findingDigest(finding, findingSources)})),
-    relevant_edges: edges.slice(0, 3).map(edge => compact(edge, ["from_node", "to_node", "edge_type"])),
-    omitted_audit_nodes: Math.max(0, nodes.length - 3),
+    relevant_edges: boundedEdges.visible.map(edge => compact(edge, ["from_node", "to_node", "edge_type"])),
+    omitted_audit_nodes: boundedNodes.omitted_count,
     omitted_audit_findings: Math.max(0, evidenceCount(audit, "findings", findings.length) - 3),
     omitted_audit_edges: Math.max(0, evidenceCount(audit, "edges", edges.length) - 3),
   };
@@ -169,8 +175,9 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const agent = requireNonEmptyString(params.agent_id, "agent_id");
   const route = requireStringArray(params.route, "route");
   const gate = requireJsonObject(params.harness_gate, "harness_gate");
-  const graph = params.graph_enabled === true;
-  const harness = gate.enabled === true;
+  const graph = evaluateMethodologyActivation({enabled: params.graph_enabled}).active;
+  const harness = evaluateMethodologyActivation({enabled: gate.enabled}).active;
+  const yardstickEnabled = evaluateMethodologyActivation({enabled: params.yardstick_enabled}).active;
   let todoId: string | null = null;
   let focusedRefs = new Set<string>();
   if ((graph || harness) && params.todo_id != null) {
@@ -248,11 +255,12 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       return outcomes.length ? [{todo_id: branch.todo_id, outcomes}] : [];
     });
     if (!linkedCandidates.length) return {};
+    const boundedCandidates = projectBoundedMethodologyItems(linkedCandidates, limit);
     return {
-      comparison_candidates: linkedCandidates.slice(0, limit).map(card => ({todo_id: card.todo_id,
+      comparison_candidates: boundedCandidates.visible.map(card => ({todo_id: card.todo_id,
         outcomes: card.outcomes.map(row => ({node_id: row.node_id, finding_id: row.finding_id,
           source_sha256: createHash("sha256").update(JSON.stringify(row)).digest("hex")}))})),
-      omitted_comparison_candidates: Math.max(0, linkedCandidates.length - limit),
+      omitted_comparison_candidates: boundedCandidates.omitted_count,
     };
   };
   const relationsByNode = new Map<unknown, JsonObject[]>();
@@ -266,15 +274,16 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const currentQuestion = (row: JsonObject): JsonObject => {
     const node = nodeById.get(row.node_id);
     const relations = relationsByNode.get(row.node_id) ?? [];
+    const boundedRelations = relations.length ? projectBoundedMethodologyItems(relations, 3) : null;
     return {
       ...(node ? {question_status: node.status,
         ...(node.blocked_reason ? {question_blocked_reason: node.blocked_reason} : {})} : {}),
-      ...(relations.length ? {
-        relations: relations.slice(0, 3).map(edge => ({...compact(edge, ["from_node", "to_node", "edge_type"]),
+      ...(boundedRelations ? {
+        relations: boundedRelations.visible.map(edge => ({...compact(edge, ["from_node", "to_node", "edge_type"]),
           summary: String(edge.summary ?? "").slice(0, 320),
           ...(String(edge.summary ?? "").length > 320 ? {summary_truncated: true} : {}),
         })),
-        omitted_relations: Math.max(0, relations.length - 3),
+        omitted_relations: boundedRelations.omitted_count,
       } : {}),
     };
   };
@@ -356,24 +365,32 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"));
     return facts ? [facts] : [];
   });
+  const boundedWorkMeasurements = projectBoundedMethodologyItems(workMeasurements, 3);
+  const boundedWorkCues = projectBoundedMethodologyItems(workCues, 3);
+  const boundedRecentNodes = projectBoundedMethodologyItems(nodes, 3);
+  const boundedRecentFindings = projectBoundedMethodologyItems(findings, 3);
+  const boundedSelectedBranches = projectBoundedMethodologyItems(branches, 3);
+  const boundedRejectedBranches = projectBoundedMethodologyItems(rejected, 3);
+  const boundedFrontier = projectBoundedMethodologyItems(frontier, 3);
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
     ...(todoId === null ? {} : {todo_id: todoId}),
     ...(reviewPages ? {review_pages: reviewPages} : {}),
     graph: graph ? {
       counts: projection.counts ?? {},
-      ...(params.yardstick_enabled === true ? {
+      ...(yardstickEnabled ? {
         work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
           guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions." + (todoId === null ? "" : " " + exploreInTurnFeedbackGuidance()),
           template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
             proxy: null, counterevidence_refs: [], next_action: {method_id: "", reason: "", cost_bound: ""}, prior_finding_id: null}},
-        ...(workMeasurements.length ? {work_measurements: workMeasurements.slice(0, 3),
-          omitted_work_measurements: Math.max(0, workMeasurements.length - 3)} : {}),
-        ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => {
+        ...(workMeasurements.length ? {work_measurements: boundedWorkMeasurements.visible,
+          omitted_work_measurements: boundedWorkMeasurements.omitted_count} : {}),
+        ...(workCues.length ? {work_yardsticks: boundedWorkCues.visible.map(cue => {
           if (resultNode !== null) return cue;
           const comparison = cue.search_comparison as JsonObject | undefined;
+          const fidelity = cue.yardstick_fidelity as JsonObject | undefined;
           return {source_finding_id: cue.source_finding_id, node_id: cue.node_id,
             todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
             cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
@@ -381,13 +398,17 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
               comparison_candidate_ref: (comparison.goal as JsonObject).preferred_candidate_ref,
               ...(typeof comparison.proxy_order_reversed === "boolean"
                 ? {proxy_order_reversed: comparison.proxy_order_reversed} : {})} : {}),
+            ...(fidelity ? {
+              fidelity_status: fidelity.fidelity_status,
+              paired_candidates: (fidelity.counts as JsonObject).paired_candidates,
+            } : {}),
             details_command: resultRead("--result-node", String(cue.node_id))};
-        }), omitted_work_yardsticks: Math.max(0, workCues.length - 3),
+        }), omitted_work_yardsticks: boundedWorkCues.omitted_count,
           work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),
       } : {}),
-      recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
+      recent_nodes: boundedRecentNodes.visible.map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       // The canonical evidence projection calls the finding's title `finding`.
-      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status", "measurement_error"]),
+      recent_findings: boundedRecentFindings.visible.map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status", "measurement_error"]),
         ...findingDigest(row, findingSources)})),
       // Full scoped summaries; progressive reads can raise the page size.
       // These retain the observation AND applicability; clipping away conditions
@@ -406,7 +427,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
         next_command: nextRead(remainingResults, visibleResults.length),
         node_command_template: resultRead("--result-node", "<node-id>", "--result-limit", "10"),
       },
-      omitted_nodes: Math.max(0, nodes.length - 3),
+      omitted_nodes: boundedRecentNodes.omitted_count,
       summary_command: command("summary"),
       ...resultWritebackFields(writeback),
       ...(measurementFeedback.length ? {
@@ -428,14 +449,14 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     harness: harness ? {
       orchestration_gate: gate,
       candidate_count: plan.candidate_count ?? 0,
-      selected_branches: branches.slice(0, 3).map(branch => branchContext(branch, findingSources)),
+      selected_branches: boundedSelectedBranches.visible.map(branch => branchContext(branch, findingSources)),
       ...visibleComparisons,
-      omitted_selected_branches: Math.max(0, branches.length - 3),
-      rejected_candidates: rejected.slice(0, 3).map(branch => branchContext(branch)),
+      omitted_selected_branches: boundedSelectedBranches.omitted_count,
+      rejected_candidates: boundedRejectedBranches.visible.map(branch => branchContext(branch)),
       omitted_rejected_candidates: Math.max(0,
         requireInteger(plan.rejected_candidate_count ?? rejected.length, "rejected_candidate_count") - 3),
-      frontier: frontier.slice(0, 3).map(node => compact(node, ["node_id", "title", "status", "summary"])),
-      omitted_frontier: Math.max(0, frontier.length - 3),
+      frontier: boundedFrontier.visible.map(node => compact(node, ["node_id", "title", "status", "summary"])),
+      omitted_frontier: boundedFrontier.omitted_count,
       // Expand the same Todo audit shown above, not a different worker-lane plan.
       plan_command: command("todo-branch-plan", "--agent-id", agent),
       link_evidence_template: [...route, "todo", "update", "--goal-id", goal, "--agent-id", agent, "--todo-id", "<todo-id>", "--explore-result-node-ref", "<node-id>"],

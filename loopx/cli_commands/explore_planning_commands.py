@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import argparse
-from typing import Callable
+import json
+from pathlib import Path
+from typing import Any, Callable
 
+from ..capabilities.explore.quantitative_planning import (
+    evaluate_budgeted_continuation_plan,
+    evaluate_counterfactual_continuations,
+    list_stage_methodology_operators,
+)
 from ..capabilities.explore.worker_branch_plan import (
     DEFAULT_WORKER_HARNESS_PROFILE,
     worker_harness_profile_names,
+)
+
+STATELESS_EXPLORE_PLANNING_COMMANDS = frozenset(
+    {
+        "budgeted-plan",
+        "counterfactual-eval",
+        "methodology-operators",
+    }
 )
 
 
@@ -155,3 +170,110 @@ def register_explore_planning_commands(
             "calibrate the lane-admission load factor from measurements."
         ),
     )
+
+    yardstick_fidelity = subparsers.add_parser(
+        "yardstick-fidelity",
+        help=(
+            "Evaluate scoped multi-point Yardstick rank concordance, frontier bias cliffs, "
+            "and unconfirmed proxy winners from recorded Explore findings. Advisory only."
+        ),
+    )
+    add_subcommand_format(yardstick_fidelity)
+    yardstick_fidelity.add_argument("--goal-id", required=True)
+    yardstick_fidelity.add_argument("--node-id", help="Filter to one Explore question node.")
+    yardstick_fidelity.add_argument("--todo-id", help="Filter declared Yardsticks to one Todo.")
+    yardstick_fidelity.add_argument("--agent-id", help="Filter declared Yardsticks to one Agent.")
+    yardstick_fidelity.add_argument(
+        "--frontier-k",
+        type=int,
+        help="Optional top-K authoritative frontier size (2..12).",
+    )
+    yardstick_fidelity.add_argument(
+        "--profiles-json",
+        help="Optional JSON file specifying explicit {authoritative, proxy, node_id} profiles.",
+    )
+
+    evolutionary_plan = subparsers.add_parser(
+        "evolutionary-plan",
+        help=(
+            "Select mechanism-diverse evolutionary elites, orthogonal crossover pairs, "
+            "and bottleneck mutations while quarantining Goodharted proxy winners. Advisory only."
+        ),
+    )
+    add_subcommand_format(evolutionary_plan)
+    evolutionary_plan.add_argument("--goal-id", required=True)
+    evolutionary_plan.add_argument("--node-id", help="Filter to one Explore question node.")
+    evolutionary_plan.add_argument("--todo-id", help="Filter declared Yardsticks to one Todo.")
+    evolutionary_plan.add_argument("--agent-id", help="Filter declared Yardsticks to one Agent.")
+    evolutionary_plan.add_argument("--elite-limit", type=int, help="Maximum confirmed elites (2..12).")
+    evolutionary_plan.add_argument("--crossover-limit", type=int, help="Maximum orthogonal crossover pairs (0..6).")
+    evolutionary_plan.add_argument("--mutation-limit", type=int, help="Maximum targeted mutations (0..6).")
+    evolutionary_plan.add_argument(
+        "--profiles-json",
+        help="Optional JSON file specifying explicit {authoritative, proxy, node_id, mechanism_by_candidate}.",
+    )
+
+    budgeted_plan = subparsers.add_parser(
+        "budgeted-plan",
+        help=(
+            "Evaluate confirmation-deadline back-scheduling, reversible probe slack, and "
+            "break-even thresholds across candidate continuation routes. Advisory only."
+        ),
+    )
+    add_subcommand_format(budgeted_plan)
+    budgeted_plan.add_argument(
+        "--document",
+        required=True,
+        help="Path to a budgeted_continuation_plan_v0 request JSON file.",
+    )
+
+    counterfactual_eval = subparsers.add_parser(
+        "counterfactual-eval",
+        help=(
+            "Evaluate same-checkpoint paired counterfactual continuations (tau_B, "
+            "identification/non-interference guards, action divergence, complete marginal costs)."
+        ),
+    )
+    add_subcommand_format(counterfactual_eval)
+    counterfactual_eval.add_argument(
+        "--document",
+        required=True,
+        help="Path to a counterfactual_continuation_eval_v0 request JSON file.",
+    )
+    counterfactual_eval.add_argument(
+        "--strict-identification",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Fail closed on checkpoint/isolation contamination (default true) or audit with --no-strict-identification.",
+    )
+
+    methodology_ops = subparsers.add_parser(
+        "methodology-operators",
+        help="List registered 5-stage methodology operators, enablement gates, and anti-entropy invariants.",
+    )
+    add_subcommand_format(methodology_ops)
+    methodology_ops.add_argument(
+        "--stage",
+        choices=["admission", "compile_context", "execute_verify", "writeback_settle", "feedback_evolve"],
+        help="Filter operators participating in one control-loop stage.",
+    )
+
+
+def handle_stateless_explore_planning_command(args: argparse.Namespace) -> dict[str, Any]:
+    cmd = str(args.explore_command)
+    if cmd == "budgeted-plan":
+        doc = json.loads(Path(args.document).read_text(encoding="utf-8-sig"))
+        if not isinstance(doc, dict):
+            raise ValueError("budgeted-plan --document must contain a JSON object")
+        return evaluate_budgeted_continuation_plan(doc)
+    if cmd == "counterfactual-eval":
+        doc = json.loads(Path(args.document).read_text(encoding="utf-8-sig"))
+        if not isinstance(doc, dict):
+            raise ValueError("counterfactual-eval --document must contain a JSON object")
+        return evaluate_counterfactual_continuations(
+            doc,
+            strict_identification=args.strict_identification,
+        )
+    if cmd == "methodology-operators":
+        return list_stage_methodology_operators(stage=getattr(args, "stage", None))
+    raise ValueError(f"unsupported stateless explore command: {cmd}")

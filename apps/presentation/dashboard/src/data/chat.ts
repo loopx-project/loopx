@@ -1,4 +1,11 @@
 import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
+import {
+  SCOPED_YARDSTICK_FIDELITY_SCHEMA,
+  YARDSTICK_CALIBRATION_TIERS,
+  YARDSTICK_FIDELITY_STATUSES,
+  type ScopedYardstickFidelity,
+} from "../../../../../loopx/control_plane/capabilities/yardstick_fidelity.js";
+import {verifyMethodologyOperatorOutput} from "../../../../../loopx/control_plane/capabilities/stage_methodology_operator.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
@@ -3096,6 +3103,18 @@ export async function changeOwnerNotifications(bindingId: string, bindingRevisio
 }
 
 
+const scopedYardstickFidelitySchema = z.custom<ScopedYardstickFidelity>(value => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (row.schema_version !== SCOPED_YARDSTICK_FIDELITY_SCHEMA) return false;
+  if (!(YARDSTICK_FIDELITY_STATUSES as readonly string[]).includes(String(row.fidelity_status))) return false;
+  if (!(YARDSTICK_CALIBRATION_TIERS as readonly string[]).includes(String(row.calibration_tier))) return false;
+  return verifyMethodologyOperatorOutput({
+    operator_id: "scoped_yardstick_fidelity",
+    output: row,
+  }).valid;
+}, "Invalid scoped_yardstick_fidelity_v0 payload");
+
 // Display validation only; finding status semantics remain owned by Explore.
 const exploreResultPageSchema = z.object({
   ok: z.literal(true), goal_id: z.string(), total: z.number().int().nonnegative(),
@@ -3107,6 +3126,7 @@ const exploreResultPageSchema = z.object({
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
     work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
+    yardstick_fidelity: scopedYardstickFidelitySchema.optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
