@@ -1868,16 +1868,20 @@ function completeHostDecision(request: JsonObject): JsonObject {
   return completeHostSource(request).decision;
 }
 
-/** Reuse the existing presentation plan only after its complete source passes
- * the versioned decision owner. The unsigned root is used for path selection;
- * edits and recovery still address the unchanged, signed original capture. */
-function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+function checkedContextPresentationSource(request: JsonObject): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   if (request.surface === "complete_turn") {
     const numbers = sourceNumberTokens(request, request.source_number_tokens)
       .filter(({path}) => path[0] === "context").map(({path, token}) => [path.slice(1), token]);
     requireCompleteTurnDecision(context, numbers);
   }
+  return context;
+}
+
+/** The unsigned root is used for path selection; edits and recovery still
+ * address the unchanged, signed original capture. */
+function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+  const context = checkedContextPresentationSource(request);
   const staged = nativeReplanPresentation(request);
   if (staged) return staged;
   if (request.surface !== "complete_turn")
@@ -2603,10 +2607,14 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "progressive_context_delivery")
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
-  if (operation === "context_delivery") return request.native_projection === undefined
-    ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
-    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
+  if (operation === "context_delivery") {
+    if (request.native_projection === undefined) {
+      if (request.surface === "complete_turn") checkedContextPresentationSource(request);
+      return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+    }
+    return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
       checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
+  }
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
