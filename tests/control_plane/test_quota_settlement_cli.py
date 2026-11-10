@@ -1727,9 +1727,22 @@ def test_scheduler_cache_misses_after_goal_is_stopped_without_run(
     assert initial["should_run"] is True
     index_path = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     index_before = index_path.read_bytes() if index_path.exists() else None
-    registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    registry["goals"][0]["activation_state"] = "stopped"
-    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    stop = ("goal-lifecycle", "--goal-id", GOAL_ID, "--operation", "stop")
+    rc, preview = _run_cli(registry_path, runtime, *stop, cwd=project)
+    assert rc == 0, preview
+    rc, stopped = _run_cli(
+        registry_path,
+        runtime,
+        *stop,
+        "--actor-kind",
+        "owner",
+        "--expected-state-fingerprint",
+        preview["observed_state_fingerprint"],
+        "--execute",
+        cwd=project,
+    )
+    assert rc == 0, stopped
+    assert stopped["after_state"] == "stopped" and stopped["readback"]["verified"]
     assert (index_path.read_bytes() if index_path.exists() else None) == index_before
 
     rc, refreshed = _run_cli(
