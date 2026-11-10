@@ -13,6 +13,7 @@ from ..control_plane.quota.error_codes import (
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_pending_action_todo_id,
+    heartbeat_receipt_semantic_replan_obligation_id,
     heartbeat_receipt_settlement_replan_obligation_id,
     heartbeat_receipt_settlement_todo_id,
     retain_pending_heartbeat_action_selection,
@@ -131,7 +132,8 @@ def load_requested_quota_action_selection(
         receipt=existing,
         receipt_bound_todo_id=heartbeat_receipt_settlement_todo_id(existing),
         receipt_bound_replan_obligation_id=(
-            heartbeat_receipt_settlement_replan_obligation_id(existing)
+            heartbeat_receipt_semantic_replan_obligation_id(existing)
+            or heartbeat_receipt_settlement_replan_obligation_id(existing)
         ),
         receipt_pending_action_todo_id=(
             heartbeat_receipt_pending_action_todo_id(existing)

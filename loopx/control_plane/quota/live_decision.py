@@ -55,16 +55,38 @@ def _receipt_bound_guard_fields(
     """Adapt the recorded guard identity and time for the shared decision owner."""
     guard = getattr(readback, "semantic_replan_guard", None)
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
+    identity = readback.identity.value if readback is not None else None
     return {
         "receipt_bound_replan_guard_scoped": bool(
-            isinstance(guard, Mapping)
-            and guard.get("scope") == "turn_guard"
+            obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
             and guard.get("selected_obligation_id") == obligation_id
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
         "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
+
+
+def _project_receipt_replan_settlement(
+    payload: dict[str, Any], readback: QuotaSettlementReadback | None, *,
+    available_capabilities: list[str] | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+    turn_instance_id: str | None, registry_path: Path, runtime_root: Path,
+    goal_ref: Mapping[str, Any] | None,
+) -> None:
+    """Project closeout from the original readback, never the current selection."""
+    if not readback or (payload.get("replan_action_packet") or {}).get("settlement_only") is not True:
+        return
+    attach_settlement_progress(payload, readback, registry_path=registry_path,
+        runtime_root=runtime_root, goal_ref=goal_ref)
+    identity = readback.identity.value
+    if identity is None:
+        raise ValueError("original replan settlement identity is unavailable")
+    payload["heartbeat_receipt"] = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
+    payload["interaction_contract"] = build_interaction_contract(payload,
+        available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
+        turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root))
 
 
 def _apply_retained_action_selection_reentry(
@@ -560,18 +582,26 @@ def bind_action_selection_cli_routes(
         selection_command["route_prefix"] = shlex.join(tokens)
 
 
-def _receipt_bound_recovery_required(
-    payload: Mapping[str, Any], receipt_bound_todo_id: str,
-) -> bool:
+def _receipt_bound_recovery_todo(
+    payload: Mapping[str, Any], receipt_bound_todo_id: str | None, *,
+    agent_id: str | None, turn_instance_id: str | None,
+    replay_phase: ReceiptBoundReplayPhase | None,
+) -> str | None:
+    """Keep finished/replan-only Turns out of generic Todo wait recovery."""
+    if (not receipt_bound_todo_id or not agent_id or not turn_instance_id
+            or replay_phase is ReceiptBoundReplayPhase.SETTLED
+            or (payload.get("replan_action_packet") or {}).get("settlement_only") is True
+            or payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value):
+        return None
+    if replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
+        return receipt_bound_todo_id
     selected_value = payload.get("selected_todo")
     selected = selected_value if isinstance(selected_value, Mapping) else {}
-    if (
-        selected.get("todo_id") != receipt_bound_todo_id
-        or payload.get("normal_delivery_allowed") is not True
-    ):
-        return True
+    if (selected.get("todo_id") != receipt_bound_todo_id
+            or payload.get("normal_delivery_allowed") is not True):
+        return receipt_bound_todo_id
     wait_kind = str(selected.get("resume_when") or "").split(":", 1)[0]
-    return wait_kind not in ("", "monitor_changed", "todo_done")
+    return receipt_bound_todo_id if wait_kind not in ("", "monitor_changed", "todo_done") else None
 
 
 def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
@@ -674,7 +704,15 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
-        replan_obligation_id=receipt_bound_replan_obligation_id,
+        # A Todo-bound receipt may also carry the semantic replan generation
+        # admitted by that Turn.  Its settlement identity remains the Todo;
+        # passing both bindings makes the readback owner treat the receipt as a
+        # conflicting replan-only identity and drops its semantic guard.
+        replan_obligation_id=(
+            None
+            if receipt_bound_todo_id
+            else receipt_bound_replan_obligation_id
+        ),
         registry_path=registry_path,
         goal_ref=goal_ref,
     )
@@ -687,6 +725,14 @@ def build_live_quota_should_run_decision(
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
     )
+    if (
+        receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
+        and receipt_bound_replan_obligation_id
+        and agent_id
+    ):
+        from ..work_items.autonomous_replan_ack import load_receipt_replan_ack_candidates
+        decision_status_payload["receipt_bound_replan_ack_candidates"] = load_receipt_replan_ack_candidates(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, obligation_id=receipt_bound_replan_obligation_id)
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
     )
@@ -762,6 +808,10 @@ def build_live_quota_should_run_decision(
         goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
     )
+    _project_receipt_replan_settlement(payload, settlement_readback,
+        available_capabilities=available_capabilities, scheduler_execution_context=resolved_context,
+        turn_instance_id=turn_instance_id, registry_path=registry_path, runtime_root=runtime_root,
+        goal_ref=goal_ref)
     _apply_retained_action_selection_reentry(
         payload,
         retained_todo_id=retained_action_selection_todo_id,
@@ -817,10 +867,6 @@ def build_live_quota_should_run_decision(
     original_replan_settlement = (
         (payload.get("replan_action_packet") or {}).get("settlement_only") is True
     )
-    if original_replan_settlement and settlement_readback is not None:
-        attach_settlement_progress(payload, settlement_readback,
-            registry_path=registry_path, runtime_root=runtime_root,
-            goal_ref=goal_ref)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
@@ -833,14 +879,9 @@ def build_live_quota_should_run_decision(
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
         )
-    if (
-        receipt_bound_todo_id and agent_id and turn_instance_id
-        and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
-        and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-        and (
-            receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
-            or _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
-        )
+    if recovery_todo_id := _receipt_bound_recovery_todo(
+        payload, receipt_bound_todo_id, agent_id=agent_id, turn_instance_id=turn_instance_id,
+        replay_phase=receipt_bound_replay_phase,
     ):
         # A verified writeback seals this Turn even while its Todo stays open
         # and selected. Let the existing typed owner project only the remaining
@@ -852,7 +893,7 @@ def build_live_quota_should_run_decision(
             )
         apply_receipt_bound_wait_recovery(
             payload, registry_path=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
+            goal_id=goal_id, agent_id=agent_id, todo_id=recovery_todo_id,
             turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
             monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),

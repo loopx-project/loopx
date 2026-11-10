@@ -614,6 +614,63 @@ test("only a bound original receipt can select the source-derived legacy obligat
   assert.deepEqual(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, null);
 });
 
+test("a later durable exact ACK settles only its original receipt-bound Turn", () => {
+  const id = "replan-1111111111111111", goal = "goal-a", agent = "synthetic-agent";
+  const guardTurn = "guided-start:original", laterTurn = "guided-start:later";
+  const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
+    obligation_id: id, outcomes: ["fresh_vision_path_outcome"],
+    satisfying_outcomes: ["fresh_vision_path_outcome"]};
+  const historicalAck = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    goal_id: goal, agent_id: agent, turn_instance_id: laterTurn,
+    generated_at: "2026-08-01T00:00:02Z", semantic_delta: delta};
+  const candidate = {historical_ack: historicalAck};
+  const request = {guard_scoped: true, selected_obligation_id: id,
+    transition_candidates: [candidate], goal_id: goal, agent_id: agent,
+    guard_recorded_at: "2026-08-01T00:00:01Z", guard_turn_instance_id: guardTurn};
+  assert.deepEqual(projectReplanSemantics({operation: "turn_transition", ...request}).semantic_delta, delta);
+  const obligation = projectReplanSemantics({operation: "receipt_bound_obligation", ...request,
+    current_obligation: null, replay_phase: "open"}).obligation as JsonObject;
+  assert.equal(obligation.obligation_id, id);
+  assert.equal(obligation.resolution_mode, "receipt_bound_replan_settlement");
+  const packet = obligation.settlement_action_packet as JsonObject;
+  assert.equal(packet.decision, "historical_ack_recorded");
+  assert.equal(packet.settlement_only, true);
+  assert.equal(packet.required_outcome, "durable_writeback_receipt");
+  assert.deepEqual(packet.semantic_delta, delta);
+  assert.equal((packet.writeback_contract as JsonObject).preferred_input, "exact_historical_ack");
+
+  for (const missingGuard of [{guard_scoped: false}, {goal_id: null}, {agent_id: null},
+    {guard_recorded_at: null}, {guard_turn_instance_id: null}]) {
+    const unbound = {...request, ...missingGuard};
+    assert.equal(projectReplanSemantics({operation: "turn_transition", ...unbound}).semantic_delta, null);
+    assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", ...unbound,
+      current_obligation: null, replay_phase: "open"}), /identity conflicts/);
+  }
+
+  const invalid = [
+    {historical_ack: {...historicalAck, schema_version: "wrong"}},
+    {historical_ack: {...historicalAck, recorded: false}},
+    {historical_ack: {...historicalAck, goal_id: "goal-b"}},
+    {historical_ack: {...historicalAck, agent_id: "peer"}},
+    {historical_ack: {...historicalAck, turn_instance_id: guardTurn}},
+    {historical_ack: {...historicalAck, turn_instance_id: null}},
+    {historical_ack: {...historicalAck, generated_at: "2026-08-01T00:00:01Z"}},
+    {historical_ack: {...historicalAck, generated_at: "invalid"}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, schema_version: "wrong"}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, accepted: false}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, satisfying_outcomes: []}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, outcomes: ["unregistered"], satisfying_outcomes: ["unregistered"]}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, satisfying_outcomes: ["new_surface"]}}},
+  ];
+  for (const badCandidate of invalid) {
+    const changed = {...request, transition_candidates: [badCandidate]};
+    assert.equal(projectReplanSemantics({operation: "turn_transition", ...changed}).semantic_delta, null);
+    assert.throws(() => projectReplanSemantics({operation: "receipt_bound_obligation", ...changed,
+      current_obligation: null, replay_phase: "open"}), /identity conflicts/);
+  }
+});
+
 
 for (const recovery of ["same_turn_terminal_closeout", "lifecycle_reentry_terminal_closeout"]) {
 test(`${recovery} restores only its exact admitted review and still owes Vision`, () => {
