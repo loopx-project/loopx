@@ -5,7 +5,7 @@
 - **交付成熟度：** M1 源码实现；预算内规划为提案；M2/M3 未资格确认
 - **作者 / 归属：** LoopX maintainers
 - **创建日期：** 2026-11-05
-- **最近规范修订：** 2026-11-09
+- **最近规范修订：** 2026-11-10
 - **实现基线：** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
 - **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
@@ -577,6 +577,13 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 验收成果指标或代理分类。共享问题关联只表示证据关联，不是该 Todo 执行测量的不可变归属。
 首次决策仍为可选记录；默认关闭及按字段首次读取保留原语义。真实 File/SQLite reader
 资格与实际模型收益分别验收。
+初始测量提示与已有组合的比较在有意义的证据或 probe 边界复用同一局部选择指导：
+验收约束内的预计成果收益、剩余时间，以及完整实现、搜索和确认成本（含模型和控制
+开销）。未知保持未知；证据支持的路线可以继续，无实质变化时继续当前获准工作。
+局部增益本身不决定哪项投入最值得做。该指导不新增必做比较、评测调用、决策附件或
+复盘，也不根据指标名称或近期展示顺序推断 profile。启用时，同一工作的 finding
+receipt 也由共享测量事实 owner 投影这段指导。更大的测量索引继续按需读取，不扩充
+每次首读。真实模型采用与成果收益仍未取得资格。
 
 在尚未结算的回合里，显式 Explore finding 可以使用普通结果附件，并与
 refresh-state 复用同一个 Todo 的规范研究问题。写入回执返回这次写入涉及的
