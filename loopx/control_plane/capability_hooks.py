@@ -20,6 +20,7 @@ from .effect_runtime import (
     EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
+    effect_runtime_projection_result,
     effect_runtime_result,
 )
 from .coordination.coordination_state_contract_generated import (
@@ -209,6 +210,15 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope
+    if "schema_version" in payload or "contract_binding" in payload:
+        from .quota.turn_envelope import quota_capability_automation_source
+
+        # A declared native contract must pass the same complete-source owner
+        # as participation. Never reinterpret a damaged version as raw quota.
+        source = quota_capability_automation_source(payload)
+        if isinstance(payload.get("heartbeat_receipt"), Mapping):
+            return {**payload, "agent_id": source.get("agent_id")}
+        return {"goal_id": source.get("goal_id"), "agent_id": source.get("agent_id")}
     agent_id = payload.get("agent_id")
     identity = payload.get("agent_identity")
     if isinstance(identity, Mapping):
@@ -268,18 +278,28 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
-            source = _turn_context_binding_source(payload)
             readback_only = (
                 result.get("context_fields") == {}
                 and result.get("instructions") == []
                 and result.get("result_fields") == {}
             )
+            if readback_only:
+                binding: dict[str, Any] = {"readback_only": True}
+            else:
+                source = _turn_context_binding_source(payload)
+                binding = {"source": source}
+                if isinstance(source.get("heartbeat_receipt"), Mapping):
+                    from .quota.turn_envelope import pack_turn_source
+
+                    transport = pack_turn_source(source)
+                    if transport is not None:
+                        binding = {"source_transport": transport}
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    **({"readback_only": True} if readback_only else {"source": source}),
+                    **binding,
                 },
             )
             readback = contribution.pop("readback")
@@ -303,42 +323,25 @@ def dispatch_turn_context_hooks(
 def project_turn_context(
     payload: Mapping[str, Any], *, from_journal: bool = False,
 ) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    instructions: list[str] = []
-    result_fields: dict[str, Any] = {}
     contributions = payload.get("turn_context_contributions")
-    if not isinstance(contributions, list):
+    if not isinstance(contributions, list) or not contributions:
         return {}
+    readback: dict[str, Any] = {}
     for item in contributions:
-        try:
-            slots = item["readback_slots"]
-            contribution = effect_runtime_result(
-                "capability_hook.turn_context.project",
-                {
-                    "contribution": item,
-                    "source": _turn_context_binding_source(payload, from_journal=from_journal),
-                    "readback": {key: payload.get(key) for key in slots},
-                },
-            )
-            if set(context) & set(contribution["context_fields"]) or set(
-                result_fields
-            ) & set(contribution["result_fields"]):
-                raise ValueError("conflicting capability contribution")
-            context.update(contribution["context_fields"])
-            instructions.extend(contribution["instructions"])
-            result_fields.update(contribution["result_fields"])
-        except (
-            Exception
-        ):  # A stale/private contribution is omitted, never repaired from cached data.
+        if not isinstance(item, Mapping):
             continue
-    if not (context or instructions or result_fields):
+        slots = item.get("readback_slots")
+        if isinstance(slots, (list, tuple)):
+            readback.update({key: payload.get(key) for key in slots if isinstance(key, str)})
+    try:
+        projected = effect_runtime_projection_result("capability_hook.turn_context.project", {
+            "contributions": contributions,
+            "source": _turn_context_binding_source(payload, from_journal=from_journal),
+            "readback": readback,
+        })
+    except Exception:  # Optional context transport cannot gate the underlying work.
         return {}
-    return {
-        **context,
-        "capability_context_fields": list(context),
-        "capability_instructions": instructions,
-        "capability_result_fields": result_fields,
-    }
+    return projected if isinstance(projected, dict) else {}
 
 
 def host_context_projection(request: Mapping[str, Any]) -> dict[str, Any]:

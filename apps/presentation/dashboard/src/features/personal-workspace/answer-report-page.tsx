@@ -6,6 +6,7 @@ import {readWorkspaceLocale} from "./i18n";
 import {resolveConversationScope} from "../../../../../../loopx/control_plane/collaboration/conversation_scope";
 import {ReturnDeliveryStatus} from "./return-delivery-status";
 import {MarkdownText} from "./markdown";
+import {DocumentAttachment, isDocumentAttachment} from "./document-attachment";
 import {markdownOutline, parseMarkdownBlocks} from "./markdown-blocks";
 import {readWorkspaceTheme} from "./workspace-theme";
 import "./personal-workspace.css";
@@ -125,6 +126,9 @@ export function AnswerReportPage({sessionId, messageId, statusUrl}: {
               <a href={`#${encodeURIComponent(heading.id)}`} onClick={() => window.requestAnimationFrame(() => document.getElementById(heading.id)?.focus({preventScroll: true}))}>{heading.text}</a>
             </li>)}</ol></nav></details> : null}
           <div className="answer-report-content"><MarkdownText text={answerText} headingPrefix={headingPrefix}/></div>
+          {answer.attachments?.map(file => isDocumentAttachment(file.mime_type)
+            ? <DocumentAttachment key={file.id} dataUrl={file.data_url} name={file.name} size={file.size} zh={zh}/>
+            : <img key={file.id} src={file.data_url} alt={file.name}/>)}
           <footer>
             <details><summary>{zh ? "来源与版本" : "Source and version"}</summary><p>{zh ? "来自本机保存的对话消息；打开此页不会重新运行 Agent。" : "From a locally saved conversation message. Opening this page does not rerun the Agent."}</p>
               <dl><dt>{zh ? "消息" : "Message"}</dt><dd><code>{answer.message_id}</code></dd>

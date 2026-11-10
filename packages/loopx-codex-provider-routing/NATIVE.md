@@ -183,6 +183,13 @@ eligible and a subsequent accepted request clears its preference penalty.
 Selection reuses the existing private runtime observations, adds no probes,
 and never retries an admitted stream or overrides the subscription/API role.
 
+Version 0.15.6 treats an API route as ready only while at least one configured
+key is currently eligible after authentication, rate-limit and billing
+observations. If the active API pool becomes unavailable, an available
+subscription is selected again; when none is available, status reports
+`all_unavailable` instead of claiming `api_active`. `api_fallback` stays enabled
+through this transition.
+
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
 It makes no inference call and does not establish spendable quota. Its 401, 403,

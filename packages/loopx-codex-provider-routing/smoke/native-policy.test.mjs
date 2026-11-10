@@ -159,4 +159,11 @@ test("API is opt-in and strictly after every measured subscription; recovery ret
   assert.equal(decide(input({policy: enabled, api, observations: [sample("a", 100), sample("b", 100), {...sample("c", 100), observed_at: now - 121}]})).target, null);
   assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: exhausted})).action, "api_active");
   assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: [sample("a", 80), sample("b", 20), sample("c", 100)]})).target, "b");
+  const exhaustedApi = {...api, ready: false};
+  assert.equal(decide(input({policy: enabled, api: exhaustedApi, active: api.slot,
+    observations: [sample("a", 80), sample("b", 20), sample("c", 100)]})).target, "b",
+  "An exhausted API pool returns to an available subscription");
+  assert.equal(decide(input({policy: enabled, api: exhaustedApi, active: api.slot,
+    observations: exhausted})).action, "all_unavailable",
+  "An exhausted API pool is never projected as actively callable");
 });

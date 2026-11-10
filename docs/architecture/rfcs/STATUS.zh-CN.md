@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (48)
+## 已接受 (49)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -44,6 +44,7 @@
 | [RFC：Goal 工作区页面 v0](goal-workspace-surface-v0.zh-CN.md) | 已接受 | 无 | — |
 | [DSH / Pi：L1 观察与 Managed Runtime 选型](harness-selection-dsh-pi-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 分层步幅控制 v0](hierarchical-agent-stride-control-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC: 参考 billion-context 的可回读历史工作集与上下文策略插件化（v0）](history-working-set-context-policy-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：用户确认的垂域操作（v0）](human-confirmed-domain-operations-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：智能化审阅与动态展示面 v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | 已接受 | 无 | — |

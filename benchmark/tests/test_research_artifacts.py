@@ -88,7 +88,8 @@ def test_native_entry_installs_identical_research_scope_and_declares_checkpoint_
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     def backend(**kwargs):
         assert kwargs["research_sidecar"] is True
-        return SimpleNamespace(image_exists=lambda image: True)
+        return SimpleNamespace(observe_local_images=lambda **keys: {},
+                               registration_options=lambda provider: {})
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     capture = profile.startswith("heartbeat-")
     request = {"destination": "/logs/agent/checkpoints", "components": [

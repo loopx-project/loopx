@@ -8,6 +8,30 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
 
 
+def _project_native_cli_settlement(payload: dict[str, object]) -> dict[str, object]:
+    """Publish one projected plan before capability binding and capture."""
+    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result
+    from ..control_plane.quota.turn_envelope import _apply_context_projection_changes
+
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
+    todo = payload.get("selected_todo")
+    if not isinstance(cli, Mapping) or not isinstance(todo, Mapping):
+        return payload
+    try:
+        projection = effect_runtime_result("settlement.native_cli_projection", {
+            "cli": cli, "receipt": payload.get("heartbeat_receipt"), "todo_id": todo.get("todo_id"),
+        })
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # The already admitted Turn still has its canonical manual plan.
+        return payload
+    if not projection:
+        return payload
+    return {**payload, "interaction_contract": {
+        **interaction, "cli_channel": _apply_context_projection_changes(dict(cli), projection),
+    }}
+
+
 def _quota_renderer(
     args: argparse.Namespace,
     *,

@@ -3,7 +3,7 @@ name: CI Maintenance
 # Trusted base-branch code only; never checks out or executes PR content.
 on:
   pull_request_target:
-    types: [closed, synchronize]
+    types: [closed, synchronize, opened, reopened, edited]
 
 permissions:
   contents: read
@@ -13,6 +13,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  inspect-pr-diff:
+    if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const repo = context.repo;
+            const pull_number = context.payload.number;
+            const expected = context.payload.pull_request;
+            const readPR = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+            const pr = await readPR();
+            const sameIdentity = current => current.state === 'open' &&
+              current.head.sha === expected.head.sha && current.head.ref === expected.head.ref &&
+              current.head.repo?.id === expected.head.repo?.id &&
+              current.base.ref === expected.base.ref && current.base.repo?.id === expected.base.repo?.id;
+            if (!sameIdentity(pr) || !pr.head.repo?.id || !pr.base.repo?.id) {
+              return core.info('PR identity changed; stop diff inspection.');
+            }
+            const readTarget = async () => (await github.rest.repos.getBranch(
+              {...repo, branch: pr.base.ref})).data.commit.sha;
+            const target = await readTarget();
+            if (pr.base.sha === target) return core.info('PR base snapshot is current.');
+            // A changed target tip alone does not prove a wrong comparison.
+            // REST base updates have no target compare-and-swap: a final GET
+            // cannot prevent overwriting a concurrent maintainer retarget.
+            const before = await readPR();
+            if (!sameIdentity(before) || before.base.sha !== pr.base.sha) {
+              return core.info('PR changed during inspection; inspect the newer revision.');
+            }
+            core.info(`Comparison inspection for #${pull_number}: PR base ${pr.base.sha}, ` +
+              `target ${pr.base.ref} at ${target}, head ${pr.head.sha}. ` +
+              'Verify the published inventory against the exact three-dot Git diff before repair. ' +
+              'This observation is read-only and does not prove an incorrect diff.');
+
   cancel-obsolete-pr:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'closed' || github.event.action == 'synchronize')
     runs-on: ubuntu-latest

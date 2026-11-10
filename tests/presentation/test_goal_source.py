@@ -7,6 +7,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+from hashlib import sha256
 
 import pytest
 
@@ -35,6 +36,45 @@ def test_explicit_source_scope_is_required_and_unknown_fields_are_rejected():
         GoalSource.parse({key: value for key, value in current.items() if key != "connection"})
 
 
+def test_document_attachment_does_not_rebind_existing_source_identity():
+    raw = manifest()
+    source = GoalSource.parse(raw)
+    legacy_identity = dict(id='source', label='Source', registry='/registry', runtime_root='/runtime',
+        cli='/bin/loopx', python='/bin/python', path='/bin', connection='local', environment='host',
+        goal_id='original', host_alias=None, container_id=None)
+    assert source.namespace == sha256(json.dumps(legacy_identity, sort_keys=True).encode()).hexdigest()
+    binding = dict(declared_path='/source/task.md', path='/capture/task.md', sha256='a' * 64)
+    assert GoalSource.parse({**raw, 'goal_document_snapshot': binding}).namespace == source.namespace
+    for invalid in [{**binding, 'sha256': 'unknown'}, {**binding, 'path': 'relative.md'},
+                    {**binding, 'extra': True}]:
+        with pytest.raises(ValueError):
+            GoalSource.parse({**raw, 'goal_document_snapshot': invalid})
+    with pytest.raises(ValueError):
+        GoalSource.parse({**raw, 'scope': {'all_registered': True}, 'goal_document_snapshot': binding})
+
+
+def test_document_relative_location_never_falls_back_to_reader_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    document = tmp_path / 'task.md'
+    document.write_text('# A file in the reader directory is not the original declaration\n')
+    registry = tmp_path / 'registry.json'
+    goal = {'id': 'original', 'authority_sources': [
+        {'kind': 'goal_doc', 'role': 'primary_goal_document', 'path': 'task.md'}]}
+    registry.write_text(json.dumps({'goals': [goal]}))
+    source = GoalSource.parse({**manifest(), 'registry': str(registry), 'python': sys.executable})
+    monkeypatch.setattr(GoalSource, 'read_status', lambda self, goal_id=None:
+        {'ok': True, 'run_history': {'goals': [{'id': 'original', 'registry_member': True}]}})
+    monkeypatch.setattr(GoalSource, 'read_registry_goal', lambda self, goal_id:
+        json.loads(registry.read_text()))
+    reader = GoalSourceReader(source, history_projector=explore_history_rows)
+    with pytest.raises(subprocess.CalledProcessError):
+        reader.document('original')
+    # An absolute declared file needs no guessed repository or process cwd.
+    goal['authority_sources'][0]['path'] = str(document)
+    registry.write_text(json.dumps({'goals': [goal]}))
+    assert reader.document('original')['document']['text'] == document.read_text()
+
+
 @pytest.mark.parametrize("connection", ["local", "ssh"])
 @pytest.mark.parametrize("environment", ["host", "container"])
 def test_connection_and_environment_compose_with_native_read_only_commands(monkeypatch, connection, environment):
@@ -47,7 +87,9 @@ def test_connection_and_environment_compose_with_native_read_only_commands(monke
 
     def run(argv, *, env=None):
         commands.append((argv, env))
-        return json.dumps({"ok": True, "run_history": {"goals": [{"id": "original"}]}})
+        return json.dumps({"ok": True, "run_history": {"goals": [{"id": "original"}]},
+            "goals": [{"id": "original", "repo": "/source", "unused": "not projected", "authority_sources": [
+                {"kind": "goal_doc", "role": "primary_goal_document", "path": "task.md", "unused": "not projected"}]}]})
 
     monkeypatch.setattr("loopx.control_plane.status.goal_source._run", run)
     assert source.read_status()["ok"]
@@ -62,6 +104,13 @@ def test_connection_and_environment_compose_with_native_read_only_commands(monke
         assert argv[:2] == ["docker", "exec"] and "b" * 64 in argv
     assert argv[-4:] == ["json", "status", "--goal-id", "original"]
     assert argv[argv.index("--registry") + 1] == "/registry with space"
+    declaration = source.read_registry_goal("original")
+    assert declaration == {"goals": [{"id": "original", "repo": "/source", "authority_sources": [
+        {"kind": "goal_doc", "role": "primary_goal_document", "path": "task.md"}]}]}
+    registry_argv = commands[-1][0]
+    if connection == "ssh":
+        registry_argv = shlex.split(registry_argv[-1])
+    assert registry_argv[-1] == "registry", "Use the native registry owner, not a parallel wire decoder"
 
 
 def test_revoked_ssh_alias_invalidates_cached_status_and_pages(monkeypatch):
