@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sys
 import time
+from hashlib import sha256
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,6 +24,51 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.control_plane.status.goal_source import GoalSource
+
+
+def test_original_document_alias_binding_and_recovery(workspace):
+    raw, request, protected = native_source(workspace)
+    registry = Path(raw['registry'])
+    registered = json.loads(registry.read_text())
+    declared = '/source/retained/primary-task.md'
+    registered['goals'][0]['authority_sources'] = [
+        {'kind': 'goal_doc', 'role': 'primary_goal_document', 'path': declared}]
+    registry.write_text(json.dumps(registered))
+    protected[registry] = registry.read_bytes()
+    document = registry.parent / 'captured-task.md'
+    original = b'# Original objective\r\n\nKeep the full original task and its constraints.\n'
+    document.write_bytes(original)
+    raw['goal_document_snapshot'] = {'declared_path': declared, 'path': str(document),
+        'sha256': sha256(original).hexdigest()}
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    path = '/api/chat/goal-source-document?' + urlencode({'goal_id': 'case-alias', 'source_namespace': namespace})
+    result = request(path)
+    assert result['goal_id'] == 'solver-goal'
+    assert result['source']['namespace'] == namespace
+    assert result['document'] == {'text': original.decode(), 'sha256': sha256(original).hexdigest(), 'captured': True}
+    assert 'path' not in result['document']
+    document.write_bytes(b'changed after capture')
+    with pytest.raises(HTTPError) as failed:
+        request(path)
+    assert failed.value.code == 503
+    document.write_bytes(original)
+    assert request(path)['document']['text'] == original.decode()
+    with pytest.raises(HTTPError) as wrong_scope:
+        request(path.replace(namespace, '0' * 64))
+    assert wrong_scope.value.code == 409
+    # Updating the attachment keeps physical identity but replaces the cached
+    # reader, so the original binding cannot silently survive a new capture.
+    replacement = b'# Another captured original\n'
+    document.write_bytes(replacement)
+    raw['goal_document_snapshot']['sha256'] = sha256(replacement).hexdigest()
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    assert GoalSource.parse(raw).namespace == namespace
+    assert request(path)['document']['text'] == replacement.decode()
+    for file, content in protected.items():
+        assert file.read_bytes() == content
 
 
 def native_source(w, name='original', task_text='Check the original question against its evidence', done=False,

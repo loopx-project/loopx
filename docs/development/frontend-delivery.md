@@ -158,6 +158,32 @@ source-read CLI's `strategies` operation. These reads retain physical namespace
 and original Goal scope, recheck membership after native history IO, and fail
 explicitly when complete coverage exceeds the transport's existing bounds.
 
+The optional **Original task** disclosure reads the single
+`goal_doc` / `primary_goal_document` declared by the original Goal, separately
+from current objective revisions and Agent strategies. It never reconstructs
+intent from a display label, a Todo or an analysis. App and prepared readers
+use the source CLI's registry owner for declaration reads, including strict
+envelopes; the presentation adapter does not decode a parallel registry format. They
+share `GET /api/chat/goal-source-document`; prepared readers and their CLI also
+support `/api/goal-source/document` and `document`. Reads validate the original
+Goal, namespace and declaration again after IO, retain complete UTF-8 text up
+to 128 KiB, and fail rather than truncate or substitute another document.
+
+When a retained source's declared path is no longer accessible, an Agent may
+prepare its optional `goal_document_snapshot` within existing source-connection
+authority: `{declared_path, path, sha256}` binds one explicit captured file to
+that exact declared reference. The source must be scoped to one Goal; paths are
+not guessed from basenames. The captured bytes must match the pinned SHA-256.
+The reader identifies a configured captured copy in provenance; a binding alone
+does not independently verify its lineage. Keep capture proof with the source.
+Only this attachment can be updated on an existing link; its connection, Goal
+and parent remain fixed, and snapshot admission verifies the declared file and
+hash before saving. This attachment does not change physical namespace, original Goal state,
+execution authority or existing history/analysis identities. Transport locator
+paths stay in the adapter; document text is preserved. Missing files, changed declarations or hashes remain explicit
+read failures with retry. Opening, refreshing or closing the disclosure starts
+no model or document commands; source switches hide old content immediately.
+
 Each linked Goal carries `source_access` in the workspace projection. Its
 original Goal id, tasks, explicit graph edges and native measurements remain
 intact; the local link owns parent organization and optional workspace routing. Source identity pins

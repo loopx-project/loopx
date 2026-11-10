@@ -64,6 +64,19 @@ def _run(argv, *, env=None):
 
 
 @dataclass(frozen=True)
+class GoalDocumentSnapshot:
+    declared_path: str
+    path: str
+    sha256: str
+
+    def __post_init__(self):
+        _text(self.declared_path, "declared document path")
+        _text(self.path, "captured document path")
+        if not isinstance(self.sha256, str) or not BARE_SHA256_PATTERN.fullmatch(self.sha256):
+            raise ValueError("Use the captured document's exact SHA-256")
+
+
+@dataclass(frozen=True)
 class GoalSource:
     id: str
     label: str
@@ -77,6 +90,7 @@ class GoalSource:
     goal_id: str | None
     host_alias: str | None = None
     container_id: str | None = None
+    goal_document_snapshot: GoalDocumentSnapshot | None = None
 
     def __post_init__(self):
         if self.connection not in {"local", "ssh"} or self.environment not in {"host", "container"}:
@@ -99,6 +113,11 @@ class GoalSource:
         path_type = Path if self.connection == "local" and self.container_id is None else PurePosixPath
         if any(not path_type(getattr(self, key)).is_absolute() for key in ("registry", "runtime_root", "cli", "python")):
             raise ValueError("Source paths must be absolute")
+        if self.goal_document_snapshot is not None:
+            if self.goal_id is None or not isinstance(self.goal_document_snapshot, GoalDocumentSnapshot):
+                raise ValueError("A document snapshot needs one original Goal")
+            if not path_type(self.goal_document_snapshot.path).is_absolute():
+                raise ValueError("Captured document paths must be absolute")
 
     @classmethod
     def parse(cls, raw):
@@ -108,6 +127,11 @@ class GoalSource:
         connection = raw.pop("connection", None)
         environment = raw.pop("environment", None)
         scope = raw.pop("scope", None)
+        document = raw.pop("goal_document_snapshot", None)
+        if document is not None:
+            if not isinstance(document, dict) or set(document) != {"declared_path", "path", "sha256"}:
+                raise ValueError("Use an exact captured document binding")
+            document = GoalDocumentSnapshot(**document)
         if not isinstance(connection, dict) or not isinstance(environment, dict):
             raise ValueError("Declare a connection and an execution environment")
         if connection.get("kind") == "local" and set(connection) == {"kind"}:
@@ -136,12 +160,17 @@ class GoalSource:
         if set(raw) != expected:
             raise ValueError("Invalid or missing source manifest fields")
         return cls(**raw, connection=connection["kind"], environment=environment["kind"],
-                   goal_id=goal_id, host_alias=host_alias, container_id=container_id)
+                   goal_id=goal_id, host_alias=host_alias, container_id=container_id,
+                   goal_document_snapshot=document)
 
     @property
     def namespace(self):
         # A reused display id cannot retain another authority's cache or cursor.
-        return sha256(json.dumps(asdict(self), sort_keys=True).encode()).hexdigest()
+        identity = asdict(self)
+        # A captured document has its own checked content digest. Adding a
+        # reading attachment must not rebind the physical Goal or its history.
+        identity.pop("goal_document_snapshot")
+        return sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
     def check_scope(self, goal_id=None):
         """Validate the prepared Goal selection without accessing its connection."""
@@ -207,6 +236,24 @@ class GoalSource:
             "--runtime-root", self.runtime_root, "todo", "list",
             "--goal-id", goal_id, "--todo-id", todo_id,
         ]))
+
+    def read_registry_goal(self, goal_id):
+        selected = self.check_access(goal_id)
+        if selected is None:
+            raise SourceScopeError("Choose an original Goal before reading its declaration")
+        # The native registry owner decodes legacy and strict envelopes and
+        # enforces their protocol/digest. Do not add a second JSON decoder here.
+        payload = json.loads(self._execute([
+            self.cli, "--registry", self.registry, "--runtime-root", self.runtime_root,
+            "--format", "json", "registry",
+        ]))
+        if payload.get("ok") is not True or not isinstance(payload.get("goals"), list):
+            raise SourceScopeError("The original declaration is unavailable")
+        return {"goals": [{"id": goal.get("id"), "repo": goal.get("repo"), "authority_sources": [
+            {key: ref.get(key) for key in ("kind", "role", "path")} if isinstance(ref, dict) else None
+            for ref in goal["authority_sources"]
+        ] if isinstance(goal.get("authority_sources"), list) else None}
+            for goal in payload["goals"] if isinstance(goal, dict) and goal.get("id") == selected]}
 
     def read_run_history(self, goal_id):
         self.check_access(goal_id)
@@ -277,7 +324,7 @@ class GoalSourceReader:
     def describe(self):
         return {"ok": True, "source": self.source.describe(), "read_only": True,
                 "scope": {"goal_id": self.source.goal_id} if self.source.goal_id else {"all_registered": True},
-                "operations": {"goals": True, "status": True, "history": True, "strategies": True,
+                "operations": {"goals": True, "status": True, "history": True, "strategies": True, "document": True,
                                "lifecycle": False, "conversation": False, "analysis": False}}
 
     def registered_status(self, goal_id, *, fresh=False):
@@ -326,6 +373,10 @@ class GoalSourceReader:
         })
         self.registered_status(goal_id, fresh=True)
         return {"ok": True, "goal_id": goal_id, "source": self.source.describe(), **projected}
+
+    def document(self, goal_id):
+        from ...presentation.goal_source_document import read_goal_document
+        return read_goal_document(self, goal_id)
 
     def findings(self, goal_id, cursor="", *, projector):
         """Read saved evidence; this transport has no complete task-list view."""
@@ -407,7 +458,7 @@ class GoalSourceCatalog:
         with self._lock:
             namespaces = {goal["source_access"]["namespace"] for goal in rows}
             self._readers = {key: value for key, value in self._readers.items() if key in namespaces}
-            if source.namespace not in self._readers:
+            if source.namespace not in self._readers or self._readers[source.namespace].source != source:
                 self._readers[source.namespace] = GoalSourceReader(source, history_projector=self._history_projector)
             reader = self._readers[source.namespace]
         return row, reader
@@ -452,7 +503,14 @@ class GoalSourceCatalog:
             existing = next((item for item in links
                 if item.get("workspace_goal_id", item["source"]["scope"].get("goal_id")) == selected), None)
             if existing is not None and existing != link:
-                raise SourceScopeError("The original source identity and parent are already linked")
+                # Only a reading attachment may change in place. The original
+                # connection, Goal and parent must retain their exact contract.
+                previous, proposed_link = deepcopy(existing), deepcopy(link)
+                previous["source"].pop("goal_document_snapshot", None)
+                proposed_link["source"].pop("goal_document_snapshot", None)
+                if previous != proposed_link:
+                    raise SourceScopeError("The original source identity and parent are already linked")
+                links[links.index(existing)] = link
             if existing is None:
                 links.append(link)
             return links
@@ -473,6 +531,8 @@ class GoalSourceCatalog:
             row["id"] == source.goal_id and row.get("registry_member") is True for row in rows
         ):
             raise SourceScopeError("Choose a registered original Goal")
+        if source.goal_document_snapshot is not None:
+            reader.document(source.goal_id)
 
         def apply(registry):
             registry["goal_source_links"] = admitted(registry)
@@ -515,8 +575,8 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
         if source_namespace is not None and source_namespace != pinned:
             raise ValueError("Conflicting source identities")
         source_namespace = pinned
-    if operation not in {"describe", "goals", "status", "history", "strategies"}:
-        raise ValueError("Only describe, goals, status, history and strategies reads are supported")
+    if operation not in {"describe", "goals", "status", "history", "strategies", "document"}:
+        raise ValueError("Only describe, goals, status, history, strategies and document reads are supported")
     base = f"{url.scheme}://{url.netloc}/api/goal-source"
     opener = build_opener(_NoRedirect())
 
@@ -563,7 +623,7 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("describe", "goals", "status", "history", "strategies"))
+    parser.add_argument("operation", choices=("describe", "goals", "status", "history", "strategies", "document"))
     parser.add_argument("--endpoint", required=True, help="Prepared owner-local reader URL")
     parser.add_argument("--goal-id")
     parser.add_argument("--cursor", default="")
