@@ -959,6 +959,8 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  // Derived from one complete, verified read. Never persisted or an authority grant.
+  verifiedHistoryBasis?: string;
   message_page?: {
     schema_version: "loopx_chat_message_page_v1";
     offset: number; total: number; snapshot_sha256: string; next_cursor: string | null;
@@ -1049,6 +1051,7 @@ const chatMessagePageSchema = z.object({
   offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
   snapshot_sha256: z.string().regex(/^[a-f0-9]{64}$/), next_cursor: z.string().min(1).max(1024).nullable(),
   turn_id: z.string().min(1).optional(),
+  visible_page_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 // A long original transcript can outlive the interactive request budget even
@@ -1063,6 +1066,7 @@ type ChatHistoryReadProgress = {
   cursor: string;
   total: number;
   digest: string;
+  visibleProof: string | undefined;
 };
 
 function sameHistorySource(actual: ChatSessionSummary, expected: ChatSessionSummary) {
@@ -1088,6 +1092,7 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
   if (progress && expectedSession && !sameHistorySource(progress.first.session, expectedSession)) progress = undefined;
   let first = progress?.first, cursor: string | null = progress?.cursor ?? null;
   let total = progress?.total, digest = progress?.digest;
+  let visibleProof = progress ? progress.visibleProof : "";
   const messages = [...(progress?.messages ?? [])], cursors = new Set(progress?.cursors),
     ids = new Set(messages.map(message => message.message_id));
   do {
@@ -1109,7 +1114,8 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {
       if (cursor !== null) throw new Error("The history page contract changed during read.");
-      return turnId === undefined ? snapshot : {...snapshot, messages: snapshot.messages.filter(row => row.turn_id === turnId)};
+      return {...snapshot, verifiedHistoryBasis: undefined,
+        messages: turnId === undefined ? snapshot.messages : snapshot.messages.filter(row => row.turn_id === turnId)};
     }
     const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
     if (!parsed.success) throw new Error("The original history page could not be verified.");
@@ -1128,15 +1134,60 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
       ids.add(message.message_id); messages.push(message);
     }
     first ??= snapshot;
+    visibleProof = visibleProof !== undefined && page.visible_page_sha256 &&
+      snapshot.messages.length === Math.min(200, page.total - page.offset)
+      ? visibleProof + page.visible_page_sha256 : undefined;
     total = page.total; digest = page.snapshot_sha256; cursor = page.next_cursor;
     if (cursor !== null) {
       cursors.add(cursor);
-      checkpoint?.({first, messages: [...messages], cursors: new Set(cursors), cursor, total, digest});
+      checkpoint?.({first, messages: [...messages], cursors: new Set(cursors), cursor, total, digest, visibleProof});
     }
   } while (cursor !== null);
   // Keep the first read's execution/revision hint. An append between pages is
   // intentionally outside this prefix and will trigger the normal next refresh.
-  return {...first!, messages, message_page: undefined};
+  const basis = visibleProof === undefined ? undefined : total + ":" + visibleProof;
+  return {...first!, messages, message_page: undefined,
+    verifiedHistoryBasis: turnId === undefined && basis && historyBasisMatches(basis, messages.length) ? basis : undefined};
+}
+
+function historyBasisMatches(basis: string, count: number) {
+  const match = /^([1-9][0-9]{0,3}):([a-f0-9]+)$/.exec(basis);
+  return match !== null && count >= 1 && count <= 5000 && Number(match[1]) === count
+    && match[2].length === Math.ceil(count / 200) * 64;
+}
+
+async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: ChatSessionSnapshot) {
+  const basis = saved.verifiedHistoryBasis;
+  if (!basis || !sameHistorySource(saved.session, session) || !historyBasisMatches(basis, saved.messages.length)) return null;
+  const query = new URLSearchParams({message_limit: "200", known_history: basis});
+  let snapshot: ChatSessionSnapshot & {history_resume?: unknown};
+  try {
+    snapshot = await requestJson<typeof snapshot>(
+      "/api/chat/sessions/" + encodeURIComponent(session.session_id) + "?" + query,
+      {signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
+  } catch (error) {
+    // A service rollback may no longer accept this optional argument.
+    if (error instanceof ChatApiError && error.payload.http_status === 400) return null;
+    throw error;
+  }
+  if (!snapshot || snapshot.history_resume === undefined) return null; // Restart or older service.
+  const proof = z.object({schema_version: z.literal("loopx_chat_history_resume_v1"),
+    base: z.literal(basis), next: z.string().max(1605)}).safeParse(snapshot.history_resume);
+  if (!proof.success || snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
+    || !snapshot.session || !sameHistorySource(snapshot.session, session) || Object.hasOwn(snapshot, "message_page")
+    || !Array.isArray(snapshot.messages) || snapshot.messages.length > 200
+    || !historyBasisMatches(proof.data.next, saved.messages.length + snapshot.messages.length)) {
+    throw new Error("The original history suffix could not be verified.");
+  }
+  const ids = new Set(saved.messages.map(message => message.message_id));
+  for (const message of snapshot.messages) {
+    if (!message || typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
+      throw new Error("The original history contains conflicting message identities.");
+    }
+    ids.add(message.message_id);
+  }
+  const {history_resume: _, ...updated} = snapshot;
+  return {...updated, messages: [...saved.messages, ...snapshot.messages], verifiedHistoryBasis: proof.data.next};
 }
 
 /** Read-only discovery through the existing Core Goal/Agent/Session identity. */
@@ -1256,7 +1307,7 @@ export async function fetchChatHistory(options: {
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
     const saved = known.get(session.session_id)?.session;
-    return !saved || (exact && (!session.transcript_revision
+    return !saved || (exact && (!sameHistorySource(saved, session) || !session.transcript_revision
       || session.transcript_revision !== saved.transcript_revision
       || session.updated_at !== saved.updated_at || session.active_turn_id !== saved.active_turn_id
       || session.status !== saved.status));
@@ -1265,10 +1316,13 @@ export async function fetchChatHistory(options: {
   const results = await Promise.allSettled(missing.map(async (session) => {
     const savedProgress = pendingReads.get(session.session_id);
     if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
+    const progress = pendingReads.get(session.session_id);
+    const saved = options.bound && !progress && previous?.snapshots.find(row => row.session.session_id === session.session_id);
     let snapshot: ChatSessionSnapshot;
     try {
-      snapshot = await readChatSessionHistory(session, undefined, undefined, pendingReads.get(session.session_id),
-        progress => pendingReads.set(session.session_id, progress));
+      snapshot = (saved ? await tryResumeChatSessionHistory(session, saved) : null)
+        ?? await readChatSessionHistory(session, undefined, undefined, progress,
+          checkpoint => pendingReads.set(session.session_id, checkpoint));
     } catch (error) {
       // Reuse the hook's existing retry schedule only for a lost transport.
       // Revoked sources, invalid pages and stale cursors must start a fresh read.

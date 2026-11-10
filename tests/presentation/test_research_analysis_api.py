@@ -237,6 +237,34 @@ def test_display_context_uses_registered_sources_and_the_existing_http_reader(wo
     assert json.loads(path.read_text()) == data
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
+def test_http_rejected_reuse_keeps_completed_attempt_and_recovers_without_dispatch(workspace):
+    w, read = workspace, workspace["request"]
+    w["mode"].write_text("ok")
+    read(body=w["operation"])
+    first = read()["pack"]
+    receipts = list((w["tmp_path"] / "runtime" / "benchmark" / "trajectory-assessments").glob("*/jobs/*/receipt.json"))
+    assert len(receipts) == 1
+    receipt_path = receipts[0]
+    receipt = receipt_path.read_bytes()
+    output_path = receipt_path.parent / "model-output.json"
+    output = output_path.read_bytes()
+    output_path.write_text("{}")
+    with pytest.raises(HTTPError) as rejected:
+        read(body=w["operation"])
+    assert rejected.value.code in (400, 503)
+    assert receipt_path.read_bytes() == receipt
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert not (receipt_path.parent / "execution.lock").exists()
+    output_path.write_bytes(output)
+    restored = read()["pack"]
+    assert restored["job"] == first["job"] and restored["result"] == first["result"]
+    assert read(body=w["operation"])["job"]["reused"] is True
+    assert read()["pack"]["job"]["analysis_wall_seconds"] == first["job"]["analysis_wall_seconds"]
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert all(path.read_bytes() == before for path, before in w["before"].items())
+
+
 def test_frontend_language_scopes_process_retry_cache_and_original_citations(workspace):
     w, read = workspace, workspace["request"]
     zh, en, legacy = read(output_language="zh")["pack"], read(output_language="en")["pack"], read()["pack"]

@@ -6,6 +6,7 @@ import json
 import copy
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
 import time
@@ -227,6 +228,129 @@ def test_failed_model_output_needs_explicit_retry_and_preserves_failure(
         == "failed"
     )
     assert read_job(directory / "attempt-1")["usage"] == failure["usage"]
+
+
+@pytest.mark.parametrize("damage", ["invalid_json", "invalid_result", "missing_output"])
+def test_rejected_reuse_preserves_the_completed_attempt(prepared, tmp_path, damage):
+    first = execute(prepared, tmp_path / "jobs", codex=provider(tmp_path))
+    directory = Path(first["directory"])
+    receipt = (directory / "receipt.json").read_bytes()
+    result = (directory / "assessment.json").read_bytes()
+    output = (directory / "model-output.json").read_bytes()
+    if damage == "missing_output":
+        (directory / "model-output.json").unlink()
+    else:
+        (directory / "model-output.json").write_text(
+            "{" if damage == "invalid_json" else "{}", encoding="utf-8"
+        )
+    with pytest.raises(Exception):
+        execute(prepared, tmp_path / "jobs", codex="must-not-run")
+    # A failed integrity check is not a new provider attempt. Preserve the
+    # completed attempt's status, observed cost, clock and result proof.
+    assert (directory / "receipt.json").read_bytes() == receipt
+    assert (directory / "assessment.json").read_bytes() == result
+    assert not (directory / "execution.lock").exists()
+    (directory / "model-output.json").write_bytes(output)
+    recovered = execute(prepared, tmp_path / "jobs", codex="must-not-run")
+    assert recovered["status"] == "succeeded" and recovered["reused"] is True
+    assert recovered["attempt"] == first["attempt"]
+    assert recovered["analysis_wall_seconds"] == first["analysis_wall_seconds"]
+    assert recovered["usage"] == first["usage"]
+
+
+def test_retry_preparation_failure_does_not_rewrite_the_previous_failure(prepared, tmp_path):
+    with pytest.raises(Exception, match="missing eligible"):
+        execute(prepared, tmp_path / "jobs", codex=provider(tmp_path, invalid=True))
+    directory = tmp_path / "jobs" / prepared["analysis_key"]
+    receipt = (directory / "receipt.json").read_bytes()
+    # A conflicting archive must be diagnosed before a new attempt exists.
+    archive = directory / "attempt-1"
+    archive.mkdir()
+    with pytest.raises(FileExistsError):
+        execute(prepared, tmp_path / "jobs", retry=True, codex="must-not-run")
+    assert (directory / "receipt.json").read_bytes() == receipt
+    assert not (directory / "execution.lock").exists()
+    archive.rmdir()
+    result = execute(prepared, tmp_path / "jobs", retry=True, codex=provider(tmp_path))
+    assert result["status"] == "succeeded" and result["attempt"] == 2
+    assert (archive / "receipt.json").read_bytes() == receipt
+
+
+def test_failure_after_starting_a_new_attempt_is_still_recorded(prepared, tmp_path):
+    with pytest.raises(FileNotFoundError):
+        execute(prepared, tmp_path / "jobs", codex=str(tmp_path / "missing-provider"))
+    directory = tmp_path / "jobs" / prepared["analysis_key"]
+    receipt = read_job(directory)
+    assert receipt["status"] == "failed" and receipt["attempt"] == 1
+    assert receipt["usage"] is None and receipt["analysis_wall_seconds"] is not None
+    assert not (directory / "execution.lock").exists()
+
+
+def test_cli_retry_preparation_preserves_status_and_attempt_sequence(prepared, tmp_path, monkeypatch):
+    with pytest.raises(Exception, match="missing eligible"):
+        execute(prepared, tmp_path / "jobs", codex=provider(tmp_path, invalid=True))
+    directory = tmp_path / "jobs" / prepared["analysis_key"]
+    original = {name: path.read_bytes() for name in ("receipt.json", "events.jsonl", "model-output.json")
+                if (path := directory / name).exists()}
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "codex").symlink_to(provider(tmp_path))
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    registry = tmp_path / "registry.json"
+    registry.write_text('{"projects":{}}')
+    prefix = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+              "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "benchmark"]
+    command = [*prefix, "trajectory-assess", "--input-json", str(tmp_path / "input.json"),
+               "--output-dir", str(tmp_path / "jobs"), "--model", "fixture", "--execute"]
+    obstruction = directory / "input.tmp"
+    obstruction.mkdir()
+    rejected = subprocess.run([*command, "--retry"], capture_output=True, text=True)
+    assert rejected.returncode != 0
+    status = subprocess.run([*prefix, "trajectory-assessment-status", "--directory", str(directory)],
+                            capture_output=True, text=True)
+    assert json.loads(status.stdout) == json.loads(original["receipt.json"])
+    assert all((directory / name).read_bytes() == raw for name, raw in original.items())
+    obstruction.rmdir()
+    ordinary = subprocess.run(command, capture_output=True, text=True)
+    assert json.loads(ordinary.stdout)["attempt"] == 1
+    assert "Explicit retry" in json.loads(ordinary.stdout)["reason"]
+    assert (directory / "receipt.json").read_bytes() == original["receipt.json"]
+    retry = subprocess.run([*command, "--retry"], capture_output=True, text=True, check=True)
+    assert json.loads(retry.stdout)["attempt"] == 2
+    assert json.loads(retry.stdout)["status"] == "succeeded"
+    assert all((directory / "attempt-1" / name).read_bytes() == raw for name, raw in original.items())
+
+
+def test_cli_rejected_reuse_and_source_recovery_preserve_original_receipt(prepared, tmp_path, monkeypatch):
+    first = execute(prepared, tmp_path / "jobs", codex=provider(tmp_path))
+    directory = Path(first["directory"])
+    receipt = (directory / "receipt.json").read_bytes()
+    output = (directory / "model-output.json").read_bytes()
+    (directory / "model-output.json").write_text("{}")
+    # Even an unexpected dispatch in this negative case stays synthetic.
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    called = tmp_path / "unexpected-dispatch"
+    child = binary / "codex"
+    child.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(called)!r}).touch()\nraise SystemExit(99)\n")
+    child.chmod(0o700)
+    monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    registry = tmp_path / "registry.json"
+    registry.write_text('{"projects":{}}')
+    command = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+               "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+               "benchmark", "trajectory-assess", "--input-json", str(tmp_path / "input.json"),
+               "--output-dir", str(tmp_path / "jobs"), "--model", "fixture", "--execute"]
+    rejected = subprocess.run(command, capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert (directory / "receipt.json").read_bytes() == receipt
+    assert not called.exists() and not (directory / "execution.lock").exists()
+    (directory / "model-output.json").write_bytes(output)
+    recovered = subprocess.run(command, capture_output=True, text=True, check=True)
+    value = json.loads(recovered.stdout)
+    assert value["status"] == "succeeded" and value["reused"] is True
+    assert value["analysis_wall_seconds"] == first["analysis_wall_seconds"]
+    assert value["usage"] == first["usage"] and not called.exists()
 
 
 def test_invalid_utf8_output_fails_strictly_and_retry_preserves_bytes(
