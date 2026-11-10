@@ -202,7 +202,7 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         from loopx.file_lock import write_bytes_atomic
 
         clock = _physical_state(path.with_name(_ACTIVE_PHASE_DEADLINE_NAME))
-        write_bytes_atomic(clock, f"{math.floor(phase_deadline)}\n".encode(),
+        write_bytes_atomic(clock, f"{float(phase_deadline)!r}\n".encode(),
                            mode=0o600, fsync_directory=True)
         return str(state)
 
