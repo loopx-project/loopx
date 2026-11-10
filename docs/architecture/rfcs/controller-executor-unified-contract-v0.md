@@ -170,7 +170,7 @@ intentionally have no LoopX Core and must remain uncontaminated controls.
 
 ### Current delivery audit
 
-The 2026-11-09 audit is pinned to main `3edaf9c25a56c9d714b097f2d6fee6ffabbd629d`.
+The 2026-11-10 audit is pinned to main `ab1406611809dc7707028a7f257f9717040bad2c`.
 A mechanism present in source establishes an implementation boundary, not a
 qualified dual-session journey or benefit.
 
@@ -182,7 +182,7 @@ qualified dual-session journey or benefit.
 | Original-audience return | [`return_delivery.ts`](../../../loopx/control_plane/collaboration/return_delivery.ts) distinguishes a provider write without a locator from no write | Router synthesis must not rerun tasks to repair delivery; delivery is not requester adoption |
 | Shared managed operations | Codex/DSH both call [`managed_operation_host.py`](../../../loopx/control_plane/turn_driver/managed_operation_host.py) and `select_managed_operation_session` | C3.1's generic-handler extraction already exists; reuse it and audit remaining callers instead of repeating the project |
 | Two-role binding | [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) stores sessions by Goal/Agent/Todo or Agent scope, without this proposed controller/worker pair | C3 needs roles/generations, independent queues and continuity within one Agent; two thread IDs alone are insufficient |
-| Unified work contract | [#7430](https://github.com/loopx-project/loopx/pull/7430) merged and was reverted by [#8265](https://github.com/loopx-project/loopx/pull/8265). [#8266](https://github.com/loopx-project/loopx/pull/8266) carries the C1 replacement. [#8238](https://github.com/loopx-project/loopx/pull/8238) and [#8323](https://github.com/loopx-project/loopx/pull/8323) landed individual settlement-read and narrative-read improvements. [#8304](https://github.com/loopx-project/loopx/pull/8304) is an independent staged-replan candidate. | Keep moving useful fixes into main. Qualify the replacement against original single-session quota before profile cutover. Earlier transport or writeback measurements remain scoped to their measured path. |
+| Unified work contract | [#7430](https://github.com/loopx-project/loopx/pull/7430) merged and was reverted by [#8265](https://github.com/loopx-project/loopx/pull/8265). [#8266](https://github.com/loopx-project/loopx/pull/8266) carries the C1 replacement. [#8238](https://github.com/loopx-project/loopx/pull/8238) and [#8323](https://github.com/loopx-project/loopx/pull/8323) landed individual settlement-read and narrative-read improvements. [#8304](https://github.com/loopx-project/loopx/pull/8304) landed the staged replan path. | Keep moving useful fixes into main. Qualify the replacement against original single-session quota before profile cutover. Earlier transport or writeback measurements remain scoped to their measured path. |
 | Common Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) remains Draft, inspected at `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | A candidate adapter; bounded calls do not establish bidirectional long-lived sessions/asynchronous control. OAR or an all-Host rewrite is not a prerequisite |
 
 The annex below retains older field audits and experiments at their original
@@ -1002,6 +1002,8 @@ The benchmark adapter supplies the profile, task validator and judge settings.
 [Single-worker integration](https://github.com/loopx-project/loopx/pull/8480) ·
 [Product provider and experiment controls](https://github.com/loopx-project/loopx/pull/8484)
 
+The C1 control comparison and isolated dual-role qualification may run in parallel. Pin the C1 revision and requalify affected callers after a contract change before production cutover.
+
 **Same admission and settlement.** Quota selects the work and owns the ordinary
 claim. After a successful claim, reread the very same Todo and verify its lease
 before dispatch. Deliver the canonical Goal requirements and original decision
@@ -1214,10 +1216,9 @@ model adoption. All-host defaults, other omitted material, trusted Host coverage
 writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
 overhead participates in the existing full-versus-folded byte guard.
 
-C1's inventory is part of its usable replacement. C3/C4/C5 may build the
-isolated preview against a pinned C1 contract. Changes to that contract require
-renewed preview validation before cutover. C7 can prepare the comparison while
-both lanes are in flight.
+C1's inventory is part of its usable replacement, not a standalone architecture
+framework. C3/C4/C5 can proceed independently once C1's contract is stable;
+C7 can prepare measurements before C6 but cannot claim two-session outcomes.
 Implementation PRs must name the replaced caller, remaining gap, actual tests
 and rollback. No full language migration or unrelated manager rewrite is a
 prerequisite. No task is complete merely because a new abstraction compiles.
