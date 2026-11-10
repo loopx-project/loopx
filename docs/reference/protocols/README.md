@@ -68,6 +68,7 @@ until their documented migration is qualified.
 - [`computer_use_runtime_v0`](computer-use-runtime-v0.md): Computer-use runtime v0
 - [`host_integration_plugin_plan_v0`](host-integration-plugin-plan-v0.md): Host integration plugin plan v0
 - [`host_integration_surface_v0`](host-integration-surface-v0.md): Host integration surface v0
+- [Host CLI source activation v0](host-cli-source-activation-v0.md): explicit paused Docker adapter for a qualified versioned CLI, with exact-intent recovery
 - [`host_mode_plan_v0`](host-mode-plan-v0.md): Host mode plan v0
 - [`local_agent_launch_plan_v1`](local-agent-launch-plan-v1.md): Local agent launch plan v1
 - [`openviking_session_memory_adapter_v0`](openviking-session-memory-adapter-v0.md): OpenViking session memory adapter v0
