@@ -94,20 +94,22 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
       vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
       path_delta: {
+        schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
         outcome: autonomousReplan ? "replan" : "continue", prior_assumption: "Viable route.",
         observed_reality: "Evidence supports the route.", retained: ["Route"],
         evidence_refs: ["evidence:verified-result"],
       },
     },
-    authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
-      "For todo_delta, use retain:todo_<id> for existing work; supported verbs are activate, create, reopen, resume and retain. " +
-      "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
-      "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +
+    authoring_hint: "Adapt the example to observed evidence. Use its public-safe IDs or aliases in evidence_refs. " +
+      "Keep raw paths with the artifact. Follow the live contract and total limit. " +
+      "Use retain:todo_<id> for existing work in todo_delta. Verbs are activate, create, reopen, resume and retain. " +
+      "Use a verified Todo ID after normal authoring/readback. These entries describe plans and grant no Todo mutation, claim or execution authority. " +
+      "For ordinary CLI writeback, pass --agent-vision-json <file>. " +
       (autonomousReplan
-        ? "JSON replaces the complete packet; the sparse minimal_example is not an update to an existing Vision. " +
-          "Start from the current Agent's complete packet and full vision_patch, then replace only deliberately reviewed fields and the fresh path_delta. " +
-          "Preserve every other field and the current state; path_delta.retained text does not merge omitted fields. " +
-          "Reuse the known current packet, or read it from canonical status/history if unavailable; never reconstruct missing intent from summaries. "
+        ? "JSON replaces the complete packet. For an existing Vision, the sparse minimal_example shows syntax. " +
+          "Use the current Agent's complete packet and full vision_patch. Read canonical status/history if unavailable. Never reconstruct intent from summaries. " +
+          "Edit only deliberately reviewed fields and supply a fresh path_delta. Keep the current state and all other fields. " +
+          "path_delta.retained text does not merge omitted fields. "
         : "") +
       "checkpoint-context is only for recovery after the original committed Turn writeback; " +
       "follow its returned same-Turn recovery action, not a fresh-turn preflight.",

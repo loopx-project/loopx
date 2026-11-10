@@ -246,7 +246,7 @@ def agent_work_summary(agent: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def manager_index(context: dict[str, Any]) -> dict[str, Any]:
+def manager_index(context: dict[str, Any], *, status_on_demand: bool = False) -> dict[str, Any]:
     """A small directory, never a second mutable progress store."""
     read_tool = CONTEXT_TOOL_NAME if context.get("scope") == "owner_goal" else TOOL_NAME
     execution = context.get("context_execution")
@@ -304,8 +304,13 @@ def manager_index(context: dict[str, Any]) -> dict[str, Any]:
         "agent_work_note": (
             "Agent Todos are bounded declared work from this portfolio snapshot, not live activity "
             "or completed results. Respect each Goal's quality, recorded timestamp and Agent coverage. "
-            "An empty or unverified projection does not prove idle or stopped. For a current-work "
-            "question, answer the known overview first; read only missing or requested detail."
+            "An empty or unverified projection does not prove idle or stopped. "
+            + (
+                "Use the scoped read tool with view=portfolio before drawing conclusions "
+                "that depend on current Goal status or attention."
+                if status_on_demand else
+                "For a current-work question, answer the known overview first; read only missing or requested detail."
+            )
         ),
         "attention_note": (
             "Attention is a directory preview, not complete decision terms or an action grant. "

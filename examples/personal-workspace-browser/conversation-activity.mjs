@@ -46,11 +46,17 @@ export const conversationActivityScenario = {
       const turn = await send("请检查当前任务状态，并说明下一步。");
       await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
-      await page.clock.install();
+      // Pin Date to a fixed instant first, then advance timers without a
+      // running wall clock, and pause. Any finite future pause target leaves a
+      // scheduling race — the clock keeps running between commands, so a
+      // delayed pause can again aim into the past. With the Date pinned the
+      // comparisons use one deterministic instant regardless of command
+      // latency; the system time is restored before the scenario continues.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
+      await page.clock.setFixedTime(clockStart);
       await page.clock.fastForward(25000);
-      // Compare the same instant across views; clock.install alone keeps
-      // advancing and can cross a second boundary while navigation completes.
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      await page.clock.pauseAt(clockStart);
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
@@ -60,6 +66,7 @@ export const conversationActivityScenario = {
       assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1, "Activity stays on the Chat entry");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
+      await page.clock.setSystemTime(Date.now());
       await page.clock.resume();
       const adjustments = [];
       let legacyMigrationAttempts = 0;

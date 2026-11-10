@@ -14,12 +14,32 @@ export const taskInspectorReturnScenario = {
     const coverageEntries = [];
     const tail = " FINAL_ACCEPTANCE: every requirement is visible; stale or unavailable reads remain explicit.";
     const prefix = "[P0] Full queue follow-up. ";
-    const request = prefix + "A".repeat(988 - prefix.length - tail.length) + tail;
+    const request = prefix + "Read the original source, compare its accepted outcome with the retained reference, and preserve conditions and uncertainty. ".repeat(12).slice(0, 988 - prefix.length - tail.length) + tail;
+    const evidence = "Independent verification. The retained source contains the complete result and comparison conditions. "
+      + "The bounded list preview does not include the final reference, so opening this Task must read it from the same original source. "
+      + "Unicode evidence 证据🙂 remains intact. Retained baseline: reference-v2.";
+    const note = "Conditions and limitations. This synthetic example separates a reported result from independent confirmation. "
+      + "Missing measurements are still unknown; reading the Task does not launch an analysis or change its status. Attribution remains unknown.";
     for (const width of [1512, 390]) {
+      let metadata = {evidence, note};
       const context = await openWorkspacePage(browser, url, {
         collectCoverage, viewport: { width, height: 844 },
-        beforeGoto(api) {
+        async beforeGoto(api, page) {
           api.todoRequestTexts.set(JSON.stringify(["progress-projection", "todo-progress-full"]), request);
+          api.transformStatus = payload => {
+            const goal = payload.attention_queue.items.find(item => item.goal_id === "progress-projection");
+            for (const item of goal?.agent_todos?.items ?? []) {
+              if (item.todo_id === "todo-progress-full") Object.assign(item, {evidence: evidence.slice(0, 100), note: note.slice(0, 100)});
+              if (item.todo_id === "todo-progress-current") item.evidence = "Current verification";
+            }
+          };
+          await page.route("**/api/chat/todo/detail?*", async route => {
+            const query = new URL(route.request().url()).searchParams;
+            if (query.get("todo_id") !== "todo-progress-full") return route.fallback();
+            api.todoRequestReads.push({goalId: query.get("goal_id"), todoId: query.get("todo_id")});
+            await route.fulfill({json: {ok: true, goal_id: "progress-projection", todo_id: "todo-progress-full",
+              text: request, status: "open", archive_state: "active", updated_at: null, ...metadata}});
+          });
         },
       });
       const { page, api } = context;
@@ -78,9 +98,36 @@ export const taskInspectorReturnScenario = {
         await fullOpener.click();
         await waitForFull();
         assert.equal(await body.innerText(), request, "A cold read restores every one of the 988 source characters beyond the 500-character status projection");
+        const evidenceCard = drawer.getByRole("region", {name: "证据", exact: true});
+        const notes = drawer.locator('details[aria-label="备注"]');
+        assert.equal(await evidenceCard.locator(".personal-md").innerText(), evidence);
+        await notes.locator("summary").click();
+        assert.equal(await notes.locator(".personal-md").innerText(), note);
+        assert.equal(api.todoRequestReads.filter(read => read.todoId === "todo-progress-full").length, 1, "Requirements, evidence and notes share one source read");
         await page.screenshot({ path: resolve(outputDir, `task-request-full-${width}.png`), animations: "disabled" });
         await page.keyboard.press("Escape");
         await drawer.waitFor({ state: "hidden" });
+
+        // Older readers omit metadata; explicit null from the current source
+        // must instead clear an outdated bounded hint.
+        for (const fields of [{}, {evidence: null, note: null}]) {
+          metadata = fields;
+          await fullOpener.click();
+          await waitForFull();
+          if ("evidence" in fields) {
+            assert.equal(await evidenceCard.count(), 0);
+            assert.equal(await notes.count(), 0);
+          } else {
+            assert.match(await evidenceCard.locator(".personal-md").innerText(), /^Independent verification/);
+            assert.doesNotMatch(await evidenceCard.innerText(), /Retained baseline/);
+            await notes.locator("summary").click();
+            assert.match(await notes.locator(".personal-md").innerText(), /^Conditions and limitations/);
+            assert.doesNotMatch(await notes.innerText(), /Attribution remains unknown/);
+          }
+          await page.keyboard.press("Escape");
+          await drawer.waitFor({state: "hidden"});
+        }
+        metadata = {evidence, note};
 
         // A failed or mismatched read must discard an earlier successful body,
         // preserve the received summary, and offer a real retry in the drawer.
@@ -93,7 +140,7 @@ export const taskInspectorReturnScenario = {
           nextRead = null;
           if (outcome === "late") {
             await new Promise(resolveWait => { releaseLate = resolveWait; });
-            await route.fulfill({ json: { ok: true, goal_id: "progress-projection", todo_id: "todo-progress-full", text: request, status: "open", archive_state: "active", updated_at: null } });
+            await route.fulfill({ json: { ok: true, goal_id: "progress-projection", todo_id: "todo-progress-full", text: request, evidence, note, status: "open", archive_state: "active", updated_at: null } });
             lateFinished();
             return;
           }
@@ -108,8 +155,10 @@ export const taskInspectorReturnScenario = {
           await retry.waitFor();
           assert.equal((await body.innerText()).length, 500);
           assert.ok(!(await body.innerText()).includes("FINAL_ACCEPTANCE"), "A previous successful body is never reused after a failed exact read");
+          assert.doesNotMatch(await drawer.innerText(), /Retained baseline|Attribution remains unknown/);
           await retry.click();
           await waitForFull();
+          assert.equal(await evidenceCard.locator(".personal-md").innerText(), evidence);
           await page.keyboard.press("Escape");
           await drawer.waitFor({ state: "hidden" });
         }
@@ -124,6 +173,8 @@ export const taskInspectorReturnScenario = {
         releaseLate();
         await finished;
         assert.equal(await body.innerText(), "Current Todo", "A late response from the closed Task cannot overwrite the next selection");
+        assert.equal(await evidenceCard.locator(".personal-md").innerText(), "Current verification");
+        assert.equal(await notes.count(), 0, "A late source note cannot appear under the next Task");
         await page.keyboard.press("Escape");
         await drawer.waitFor({ state: "hidden" });
         assert.ok(api.todoRequestReads.every(read => read.todoId), "A display-only legacy identity must never be sent as an authority id");
@@ -274,6 +325,6 @@ export const taskInspectorReturnScenario = {
       await exited;
       await rm(root, {recursive:true,force:true});
     }
-    return { coverageEntries, note: "The 988-character source survives a bounded 500-character status; failed/mismatched reads, retry and late selection responses are explicit on packaged desktop/390px. Pointer/Escape/Enter/close/More retain the opener with reduced motion. Editing uses a disposable real File authority and Chat HTTP owner: one save, retained concurrent-conflict draft and lost successful response recovery without another apply. Workspace navigation/status is synthetic. File/SQLite hard-lease semantics are qualified separately by HTTP+CLI tests; no active Goal or model execution." };
+    return { coverageEntries, note: "The 988-character request plus complete evidence/notes share one read beyond bounded status hints; absent fields preserve legacy compatibility and explicit null clears stale hints. Failed/mismatched reads, retry and late selection responses are explicit on packaged desktop/390px. Pointer/Escape/Enter/close/More retain the opener with reduced motion. Editing uses a disposable real File authority and Chat HTTP owner: one save, retained concurrent-conflict draft and lost successful response recovery without another apply. Workspace navigation/status is synthetic. File/SQLite hard-lease semantics are qualified separately by HTTP+CLI tests; no active Goal or model execution." };
   },
 };

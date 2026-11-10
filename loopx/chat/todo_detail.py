@@ -3,7 +3,7 @@
 import hashlib
 from urllib.parse import parse_qs, urlparse
 
-from ..chat_status_api import goal_read_runtime_root
+from .status_api import goal_read_runtime_root
 from ..status_server import is_loopback_host
 from ..control_plane.todos.list_readback import list_goal_todos
 

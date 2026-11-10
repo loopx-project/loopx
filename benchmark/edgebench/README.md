@@ -114,6 +114,25 @@ its PR manifest current. Changing the default repository/branch requires updatin
 the single source file and this protocol; adding a second contributor-specific
 default would split the source of truth again.
 
+### Inspect cached images by case
+
+The worker's existing Docker preflight records the local image ID and logical
+size for the work and judge images in `runtime-receipt.json`. Review observations
+across selected run directories without reading trajectories or contacting Docker:
+
+```sh
+python -m benchmark.edgebench.image_inventory \
+  --log-dir /data/private-runs --log-dir /data/older-runs --task TASK_ID
+```
+
+Omit `--task` to include every case in those directories. The report groups
+observations by task specification digest, image role and image ID. It counts
+older receipts without observations and keeps distinct image revisions separate.
+Docker's logical image sizes include shared layers. Use them for cache inventory,
+and measure incremental disk use and runtime memory separately. Observations
+describe the worker's local Docker daemon at preflight. A remote judge requires
+its own image provenance, and a later retag can change what gets launched.
+
 ## Worker profiles
 
 The five worker profiles are `official`, `single`, `native-goal`,
@@ -225,6 +244,18 @@ evaluation opportunities or silently extend the experiment by its offline time.
 An Official worker without a checkpoint must retain its existing session and
 use its authorized runtime owner's idle credential handoff; this preparation
 helper does not provide a live credential-replacement transaction.
+
+An unchanged stopped heartbeat worker with an empty-output legacy Host failure
+can use the explicit [idle-host handoff](../runtime/RUNTIME.md) after independent
+native-history, source, current Goal and account qualification. Seal with
+`python -m benchmark.edgebench.stopped_recovery --idle-host-handoff` using the
+original source declaration; then select the original scheduler digest with
+`benchmark.runtime.scheduler --idle-host-state-sha256`. Both options are off by
+default. The original failure remains recorded. This route preserves the
+existing completed session and source rather than manufacturing an interrupted
+Turn. Native judge restoration, opportunity/cooldown conservation, the audited
+remaining allowance and a finite owner cutoff remain separate requirements.
+It does not apply to Official or native-Goal workers.
 
 When the product must run from main while the adapter is under development, set
 `LOOPX_SRC_DIR` / `LOOPX_EXPECTED_COMMIT` to the clean product checkout and

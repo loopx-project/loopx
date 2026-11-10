@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -84,6 +85,31 @@ def pinned_initial_view(payload, directory):
     capture = {key: base["recovery"][key] for key in ("path", "sha256")}
     return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
         initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
+def test_first_read_keeps_goal_turn_binding_ahead_of_work_context(tmp_path, decision):
+    interaction = decision["interaction_contract"]
+    action = "loopx quota should-run --runtime-profile codex_cli --turn-instance-id fixture-turn"
+    interaction["agent_channel"].update(primary_action=action, must_attempt=True, delivery_allowed=False)
+    interaction["cli_channel"] = {
+        "turn_binding_required": True,
+        "next_cli_actions": [action],
+        "spend_after_validation": False,
+    }
+
+    view = pinned_initial_view(decision, tmp_path)
+    page = read_context_capture(Namespace(
+        capture_file=view["recovery"]["path"], capture_sha256=view["recovery"]["sha256"],
+        format="json", select=None, initial_read=True, offset=0,
+        page_bytes=64000, max_page_output_bytes=64000,
+    ))
+    assert page["ok"] and page["eof"]
+    values = selected_context_values(page["content"])
+    assert values["/interaction_contract/cli_channel/turn_binding_required"] is True
+    assert values["/interaction_contract/cli_channel/next_cli_actions"] == [action]
+    assert list(values).index("/interaction_contract/cli_channel/next_cli_actions") < list(values).index(
+        "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    )
 
 
 @pytest.mark.parametrize("required", [True, False])
@@ -234,11 +260,21 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     page, values = read_selection(navigation["first_read_command"])
     assert page["content"] == original["content"]
     assert values["/selected_todo"]["future_number"] == 10**45 + 17
-    assert len(observed) == 1
     if opaque:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference, write_context_read_reference
+
+        assert observed == []
+        words = shlex.split(navigation["first_read_command"])
+        _, metadata = read_context_read_reference(words[words.index("--reference-file") + 1])
+        legacy = write_context_read_reference(Path(metadata["path"]), metadata["sha256"], selection=metadata["selection"])
+        words[words.index("--reference-file") + 1] = str(legacy)
+        legacy_page, _ = read_selection(shlex.join(words))
+        assert legacy_page["content"] == original["content"]
+        assert len(observed) == 1
         assert b"Historical evidence remains available." not in observed[0]
         assert len(observed[0]) < len(raw) // 2
     else:
+        assert len(observed) == 1
         assert b"Historical evidence remains available." in observed[0]
     assert Path(view["recovery"]["path"]).read_bytes() == raw
 
@@ -331,6 +367,32 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
     assert not registry.exists() and not runtime.exists()
 
 
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_first_read_delivers_current_task_operation_with_its_continuation(tmp_path, decision, bound):
+    action = {"operation": "read_private_source", "target_ref": "fixture/private-source.json",
+              "future_constraint": {"allowed": False, "measurement": 2**60 + 1}}
+    commands = ["loopx quota should-run --goal-id example --agent-id worker"]
+    decision["interaction_contract"]["agent_channel"]["next_task_action"] = action
+    decision["interaction_contract"]["cli_channel"].update(
+        turn_binding_required=bound, next_cli_actions=commands)
+    original = deepcopy(decision)
+    view = native_context_capture_view(decision, tmp_path)
+    _page, values = read_selection(view["first_read_command"])
+
+    def delivered(pointer):
+        root = max((key for key in values if pointer == key or pointer.startswith(key + "/")), key=len)
+        value = values[root]
+        for key in pointer[len(root):].split("/")[1:]:
+            value = value[key]
+        return value
+
+    assert delivered("/interaction_contract/agent_channel/next_task_action") == action
+    assert delivered("/interaction_contract/cli_channel/next_cli_actions") == commands
+    assert json.loads(Path(view["recovery"]["path"]).read_bytes()) == original
+    assert decision == original
+
+
 def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obligations(tmp_path, decision):
     cli = decision["interaction_contract"]["cli_channel"]
     cli["settlement_plan"]["ordered_steps"] = [{
@@ -401,6 +463,144 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
     assert values["/interaction_contract/agent_channel/delivery_allowed"] is False
     assert json.loads(raw) == decision and Path(view["recovery"]["path"]).read_bytes() == raw
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(("scope_count", "page_budget"), [(165, 12000), (290, 12000), (165, 16000)])
+def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget,
+):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _heartbeat_receipt_count, _initialize_fixture_authority,
+        _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = _configure_read_only_todo(project)
+    narrative = "Keep the current verification requirements visible. " * 130
+    state.write_text(state.read_text().replace("## Next Action", narrative + "\n\n## Next Action", 1))
+    configuration = json.loads(registry.read_text())
+    scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
+    if scope_count == 165:
+        assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
+    configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
+    configuration["goals"][0]["quota"]["allowed_slots"] = 3
+    registry.write_text(json.dumps(configuration))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal, captures = tmp_path / "journal", tmp_path / "captures"
+    journal.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    event = setup(journal, monkeypatch)
+
+    def cli(*args):
+        code, result = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and result["ok"], result
+        return result
+
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    cli("todo", "claim", *binding, "--claimed-by", AGENT_ID)
+
+    def capture(turn):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+            *binding, "--turn-instance-id", turn, "--decision-output-root", str(captures),
+            "--codex-context-dir", str(journal), "--max-page-output-bytes", str(page_budget))
+
+    def read(command):
+        pages, body = [], bytearray()
+        while command:
+            words = shlex.split(command)
+            page = cli(*words[words.index("quota"):])
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            pages.append(page)
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and len(body) == pages[-1]["total_bytes"]
+        return pages, selected_context_values(body.decode())
+
+    body_pointer = None
+    if warm:
+        prior = capture("wide-prior")
+        _, prior_ref = read_context_read_reference(prior["recovery"]["reference_file"])
+        rows = json.loads(Path(prior_ref["path"]).read_bytes())["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        index = next(i for i, source in enumerate(rows) if source["source"] == "goal_state")
+        body_pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/text"
+        prior_pages, prior_facts = read(prior["recovery"]["command"] + " --select " + body_pointer)
+        assert narrative in prior_facts[body_pointer]
+        deliver(journal, event, prior_pages)
+        cli("refresh-state", *binding, "--turn-instance-id", "wide-prior", "--classification", "fixture_verified",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+        cli("quota", "spend-slot", *binding, "--turn-instance-id", "wide-prior",
+            "--slots", "1", "--source", "heartbeat", "--execute")
+        scopes = [*scopes[:-1], "docs/areas/current-fixture-scope/**"]
+        configuration["goals"][0]["coordination"]["write_scope"] = scopes
+        registry.write_text(json.dumps(configuration))
+
+    view = capture("wide-ready")
+    _, source_ref = read_context_read_reference(view["recovery"]["reference_file"])
+    path = Path(source_ref["path"])
+    raw = path.read_bytes()
+    source = json.loads(raw)
+    pages, opening = read(view["first_read_command"])
+    if page_budget == 16000:
+        # A paged body is not itself a reason to add a second reader. The
+        # ordinary first page fits the scope, selected Todo and read controls.
+        assert "remaining_read_command" not in view and len(pages) > 1
+        assert opening["/goal_boundary/write_scope"] == scopes
+        assert opening["/selected_todo/todo_id"] == TODO_ID
+        assert TODO_ID in pages[0]["content"] and "required_reads" in pages[0]["content"]
+        assert "execution_preparation" in pages[0]["content"]
+        assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
+        assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
+        assert _heartbeat_receipt_count(runtime, "wide-ready") == 1
+        assert _spend_run_count(runtime) == int(warm)
+        return
+    assert "Before work" in view["instruction"] and "remaining_read_command" in view
+    assert len(pages) == 1 and pages[0]["eof"]
+    assert not pages[0].get("previously_delivered_fields")
+    _, opening_ref = read_context_read_reference(pages[0]["reference_file"])
+    assert opening_ref["sha256"] == source_ref["sha256"]
+    assert opening["/effective_action"] == "normal_run"
+    assert opening["/heartbeat_receipt/turn_instance_id"] == "wide-ready"
+    assert opening["/selected_todo/todo_id"] == TODO_ID
+    assert opening["/interaction_contract/cli_channel/execution_preparation/state"] == "ready"
+    assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
+    assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
+    assert "/goal_boundary/write_scope" not in opening
+    if warm:
+        deliver(journal, event, pages)
+
+    pages, remaining = read(view["remaining_read_command"])
+    assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    _, remainder_ref = read_context_read_reference(pages[0]["reference_file"])
+    assert remainder_ref["sha256"] == source_ref["sha256"]
+    _, ordinary = read(view["recovery"]["command"] + " --initial-read")
+    # The pinned split and historical one-view selector cover the same leaves.
+    def leaves(values):
+        return {pointer: value for pointer, value in values.items()
+            if not isinstance(value, (dict, list)) or not value}
+    assert not opening.keys() & remaining.keys()
+    if warm:
+        assert body_pointer in pages[0]["previously_delivered_fields"] and body_pointer not in remaining
+        assert "/goal_boundary/write_scope" not in pages[0]["previously_delivered_fields"]
+        assert leaves(opening | remaining) == {key: value for key, value in leaves(ordinary).items() if key != body_pointer}
+        deliver(journal, event, pages)
+        assert "/goal_boundary/write_scope" in codex_context._state(journal)["consumed_pointers"]
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+        recovery_pages, restored = read(view["remaining_read_command"])
+        assert "previously_delivered_fields" not in recovery_pages[0]
+        assert not opening.keys() & restored.keys()
+        assert leaves(opening | restored) == leaves(ordinary)
+    else:
+        assert leaves(opening | remaining) == leaves(ordinary)
+    assert path.read_bytes() == raw and hashlib.sha256(raw).hexdigest() == source_ref["sha256"]
+    assert _heartbeat_receipt_count(runtime, "wide-ready") == 1
+    assert _spend_run_count(runtime) == int(warm)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -596,6 +796,52 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
     assert detail["ok"] and "FULL-REQUEST-DETAIL-ON-DEMAND" in detail["content"]
 
 
+@pytest.mark.parametrize("route", [
+    "matching", "different", "missing", "incomplete", "omitted", "unknown", "bad_counts", "small", "held",
+])
+def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
+    agenda = {"count_unit": "request", "incoming_count": 3 if route == "bad_counts" else 2, "outgoing_count": 1,
+        "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
+        "omitted_count": int(route == "omitted"), "scan_complete": route != "incomplete",
+        "unavailable_count": int(route == "incomplete"), "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    if route == "unknown":
+        agenda["future_gate"] = "Check the retained restriction."
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=route != "held", must_attempt=True)
+    channel["work_context"]["sources"].append({**read, "content": {
+        "ok": True, "read_complete": False, "unfinished_delegations": agenda,
+    }})
+    if route != "missing":
+        required = {**read, "command": command + " --agent-id other"} if route == "different" else read
+        channel["required_reads"].append(required)
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
+    assert values[prefix + "/read_complete"] is False
+    agenda_path = prefix + "/unfinished_delegations"
+    if route == "matching":
+        assert agenda_path not in values and agenda_path + "/items" not in values
+        for field in ("incoming_count", "outgoing_count", "scan_complete"):
+            assert values[f"{agenda_path}/{field}"] == agenda[field]
+        assert agenda_path + "/instruction" not in values
+        assert read in values["/interaction_contract/agent_channel/required_reads"]
+    else:
+        assert values[agenda_path] == agenda
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[agenda_path],
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert detail["ok"] and detail["eof"]
+    assert json.loads(detail["content"])["selections"][0]["value"] == agenda
+
+
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     plan = {"schema_version": "future", "new_stop": "Stop before every new effect."}
     decision["interaction_contract"]["cli_channel"]["settlement_plan"] = plan
@@ -760,6 +1006,72 @@ def test_initial_read_pages_pin_the_exact_selection_for_continuation(tmp_path, d
     args.selection_sha256 = "0" * 64
     changed = read_context_capture(args)
     assert not changed["ok"] and "digest changed" in changed["reason"]
+
+
+def test_pinned_value_pages_replay_the_resolved_paths(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    payload = {"a/~": {"0": "原捕获的精确正文。" * 160}, "array": [{"number": 9007199254740993}]}
+    digest = write_decision_capture(capture, payload)
+    reference = write_context_read_reference(capture, digest)
+    start = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256,
+        select=["/a~1~0/0", "/array/0/number"], max_page_output_bytes=5000))
+    assert start["ok"] and not start["eof"]
+    pinned = start["reference_file"]
+    _, saved = read_context_read_reference(pinned)
+    assert saved["selection_paths"] == [["array", 0, "number"], ["a/~", "0"]]
+
+    legacy = write_context_read_reference(capture, digest, selection=saved["selection"])
+    legacy_page = read_context_capture(Namespace(reference_file=str(legacy), format="json", offset=0, page_bytes=256))
+    assert legacy_page["ok"] and legacy_page["content"] == start["content"]
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("a pinned value page should reuse the writer's resolved paths")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    page, parts = start, [start["content"]]
+    while not page["eof"]:
+        page = read_context_capture(Namespace(reference_file=pinned, format="json", offset=page["next_offset"],
+            page_bytes=256, max_page_output_bytes=5000))
+        assert page["ok"]
+        parts.append(page["content"])
+    assert json.loads("".join(parts))["selections"] == [
+        {"pointer": "/array/0/number", "value": payload["array"][0]["number"]},
+        {"pointer": "/a~1~0/0", "value": payload["a/~"]["0"]},
+    ]
+
+
+@pytest.mark.parametrize("damage", ["different_path", "wrong_key_type", "view_digest", "capture_digest"])
+def test_pinned_value_page_rejects_changed_path_or_bytes(tmp_path, damage):
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_read_reference, write_context_read_reference, write_decision_capture,
+    )
+
+    capture = tmp_path / "decision.json"
+    digest = write_decision_capture(capture, {"array": ["value"], "alias": ["value"]})
+    original = write_context_read_reference(capture, digest)
+    first = read_context_capture(Namespace(reference_file=str(original), format="json", offset=0, page_bytes=256,
+        select=["/array/0"]))
+    assert first["ok"]
+    _, saved = read_context_read_reference(first["reference_file"])
+    selection, paths = saved["selection"], saved["selection_paths"]
+    if damage == "different_path":
+        paths = [["alias", 0]]  # The value itself is identical.
+    elif damage == "wrong_key_type":
+        paths = [["array", "0"]]
+    elif damage == "view_digest":
+        selection = {**selection, "sha256": "0" * 64}
+    else:
+        capture.write_text('{"array":["changed"],"alias":["value"]}', encoding="utf-8")
+    reference = write_context_read_reference(capture, digest, selection=selection, selection_paths=paths)
+    rejected = read_context_capture(Namespace(reference_file=str(reference), format="json", offset=0, page_bytes=256))
+    assert not rejected["ok"] and "content" not in rejected
+    reason = "digest" if "digest" in damage else "address"
+    assert reason in rejected["reason"]
 
 
 def test_small_initial_pages_progress_without_repeating_the_pointer_vector(tmp_path, decision):
@@ -1049,3 +1361,442 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     assert facts(restarted)[prefix + "/0"] == outcomes[0]
     recovered = pages(second["first_read_command"])
     assert facts(recovered)[prefix + "/0"] == outcomes[0]
+
+
+@pytest.mark.parametrize("transition", ["unchanged", "corrected", "different_source", "incomplete"])
+def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    narrative = "保留完整目标、独立验收、权限边界和停止条件。\n" * 140
+    source = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    plan = decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content"
+    body_pointer = prefix + "/text"
+    source.update(source="goal_state", ordering="before_work")
+
+    def goal_source(path, text, generated):
+        def revision(value):
+            return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+        line = len(text.splitlines()) + 1
+        return {"state_file": path, "text": text, "revision": revision(text + generated),
+                "excluded_todo_regions": [{"role": "agent", "start_line": line, "end_line": line,
+                                           "revision": revision(generated)}]}
+
+    def capture(name, content):
+        source.update(content=content, command=f"cat -- {content['state_file']}")
+        plan["identity"]["turn_instance_id"] = name
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent",
+            surface="quota_packet", capture_id=name)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            words = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]])
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(page["content"] for page in pages)), size
+
+    first = capture("first", goal_source("goal.md", narrative, "old generated todo\n"))
+    pages, facts, _ = read(first["first_read_command"])
+    assert facts[body_pointer] == narrative and "previously_delivered_fields" not in pages[0]
+    deliver(tmp_path, event, pages)
+    assert body_pointer in codex_context._state(tmp_path)["consumed_pointers"]
+
+    text = narrative + "Use the revised owner decision.\n" if transition == "corrected" else narrative
+    current = goal_source("alternate.md" if transition == "different_source" else "goal.md",
+                          text, "new generated todo\n")
+    if transition == "incomplete":
+        current.update(read_complete=False, recovery="Restore the complete Goal source.")
+    decision["goal_boundary"]["stop_condition"] = "Stop before an external write."
+    second = capture("second", current)
+    pages, facts, warm_bytes = read(second["first_read_command"])
+    assert facts[prefix + "/revision"] == current["revision"]
+    assert facts["/goal_boundary"] == decision["goal_boundary"]
+    assert facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "second"
+    if transition != "unchanged":
+        assert facts[body_pointer] == text and "previously_delivered_fields" not in pages[0]
+        if transition == "incomplete":
+            assert facts[prefix + "/recovery"] == current["recovery"]
+        return
+
+    assert pages[0]["previously_delivered_fields"] == [body_pointer] and body_pointer not in facts
+    observed = json.loads(Path(pages[0]["reference_file"]).read_text())["observed_read"]
+    ordinary = Path(pages[0]["reference_file"]).with_name(observed["fallback_reference"]["filename"])
+    recovery = second["recovery"]["command"]
+    _, restored, _ = read(recovery + " --select " + body_pointer)
+    assert restored[body_pointer] == narrative
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    fallback, after, fallback_bytes = read(second["first_read_command"])
+    assert "previously_delivered_fields" not in fallback[0] and after[body_pointer] == narrative
+    assert Path(fallback[0]["reference_file"]) == ordinary
+    assert {key: value for key, value in after.items() if key != body_pointer} == facts
+    assert fallback_bytes - warm_bytes > 3000
+
+
+@pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
+@pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
+def test_native_first_read_reuses_only_observed_writeback_precondition(
+    tmp_path, monkeypatch, decision, version, transition,
+):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    decision.update(agent_id="agent", should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    decision.update(registry=str(tmp_path / "registry.json"), runtime_root=str(tmp_path / "runtime"))
+    contract = decision["interaction_contract"]
+    contract["agent_channel"]["delivery_allowed"] = True
+    source = contract["agent_channel"]["work_context"]["sources"][0]
+    narrative = source["content"]["text"]
+    source.update(source="goal_state", content={
+        "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+        "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+    })
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    cli = contract["cli_channel"]
+    cli["execution_preparation"] = {"state": "ready", "todo_id": "todo_current", "agent_id": "agent"}
+    plan = cli["settlement_plan"]
+    plan["schema_version"] = version
+    text = "After independent validation, write back under the original identity and respect the current stop. " * 38
+    step = {"kind": "durable_writeback", "owner": "agent", "precondition": text}
+    plan["ordered_steps"] = [step]
+    root = "/interaction_contract/cli_channel/settlement_plan"
+    precondition = root + "/ordered_steps/0/precondition"
+    command = root + "/ordered_steps/0/command_template"
+
+    def capture(turn):
+        identity = {"goal_id": "fixture", "agent_id": "agent", "todo_id": "todo_current",
+                    "turn_instance_id": turn, "effect_id": f"fixture:agent:todo_current:{turn}"}
+        decision["heartbeat_receipt"] = {"settlement_identity": identity}
+        plan["identity"] = {**identity, "effect_id": "mismatch"} if turn == "next" and transition == "wrong_binding" else identity
+        step["command_template"] = f"loopx refresh-state --turn-instance-id {turn}"
+        directory = tmp_path / turn
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=turn)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    first = capture("first")
+    page, facts = read_selection(first["first_read_command"])
+    assert facts[precondition] == text and "previously_delivered_fields" not in page
+    deliver(tmp_path, event, [page])
+
+    if transition == "changed":
+        step["precondition"] += " Await the updated external approval."
+    elif transition == "unknown_version":
+        plan["schema_version"] = "unknown"
+    elif transition == "rebound":
+        decision["registry"] = str(tmp_path / "another-registry.json")
+    decision["goal_boundary"]["stop_condition"] = "Stop before publishing."
+    second = capture("next")
+    page, facts = read_selection(second["first_read_command"])
+    assert facts[command] == "loopx refresh-state --turn-instance-id next"
+    assert facts["/goal_boundary"] == decision["goal_boundary"]
+    assert facts[root + "/identity/effect_id"] == plan["identity"]["effect_id"]
+    if transition != "same":
+        assert precondition not in page.get("previously_delivered_fields", [])
+        assert facts[precondition] == step["precondition"]
+        return
+
+    assert set(page["previously_delivered_fields"]) == {goal_text, precondition}
+    assert goal_text not in facts and precondition not in facts
+    _, recovered = read_selection(second["recovery"]["command"] + " --select " + precondition)
+    assert recovered[precondition] == text
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    page, facts = read_selection(second["first_read_command"])
+    assert "previously_delivered_fields" not in page and facts[precondition] == text
+    assert facts[goal_text] == narrative
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configuration = json.loads(registry.read_text())
+    scopes = [f"docs/areas/{i:03d}/entrypoints/public-fixture/**" for i in range(270)]
+    configuration["goals"][0]["quota"]["allowed_slots"] = 6
+    coordination = configuration["goals"][0]["coordination"]
+    coordination["write_scope"] = scopes
+    registry.write_text(json.dumps(configuration))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal, captures = tmp_path / "journal", tmp_path / "captures"
+    journal.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    event = setup(journal, monkeypatch)
+    scope_path = "/goal_boundary/write_scope"
+
+    def cli(*args, registry_path=registry):
+        code, payload = _run_cli(registry_path, runtime, *args, cwd=project)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    def binding(turn):
+        return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn)
+
+    def capture(turn, registry_path=registry):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "auto", "--delta-delivery", "auto",
+                   *binding(turn), "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
+                   registry_path=registry_path)
+
+    def settle(turn, registry_path=registry):
+        cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--no-global-sync", "--suppress-external-sinks", registry_path=registry_path)
+        spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute",
+                    registry_path=registry_path)
+        assert spent["appended"]
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            words = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]], cwd=project)
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(page["content"] for page in pages)), size
+
+    def read_initial(view):
+        pages, facts, size = read(view["first_read_command"])
+        if continuation := view.get("remaining_read_command"):
+            more_pages, more_facts, more_size = read(continuation)
+            assert not facts.keys() & more_facts.keys()
+            return pages + more_pages, facts | more_facts, size + more_size
+        return pages, facts, size
+
+    cli("todo", "claim", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--claimed-by", AGENT_ID)
+    cold, cold_facts, _ = read_initial(capture("scope-cold"))
+    assert cold_facts[scope_path] == scopes and len(cold) > 1
+    assert scope_path not in cold[0].get("previously_delivered_fields", [])
+    deliver(journal, event, cold[:1])
+    settle("scope-cold")
+
+    first_complete, complete_facts, _ = read_initial(capture("scope-unobserved"))
+    assert scope_path not in first_complete[0].get("previously_delivered_fields", [])
+    assert complete_facts[scope_path] == scopes
+    deliver(journal, event, first_complete)
+    settle("scope-unobserved")
+
+    guard = "Check the current authorization before writing outside the project."
+    configuration["goals"][0]["guards"] = [guard]
+    registry.write_text(json.dumps(configuration))
+    current = capture("scope-warm")
+    _, source_ref = read_context_read_reference(current["recovery"]["reference_file"])
+    original = Path(source_ref["path"])
+    raw = original.read_bytes()
+    boundary = json.loads(raw)["goal_boundary"]
+    warm, warm_facts, warm_bytes = read_initial(current)
+    _, restored_scope, scope_bytes = read(current["recovery"]["command"] + " --select " + scope_path)
+    assert restored_scope[scope_path] == scopes
+    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    restored, restored_facts, restored_bytes = read_initial(current)
+    assert scope_path not in restored[0].get("previously_delivered_fields", [])
+    assert restored_facts[scope_path] == scopes and original.read_bytes() == raw
+    deliver(journal, event, restored)
+    settle("scope-warm")
+
+    alternate_registry = registry.with_name("alternate-registry.json")
+    alternate_registry.write_bytes(registry.read_bytes())
+    rebound, rebound_facts, _ = read_initial(capture("scope-rebound", alternate_registry))
+    assert scope_path not in rebound[0].get("previously_delivered_fields", [])
+    assert rebound_facts[scope_path] == scopes
+    settle("scope-rebound", alternate_registry)
+
+    coordination["write_scope"] = scopes[:-1] + ["docs/areas/fresh-scope/**"]
+    registry.write_text(json.dumps(configuration))
+    changed, changed_facts, _ = read_initial(capture("scope-revised"))
+    assert scope_path not in changed[0].get("previously_delivered_fields", [])
+    assert changed_facts[scope_path] == coordination["write_scope"]
+    settle("scope-revised")
+    off = cli("quota", "should-run", "--codex-app", "--context-delivery", "off", *binding("scope-off"))
+    assert off["goal_boundary"]["write_scope"] == coordination["write_scope"]
+    assert "first_read_command" not in off
+    assert _heartbeat_receipt_count(runtime, "scope-warm") == 1 and _spend_run_count(runtime) == 5
+
+    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": restored_bytes,
+                      "warm_pages": len(warm), "recovery_pages": len(restored), "scope_selection_bytes": scope_bytes}))
+    assert scope_path in warm[0].get("previously_delivered_fields", []) and scope_path not in warm_facts
+    assert warm_facts["/goal_boundary/guards"] == [guard]
+    for key, value in boundary.items():
+        if key != "write_scope":
+            assert warm_facts[f"/goal_boundary/{key}"] == value
+    assert warm_facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "scope-warm"
+    restored_selection = {key: value for key, value in restored_facts.items()
+        if key != "/goal_boundary" and not key.startswith(scope_path)}
+    observed = warm[0].get("previously_delivered_fields", [])
+    assert restored_selection == {
+        **warm_facts,
+        **{key: value for key, value in restored_selection.items()
+           if any(key == pointer or key.startswith(pointer + "/") for pointer in observed)},
+    }
+    assert restored_bytes - warm_bytes > 10_000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_quota_settlement_cli import (
+        AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_cli, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configuration = json.loads(registry.read_text())
+    configuration["goals"][0]["quota"]["allowed_slots"] = 6
+    registry.write_text(json.dumps(configuration))
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    if provider == "sqlite":
+        # Exercise the full canonical row when its text exceeds the selected
+        # summary's display limit. The File fixture covers the referenced row.
+        state.write_text(state.read_text().replace(
+            "[P1] Validate and settle the selected delivery.",
+            "[P1] " + "Validate and settle the selected delivery. " * 12,
+        ))
+    with state.open("a") as handle:
+        handle.write(f"- [ ] [P2] Validate the alternate delivery.\n"
+                     f"  <!-- loopx:todo todo_id={ALTERNATIVE_TODO_ID} status=open "
+                     "task_class=advancement_task action_kind=validate -->\n")
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    journal = tmp_path / "journal"
+    journal.mkdir()
+    event = setup(journal, monkeypatch)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+
+    def cli(*args):
+        code, payload = _run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    def update(todo_id, note, action):
+        key = f"lease-{todo_id}"
+        if action == "seed":
+            lease = cli("todo", "claim", "--goal-id", GOAL_ID, "--todo-id", todo_id,
+                        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID,
+                        "--task-lease-idempotency-key", key)["lease"]
+        else:
+            lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", todo_id)["lease"]
+        cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", todo_id, "--agent-id", AGENT_ID,
+            "--note", note, "--task-lease-idempotency-key", key,
+            "--task-lease-expected-version", str(lease["version"]), "--update-operation-id", f"{action}-{todo_id}")
+
+    def binding(turn, todo_id=TODO_ID):
+        return ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                "--todo-id", todo_id, "--turn-instance-id", turn)
+
+    def capture(turn, todo_id=TODO_ID):
+        return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+                   "--delta-delivery", "auto", *binding(turn, todo_id),
+                   "--decision-output-root", str(captures), "--codex-context-dir", str(journal))
+
+    def settle(turn):
+        cli("refresh-state", *binding(turn), "--classification", "fixture_validated",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+            "--no-global-sync", "--suppress-external-sinks")
+        spent = cli("quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
+        assert spent["appended"]
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            args = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint",
+                "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                *args[args.index("quota"):]], cwd=project)
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(p["content"] for p in pages)), size
+
+    note = "原始交付条件与验收材料。Keep the cited acceptance evidence. " * 260
+    update(TODO_ID, note.rstrip(), "seed")
+    first = capture("note-cold")
+    cold, cold_facts, _ = read(first["first_read_command"])
+    pointer = next(p for p in cold_facts if p.endswith("/content/todo/note"))
+    assert cold_facts[pointer] == note.rstrip()
+    deliver(journal, event, cold)
+    assert pointer in codex_context._state(journal)["consumed_pointers"]
+    settle("note-cold")
+    update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+
+    second = capture("note-warm")
+    _, original = read_context_read_reference(second["recovery"]["reference_file"])
+    source_path = Path(original["path"])
+    source = source_path.read_bytes()
+    context = json.loads(source)["interaction_contract"]["agent_channel"]["work_context"]
+    assert context["selected_todo_text_verified"]
+    assert context.get("selected_todo_ref") == ("selected_todo" if provider == "file" else None)
+    source_pointer = pointer.removesuffix("/todo/note")
+    _, current_source, _ = read(second["recovery"]["command"] + " --select " + source_pointer)
+    current_authority = current_source[source_pointer]["authority_read"]
+    cold_authority = cold_facts[source_pointer + "/authority_read"]
+    assert current_authority["provider_revision"] != cold_authority["provider_revision"]
+    warm, facts, warm_bytes = read(second["first_read_command"])
+    assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+    recovered, restored, fallback_bytes = read(second["first_read_command"])
+    assert pointer not in recovered[0].get("previously_delivered_fields", [])
+    assert restored[pointer] == note.rstrip() and source_path.read_bytes() == source
+
+    assert _spend_run_count(runtime) == 1
+    deliver(journal, event, recovered)
+    settle("note-warm")
+    revised = note + "Use the revised acceptance check before writing."
+    update(TODO_ID, revised, "revise")
+    update(ALTERNATIVE_TODO_ID, revised, "revise")
+    corrected, current, _ = read(capture("note-corrected")["first_read_command"])
+    assert current[pointer] == revised and pointer not in corrected[0].get("previously_delivered_fields", [])
+    deliver(journal, event, corrected)
+    settle("note-corrected")
+    alternate, other, _ = read(capture("note-alternate", ALTERNATIVE_TODO_ID)["first_read_command"])
+    assert other[pointer] == revised and other["/selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
+    assert pointer not in alternate[0].get("previously_delivered_fields", [])
+    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
+
+    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
+                      "warm_pages": len(warm), "recovery_pages": len(recovered)}))
+    assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
+    assert facts[source_pointer + "/authority_read"] == current_authority
+    restored_note = {key: value for key, value in restored.items() if key != pointer}
+    observed = warm[0].get("previously_delivered_fields", [])
+    assert restored_note == {
+        **facts,
+        **{key: value for key, value in restored_note.items()
+           if any(key == address or key.startswith(address + "/") for address in observed)},
+    }
+    assert fallback_bytes - warm_bytes > 10_000

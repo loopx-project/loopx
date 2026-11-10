@@ -287,6 +287,7 @@ def build_state_refresh_record(
     progress_observation: dict[str, Any] | None = None,
     explore_result: dict[str, Any] | None = None,
     explore_result_recorded_at: str | None = None,
+    explore_result_source_snapshot: dict[str, Any] | None = None,
     delivery_workspace: dict[str, Any] | None = None,
     settlement_identity: SettlementIdentity | None = None,
     todo_fields: dict[str, Any] | None = None,
@@ -379,6 +380,8 @@ def build_state_refresh_record(
     if explore_result is not None:
         record["explore_result"] = explore_result
         record["explore_result_recorded_at"] = explore_result_recorded_at or generated_at
+        if explore_result_source_snapshot is not None:
+            record["explore_result_source_snapshot"] = explore_result_source_snapshot
     if progress_observation:
         record["progress_observation"] = progress_observation
     if progress_scope:
@@ -461,6 +464,7 @@ def _build_state_refresh_output_projections(
         "progress_observation",
         "explore_result",
         "explore_result_recorded_at",
+        "explore_result_source_snapshot",
         "progress_scope",
         "agent_id",
         "agent_lane",
@@ -789,6 +793,7 @@ def refresh_state_run(
     normalized_delivery_boundary = normalize_delivery_boundary(delivery_boundary)
     normalized_repair_delta_kinds = normalize_repair_delta_kinds(repair_delta_kinds)
     normalized_explore_result = None
+    prepared_explore_source: dict[str, Any] = {}
     if explore_result is not None:
         from .capabilities.explore.result_writeback import normalize_result_attachment
         normalized_explore_result = normalize_result_attachment(explore_result)
@@ -945,6 +950,7 @@ def refresh_state_run(
                 normalized_explore_result, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=goal_id, agent_id=normalized_agent_id, todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
+                _prepared_source=prepared_explore_source,
             )
         runtime_projection_route = resolve_runtime_projection_route(
             registry_path=registry_path,
@@ -1369,6 +1375,11 @@ def refresh_state_run(
             explore_result_recorded_at=(
                 prior_writeback_run.get("explore_result_recorded_at", prior_writeback_run["generated_at"])
                 if checkpoint_supplement and prior_writeback_run else None
+            ),
+            explore_result_source_snapshot=(
+                prior_writeback_run.get("explore_result_source_snapshot")
+                if checkpoint_supplement and prior_writeback_run
+                else prepared_explore_source.get("source_snapshot")
             ),
             delivery_workspace=delivery_workspace,
             settlement_identity=settlement_identity,

@@ -155,6 +155,7 @@ def refine_goal_outcome(
     *, registry_path: Path, goal_id: str, refinement: dict[str, Any],
     expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
     runtime_root: str | None = None, execute: bool = False,
+    reviewed_work_update: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Record scoped planning intent, never configure validators or attest success."""
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
@@ -165,7 +166,9 @@ def refine_goal_outcome(
         raise ValueError("Outcome refinement requires an active Goal")
     return _result("goal.acceptance.refine", {**route, "actor_agent_id": agent_id,
         "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
-        "refinement": refinement, "dry_run": not execute}, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+        "refinement": refinement, "dry_run": not execute,
+        **({"reviewed_work_update": reviewed_work_update} if reviewed_work_update is not None else {}),
+    }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
 def update_goal_objective(

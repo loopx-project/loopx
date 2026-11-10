@@ -88,7 +88,14 @@ def test_cross_goal_batch_independent_returns_replay_and_partial_revocation(tmp_
     assert not any(row.get("collaborations") or row.get("collaboration") for row in snapshot["messages"])
     results = [row for row in snapshot["messages"] if row.get("origin") == "manager_followup"]
     assert len(results) == len(receipts)
-    assert {row["text"].split("Finding from ")[-1] for row in results} == {r["goal_id"] for r in receipts}
+    expected = {
+        f"Finding from {receipt['goal_id']}": receipt["request_id"][:8]
+        for receipt in receipts
+    }
+    for row in results:
+        body, _, attribution = row["text"].partition("\n\n")
+        assert attribution.endswith(expected.pop(body))
+    assert not expected
     assert registry.read_bytes() == before
 
 

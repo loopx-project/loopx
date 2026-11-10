@@ -214,6 +214,8 @@ def test_canonical_periodic_successor_settles_original_open_validation_todo(
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_error: str | None = None) -> dict:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=project,
             capture_output=True, text=True, timeout=60)
@@ -346,7 +348,7 @@ def test_long_chain_ack_survives_real_cli_history_and_peer_claim(tmp_path: Path,
 
     def guard():
         result = call("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
-            "--runtime-profile", "generic_cli")
+            "--runtime-profile", "generic_cli", "--context-delivery", "off")
         return result.get("autonomous_replan_obligation")
 
     original = guard()

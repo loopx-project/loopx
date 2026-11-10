@@ -187,7 +187,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
         <div><dt>{zh ? "来源" : "Source"}</dt><dd>{native.artifact}<br/><code>{native.artifact_sha256}</code></dd></div></dl>
       <dl>{points.map(([key, cn, en]) => {
         const point = outcomes[key];
-        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "收到结果" : "Result received"}: {point.observed_at}</dd></div> : null;
+        return point ? <div key={key}><dt>{zh ? cn : en}</dt><dd>{String(point.value)} {outcomes.metric.unit}<br/><code>{point.candidate_ref}</code><br/>{zh ? "提交" : "Submission"} {point.submission_index} · {zh ? "提交时间" : "Submitted at"}: {point.submitted_at ?? (zh ? "未知" : "Unknown")}<br/>{zh ? "观测时间" : "Observed at"}: <time dateTime={point.observed_at}>{point.observed_at}</time></dd></div> : null;
       })}</dl>
       <ul>{outcomes.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul>
     </details></div>

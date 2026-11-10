@@ -81,6 +81,47 @@ def test_writeback_guidance_uses_current_cli_scale_vocabulary():
         assert alias not in hint  # Historical aliases remain read-only.
 
 
+def test_quota_decision_reuses_only_the_same_settlement_plan_input(monkeypatch):
+    real_render = quota_effect_program.effect_runtime_result
+    requests = []
+
+    def record(method, request):
+        assert method == "settlement.turn_scoped_cli_plan"
+        requests.append(request)
+        return real_render(method, request)
+
+    monkeypatch.setattr(quota_effect_program, "effect_runtime_result", record)
+
+    def plan(capabilities=""):
+        return quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID,
+            agent_id=AGENT_ID,
+            todo_id=TODO_ID,
+            turn_instance_id=TURN_ID,
+            scoped_cli_args=capabilities,
+            lifecycle_actor_args="",
+        )
+
+    with quota_effect_program.reuse_cli_settlement_plans():
+        first = plan()
+        expected = first.as_dict()
+        writeback = next(step for step in first.steps if step.kind is SettlementStepKind.DURABLE_WRITEBACK)
+        assert isinstance(writeback.vision_authoring, dict)
+        writeback.vision_authoring.clear()
+        assert plan().as_dict() == expected
+        assert len(requests) == 1
+
+        with_capability = settlement_step_command(
+            plan(" --available-capability shell").as_dict(),
+            SettlementStepKind.QUOTA_SPEND,
+        )
+        assert "--available-capability shell" in with_capability
+        assert len(requests) == 2
+
+    assert plan().as_dict() == expected
+    assert len(requests) == 3
+
+
 @pytest.mark.parametrize("replan", [False, True])
 def test_command_plan_supplies_actor_from_identity(replan):
     plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(

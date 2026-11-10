@@ -581,6 +581,8 @@ def _configure_autonomous_replan_fixture(
     project: Path,
     runtime: Path,
     registry_path: Path,
+    *,
+    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_path.write_text(
@@ -605,6 +607,8 @@ def _configure_autonomous_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
+    if stride_strategy is not None:
+        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -651,6 +655,8 @@ def _configure_autonomous_replan_fixture(
 def _configure_selected_todo_replan_fixture(
     project: Path,
     registry_path: Path,
+    *,
+    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todo_rows = "\n".join(
@@ -681,6 +687,8 @@ def _configure_selected_todo_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
+    if stride_strategy is not None:
+        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -4733,7 +4741,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         AGENT_ID,
     )
     assert guard_rc == 0, guard
-    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    interaction = guard["interaction_contract"]
+    agent = interaction["agent_channel"]
+    cli = interaction["cli_channel"]
+    actions = cli["next_cli_actions"]
     assert len(actions) == 1
     if profile == "codex_app_ssh_goal":
         assert actions[0].endswith("--begin-turn")
@@ -4741,6 +4752,18 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         assert "--turn-instance-id" in actions[0]
         assert "--begin-turn" not in actions[0]
     assert all("spend-slot" not in action for action in actions)
+    assert guard["should_run"] is True
+    assert guard["normal_delivery_allowed"] is False
+    assert guard["execution_obligation"]["delivery_allowed"] is False
+    assert guard["execution_obligation"]["must_attempt_work"] is False
+    assert guard["recommended_action"] == actions[0] == agent["primary_action"]
+    assert agent["must_attempt"] is True
+    assert agent["delivery_allowed"] is False
+    assert agent["quiet_noop_allowed"] is False
+    assert cli["turn_binding_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert "settlement_plan" not in cli
+    assert not guard.get("heartbeat_receipt")
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -4770,7 +4793,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     )
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
-    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    bound_interaction = bound["interaction_contract"]
+    assert bound_interaction["agent_channel"]["delivery_allowed"] is True
+    assert "turn_binding_required" not in bound_interaction["cli_channel"]
+    plan = bound_interaction["cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO_ID
     assert plan["identity"]["agent_id"] == AGENT_ID
     if profile != "codex_app_ssh_goal":
@@ -4808,6 +4834,37 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
         "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
         "passing its own --turn-instance-id"
     )
+
+
+@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    rc, preview = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+    )
+    assert rc == 0, preview
+    contract = preview["interaction_contract"]
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    cli = contract["cli_channel"]
+    assert cli["selection_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert not preview.get("heartbeat_receipt")
+
+    selection = cli["selection_command"]
+    command = (selection["route_prefix"] + " " + selection["command_args_template"]).replace(
+        "{todo_id}", ALTERNATIVE_TODO_ID,
+    ).replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
+    bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
+    assert bound_rc == 0, bound
+    assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = bound["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
@@ -6993,6 +7050,21 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert actions[0].endswith("--begin-turn")
     assert "refresh-state" not in actions[0]
     assert "spend-slot" not in actions[0]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(unbound)
+    assert envelope["action"]["primary_action"] == actions[0]
+    assert envelope["action"]["must_attempt"] is True
+    assert envelope["action"]["delivery_allowed"] is False
+    assert envelope["writeback"]["next_cli_actions"] == actions
+    assert envelope["writeback"]["spend_after_validation"] is False
+    assert envelope["replan_action_packet"] is None
+    from loopx.control_plane.turn_driver import build_loopx_turn_plan
+
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert plan["route"]["kind"] == "blocked"
+    assert plan["route"]["would_invoke_host"] is False
+    assert not any(plan["effects"].values())
 
     bound_rc, bound = _run_generated_cli(
         actions[0],

@@ -184,6 +184,10 @@ def test_projected_module_readers_complete_native_shell_closeout(
                for message in transport.requests[-1]["messages"]
                if message["role"] == "tool" and message["content"].startswith("{")]
     assert [value["stage"] for value in outputs if "stage" in value] == ["review", "writeback"]
+    writer = next(value for value in outputs if value.get("stage") == "writeback")
+    assert "agent_vision.stride_decision" in writer["writeback_contract"]["required_fields"]
+    assert "fields" in writer["writeback_contract"]["vision_authoring"]
+    assert "refresh-state" in shlex.split(writer["writeback"]["next_cli_actions"][0])
     packet = _packet(transport.requests[-1])
     reader = packet["autonomous_replan_obligation"]["context_read"]
     assert shlex.split(reader)[1:3] == ["-m", "loopx.entrypoint"]
@@ -234,6 +238,12 @@ def test_native_stride_rejection_cannot_write_or_spend(
         assert feedback["exit_code"] != 0
         assert "stride" in feedback["output"]
         assert "vision_budget_exceeded" not in feedback["output"]
+        if invalid == "missing":
+            refusal = json.loads(feedback["output"])
+            assert refusal["ok"] is False and refusal["appended"] is False
+            transition = refusal["replan_transition"]
+            assert transition["reason_code"] == "stride_decision_required"
+            assert transition["obligation_id"] == _packet(request)["autonomous_replan_obligation"]["obligation_id"]
         return projected_spend(request)
 
     def unspent(request: Mapping[str, Any]) -> ScriptedAssistantAction:
@@ -322,21 +332,39 @@ def test_native_shell_closes_real_cli_turn_without_command_rituals(tmp_path: Pat
     assert "required_agent_vision_missing" not in result["semantic_reentry"]["trigger_kinds"]
 
 
-@pytest.mark.parametrize("evidence", ["evidence-permission-config", "fixture/permission-config.json"])
-def test_cli_validation_errors_are_correctable_in_the_same_draft(tmp_path: Path, evidence: str) -> None:
+@pytest.mark.parametrize(("evidence", "failure"), [
+    ("evidence-permission-config", "budget"),
+    ("fixture/permission-config.json", "budget"),
+    ("evidence-permission-config", "missing_stride"),
+])
+def test_cli_validation_errors_are_correctable_in_the_same_draft(tmp_path: Path, evidence: str, failure: str) -> None:
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
-    def oversized(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-        return ScriptedExecToolAction(vision_patch_action(request).command.replace(
-            "Reader is default; writing requires an explicit grant.", "x" * 700))
+
+    def invalid_draft(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+        action = vision_patch_action(request)
+        if failure == "budget":
+            return ScriptedExecToolAction(action.command.replace(
+                "Reader is default; writing requires an explicit grant.", "x" * 700))
+        lines = action.command.splitlines()
+        draft = json.loads("\n".join(lines[1:-1]))
+        del draft["stride_decision"]
+        return ScriptedExecToolAction(lines[0] + "\n" + json.dumps(draft) + "\nJSON")
+
     def correct(request: Mapping[str, Any]) -> ScriptedExecToolAction:
         response = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
         assert response["exit_code"] != 0
-        assert "vision_budget_exceeded" in response["output"]
+        if failure == "missing_stride":
+            refusal = json.loads(response["output"])
+            assert refusal["appended"] is False
+            assert refusal["replan_transition"]["reason_code"] == "stride_decision_required"
+        else:
+            assert "vision_budget_exceeded" in response["output"]
         return ScriptedExecToolAction(vision_patch_action(request).command.replace("evidence-permission-config", evidence))
+
     result = _qualify(tmp_path, [
         ScriptedExecToolAction(fixture.quota_guard_command),
         ScriptedExecToolAction("cat fixture/permission-config.json"),
-        oversized, projected_refresh, correct, projected_refresh, projected_spend,
+        invalid_draft, projected_refresh, correct, projected_refresh, projected_spend,
     ])
     assert result["qualification_passed"] is True, result
     assert result["vision_closeout"]["spend_count"] == 1

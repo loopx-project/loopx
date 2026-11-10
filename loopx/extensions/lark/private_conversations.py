@@ -12,11 +12,15 @@ import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from ...capabilities.native_chat.external_conversations import ChatExternalConversations, QUOTA_BACKLOG_BATCH_SIZE
-from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
+from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
+from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
@@ -43,6 +47,169 @@ from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC
 # Reserve edits for a final/closing notice; continue long Turns on a new draft.
 PROGRESS_EDIT_BUDGET = 12
 CHAT_CONTROL_COMMANDS = {"/status": "status", "/help": "help", "/new": "new", "/stop": "stop"}
+_UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
+
+
+def _unsupported_media_label(row: Mapping[str, Any]) -> str | None:
+    event = row.get("event")
+    kind = event.get("message_type") if isinstance(event, Mapping) else None
+    if (isinstance(kind, str) and row.get("schema_version") == "lark_private_chat_delivery_v0"
+            and row.get("status") in ("command_completed", "delivered")
+            and row.get("response_code") == "unsupported_attachment" and "turn_id" in row and row["turn_id"] is None):
+        return _UNSUPPORTED_MEDIA_LABELS.get(kind)
+    return None
+
+
+def _history_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("missing history time")
+    stamp = datetime.fromisoformat(value)
+    if stamp.tzinfo is None:
+        raise ValueError("unqualified history time")
+    return stamp.astimezone(timezone.utc)
+
+
+class PrivateUnsupportedMediaHistory:
+    """Read Lark presentation history without constructing a transport worker."""
+
+    def __init__(self) -> None:
+        self._discovery = FileChatDiscovery()
+        self._location_lock = Lock()
+        self._location_cache: tuple[Path, tuple[int, ...], dict[str, list[Path]]] | None = None
+
+    def _locations(self, root: Path, sid: str) -> list[Path]:
+        complete = True
+
+        def read_receipt(path: Path) -> dict[str, Any]:
+            try:
+                return _read_json(path)
+            except UnicodeDecodeError:
+                return {}
+
+        def locate(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+            nonlocal complete
+            # Keep valid locators, but retry unreadable receipts on the next scan.
+            if row.get("schema_version") != "lark_private_chat_delivery_v0":
+                complete = False
+                return None
+            return {"media_session": row.get("session_id") if _unsupported_media_label(row) else None}
+
+        with self._location_lock:
+            try:
+                stamp = file_change_fingerprint(root)
+            except OSError:
+                return []
+            cached = self._location_cache
+            if stamp is not None and cached is not None and cached[:2] == (root, stamp):
+                return cached[2].get(sid, [])
+            paths = (path for path in root.glob("*.json") if re.fullmatch(r"[a-f0-9]{24}", path.stem))
+            locations: dict[str, list[Path]] = {}
+            for path, view in self._discovery.rows(root, paths, read=read_receipt, project=locate):
+                session_id = view.get("media_session")
+                if isinstance(session_id, str):
+                    locations.setdefault(session_id, []).append(path)
+            # All production journal publications are atomic replacements.
+            # Cache only the locator list, never a selected receipt or grant.
+            try:
+                if complete and stamp is not None and file_change_fingerprint(root) == stamp:
+                    self._location_cache = (root, stamp, locations)
+            except OSError:
+                pass
+            return locations.get(sid, [])
+
+    def read(self, store: ChatSessionStore, bindings: ChatConversationBindings | None,
+             session: dict[str, Any]) -> list[dict[str, Any]]:
+        """Show original, non-executed Lark media without replay or provider IO."""
+        saved = session.get("steward_context") or session.get("project_context") or {}
+        if (bindings is None or saved.get("audience") != "bound_owner"
+                or session.get("session_mode") != "managed_runtime"):
+            return []
+        sid = session["session_id"]
+        try:
+            state = bindings.read()
+            matches = [row for row in state["bindings"] if row["binding_id"] == saved.get("binding_id")]
+        except (KeyError, TypeError, ValueError, OSError):
+            return []
+        if len(matches) != 1:
+            return []
+        binding, = matches
+        prefix = "manager.external.native" if binding.get("context_kind") == "steward" else "project.external"
+        if (binding.get("enabled") is not True or binding.get("audience", "owner") != "owner"
+                or any(not saved.get(k) or binding.get(k) != saved[k]
+                       for k in ("provider_ref", "operator_ref", "project_ref", "grant"))
+                or not saved.get("source_ref")
+                or session.get("channel_id") != f"{prefix}.{binding['binding_id']}.{saved['source_ref']}"):
+            return []
+
+        markers = []
+        for path in self._locations(store.root / "lark-private-deliveries", sid):
+            try:
+                # The locator is only a hint. Join the two exact receipts and
+                # recompute the private principal; don't trust a cached grant.
+                record = _read_json(path)
+                label = _unsupported_media_label(record)
+                event = record["event"]
+                source = lark_private_source(provider_ref=saved["provider_ref"], event=event)
+                native = _read_json(store.root / "external-requests" / path.name)
+                expected = {"request_ref": path.stem, "binding_id": binding["binding_id"],
+                            "session_id": sid, "source": source, "response_code": "unsupported_attachment"}
+                if (not label or record.get("profile") != binding["transport_ref"]
+                        or source["private_human_message"] is not True or source["source_ref"] != saved["source_ref"]
+                        or source["sender_ref"] != saved["operator_ref"]
+                        or identity_ref(saved["provider_ref"], event["message_id"]) != path.stem
+                        or any(row.get(k) != v for row in (record, native) for k, v in expected.items())
+                        or native.get("schema_version") != "loopx_chat_external_request_v0"
+                        or native.get("origin") not in (None, "lark")
+                        or native.get("status") != "command_completed" or native.get("command") != "unsupported"
+                        or "turn_id" not in native or native["turn_id"] is not None):
+                    continue
+                epoch = str(event.get("create_time") or "")
+                stamp = (datetime.fromtimestamp(int(epoch) / 1000, timezone.utc)
+                         if re.fullmatch(r"[0-9]{13}", epoch) else _history_timestamp(native.get("created_at")))
+                mid = f"lark.unsupported.{path.stem}"
+                markers.append({"schema_version": CHAT_MESSAGE_SCHEMA_VERSION,
+                    "message_id": mid, "turn_id": None, "role": "error", "origin": "lark",
+                    "text": f"飞书{label} · 未提交执行。请在原飞书会话查看。",
+                    "created_at": stamp.isoformat(timespec="microseconds")})
+            except (KeyError, ValueError, TypeError, OSError):
+                continue
+
+        try:
+            if not markers or bindings.read() != state:
+                return []
+        except (ValueError, OSError):
+            return []
+        return sorted(markers, key=lambda row: (row["created_at"], row["message_id"]))
+
+    @staticmethod
+    def summary(summary: dict[str, Any], markers: list[dict[str, Any]]) -> dict[str, Any]:
+        """Invalidate an App's quiet history cache even when no Turn was created."""
+        revision = summary.get("transcript_revision")
+        if not revision or not markers:
+            return summary
+        digest = hashlib.sha256(json.dumps(markers, sort_keys=True, ensure_ascii=False,
+                                          separators=(",", ":")).encode("utf-8")).hexdigest()
+        return {**summary, "transcript_revision": f"{revision}.lark.{digest}"}
+
+    @staticmethod
+    def insert(messages: list[dict[str, Any]], markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not markers:
+            return messages
+        # Keep canonical append order and insert presentation rows by original
+        # time before paging. A late insertion must invalidate the old prefix.
+        ids = {row.get("message_id") for row in messages}
+        pending = [(_history_timestamp(row["created_at"]), row) for row in reversed(markers)
+                   if row["message_id"] not in ids]
+        projected = []
+        for message in messages:
+            try:
+                stamp = _history_timestamp(message.get("created_at"))
+            except ValueError:
+                stamp = None
+            while pending and stamp is not None and pending[-1][0] < stamp:
+                projected.append(pending.pop()[1])
+            projected.append(message)
+        return projected + [row[1] for row in reversed(pending)]
 
 
 class _ControlReadFallback(Exception):
@@ -59,6 +226,7 @@ class LarkPrivateConversations:
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
+        self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
         self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
         from .owner_attention import LarkOwnerAttention
@@ -635,10 +803,18 @@ class LarkPrivateConversations:
         projected = conversation_reply_context({**context, "source_conversation_id": event["chat_id"]})
         prefix = str(projected["context_text"])
         message = f"{prefix}\n\nCurrent user message:\n{text}" if prefix else text
+        # A compact private event can omit its thread ID. Retain the verified
+        # identity for redelivery even when the provider has no thread excerpt.
+        thread_id = context.get("thread_id")
+        if (event["chat_type"] == "p2p" and event.get("parent_id") and not event.get("thread_id")
+                and context.get("reply_context_verified") is True
+                and isinstance(thread_id, str) and 0 < len(thread_id) <= 200):
+            record["event"] = {**event, "thread_id": thread_id}
         record.update(reply_context_message=message, reply_context_source_text=text)
         _atomic_write_json(path, record)
         return message
 
+    @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
               defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
@@ -682,8 +858,15 @@ class LarkPrivateConversations:
                     return {"status": "history_answer_held"}
                 # event_id can change on redelivery; canonical message content
                 # and audience cannot change underneath the stable message id.
-                if any(record["event"].get(key) != event.get(key) for key in
-                       ["message_id", "sender_id", "chat_id", "content", "message_type", "chat_type", "sender_type", "root_id", "parent_id", "thread_id"]):
+                # A compact private redelivery may omit a thread ID already
+                # verified and frozen with the original reply context.
+                saved_event = record["event"]
+                omitted_private_thread = (event["chat_type"] == "p2p" and not event.get("thread_id")
+                                          and "reply_context_message" in record)
+                if any(saved_event.get(key) != event.get(key) for key in (
+                        "message_id", "sender_id", "chat_id", "content", "message_type",
+                        "chat_type", "sender_type", "root_id", "parent_id")) or (
+                        not omitted_private_thread and saved_event.get("thread_id") != event.get("thread_id")):
                     return {"status": "source_conflict"}
             else:
                 record = {"schema_version": "lark_private_chat_delivery_v0", "request_ref": request,
@@ -1256,6 +1439,17 @@ class LarkPrivateConversations:
             except (KeyError, ValueError, OSError):
                 return  # Unknown authority or provider effects stay pending.
 
+    def pending_body_paths(self) -> list[Path]:
+        """Find unsent bodies without waiting for historical recovery probes.
+
+        The existing pool reads the complete discovery separately. Keep this
+        metadata cache local to the scanner; it grants no admission or send.
+        """
+        paths = [path for path, row, _ in self._body_discovery.rows()
+                 if row["status"] != "delivered"]
+        return [*paths, *(path for path in sorted((self.root / "web-projections").glob("*.json"))
+                         if _read_json(path).get("status") == "pending")]
+
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
@@ -1315,11 +1509,7 @@ class LarkPrivateConversations:
                         continue
                     key = identity_ref(source["binding_id"], sid)
                     path = root / f"{key}.json"
-                    messages = store.messages(sid)
-                    web_turns = {message["turn_id"] for message in messages
-                                 if message.get("role") == "user" and message.get("origin") == "web"}
-                    selected = [message for message in messages if message.get("turn_id") in web_turns
-                                and message.get("role") in {"user", "agent"}]
+                    selected = self._web_projection_transcript(sid)
                     if selected:
                         with exclusive_file_lock(path, operation="discover_web_conversation_projection"):
                             row = _read_json(path) if path.exists() else {
@@ -1339,6 +1529,40 @@ class LarkPrivateConversations:
                     continue
         return [path for path in sorted(root.glob("*.json")) if _read_json(path).get("status") == "pending"]
 
+    def _web_projection_transcript(self, session_id: str, *, inputs_only: bool = False,
+                                   verify_turns: bool = False) -> list[dict[str, Any]]:
+        store = self.core.controller.store
+        messages = store.messages(session_id)
+        web_turns = {message["turn_id"] for message in messages
+                     if message.get("role") == "user" and message.get("origin") == "web"}
+        roles = {"user"} if inputs_only else {"user", "agent", "error"}
+        selected = []
+        failed_turns = set()
+        for message in messages:
+            turn_id, role = message.get("turn_id"), message.get("role")
+            if turn_id not in web_turns or role not in roles:
+                continue
+            turn = store.load_turn(session_id, turn_id) if verify_turns or role == "error" else None
+            same_turn = bool(turn and turn.get("origin") == "web" and turn.get("session_id") == session_id
+                             and turn.get("turn_id") == turn_id)
+            if role == "error":
+                # An unconfirmed stop may leave an earlier error row in the
+                # transcript. Use only the exact terminal failure, once per Turn.
+                if (not same_turn or turn_id in failed_turns or turn["status"] not in {"failed", "timed_out"}
+                        or not turn.get("completed_at") or turn.get("error") != message.get("text")
+                        or message.get("attachments")):
+                    continue
+                failed_turns.add(turn_id)
+                if turn.get("error_code") == "server_restarted":
+                    failure = "服务在处理此请求时重启，本轮未完成。详情可在 App 的原会话查看。"
+                else:
+                    _, failure = manager_failure_reply(turn)
+                message = {**message, "text": f"App 执行记录（{turn['completed_at']}）\n\n{failure}"}
+            elif verify_turns and not same_turn:
+                raise ValueError("canonical App input identity changed")
+            selected.append(message)
+        return selected
+
     def _web_projection_messages(self, row: dict[str, Any], *, inputs_only: bool = False) -> list[dict[str, Any]]:
         store = self.core.controller.store
         source = _read_json(self.root / f"{row['request_ref']}.json")
@@ -1356,23 +1580,7 @@ class LarkPrivateConversations:
                 or saved.get("source_ref") != row["source"]["source_ref"]):
             raise ValueError("original App projection audience changed")
         with self.bindings.input_context(saved, origin="web", session=session, store=store):
-            messages = store.messages(session["session_id"])
-            web_turns = {message["turn_id"] for message in messages
-                         if message.get("role") == "user" and message.get("origin") == "web"}
-            selected = []
-            for message in messages:
-                if message.get("turn_id") not in web_turns or message.get("role") not in {"user", "agent"}:
-                    continue
-                # Reactions belong to canonical user inputs. The independent
-                # body outbox still reads and validates every answer; feedback
-                # need not reload those Turns just to discard their messages.
-                if inputs_only and message["role"] != "user":
-                    continue
-                turn = store.load_turn(session["session_id"], message["turn_id"])
-                if not turn or turn.get("origin") != "web" or turn.get("session_id") != session["session_id"]:
-                    raise ValueError("canonical App input identity changed")
-                selected.append(message)
-            return selected
+            return self._web_projection_transcript(session["session_id"], inputs_only=inputs_only, verify_turns=True)
 
     @staticmethod
     def _web_projection_delivery_id(row: dict[str, Any], message: dict[str, Any]) -> str:

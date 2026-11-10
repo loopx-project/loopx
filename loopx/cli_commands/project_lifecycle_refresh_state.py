@@ -81,6 +81,7 @@ from .quota_reward_memory import (
     stage_reward_memory_outcome_candidate,
 )
 from ..control_plane.quota.cli_projection import compact_refresh_state_cli_payload
+from .refresh_settlement import settle_requested_refresh
 
 
 def register_refresh_state_command(
@@ -596,7 +597,10 @@ def handle_refresh_state_command(
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
             refinement_result = refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update)
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update,
+                **({"reviewed_work_update": {"todo_id": args.todo_id,
+                    "append_explore_result_node_refs": [explore_result["node_id"]]}}
+                   if explore_result is not None and "review" in outcome_update["refinement"] else {}))
             outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
             if args.dry_run:
                 # Preview the same ordered composition as execution: the typed
@@ -879,7 +883,7 @@ def handle_refresh_state_command(
                 )
             )
         if not material_refresh_ready:
-            _settle_requested_refresh(payload, args, registry_path, goal_ref)
+            settle_requested_refresh(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
@@ -969,33 +973,6 @@ def handle_refresh_state_command(
                 )
             ),
         )
-    _settle_requested_refresh(payload, args, registry_path, goal_ref)
+    settle_requested_refresh(payload, args, registry_path, goal_ref)
     print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1
-
-
-def _settle_requested_refresh(payload, args, registry_path, goal_ref):
-    if not getattr(args, "settle_turn", False):
-        return
-    from .refresh_settlement import present_settled_refresh, settle_refreshed_turn
-
-    settle_refreshed_turn(payload, registry_path=registry_path,
-        runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
-        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
-        replan_obligation_id=args.replan_obligation_id,
-        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
-        delivery_workspace_path=(
-            Path(args.delivery_workspace_path)
-            if args.delivery_workspace_path else None
-        ))
-    if getattr(args, "settlement_receipt", False):
-        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
-        try:
-            view = present_settled_refresh(payload, runtime_root=resolve_runtime_root(
-                load_registry(registry_path), args.runtime_root))
-        except QuotaDecisionTransportError as exc:
-            payload.update(ok=False, error=str(exc))
-            return  # Exact committed receipts stay visible; never re-admit.
-        if view is not payload:
-            payload.clear()
-            payload.update(view)

@@ -179,9 +179,9 @@ class NativeHost:
                   for path in (self.manager.active, self.manager.root / "last.json")]
         return hashlib.sha256(b"\0".join(values)).hexdigest()
 
-    def status(self) -> dict:
+    def status(self, *, adopt_current: bool = True) -> dict:
         self.apps.check_provider(self.spec, "gpt")
-        value = self.manager.status()
+        value = self.manager.status(adopt_current=adopt_current)
         result = {key: value[key] for key in (
             "slots", "active_slot", "current_login_matches", "recovery_required"
         )} | {"selection_revision": self.revision()}

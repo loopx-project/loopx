@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-import loopx.chat_status_api as chat_status_api
+import loopx.chat.status_api as chat_status_api
 import loopx.codex_app_thread_activity as codex_activity
 from loopx.codex_app_thread_activity import (
     _automation_rrule_interval_minutes,

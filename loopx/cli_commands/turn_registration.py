@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 
 from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA, LOOPX_TURN_HOST_REQUEST_SCHEMA
 from ..control_plane.turn_driver.driver import SessionBindingScope, SUPPORTED_ITERATION_CONTEXT_POLICIES
 from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
@@ -190,6 +191,11 @@ def register_turn_commands(
             "the Turn request from stdin and emits one result JSON object; shell "
             "parsing is never used."
         ),
+    )
+    run_once.add_argument(
+        "--host-adapter-request-schema",
+        choices=[LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA],
+        help="Request schema supported by the generic CLI adapter. Required for a v1 Host invocation.",
     )
     run_once.add_argument(
         "--validation-command-json",

@@ -112,6 +112,7 @@ def setup(
     )
     fixture = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fixture)
+    # Finish the release source before its one canonical cold import.
     project, runtime, registry = fixture.write_fixture(root, initialize=False)
     config = json.loads(registry.read_text())
     goal = config["goals"][0]
