@@ -1768,6 +1768,18 @@ queued Turn and imported suffix are verified. An unknown fork or injection
 leaves the original binding and history intact. Unverified legacy or changed
 authority retains the existing context migration path.
 
+Before opening a Codex adapter for an accepted queued Turn, Core records the
+first routing choice in that Turn's `native_context_preparation` metadata.
+The immutable observation names the planned native
+`thread/start`, `thread/resume` or `thread/fork`, prior thread, planned history
+message count, and the migration, settings and checkpoint conditions used by
+the current controller. It contains no transcript, host path or account data.
+Healthy in-process reuse adds no restoration observation. This is planned
+preparation, not proof that native IO, compaction or business work succeeded;
+the normal native and terminal records remain authoritative for those facts.
+It does not change lifecycle events or pre-dispatch recovery evidence. Older
+Turns without this observation remain unknown and are not rewritten.
+
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
