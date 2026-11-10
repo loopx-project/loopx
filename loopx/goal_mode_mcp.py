@@ -353,11 +353,11 @@ def create_fastmcp_server(
             return control.host_prompt()
 
     def should_run() -> Any:
-        """Read the bound decision, then its separate host_mcp_interaction_v0 guidance."""
+        """Read the bound decision; MCP guidance is separate in complete-v1, inline in legacy results."""
         return guard_content(control.should_run())
 
     def list_todos() -> Any:
-        """Read the bound Todo decision and its separate host_mcp_interaction_v0 guidance."""
+        """Read visible Todo decisions; MCP guidance is separate in complete-v1, inline in legacy results."""
         return guard_content(control.list_todos())
 
     # The SDK is optional and imported inside this factory. Supply its evaluated
