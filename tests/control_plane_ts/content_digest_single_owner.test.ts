@@ -58,6 +58,10 @@ const RECORDED_EXCEPTIONS: Record<string, string> = {
  * and a digest restatement cannot hide in this bucket (the last assertion below proves it).
  */
 const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
+  "control_plane/capabilities/benchmark_cli_source_activation.ts": {
+    count: 1,
+    reason: "CLI activation scope checks 32-hex activation_id, 64-hex container_id, and 40-hex Git SHA-1 target_revision",
+  },
   "control_plane/coordination/authority_format_inspection.ts": {
     count: 1,
     reason: "store identity binds a provider name at runtime; 32 hex, not a 64 digest",
@@ -100,14 +104,14 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 const CANONICAL_CONSUMERS = [
   "control_plane/effect_program.ts",
   "control_plane/agents/supervisor_event_append.ts",
+  "control_plane/capabilities/benchmark_cli_source_activation.ts",
   "control_plane/capabilities/change_quality_validation.ts",
   "control_plane/capabilities/content_media.ts",
   "control_plane/capabilities/content_media_generation.ts",
   "control_plane/capabilities/content_media_image.ts",
-  "control_plane/capabilities/explore_execution_observation.ts",
-  "control_plane/capabilities/explore_result_page.ts",
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
+  "control_plane/capabilities/stage_methodology_operator.ts",
   "control_plane/capabilities/trajectory_assessment.ts",
   "control_plane/capabilities/trajectory_input_usage.ts",
   "control_plane/capabilities/trajectory_tool_context.ts",
@@ -181,12 +185,10 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/replan_history_snapshot.ts",
   "control_plane/work_items/replan_semantics.ts",
   "control_plane/work_items/refresh_recommendation.ts",
-  "control_plane/work_items/stride_policy.ts",
   "control_plane/work_items/task_lease_acquire.ts",
   "control_plane/work_items/task_lease_lifecycle.ts",
   "control_plane/work_items/task_lease_lifecycle_request.ts",
   "control_plane/work_items/task_lease_workspace.ts",
-  "control_plane/work_items/yardstick_decision.ts",
   "zcode_goal_mode/cli.ts",
   "zcode_goal_mode/runtime.ts",
 ];
