@@ -792,6 +792,35 @@ def test_upsert_rejects_stale_transition_after_terminal_state(tmp_path: Path) ->
     assert rows[0]["status"] == "completed"
 
 
+def test_upsert_promotes_runner_invalid_after_terminal_adjudication(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "experiment-board.jsonl"
+    runner_invalid = _running_baseline(
+        status="runner_invalid",
+        observed_at="2026-08-18T00:10:00+00:00",
+    )
+    completed = _baseline(observed_at="2026-08-18T00:20:00+00:00")
+
+    upsert_benchmark_experiment_board_row(ledger, runner_invalid)
+    receipt = upsert_benchmark_experiment_board_row(ledger, completed)
+    rows = read_benchmark_experiment_board_rows(ledger)
+
+    assert receipt["write"]["status"] == "updated"
+    assert rows == [normalize_benchmark_experiment_board_row(completed)]
+
+
+def test_upsert_does_not_demote_completed_to_runner_invalid(tmp_path: Path) -> None:
+    ledger = tmp_path / "experiment-board.jsonl"
+    upsert_benchmark_experiment_board_row(ledger, _baseline())
+    runner_invalid = _running_baseline(status="runner_invalid")
+
+    with pytest.raises(
+        ValueError, match="cannot move from completed to runner_invalid"
+    ):
+        upsert_benchmark_experiment_board_row(ledger, runner_invalid)
+
+
 def test_reconcile_promotes_terminal_and_skips_late_nonterminal_source() -> None:
     canonical = _running_baseline(observed_at="2026-08-18T00:10:00+00:00")
     source_running = _running_baseline(

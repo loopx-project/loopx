@@ -161,6 +161,11 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
                                 "status": self.server.reader.status(goal_id)})
                 elif parsed.path == "/api/goal-source/history":
                     self._json(self.server.reader.history(goal_id, query.get("cursor", [""])[0]))
+                elif parsed.path == "/api/goal-source/strategies":
+                    if query.keys() - {"goal_id", "source_namespace"}:
+                        self._json({"ok": False, "error": "Choose one original Goal and source."}, 400)
+                    else:
+                        self._json(self.server.reader.strategies(goal_id))
                 else:
                     self._json({"ok": False, "error": "Read endpoint is not available for this source."}, 404)
             elif parsed.path == "/status.json":
@@ -170,6 +175,12 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
                     "status_url": self.server.status_url, "read_only_sources": self.server.catalog,
                     "control_plane_write_enabled": False, "reward_write_enabled": False}
                 self._json(status)
+            elif parsed.path == "/api/chat/goal-source-strategies":
+                if (set(query) != {"goal_id", "source_namespace"}
+                        or query["source_namespace"] != [self.server.source.namespace]):
+                    self._json({"ok": False, "error": "Choose one original Goal and source."}, 409)
+                else:
+                    self._json(self.server.reader.strategies(goal_id))
             elif parsed.path == "/api/chat/explore-results":
                 from .explore_results_api import _finding_rows
 

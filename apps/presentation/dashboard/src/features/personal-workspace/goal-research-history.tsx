@@ -1,4 +1,5 @@
 import {WorkYardstickReadback} from "./work-yardstick-readback";
+import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
@@ -10,7 +11,6 @@ import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
-import type {WorkspaceGoal} from "./personal-workspace-model";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent, type ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
@@ -53,10 +53,11 @@ const viewFromUrl = (goal: string) => {
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
-export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl, sourceStrategy, onOpenSourceTasks}: {
+export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl, onOpenSourceTasks}: {
   goalId: string; originalGoalId?: string; preferHistory?: boolean; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string;
-  sourceStrategy?: WorkspaceGoal["sourceStrategy"]; onOpenSourceTasks?: () => void;
+  onOpenSourceTasks?: () => void;
 }) {
+  const strategies = useGoalStrategyLocation(goalId, readSourceUrl);
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
@@ -81,6 +82,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [originalDisplay, setOriginalDisplay] = useState(false);
   const [displayIdentity, setDisplayIdentity] = useState<{events: ExploreHistoryEvent[]; namespace: string; key: string} | null>(null);
   const displayNamespace = readSourceUrl ? new URL(readSourceUrl, window.location.href).searchParams.get("source_namespace") ?? "local" : "local";
+  const hasNativeSource = preferHistory || /^[a-f0-9]{64}$/.test(displayNamespace);
   const display = analysis.pack?.result?.display;
   const displayHashSupported = Boolean(globalThis.crypto?.subtle);
   useEffect(() => {
@@ -499,13 +501,18 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const emptyHistory = !busy && !readFailure && read.complete && read.total === 0;
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
-  const emptySourceHistory = preferHistory && emptyHistory;
+  const emptySourceHistory = hasNativeSource && emptyHistory;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
   // Keep an explicitly opened study in place during a read failure. A complete
   // catalogue with no study still uses the ordinary history view.
   const awaitingRequestedCase = requestedCase === true && (analysis.loading || Boolean(analysis.readError));
+  if (hasNativeSource && strategies.selection !== null && !emptySourceHistory) {
+    return <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
+      sourceUrl={readSourceUrl} zh={zh} selection={strategies.selection}
+      onSelect={strategies.choose} onClose={() => strategies.choose(null)}/>;
+  }
   if (caseReading && (hasCases || awaitingRequestedCase)) {
     return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
   }
@@ -528,7 +535,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>
       {lens === "graph" ? <p>{zh ? "按来源分组，实线为已记录关联，虚线仅表示分组；排列不代表时间或进展。未关联问题按首次记录 UTC 日期收纳。" : "Grouped by source. Solid lines are recorded relationships; dotted lines only group nodes. Position does not imply time or progress. Unlinked questions are collected by first-record UTC date."}</p> : null}
       <p>{zh ? "合拢仅为避免遮挡，不表示关联或因果；选择一次可读全部原始记录与依据。" : "Nearby points group to avoid overlap, without implying a relationship or causality. Select once to read every original record and source."}</p>
-    </ContextHelp></div>
+    </ContextHelp>{hasNativeSource && !emptySourceHistory ? <button type="button" className="research-strategy-entry" ref={element => {if (element) strategies.opener.current = element;}}
+      onClick={() => strategies.choose("all")}>{zh ? "策略历史" : "Strategy history"}</button> : null}</div>
       </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         {!emptySourceHistory ? <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
@@ -559,18 +567,15 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </div>
       <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
-    {emptySourceHistory ? <div className="research-history-empty research-history-source-empty">
-      <div>
+    {emptySourceHistory ? <>
+      <div className="research-history-empty research-history-source-empty"><div>
         <p role="status">{zh ? "这份来源没有可读的 Explore 记录。" : "This source has no readable Explore records."}</p>
-        {sourceStrategy ? <div className="research-source-strategy">
-          <strong>{zh ? "最近一条策略记录" : "Last recorded strategy"}</strong>
-          <time dateTime={sourceStrategy.recordedAt}>{timeLabel(sourceStrategy.recordedAt)}</time>
-          <p>{sourceStrategy.summary}</p>
-          {sourceStrategy.observation && sourceStrategy.observation !== sourceStrategy.summary ? <p>{sourceStrategy.observation}</p> : null}
-        </div> : null}
       </div>
       {onOpenSourceTasks ? <button type="button" onClick={onOpenSourceTasks}>{zh ? "查看原实验任务" : "View original tasks"}</button> : null}
-    </div> : emptyHistory && !emptyWithAnalysis ? <div className="research-history-empty">
+      </div>
+      <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
+        sourceUrl={readSourceUrl} zh={zh} selection={strategies.selection ?? "all"} onSelect={strategies.choose} embedded/>
+    </> : emptyHistory && !emptyWithAnalysis ? <div className="research-history-empty">
       <div role="status"><strong>{emptyHistoryMessage}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
