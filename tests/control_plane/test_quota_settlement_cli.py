@@ -2868,15 +2868,20 @@ def test_open_completion_todo_accepts_only_matching_in_flight_writeback(
     )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _append_newly_due_monitor(project)
     prior_turn_id = "turn-unsettled-prior"
 
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     prior_rc, prior = _run_cli(
         registry_path,
         runtime,

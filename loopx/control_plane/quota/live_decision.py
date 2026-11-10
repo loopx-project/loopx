@@ -68,11 +68,14 @@ def _receipt_bound_guard_fields(
     }
 
 
-def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
-    """Dispatch the typed historical ACK without hiding pending current closeout."""
+def _receipt_replan_settlement_required(
+    payload: Mapping[str, Any], replay_phase: ReceiptBoundReplayPhase | None,
+) -> bool:
+    """Keep the typed original ACK or pending writeback on its closeout path."""
     packet = payload.get("replan_action_packet")
     return (isinstance(packet, Mapping) and packet.get("settlement_only") is True
-            and packet.get("decision") == "historical_ack_recorded")
+            and (packet.get("decision") == "historical_ack_recorded"
+                 or replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING))
 
 
 def _project_receipt_replan_settlement(
@@ -83,7 +86,7 @@ def _project_receipt_replan_settlement(
     goal_ref: Mapping[str, Any] | None,
 ) -> None:
     """Project closeout from the original readback, never the current selection."""
-    if not readback or not _historical_ack_writeback_required(payload):
+    if not readback or not _receipt_replan_settlement_required(payload, readback.replay_phase):
         return
     attach_settlement_progress(payload, readback, registry_path=registry_path,
         runtime_root=runtime_root, goal_ref=goal_ref)
@@ -597,11 +600,15 @@ def _receipt_bound_recovery_todo(
     """Keep finished/replan-only Turns out of generic Todo wait recovery."""
     if (not receipt_bound_todo_id or not agent_id or not turn_instance_id
             or replay_phase is ReceiptBoundReplayPhase.SETTLED
-            or _historical_ack_writeback_required(payload)
             or payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value):
         return None
+    # A Todo-backed review with verified writeback still uses the existing
+    # current-Turn, spend-only recovery contract. An ACK without writeback does
+    # not enter that phase and keeps its receipt-bound replan settlement route.
     if replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
         return receipt_bound_todo_id
+    if (payload.get("replan_action_packet") or {}).get("settlement_only") is True:
+        return None
     selected_value = payload.get("selected_todo")
     selected = selected_value if isinstance(selected_value, Mapping) else {}
     if (selected.get("todo_id") != receipt_bound_todo_id
@@ -871,7 +878,7 @@ def build_live_quota_should_run_decision(
     # unsettled Turn here can overwrite the settled-skip route with a recovery
     # obligation and then select a successor against the immutable receipt
     # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
-    original_replan_settlement = _historical_ack_writeback_required(payload)
+    original_replan_settlement = _receipt_replan_settlement_required(payload, receipt_bound_replay_phase)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
