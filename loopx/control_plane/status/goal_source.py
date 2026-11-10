@@ -42,6 +42,17 @@ if path.exists():
     if len(data) > 16 * 1024 * 1024: raise ValueError('log too large')
     sys.stdout.buffer.write(data)
 """
+_READ_DOCUMENT = """
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if not path.is_absolute():
+    root = pathlib.Path(sys.argv[2])
+    if not root.is_absolute(): raise ValueError('relative document needs its original repository')
+    path = root / path
+with path.open('rb') as f: data = f.read(128 * 1024 + 1)
+if len(data) > 128 * 1024: raise ValueError('document too large')
+print(json.dumps({'text': data.decode('utf-8')}))
+"""
 
 
 class SourceScopeError(ValueError):
@@ -375,8 +386,27 @@ class GoalSourceReader:
         return {"ok": True, "goal_id": goal_id, "source": self.source.describe(), **projected}
 
     def document(self, goal_id):
-        from ...presentation.goal_source_document import read_goal_document
-        return read_goal_document(self, goal_id)
+        from ..effect_runtime import effect_runtime_result
+
+        if goal_id is None:
+            raise ValueError("Choose an original Goal before reading its document")
+        self.registered_status(goal_id, fresh=True)
+        source = self.source
+        before = source.read_registry_goal(goal_id)
+        plan = effect_runtime_result("presentation.goal_sources.document_plan", {
+            "goal_id": goal_id, "registration": before,
+            "snapshot": asdict(source.goal_document_snapshot) if source.goal_document_snapshot else None,
+        })
+        source.check_access(goal_id)
+        document = json.loads(source._execute([
+            source.python, "-c", _READ_DOCUMENT, plan["path"], plan["repo"],
+        ]))
+        after = source.read_registry_goal(goal_id)
+        self.registered_status(goal_id, fresh=True)
+        projected = effect_runtime_result("presentation.goal_sources.document", {
+            "plan": plan, "registration": after, "document": document,
+        })
+        return {"ok": True, "goal_id": goal_id, "source": source.describe(), **projected}
 
     def findings(self, goal_id, cursor="", *, projector):
         """Read saved evidence; this transport has no complete task-list view."""
