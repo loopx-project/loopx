@@ -453,8 +453,8 @@ def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_pa
 def test_complete_turn_composition_failure_preserves_original_guard_and_recovers(tmp_path, monkeypatch, capsys, provider):
     import hashlib
     from loopx.cli import main
+    from loopx.cli_commands import quota as quota_cli
     from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
-    from loopx.control_plane.quota import turn_envelope
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
@@ -468,7 +468,9 @@ def test_complete_turn_composition_failure_preserves_original_guard_and_recovers
         raise EffectRuntimeStartupError("synthetic complete-context transport unavailable", diagnostic_code="fixture_unavailable")
     with monkeypatch.context() as fault:
         fault.chdir(project)
-        fault.setattr(turn_envelope, "compose_turn_decision", unavailable)
+        # The CLI caches lazy exports after first use. Patch its actual call
+        # boundary so this fault also fires after earlier in-process guards.
+        fault.setattr(quota_cli, "compose_turn_decision", unavailable)
         assert main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             *command, "--decision-output-dir", str(directory)]) == 1
         failed = json.loads(capsys.readouterr().out)
