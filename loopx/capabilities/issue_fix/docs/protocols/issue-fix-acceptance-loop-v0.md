@@ -60,8 +60,11 @@ Git pathnames that are valid UTF-8 are preserved literally. A pathname
 with invalid UTF-8 is shown only as a `git-bytes:<repr(bytes)>` diagnostic;
 the artifact records `changed_files_unrepresentable_count`, and
 `review_packet.ready` stays false because that diagnostic is not an
-openable repo-relative UTF-8 pathname. Reviewers must inspect the local
-checkout before proceeding.
+openable repo-relative UTF-8 pathname. The list fields remain capped at 20
+display entries, while `changed_file_count` and the unrepresentable count are
+derived from every unique Git path across all change sources before that
+projection; readiness therefore does not depend on diff order. Reviewers must
+inspect the local checkout before proceeding when the count is nonzero.
 Without `--execute`, the command is a dry-run plan and does not inspect or
 modify the local repository.
 

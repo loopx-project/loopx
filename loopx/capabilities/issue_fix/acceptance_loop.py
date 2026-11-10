@@ -297,20 +297,16 @@ def _base_snapshot(workspace: Path, base_branch: str) -> dict[str, Any]:
 
 def _changed_files(
     workspace: Path, *, base_branch: str
-) -> tuple[list[str], bool, int]:
+) -> tuple[list[str], bool, int, int]:
     files: list[bytes] = []
-    truncated = False
+    seen: set[bytes] = set()
 
     def add_paths(paths: list[bytes]) -> None:
-        nonlocal truncated
         for path in paths:
-            if not path or path.startswith(b"/"):
+            if not path or path.startswith(b"/") or path in seen:
                 continue
-            if path not in files:
-                files.append(path)
-            if len(files) >= 20:
-                truncated = True
-                return
+            seen.add(path)
+            files.append(path)
 
     if _git_branch_exists(workspace, base_branch):
         result = _run_git_paths(
@@ -329,11 +325,12 @@ def _changed_files(
     add_paths(_git_untracked_paths(workspace))
     displayed: list[str] = []
     unrepresentable_count = 0
-    for path in files[:20]:
+    for path in files:
         display, unrepresentable = _display_git_path(path)
-        displayed.append(display)
+        if len(displayed) < 20:
+            displayed.append(display)
         unrepresentable_count += int(unrepresentable)
-    return displayed, truncated, unrepresentable_count
+    return displayed, len(files) > 20, unrepresentable_count, len(files)
 
 
 # Caller-validation execution (_run_caller_validation / _require_passed) is
@@ -741,6 +738,7 @@ def build_issue_fix_caller_repo_branch_packet(
     changed_files: list[str] = []
     changed_files_truncated = False
     changed_files_unrepresentable_count = 0
+    changed_file_count = 0
 
     if execute:
         if not workspace.exists() or not workspace.is_dir():
@@ -800,6 +798,7 @@ def build_issue_fix_caller_repo_branch_packet(
             changed_files,
             changed_files_truncated,
             changed_files_unrepresentable_count,
+            changed_file_count,
         ) = _changed_files(workspace, base_branch=base)
 
     review_ready = bool(
@@ -824,7 +823,7 @@ def build_issue_fix_caller_repo_branch_packet(
         "changed_files": changed_files,
         "changed_files_truncated": changed_files_truncated,
         "changed_files_unrepresentable_count": changed_files_unrepresentable_count,
-        "changed_file_count": len(changed_files),
+        "changed_file_count": changed_file_count,
     }
     packet: dict[str, Any] = {
         "ok": True,
@@ -1036,12 +1035,37 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
                 errors.append("changed files must be repo-relative public-safe paths")
     else:
         errors.append("changed_files must be a list")
+    changed_file_count = artifact.get("changed_file_count")
+    changed_files_truncated = artifact.get("changed_files_truncated")
+    if not isinstance(changed_files_truncated, bool):
+        errors.append("changed_files_truncated must be a boolean")
+    if (
+        not isinstance(changed_file_count, int)
+        or isinstance(changed_file_count, bool)
+        or changed_file_count < 0
+        or (isinstance(files, list) and changed_file_count < len(files))
+        or (
+            isinstance(files, list)
+            and changed_files_truncated is False
+            and changed_file_count != len(files)
+        )
+        or (
+            isinstance(files, list)
+            and changed_files_truncated is True
+            and changed_file_count <= len(files)
+        )
+    ):
+        errors.append("changed_file_count must cover the exact public list scope")
     unrepresentable_count = artifact.get("changed_files_unrepresentable_count", 0)
     if (
         not isinstance(unrepresentable_count, int)
         or isinstance(unrepresentable_count, bool)
         or unrepresentable_count < 0
-        or (isinstance(files, list) and unrepresentable_count > len(files))
+        or (
+            isinstance(changed_file_count, int)
+            and not isinstance(changed_file_count, bool)
+            and unrepresentable_count > changed_file_count
+        )
     ):
         errors.append("changed_files_unrepresentable_count must be a bounded count")
     review = (
@@ -1059,8 +1083,9 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
         not isinstance(review_unrepresentable_count, int)
         or isinstance(review_unrepresentable_count, bool)
         or review_unrepresentable_count < 0
+        or review_unrepresentable_count != unrepresentable_count
     ):
-        errors.append("files_changed_unrepresentable_count must be a non-negative count")
+        errors.append("files_changed_unrepresentable_count must match the artifact")
     if unrepresentable_count and review.get("ready") is True:
         errors.append("review packet is not ready while changed paths are unrepresentable")
     return {

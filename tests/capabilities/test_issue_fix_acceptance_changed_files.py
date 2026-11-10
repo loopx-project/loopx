@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -13,6 +14,7 @@ from loopx.capabilities.issue_fix.acceptance_loop import (
     _changed_files,
     build_issue_fix_caller_repo_branch_packet,
 )
+from tests.source_cli import run_source_cli
 
 
 def _repository(tmp_path: Path) -> Path:
@@ -46,7 +48,7 @@ def test_untracked_names_keep_the_bytes_git_reported(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted(names)
@@ -66,7 +68,7 @@ def test_committed_staged_and_untracked_sources_agree(tmp_path: Path) -> None:
     subprocess.run(["git", "-C", str(repo), "add", staged], check=True)
     (repo / untracked).write_text("untracked\n", encoding="utf-8")
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted([committed, staged, untracked])
@@ -78,7 +80,7 @@ def test_a_rename_reports_only_the_new_name(tmp_path: Path) -> None:
         ["git", "-C", str(repo), "mv", "tracked.txt", "renamed.txt"], check=True
     )
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert files == ["renamed.txt"], "the rename source leaked into the change list"
@@ -90,9 +92,10 @@ def test_more_than_twenty_changes_stop_at_the_limit(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, full_count = _changed_files(repo, base_branch="main")
 
     assert truncated is True
+    assert full_count == 25
     assert len(files) == 20
     assert files == sorted(names)[:20]
 
@@ -128,7 +131,7 @@ def test_a_carriage_return_is_not_folded_into_a_newline(tmp_path: Path) -> None:
     for name in names:
         (repo / name).write_text("content\n", encoding="utf-8")
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted(names)
@@ -146,7 +149,7 @@ def test_committed_and_staged_carriage_return_names_survive(tmp_path: Path) -> N
     (repo / staged).write_text("staged\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", staged], check=True)
 
-    files, truncated, _ = _changed_files(repo, base_branch="main")
+    files, truncated, _, _ = _changed_files(repo, base_branch="main")
 
     assert truncated is False
     assert sorted(files) == sorted([committed, staged])
@@ -300,7 +303,7 @@ def test_untracked_byte_paths_keep_three_distinct_records(
 
     monkeypatch.setattr(acceptance_loop, "_run_git_paths", fake_run_git_paths)
     paths = acceptance_loop._git_untracked_paths(repo)
-    files, truncated, unrepresentable_count = _changed_files(
+    files, truncated, unrepresentable_count, full_count = _changed_files(
         repo, base_branch="main"
     )
     displayed = [
@@ -314,6 +317,93 @@ def test_untracked_byte_paths_keep_three_distinct_records(
     ]
     assert truncated is False
     assert unrepresentable_count == 2
+    assert full_count == 3
     assert files == displayed
     assert displayed[0] == "lossy-\ufffd.txt"
     assert len(set(displayed)) == 3
+
+
+@pytest.mark.skipif(os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only")
+def test_truncated_packet_checks_every_path_regardless_of_diff_order(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    names = [f"a{index:02d}.txt" for index in range(25)]
+    for name in names:
+        (repo / name).write_text("valid\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", *names], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "valid files"], check=True)
+
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input=b"byte path\n", stdout=subprocess.PIPE, check=True,
+    ).stdout.strip()
+    path_bytes = b"z-\xff.txt"
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "-z", "--index-info"],
+        input=b"100644 " + blob + b" 0\t" + path_bytes + b"\0", check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "byte path"], check=True
+    )
+    marker = "git-bytes:" + repr(path_bytes)
+    command = [
+        "--format", "json", "issue-fix", "caller-repo-branch",
+        "--repo-path", str(repo), "--base-branch", "main",
+        "--issue-branch", "issue", "--validation-command", "true",
+        "--execute",
+    ]
+
+    def run_packet() -> dict:
+        completed = run_source_cli(command, cwd=repo, timeout=60)
+        return json.loads(completed.stdout)
+
+    default = run_packet()
+    assert default["ok"] is True
+    assert default["caller_repo_branch"]["changed_file_count"] == 26
+    assert default["caller_repo_branch"]["changed_files_truncated"] is True
+    assert default["caller_repo_branch"]["changed_files_unrepresentable_count"] == 1
+    assert len(default["caller_repo_branch"]["changed_files"]) == 20
+    assert default["review_packet"]["ready"] is False
+    assert marker not in default["caller_repo_branch"]["changed_files"]
+
+    order_file = tmp_path / "diff-order"
+    order_file.write_text("z*\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "diff.orderFile", str(order_file)],
+        check=True,
+    )
+    reordered = run_packet()
+    assert reordered["ok"] is True
+    assert reordered["caller_repo_branch"]["changed_file_count"] == 26
+    assert reordered["caller_repo_branch"]["changed_files_truncated"] is True
+    assert reordered["caller_repo_branch"]["changed_files_unrepresentable_count"] == 1
+    assert reordered["review_packet"]["files_changed_unrepresentable_count"] == 1
+    assert reordered["review_packet"]["ready"] is False
+    assert reordered["caller_repo_branch"]["changed_files"][0] == marker
+
+    subprocess.run(
+        [
+            b"git", b"-C", os.fsencode(str(repo)), b"reset", b"--soft", b"main"
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            b"git", b"-C", os.fsencode(str(repo)), b"rm", b"--cached", b"--",
+            path_bytes,
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "valid files"], check=True
+    )
+
+    recovered = run_packet()
+    assert recovered["ok"] is True
+    assert recovered["caller_repo_branch"]["changed_file_count"] == 25
+    assert recovered["caller_repo_branch"]["changed_files_truncated"] is True
+    assert recovered["caller_repo_branch"]["changed_files_unrepresentable_count"] == 0
+    assert recovered["review_packet"]["files_changed_unrepresentable_count"] == 0
+    assert len(recovered["caller_repo_branch"]["changed_files"]) == 20
+    assert recovered["review_packet"]["ready"] is True
