@@ -37,6 +37,7 @@ async function checkReturnedFiles(ready, page, errors, writes) {
   await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
   const timeline = page.locator(".personal-channel-timeline");
   await timeline.getByText("结果已核验 / Verified result", {exact: true}).waitFor();
+  await page.waitForFunction(() => document.body.innerText.includes("已连接"));
   const baseline = process.env.LOOPX_REPLY_BEFORE === "1";
   if (baseline) {
     assert.equal(answer.attachments?.length ?? 0, 0);
@@ -95,7 +96,8 @@ async function checkReturnedFiles(ready, page, errors, writes) {
   assert.equal(inspection.reply_evidence_unchanged, true);
   assert.deepEqual(errors, []);
   assert.ok(!writes.some(path => /\/turns(?:\/|$)/u.test(path)), "Reading cannot submit a Turn");
-  console.log(`returned-files-browser: ${baseline ? "baseline reproduced" : "passed"} (real publisher, bound source, original history/reader, byte-exact downloads, desktop/narrow, keyboard, English, zero model Turns or repeat sends)`);
+  console.log(baseline ? "returned-files-browser: baseline reproduced (published files omitted from history and full reader; zero model Turns or repeat sends)"
+    : "returned-files-browser: passed (real publisher, bound source, original history/reader, byte-exact downloads, desktop/narrow, keyboard, English, zero model Turns or repeat sends)");
 }
 try {
   const ready = await next();
