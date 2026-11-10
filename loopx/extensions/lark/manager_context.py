@@ -37,7 +37,7 @@ def opaque_digest(*values: Any) -> str:
 
 def manager_failure_reply(
     error: Exception | Mapping[str, Any], *, retry_info: Any = None,
-    preparation_recovery: bool = False,
+    preparation_recovery: bool = False, phase_events: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
@@ -51,6 +51,8 @@ def manager_failure_reply(
         "unauthorized": "上游身份验证失败",
         "idle_timeout": "等待上游响应超时",
         "hard_timeout": "处理超过时间限制",
+        "response_timeout": "等待助手响应超时",
+        "antigravity_step_error": "原生助手调用失败",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
         # host_gate is a generic host failure. It does not establish whether
@@ -74,6 +76,24 @@ def manager_failure_reply(
         else getattr(error, "error_code", "")
     )
     code = code if code in labels else "processing_failed"
+    events = phase_events or []
+    if code == "host_gate" and retry_info is None:
+        retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
+            for event in reversed(events) if event.get("kind") == "agent.phase"
+            and event.get("payload", {}).get("method") == "error"), None)
+    timeout_info = next((event.get("payload", {}).get("timeout")
+        for event in reversed(events) if event.get("kind") == "agent.phase"
+        and event.get("payload", {}).get("method") == "native/timeout"), None) if code == "response_timeout" else None
+    if code == "response_timeout" and isinstance(timeout_info, Mapping):
+        # Use only the adapter's typed observation. Do not infer the deadline
+        # from error prose or publish arbitrary host diagnostics.
+        kind = timeout_info.get("kind")
+        if isinstance(kind, str) and kind in {"idle", "hard"}:
+            label = "等待原生助手有效进展超时" if kind == "idle" else "原生助手达到本次执行时限"
+            count = timeout_info.get("native_error_count")
+            observed = "期间原生助手记录了调用错误。" if type(count) is int and count > 0 else ""
+            return code, (f"本次未能完成：{label}。{observed}"
+                          "没有生成完整答复，本次请求不会自动重放。")
     if code == "manager_authorization_unavailable" and preparation_recovery:
         return code, ("已收到你的消息，但本轮在准备授权上下文时失败。请求已保留；只有核验为模型调用前失败、"
                       "连接恢复且没有后续重交时，原队列才会限次接续。可用 /status 查看状态。")
