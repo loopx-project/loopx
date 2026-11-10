@@ -76,6 +76,24 @@ test("deferred dependency work retains the original Turn's blocked closeout proo
 });
 
 
+test("corrupt calendars and offset-less clocks are not bounded retries", () => {
+  const retry = (observed: string, due: string) => ({
+    schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+    todo_id: "todo_waiting", observed_at: observed, due_at: due,
+    resume_when: `resume_at:${due}`,
+  });
+  assert.equal(isBoundedBlockedRetry(retry("2026-01-01T00:00:00Z", "2026-01-01T00:05:00Z"), "todo_waiting"), true);
+  assert.equal(isBoundedBlockedRetry(retry("2026-01-01T08:00:00+08:00", "2026-01-01T08:05:00+08:00"), "todo_waiting"), true);
+  for (const [observed, due] of [
+    ["2026-02-30T00:00:00Z", "2026-02-30T00:05:00Z"],
+    ["2026-01-01T00:00:00", "2026-01-01T00:05:00"],
+    ["2026-01-01T23:50:00Z", "2026-01-01T24:00:00Z"],
+    ["2026-01-01T00:00:00+0000", "2026-01-01T00:05:00+0000"],
+  ] as const) {
+    assert.equal(isBoundedBlockedRetry(retry(observed, due), "todo_waiting"), false, due);
+  }
+});
+
 test("a PR wait gives a causal recovery route without accepting caller-authored PR evidence", () => {
   const request = fixture("todo_done");
   request.todos[0].resume_when = "pr_merged:example/project#1";

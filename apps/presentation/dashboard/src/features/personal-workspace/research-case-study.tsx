@@ -1,4 +1,4 @@
-import {useId} from 'react';
+import {useEffect, useRef} from 'react';
 import type {TrajectoryCaseStudy} from '../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js';
 import type {AssessmentCitation} from '../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js';
 import {MarkdownText} from './markdown';
@@ -44,42 +44,88 @@ function CaseSeries({series, zh}: {series: Series; zh: boolean}) {
   </figure>;
 }
 
+export const caseChapterHashPrefix = '#case-section-';
+
+function focusChapter(chapter: HTMLElement) {
+  chapter.focus({preventScroll: true});
+  chapter.scrollIntoView({block: 'start'});
+}
+
 /** A document's author controls the composition; the host owns navigation and evidence. */
-export function ResearchCaseStudy({study, zh, historical, scope, onCitation}: {
+export function ResearchCaseStudy({study, zh, historical, scope, navigation, onCitation}: {
   study: TrajectoryCaseStudy; zh: boolean; historical: boolean;
   scope: {case_id: string; run_id: string; revision: string; window: string};
+  navigation: {url: URL; goalId: string; packId: string; namespace: string | null; follow: (href: URL) => void};
   onCitation: (c: AssessmentCitation, origin?: HTMLButtonElement) => void;
 }) {
-  const id = useId().replace(/:/g, '');
-  const sources = (citations: AssessmentCitation[]) => <details className="case-sources"><summary>{zh ? '依据与原文' : 'Evidence and originals'}</summary>
-    {citations.map((c, i) => <button key={i} type="button" onClick={e => onCitation(c, e.currentTarget)}>
-      {c.source_id} · {c.first_line}–{c.last_line} ↗</button>)}
-  </details>;
-  return <article className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
+  const article = useRef<HTMLElement>(null);
+  const {url, goalId, packId, namespace, follow} = navigation;
+  const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
+  useEffect(() => {
+    // The URL can arrive before the saved study is mounted, or while history
+    // switches to another Goal/version. Only restore a visible matching chapter.
+    let frame = 0;
+    const restore = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const {searchParams, hash} = new URL(window.location.href);
+        if (searchParams.get('view') !== 'research' || searchParams.get('research_reading') !== 'case'
+          || searchParams.get('research_goal') !== goalId || searchParams.get('research_analysis_goal') !== goalId
+          || searchParams.get('research_pack') !== packId || !hash.startsWith(`#${prefix}`)) return;
+        const chapter = document.getElementById(hash.slice(1));
+        if (chapter && article.current?.contains(chapter) && chapter.getClientRects().length) focusChapter(chapter);
+      });
+    };
+    restore();
+    window.addEventListener('popstate', restore);
+    window.addEventListener('hashchange', restore);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('popstate', restore);
+      window.removeEventListener('hashchange', restore);
+    };
+  }, [goalId, packId, prefix]);
+  const citationLinks = (citations: AssessmentCitation[]) => <ul className="case-citation-links" role="list">
+    {citations.map((c, i) => <li key={i}><button type="button" onClick={e => onCitation(c, e.currentTarget)}>
+      {c.source_id} · {zh ? '行' : 'lines'} {c.first_line}–{c.last_line} <span aria-hidden="true">↗</span>
+    </button></li>)}
+  </ul>;
+  return <article ref={article} className="research-case-study" lang={study.language === 'zh' ? 'zh-CN' : 'en'}>
     <header className="case-opening">
       <p className="case-eyebrow">{scope.case_id} <span>· {zh ? 'Case 深度解读' : 'Case study'}</span></p>
       <h2>{study.title}</h2>
       <div className="case-lead"><MarkdownText text={study.summary}/></div>
       {historical ? <p className="case-read-warning" role="status">{zh ? '来源已变化或暂不可读。下文保留注册时的解读与证据快照，不能视作当前结果。' : 'The source changed or is unavailable. This reading and its evidence snapshot describe the registered version, not current results.'}</p> : null}
       {study.language !== (zh ? 'zh' : 'en') ? <p className="case-original-language">{zh ? '显示已保存的英文原文。' : 'Showing the saved Chinese original.'}</p> : null}
-      <details className="case-provenance"><summary>{zh ? '范围与来源' : 'Scope and provenance'}</summary>
+      <details className="case-provenance"><summary>{zh ? '结论依据与范围' : 'Conclusion evidence and scope'}</summary>
+        {citationLinks(study.citations)}
         <p>{zh ? '已保存的作者分析；来源绑定不代表结论已独立验证。' : 'Saved author analysis; source binding does not independently verify the conclusions.'}</p>
         <dl><dt>{zh ? '观察窗口' : 'Window'}</dt><dd>{scope.window}</dd><dt>{zh ? '运行' : 'Run'}</dt><dd>{scope.run_id}</dd><dt>{zh ? '版本' : 'Revision'}</dt><dd>{scope.revision}</dd></dl>
-        {sources(study.citations)}
       </details>
     </header>
     <div className="case-reading-layout">
-      <nav className="case-outline" aria-label={zh ? '解读目录' : 'Study contents'}>{study.sections.map((s, n) =>
-        <button type="button" key={s.id} onClick={() => {const target = document.getElementById(`${id}-${s.id}`); target?.focus({preventScroll: true}); target?.scrollIntoView({block: 'start'});}}>
-          <span>{String(n + 1).padStart(2, '0')}</span>{s.title}</button>)}</nav>
-      <div className="case-sections">{study.sections.map((s, n) => <section className="case-section" key={s.id} id={`${id}-${s.id}`} tabIndex={-1}>
+      <nav className="case-outline" aria-label={zh ? '解读目录' : 'Study contents'}>{study.sections.map((s, n) => {
+        const id = prefix + s.id;
+        const href = new URL(url);
+        href.hash = id;
+        return <a key={s.id} href={href.href} onClick={e => {
+          if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+          e.preventDefault();
+          follow(href);
+          const chapter = document.getElementById(id);
+          if (chapter && article.current?.contains(chapter)) focusChapter(chapter);
+        }}><span>{String(n + 1).padStart(2, '0')}</span>{s.title}</a>;
+      })}</nav>
+      <div className="case-sections">{study.sections.map((s, n) => <section className="case-section" key={s.id} id={prefix + s.id} tabIndex={-1}>
         <div className="case-section-number">{String(n + 1).padStart(2, '0')}</div><h3>{s.title}</h3>
         <MarkdownText text={s.text}/>
         {s.series ? <CaseSeries series={s.series} zh={zh}/> : null}
         {s.table ? <div className="case-table-scroll" tabIndex={0} role="region" aria-label={s.title}><table><thead><tr>{s.table.columns.map((c, i) => <th key={i} scope="col">{c}</th>)}</tr></thead>
           <tbody>{s.table.rows.map((row, i) => <tr key={i}>{row.map((cell, j) => j === 0 ? <th key={j} scope="row">{cell}</th> : <td key={j}><MarkdownText text={cell}/></td>)}</tr>)}</tbody></table></div> : null}
         {s.timeline ? <ol className="case-timeline">{s.timeline.map((event, i) => <li key={i}><span className="case-event-label">{event.label}</span><div><h4>{event.title}</h4><MarkdownText text={event.text}/></div></li>)}</ol> : null}
-        {sources(s.citations)}
+        <details className="case-sources"><summary>{zh ? '依据与原文' : 'Evidence and originals'}</summary>
+          {citationLinks(s.citations)}
+        </details>
       </section>)}
         {study.limitations.length ? <section className="case-section case-limitations"><h3>{zh ? '这份解读还缺什么' : 'What this reading cannot resolve'}</h3><ul>{study.limitations.map((text, i) => <li key={i}>{text}</li>)}</ul></section> : null}
       </div>

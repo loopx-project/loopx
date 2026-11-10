@@ -804,7 +804,10 @@ def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | 
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
         "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements", "work_yardstick",
     )
-    return [{key: event[key] for key in fields if key in event} for event in events]
+    from ...control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
+
+    return project_work_yardstick_presentations(
+        [{key: event[key] for key in fields if key in event} for event in events], goal_id=goal_id)
 
 
 def _fold_by_result_id(
@@ -999,8 +1002,9 @@ def _mermaid_label(text: str) -> str:
     return cleaned[:60].strip() or "untitled"
 
 
-def _mermaid_id(node_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]", "_", str(node_id))
+def explore_mermaid_node_id(node_id: str) -> str:
+    """Encode identity losslessly, outside Mermaid keywords and layout IDs."""
+    return "n_" + str(node_id).encode("utf-8").hex()
 
 
 def build_explore_mermaid(
@@ -1015,7 +1019,7 @@ def build_explore_mermaid(
     shown = list(nodes)[:node_limit]
     shown_ids = {str(node.get("node_id")) for node in shown}
     for node in shown:
-        node_id = _mermaid_id(str(node.get("node_id")))
+        node_id = explore_mermaid_node_id(str(node.get("node_id")))
         status = str(node.get("status") or NODE_STATUS_OPEN)
         marker = {"blocked": " (BLOCKED)", "resolved": " (done)", "dead_end": " (dead end)"}.get(
             status, ""
@@ -1028,7 +1032,7 @@ def build_explore_mermaid(
         if from_node not in shown_ids or to_node not in shown_ids:
             continue
         label = _mermaid_label(str(edge.get("edge_type") or ""))
-        lines.append(f"    {_mermaid_id(from_node)} -->|{label}| {_mermaid_id(to_node)}")
+        lines.append(f"    {explore_mermaid_node_id(from_node)} -->|{label}| {explore_mermaid_node_id(to_node)}")
     if len(nodes) > node_limit:
         lines.append(f"    %% {len(nodes) - node_limit} more nodes omitted")
     lines.extend(

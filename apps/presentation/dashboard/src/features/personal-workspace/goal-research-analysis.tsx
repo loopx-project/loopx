@@ -7,7 +7,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
-import {ResearchCaseStudy} from "./research-case-study";
+import {ResearchCaseStudy, caseChapterHashPrefix} from "./research-case-study";
 import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
@@ -30,6 +30,12 @@ type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; 
 type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]; unreadable_pack_ids?: string[]}; pack: Pack | null;
   originalPack?: Pack | null; originalReadError?: string};
 type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
+type EvidenceRead = {
+  scope: string;
+  busy?: boolean;
+  value?: Citation;
+  failure?: {message: string; route: string; selection: Record<string, string>};
+};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -86,12 +92,15 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
       || !["observed", "unavailable"].includes(value.comparison.status)) throw new Error("Comparison readback unavailable");
     return value.comparison;
   }, [goalId, readSourceUrl, outputLanguage]);
-  const [citation, setCitation] = useState<Citation | null>(null);
-  const [citationError, setCitationError] = useState("");
-  const [citationBusy, setCitationBusy] = useState(false);
+  const [evidenceRead, setEvidenceRead] = useState<EvidenceRead | null>(null);
   const citeGeneration = useRef(0);
   const sourcePanel = useRef<HTMLElement>(null);
   const sourceTrigger = useRef<HTMLButtonElement | null>(null);
+  const invalidateCitation = useCallback(() => {
+    citeGeneration.current++;
+    sourceTrigger.current = null;
+    setEvidenceRead(null);
+  }, []);
   const [location, setLocation] = useState(() => locationFor(goalId));
   const sourceScope = JSON.stringify([goalId, outputLanguage, readSourceUrl ?? ""]);
   const [readState, setReadState] = useState<{scope: string; packId: string | null; snapshot: Snapshot | null; error: string; loading: boolean}>(
@@ -145,14 +154,14 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     // pending reads/actions before a new scope can display the old snapshot.
     if (scope.current.packId !== next.packId) {
       generation.current++; readSequence.current++; submitting.current = false;
-      citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);
+      invalidateCitation();
       setPending(false); setCancelPending(false); setError("");
       setReadState(previous => ({scope: sourceScope, packId: next.packId, snapshot: previous.scope === sourceScope && previous.snapshot
         ? previous.snapshot.pack?.pack_id === next.packId ? previous.snapshot : {...previous.snapshot, pack: null, originalPack: null, originalReadError: ""} : null, error: "", loading: true}));
     }
     scope.current = {goalId, packId: next.packId, outputLanguage, sourceScope};
     setLocation(next);
-  }, [goalId, outputLanguage, sourceScope]);
+  }, [goalId, outputLanguage, sourceScope, invalidateCitation]);
   useEffect(() => {
     generation.current++; submitting.current = false;
     applyLocation(locationFor(goalId));
@@ -171,8 +180,16 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const currentSnapshot = snapshot;
   const pack = currentSnapshot?.pack ?? null;
   const readingPack = currentSnapshot?.originalPack ?? pack;
+  // A saved original and a later result in the requested language can share
+  // the selection and pack ID. Evidence belongs to the result being displayed.
+  const evidenceScope = readingPack ? JSON.stringify([sourceScope, readingPack.pack_id, readingPack.analysis_key]) : null;
+  const visibleEvidence = evidenceRead?.scope === evidenceScope ? evidenceRead : null;
+  const citation = visibleEvidence?.value ?? null;
+  const citationBusy = Boolean(visibleEvidence?.busy);
+  const failedCitation = visibleEvidence?.failure;
+  const citationError = failedCitation?.message ?? "";
   const savedOriginal = Boolean(currentSnapshot?.originalPack);
-  useEffect(() => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false);}, [goalId, readSourceUrl, snapshot?.pack?.pack_id, snapshot?.pack?.analysis_key]);
+  useLayoutEffect(invalidateCitation, [evidenceScope, invalidateCitation]);
   useEffect(() => {
     if ((!citation && !citationBusy && !citationError) || !active) return;
     // A response can arrive before React mounts the source panel. Move only
@@ -196,14 +213,31 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     timer = setTimeout(poll, 1000);
     return () => {stopped = true; clearTimeout(timer);};
   }, [active, location.open, pending, recordedRunning, read]);
-  const navigate = (open: boolean, packId = location.packId, push = false) => {
+  const analysisUrl = (open: boolean, packId: string | null) => {
     const url = new URL(window.location.href);
     if (packId) {url.searchParams.set("research_pack", packId); url.searchParams.set("research_analysis_goal", goalId);}
     else {url.searchParams.delete("research_pack"); url.searchParams.delete("research_analysis_goal");}
     if (open) url.searchParams.set("research_analysis", goalId);
     else url.searchParams.delete("research_analysis");
+    return url;
+  };
+  const navigate = (open: boolean, packId = location.packId, push = false) => {
+    const url = analysisUrl(open, packId);
+    if (packId !== location.packId && url.hash.startsWith(caseChapterHashPrefix)) url.hash = "";
     window.history[push ? "pushState" : "replaceState"](window.history.state, "", url);
     applyLocation({open, packId});
+  };
+  const studyNavigation = (packId: string) => {
+    const url = analysisUrl(location.open, packId);
+    url.searchParams.set("goalId", goalId);
+    url.searchParams.set("view", "research");
+    url.searchParams.set("research_goal", goalId);
+    url.searchParams.set("research_reading", "case");
+    const namespace = readSourceUrl ? new URL(readSourceUrl, url).searchParams.get("source_namespace") : null;
+    return {url, goalId, packId, namespace, follow: (href: URL) => {
+      if (href.href !== window.location.href) window.history.pushState(window.history.state, "", href);
+      if (location.packId !== packId) applyLocation({open: location.open, packId});
+    }};
   };
   const show = () => {
     navigate(true, pack?.pack_id ?? location.packId, !location.open);
@@ -233,20 +267,32 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   };
   const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLButtonElement) => {
     const p = readingPack;
-    if (!p) return;
+    if (!p || evidenceScope === null) return;
     if (origin) sourceTrigger.current = origin;
-    const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
+    const current = ++citeGeneration.current;
+    setEvidenceRead({scope: evidenceScope, busy: true});
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
       ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
-    try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`)); if (current === citeGeneration.current) setCitation(value);}
-    catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
-    finally {if (current === citeGeneration.current) setCitationBusy(false);}
+    try {
+      const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`));
+      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, value});
+    } catch (e) {
+      if (current === citeGeneration.current) setEvidenceRead({
+        scope: evidenceScope, failure: {message: errorText(e), route, selection},
+      });
+    }
   };
   const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
-  const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
-    close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
+  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route) : undefined;
+  const closeCitation = () => {
+    const origin = sourceTrigger.current;
+    invalidateCitation();
+    const closedAt = citeGeneration.current;
+    requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
+  };
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+    studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
 
@@ -358,14 +404,14 @@ export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Control
     if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
   }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
   return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
-    <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
+    <header className="case-reader-toolbar">{(packs.length > 1 || (packs.length === 1 && !p?.case_study)) ? <label>{a.zh ? "解读版本" : "Study version"}
       <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
         {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
-      </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+      </select></label> : null}<button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
     {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
-      scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
 }
@@ -452,7 +498,11 @@ export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
   return <section className="research-analysis analysis-source" ref={a.sourcePanel} tabIndex={-1} aria-label={zh ? "引用原文" : "Cited original"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.closeCitation();}}}>
     <header><h4>{zh ? "引用原文" : "Cited original"}</h4><button type="button" onClick={a.closeCitation} aria-label={zh ? "关闭原文" : "Close source"}><X size={14} aria-hidden/></button></header>
     {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
-    {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
+    {a.citationError ? <div className="analysis-read-error" role="alert">
+      <span>{a.citationError}</span>
+      <button type="button" onClick={a.retryCitation} aria-label={zh ? "重试读取原文" : "Retry reading source"}>
+        <RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
+    </div> : null}
     {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p>
       {a.citation.evidence_kind === "usage_counters" ? <p>{zh ? "计数事件：前一累计观测、本轮开始、末次计数及完成（如有）。仅显示计数字段；提示词、工具内容与账户信息不传入浏览器。" : "Counter events: preceding cumulative observation, Turn start, latest counters and completion if present. Only counter fields are shown; prompts, tool content and account metadata stay outside the browser."}</p> : null}
       <CitationContent key={`${a.pack?.analysis_key}:${a.citation.source_id}:${a.citation.first_line}:${a.citation.last_line}`} citation={a.citation} zh={zh}/></> : null}

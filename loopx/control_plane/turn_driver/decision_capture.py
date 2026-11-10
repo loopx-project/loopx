@@ -345,7 +345,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 
 
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
-                                 navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None) -> Path:
+                                 navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None,
+                                 selection_paths: list[list[str | int]] | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
 
     A short filename locates the document; only its complete stored digests are
@@ -358,6 +359,13 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         payload["navigation"] = navigation
     if observed_read is not None:
         payload["observed_read"] = observed_read
+    if selection is not None and selection_paths is not None:
+        from ..effect_runtime import MAX_REQUEST_BYTES
+
+        # A large descriptor can still use the older selector replay route.
+        with_paths = {**payload, "selection_paths": selection_paths}
+        if len(_decision_json(with_paths).encode("utf-8")) <= MAX_REQUEST_BYTES:
+            payload = with_paths
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
     reference = path.with_name(path.stem + suffix + ".reader.json")
@@ -400,7 +408,9 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     if (not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_read_reference_v1"
             or not isinstance(payload.get("path"), str) or not isinstance(payload.get("sha256"), str)
             or BARE_SHA256_PATTERN.fullmatch(payload["sha256"]) is None
-            or ("selection" in payload and not isinstance(payload["selection"], dict))):
+            or ("selection" in payload and not isinstance(payload["selection"], dict))
+            or ("selection_paths" in payload and (
+                "selection" not in payload or not isinstance(payload["selection_paths"], list)))):
         raise ValueError("reader reference is incomplete or unsupported")
     return path, payload
 
@@ -570,6 +580,10 @@ def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]
     return fields
 
 
+def _pointer_token(key: str | int) -> str:
+    return str(key).replace("~", "~0").replace("/", "~1")
+
+
 def context_selection_transport(payload: dict[str, Any], select: list[str] | None, *,
                                 list_fields: bool, list_depth: int | None) -> dict[str, Any]:
     """Supply the address shape for the TS selector. Values are read from the verified original."""
@@ -597,7 +611,7 @@ def context_selection_transport(payload: dict[str, Any], select: list[str] | Non
         if depth <= 0 and not any(key is not None for key in branch):
             continue
         for key, value in source.items() if isinstance(source, dict) else enumerate(source):
-            token = str(key).replace("~", "~0").replace("/", "~1")
+            token = _pointer_token(key)
             if depth <= 0 and token not in branch:
                 continue
             if isinstance(value, (dict, list)):
@@ -652,7 +666,12 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
         selected: Any = payload
         path, pointer = item["path"], item["pointer"]
         for key in path:
-            selected = selected[key]
+            if type(key) is str and isinstance(selected, dict) and key in selected:
+                selected = selected[key]
+            elif type(key) is int and isinstance(selected, list) and 0 <= key < len(selected):
+                selected = selected[key]
+            else:
+                raise ValueError("selected address does not match the original capture")
         if list_fields:
             views.append({"pointer": pointer, "fields": context_index_fields(payload, item["children"])})
         else:
@@ -674,34 +693,61 @@ def context_selection_binding(select: list[str], *, list_fields: bool, list_dept
         "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
 
 
+def initial_context_selection_bytes(payload: dict[str, Any],
+                                    selections: list[dict[str, Any]]) -> tuple[bytes, list[str]]:
+    return _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
+        present_goal_narrative=True)
+
+
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
                                         observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
-    raw, presented = _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
-        present_goal_narrative=True)
+    raw, presented = initial_context_selection_bytes(payload, selections)
     reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
+        selection_paths=[item["path"] for item in selections],
         observed_read=observed_read)
     return reference, raw
+
+
+def _pinned_selection_plan(select: list[str] | None, paths: list[list[str | int]]) -> dict[str, Any]:
+    """Replay TypeScript's resolved addresses from the existing reader reference."""
+    if (not isinstance(select, list) or not select or len(select) != len(paths)
+            or not all(isinstance(pointer, str) for pointer in select) or len(set(select)) != len(select)):
+        raise ValueError("reader selection paths do not match its pinned addresses")
+    selections = []
+    for pointer, path in zip(select, paths, strict=True):
+        if (not isinstance(path, list)
+                or not all(type(key) in (str, int) for key in path)
+                or pointer != "".join("/" + _pointer_token(key) for key in path)):
+            raise ValueError("reader selection paths do not match its pinned addresses")
+        selections.append({"pointer": pointer, "path": path})
+    return {"selections": selections}
 
 
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            initial_read: bool, list_fields: bool, list_depth: int | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
                            present_goal_narrative: bool | None = None,
+                           selection_paths: list[list[str | int]] | None = None,
                            ) -> tuple[dict[str, Any], bytes | None, str | None]:
-    """Replay the TS selector and verify the original digest-pinned view."""
-    from ..quota.turn_envelope import _turn_envelope_result
+    """Render the digest-pinned view from a new or previously resolved plan."""
+    if selection_paths is not None:
+        if initial_read or list_fields or list_depth is not None or not preserve_selection_order or expected_sha256 is None:
+            raise ValueError("reader selection paths require a pinned value selection")
+        plan = _pinned_selection_plan(select, selection_paths)
+    else:
+        from ..quota.turn_envelope import _turn_envelope_result
 
-    context = payload if initial_read else context_selection_transport(
-        payload, select, list_fields=list_fields, list_depth=list_depth)
-    selection = {"initial_read": True} if initial_read else {"select": select}
-    depth = {"list_depth": list_depth} if list_depth is not None else {}
-    order = {"preserve_selection_order": True} if preserve_selection_order else {}
-    plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
-        recover_selection_errors=not initial_read, **selection, **depth, **order)
+        context = payload if initial_read else context_selection_transport(
+            payload, select, list_fields=list_fields, list_depth=list_depth)
+        selection = {"initial_read": True} if initial_read else {"select": select}
+        depth = {"list_depth": list_depth} if list_depth is not None else {}
+        order = {"preserve_selection_order": True} if preserve_selection_order else {}
+        plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
+            recover_selection_errors=not initial_read, **selection, **depth, **order)
     if plan.get("rejected_selection"):
         return plan, None, None
     presentation = initial_read if present_goal_narrative is None else present_goal_narrative
@@ -712,7 +758,7 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
         return raw, hashlib.sha256(raw).hexdigest(), displayed
 
     raw, digest, displayed = render(plan, presentation)
-    if preserve_selection_order and expected_sha256 != digest:
+    if selection_paths is None and preserve_selection_order and expected_sha256 != digest:
         # Historical explicit references may pin canonical output despite
         # retaining caller order. Only the same source and addresses can replay.
         plan = _turn_envelope_result("context_select", context=context,

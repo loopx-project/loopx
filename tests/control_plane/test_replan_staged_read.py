@@ -851,3 +851,73 @@ def test_replan_reader_rejects_replaced_entries_and_recovers_original(tmp_path):
         original.unlink()
     saved.rename(original)
     assert read() == (0, review)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("wide", ["m", "汉"])
+def test_measurement_groups_keep_bounded_replan_detail_and_reachable_remainder(tmp_path, monkeypatch, provider, wide):
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_event, build_explore_finding_event, build_explore_node_event,
+        explore_result_log_path,
+    )
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    enable_explore(fixture)
+    registry = json.loads(fixture["registry"].read_text())
+    registry["goals"][0]["execution_profile"]["stride_strategy"] = "evidence_conditioned_v1"
+    fixture["registry"].write_text(json.dumps(registry))
+    log = explore_result_log_path(fixture["runtime"], GOAL)
+    append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, agent_id=AGENT,
+        node_id="question-measurement", node_kind="question", title="Does this candidate improve the outcome?"))
+    measurements = [dict(metric=f"metric-{i}-" + wide * 68, unit=wide * 40, value=2 * i + (1 if candidate == "a" else 2),
+        higher_is_better=True, comparison_scope="validation:" + "s" * 110,
+        input_revision=wide * 160, evaluation_ref="evaluator:" + "e" * 118,
+        candidate_ref=f"candidate:{candidate}-" + "c" * 115, evidence_ref=f"result:{i}-{candidate}-" + "r" * 113,
+        ) for i in range(5) for candidate in (("a", "b") if i < 3 else ("a",))]
+    append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL, agent_id=AGENT,
+        node_id="question-measurement", finding_id="finding-measurements", title="Five distinct measurements",
+        summary="Retain the full scoped observations.", evidence_refs=[r["evidence_ref"] for r in measurements],
+        measurements=measurements, tags=["writeback-result"]))
+    captured = tmp_path / "captured"
+    try:
+        call_progress_cli(fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN,
+            "--decision-output-dir", str(captured), "--context-delivery", "on", "--delta-delivery", "off")
+        original = (captured / "decision.json").read_bytes()
+        source = json.loads(original)
+        graph = explore_source(source)["content"]["graph"]
+        assert len(graph["measurement_feedback"]) == 3
+        assert graph["measurement_feedback_page"]["remaining"] == 2
+        assert graph["result_page"]["next_command"] is None
+        envelope = build_turn_envelope(source, captured_decision_path=str(captured / "decision.json"))
+        command = shlex.split(envelope["replan_action_packet"]["review"])
+        review = call_progress_cli(fixture, *command[command.index("quota"):])
+        command = shlex.split(review["capabilities"]["explore"]["read_action"])
+        detail = call_progress_cli(fixture, *command[command.index("quota"):])
+        basis = detail["explore_basis"]
+        print(json.dumps({"provider": provider, "detail_bytes": json_bytes(detail),
+            "omitted": basis.get("omitted_measurement_feedback"),
+            "measurement_page": basis.get("measurement_feedback_page")}), flush=True)
+        assert json_bytes(detail) <= 8 * 1024
+        assert basis["measurement_feedback"][0]["best"]["value"] == 2
+        assert basis["measurement_feedback"][0]["latest"]["value"] == 2
+        page = basis["measurement_feedback_page"]
+        assert page["revision"] == graph["measurement_feedback_page"]["revision"]
+        command = page["next_command"]
+        remainder = call_progress_cli(fixture, *command[command.index("explore"):])["graph"]
+        assert len(remainder["measurement_feedback"]) == 2
+        assert {r["metric"] for r in graph["measurement_feedback"] + remainder["measurement_feedback"]} == {r["metric"] for r in measurements}
+        assert (captured / "decision.json").read_bytes() == original
+        # Full provenance stays on the original node reader; the summary does
+        # not silently turn its shorter points into a new evidence source.
+        node_command = basis["result_page"]["node_command_template"]
+        node_command = ["question-measurement" if item == "<node-id>" else item for item in node_command]
+        complete = call_progress_cli(fixture, *node_command[node_command.index("explore"):])["graph"]
+        assert complete["measurement_feedback"][0]["latest"]["measurement"]["evidence_ref"] in {r["evidence_ref"] for r in measurements}
+        append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL, agent_id=AGENT,
+            node_id="question-measurement", finding_id="finding-changed", title="Changed evidence",
+            summary="Restart the source-bound read.", evidence_refs=["result:changed"], tags=["writeback-result"]))
+        stale = call_progress_cli(fixture, *command[command.index("explore"):], expected_code=1)
+        assert "Explore evidence changed" in json.dumps(stale)
+    finally:
+        restart_effect_runtime()
