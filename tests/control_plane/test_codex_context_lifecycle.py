@@ -61,27 +61,51 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
     }
     _, wire = project(tmp_path, payload=payload)
-    request = context.native_execution_preparation_request(
-        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
-    )
+    source_sha256 = wire["recovery"]["sha256"]
+    eligible = {**event, "hook_event_name": "PostToolUse"}
+    request = context.native_execution_preparation_request(str(tmp_path), eligible)
     assert request == {
         "goal_id": "fixture",
         "agent_id": "agent",
         "todo_id": "todo_fixture",
-        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "claim_args": [
+            *payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id",
+            f"todo-claim:codex-capture:{source_sha256}",
+        ],
         "authority_route": {
             "registry_path": str(tmp_path / "registry.json"),
             "runtime_root": str(tmp_path / "runtime"),
         },
         "turn_instance_id": "turn-fixture",
-        "source_sha256": wire["recovery"]["sha256"],
+        "claim_source_sha256": source_sha256,
+        "source_sha256": source_sha256,
     }
     child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
     assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), eligible, readback_for="0" * 64,
+    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request, "readback_only": True,
+    }
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    ) == {
+        **request, "readback_only": True,
+    }
+    ready_capture = tmp_path / "ready.json"
+    ready_bytes = b'{"execution_preparation":{"state":"ready"}}'
+    ready_capture.write_bytes(ready_bytes)
+    ready_capture.chmod(0o600)
+    ready_digest = hashlib.sha256(ready_bytes).hexdigest()
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
         "turn_instance_id": "turn-fixture",
+        "capture_path": str(ready_capture),
+        "capture_sha256": ready_digest,
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
     }
     state_before_child = (tmp_path / "session.json").read_bytes()
     context.record_native_execution_preparation(
@@ -93,12 +117,42 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         str(tmp_path), event,
         source_sha256=request["source_sha256"], receipt=receipt,
     )
-    assert context.native_execution_preparation_request(
-        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
-    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
+    }
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
-    )["todo_id"] == "todo_fixture"
+    ) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
+    }
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible)["readback_only"] is True
+    deliver(tmp_path, event, capture_pages(str(ready_capture), ready_digest))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["readback_only"] is True
+    payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
+    _, next_wire = project(tmp_path, capture_id="next", payload=payload)
+    next_sha256 = next_wire["recovery"]["sha256"]
+    assert next_sha256 != source_sha256
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request,
+        "claim_args": [
+            *payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id",
+            f"todo-claim:codex-capture:{next_sha256}",
+        ],
+        "turn_instance_id": "next-turn",
+        "claim_source_sha256": next_sha256,
+        "source_sha256": next_sha256,
+    }
 
 
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):
@@ -225,6 +279,60 @@ def deliver(root, event, pages):
     for page in pages:
         assert context.codex_context_hook(str(root), {**event, "hook_event_name": "PostToolUse",
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
+
+
+@pytest.mark.parametrize("order", ["sequential", "terminal_first", "one_batch"])
+def test_selected_read_can_defer_digests_without_losing_coverage(tmp_path, monkeypatch, order):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    body = "Preserve this acceptance condition: 核对原始结果。\n" * 45
+    _, wire = project(tmp_path, payload={"ok": True, "requirements": body})
+    recovery = wire["recovery"]
+    pages = []
+    offset, selection_digest = 0, None
+    while offset is not None:
+        page = read_context_capture(Namespace(format="json", capture_file=recovery["path"],
+            capture_sha256=recovery["sha256"], offset=offset, page_bytes=1024, select=["/requirements"],
+            selection_sha256=selection_digest))
+        assert page["ok"], page
+        pages.append(page)
+        offset = page["next_offset"]
+        selection_digest = page["selection_sha256"]
+    assert len(pages) == 3 and pages[-1]["eof"]
+
+    calls = []
+    run = turn_envelope._turn_envelope_result
+
+    def track(operation, **kwargs):
+        if operation == "context_read_sections":
+            calls.append(operation)
+        return run(operation, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", track)
+    if order == "sequential":
+        deliver(tmp_path, event, pages[:-1])
+        assert calls == []
+        assert not context._state(tmp_path).get("consumed_pointers")
+        deliver(tmp_path, event, pages[-1:])
+        assert len(calls) == 1
+    elif order == "terminal_first":
+        deliver(tmp_path, event, [pages[-1], pages[0]])
+        damaged = {**pages[1], "content": "!" + pages[1]["content"][1:]}
+        deliver(tmp_path, event, [damaged])
+        assert not context._state(tmp_path).get("consumed_pointers")
+        deliver(tmp_path, event, pages[1:2])
+    else:
+        batch = {"content": [{"type": "text", "text": json.dumps(page)} for page in reversed(pages)]}
+        assert context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "selected-pages", "tool_response": batch}) == {}
+    state = context._state(tmp_path)
+    expected = hashlib.sha256(json.dumps(body, ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert state["consumed_pointers"] == {"/requirements": expected}
+    assert not state.get("section_reads")
+    assert "candidate" not in state and "retained" not in state
 
 
 def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_path, monkeypatch):

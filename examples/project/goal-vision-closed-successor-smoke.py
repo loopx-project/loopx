@@ -11,6 +11,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT))
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
@@ -39,7 +43,8 @@ def run_cli(registry: Path, runtime: Path, *args: str) -> dict[str, object]:
     )
     if completed.returncode != 0:
         raise AssertionError(completed.stderr or completed.stdout)
-    return json.loads(completed.stdout)
+    body, _ = read_cli_context_for_oracle(completed.stdout)
+    return json.loads(body)
 
 
 with tempfile.TemporaryDirectory(prefix="loopx-closed-vision-successor-") as raw_temp:

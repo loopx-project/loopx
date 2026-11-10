@@ -427,8 +427,19 @@ for (const provider of ["file", "sqlite"] as const) {
         child.on("error", reject);
         child.on("close", code => {clearTimeout(timeout); if (code !== 0) reject(new Error(error)); else resolve(JSON.parse(output));});
       })));
-      assert.deepEqual(results.map(r => r.status).sort(), differentIntent ? ["applied", "failed"] : ["applied", "applied"]);
-      if (differentIntent) assert.equal(results.find(r => r.status === "failed")!.reason_code, "coordination_operation_identity_mismatch");
+      const statuses = results.map(r => r.status).sort();
+      if (differentIntent) {
+        assert.deepEqual(statuses, ["applied", "failed"]);
+        assert.equal(results.find(r => r.status === "failed")!.reason_code, "coordination_operation_identity_mismatch");
+      } else {
+        // The other worker may reach preflight after the first commit or
+        // recover the same receipt through its concurrent commit attempt.
+        assert.equal(statuses[0], "applied");
+        assert.ok(["applied", "recovered", "replayed"].includes(String(statuses[1])));
+        assert.ok(results.every(result => result.renewed === true && result.original_receipt));
+        assert.deepEqual(results[0]!.original_receipt, results[1]!.original_receipt);
+        assert.deepEqual(results[0]!.lease, results[1]!.lease);
+      }
       const head = await store.loadAuthority(); if (head.status !== "loaded") throw new Error("missing head");
       assert.equal(head.cursor, "2"); assert.equal((head.head.leases as Record<string, unknown>[])[0]!.version, 2);
     });

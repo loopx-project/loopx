@@ -1,9 +1,6 @@
 """Real quota reads preserve requirement/target semantics across authority sources."""
-import json
-
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
+from canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 
@@ -28,13 +25,10 @@ def test_real_quota_capability_gate_does_not_enable_repair_outputs(tmp_path, mon
                            domain="software", adapter_kind="generic_project_goal_v0", state_file=str(state),
                            registered_agents=["agent-a"], quota_allowed_slots=None)
     if provider != "markdown":
-        goal = json.loads(registry.read_text())["goals"][0]
-        projection, _ = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime,
-                                                             state_path=state, registry_path=registry)
-        initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+        initialize_canonical_source_fixture(runtime, "goal-a", state_path=state, provider=provider)
     before = state.read_bytes()
     args = ["quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-            "--include-detail", "agent-todos", ]
+            "--include-detail", "agent-todos", "--context-delivery", "off"]
     if network_available:
         args += ["--available-capability", "network"]
     if provider == "markdown":

@@ -136,9 +136,27 @@ source; the same physical source cannot be linked twice. Removing an aliased
 link uses its workspace id and current physical namespace. Linked-source research
 opens native history by default; an authored case reading remains optional.
 When a complete linked history read has no Explore records, show that limit
-alongside any retained strategy and a route to the original Tasks. A failed
+alongside the retained strategy chronology and a route to the original Tasks. A failed
 read still offers recovery, and a linked reader never offers to enable research
 mode on the original Goal.
+
+The **Strategy history** action reads every retained `agent_vision` version
+through the original Goal's native history, including versions outside the
+status window. Its default overview spans all retained records by recorded time;
+it never silently selects the latest version. Sources proven to have no Explore
+records show this overview directly. Other sources keep their Explore history
+and load strategy history only on request. Unknown times stay visible, and time
+adjacency establishes neither inactivity, inheritance nor causal benefit.
+It preserves original language, negative results and unresolved
+questions. The focused reader supports exact-version links, reload, Back/Forward
+and unavailable-version recovery; missing versions never select the latest one
+silently. Plans and recorded adoption claims remain distinct from demonstrated
+subsequent action or benefit. Opening or switching records starts no analysis.
+The App and prepared workspace share `GET /api/chat/goal-source-strategies`;
+prepared readers also expose `/api/goal-source/strategies` and the existing
+source-read CLI's `strategies` operation. These reads retain physical namespace
+and original Goal scope, recheck membership after native history IO, and fail
+explicitly when complete coverage exceeds the transport's existing bounds.
 
 Each linked Goal carries `source_access` in the workspace projection. Its
 original Goal id, tasks, explicit graph edges and native measurements remain
@@ -264,6 +282,13 @@ producer; the second also checks the shared reader inside original delegations.
 Both check read-only browsing. Source/receipt negatives live in
 `tests/test_manager_context_roundtrip.py`; captures and limits are described in
 [the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
+
+When a later history page loses its transport, the existing read retry retains
+the verified prefix in browser memory and resumes its next cursor. Partial text
+never becomes a readable snapshot or enables sending. Each recovery rechecks
+the current source; source conflicts, invalid cursors/pages and permission
+denials discard the checkpoint. Reload and explicit refresh start a new read.
+See [the repeated-interruption evidence](../assets/personal-workspace/history-recovery/README.md).
 
 ### Workspace reading and request continuity / 工作区阅读与请求连续性
 

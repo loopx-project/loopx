@@ -201,6 +201,15 @@ Paired diffs do not certify translation accuracy.
     Existing Core/request/session owners retain authority, identity and recovery.
     C1–C9 connect concrete refactors, real host adoption and complete-cost
     qualification without changing defaults or launching experiments.
+- [Recoverable History Working Sets and Context Policy Extensions v0](history-working-set-context-policy-v0.md)
+  ([中文版](history-working-set-context-policy-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; tracking [#8450](https://github.com/loopx-project/loopx/issues/8450).
+  - **Current boundary:** A bounded T02 continuation design informed by
+    billion-context. Reuses complete sources, shared TypeScript presentation
+    and exact delivery; first qualifies one real model-input consumer, then
+    source-bound historical views and optional provider extensions. Source
+    retention, original readback, actual adoption and complete-cost evidence
+    remain unqualified; no runtime, default or experiment change.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
   ([中文版](typescript-control-plane-migration-v0.zh-CN.md))
   - **Delivery on `main`:** Substantially implemented; active migration.
@@ -337,11 +346,13 @@ Paired diffs do not certify translation accuracy.
     [implementation comparison](../long-running-execution-exploration-and-correction.md).
 - [Joint Target, Yardstick and Stride Decisions v0](target-yardstick-stride-decisions-v0.md)
   ([中文版](target-yardstick-stride-decisions-v0.zh-CN.md))
-  - **Delivery on `main`:** Design only; no new runtime behavior or default.
-  - **Current boundary:** Extends the Stride owner with joint direction/measurement
-    selection, a minimal ordinary-Turn cue and full replan composition. Scoped
-    fidelity, actual adoption, compatibility and matched outcome/cost qualification
-    remain implementation acceptance, not measured benefits.
+  - **Delivery on `main`:** M1 optional decision/followthrough path exists;
+    budgeted planning is proposed, numerical fidelity and matched gain unqualified.
+  - **Current boundary:** Reuse Stride/Yardstick owners for multi-step decisions
+    under the remaining budget. The [EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning)
+    precedes full-budget benefit and later calibrated/learned allocation; no new
+    controller runtime is required. Scoped fidelity, actual adoption and complete
+    outcome/cost qualification remain separate from source delivery.
 - [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md)
   ([中文版](post-outcome-memory-utility-attribution-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1 implemented.

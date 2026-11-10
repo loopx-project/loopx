@@ -103,6 +103,81 @@ def prepared_request_ref(messages):
     return next(values(messages))
 
 
+def _sdk_response_stream(index, delta, finish, arguments, *, path):
+    """Shared scripted stream for the two qualified SDK provider transports."""
+    chunks = [
+        {
+            "id": f"fixture-{index}",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "fixture-model",
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": None}
+            ],
+        },
+        {
+            "id": f"fixture-{index}",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "fixture-model",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+    ]
+    data = (
+        "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+        + "data: [DONE]\n\n"
+    ).encode()
+    if path.endswith("/messages"):
+        # 0.2.1's official adapter uses Messages SSE; 0.1.5 uses
+        # Chat Completions. Both are actual loopback wire paths.
+        block = (
+            {"type": "text", "text": delta["content"]}
+            if finish == "stop"
+            else {
+                "type": "tool_use",
+                "id": f"sdk-native-call-{index}",
+                "name": "loopx_operation",
+                "input": arguments(index),
+            }
+        )
+        events = [
+            {
+                "type": "message_start",
+                "message": {
+                    "id": f"fixture-{index}",
+                    "model": "fixture-model",
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": block,
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "end_turn"
+                    if finish == "stop"
+                    else "tool_use"
+                },
+                "usage": {"output_tokens": 1},
+            },
+            {"type": "message_stop"},
+        ]
+        data = "".join(
+            f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+            for event in events
+        ).encode()
+    return data
+
+
 @pytest.mark.parametrize("request_transport", ["inline", "frozen"])
 @pytest.mark.parametrize("authority_provider", ["file", "sqlite"])
 @pytest.mark.parametrize(
@@ -228,76 +303,7 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
                         ],
                     }
                     finish = "tool_calls"
-                chunks = [
-                    {
-                        "id": f"fixture-{index}",
-                        "object": "chat.completion.chunk",
-                        "created": 1,
-                        "model": "fixture-model",
-                        "choices": [
-                            {"index": 0, "delta": delta, "finish_reason": None}
-                        ],
-                    },
-                    {
-                        "id": f"fixture-{index}",
-                        "object": "chat.completion.chunk",
-                        "created": 1,
-                        "model": "fixture-model",
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-                        "usage": {
-                            "prompt_tokens": 1,
-                            "completion_tokens": 1,
-                            "total_tokens": 2,
-                        },
-                    },
-                ]
-                data = (
-                    "".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
-                    + "data: [DONE]\n\n"
-                ).encode()
-                if self.path.endswith("/messages"):
-                    # 0.2.1's official adapter uses Messages SSE; 0.1.5 uses
-                    # Chat Completions. Both are actual loopback wire paths.
-                    block = (
-                        {"type": "text", "text": delta["content"]}
-                        if finish == "stop"
-                        else {
-                            "type": "tool_use",
-                            "id": f"sdk-native-call-{index}",
-                            "name": "loopx_operation",
-                            "input": arguments(index),
-                        }
-                    )
-                    events = [
-                        {
-                            "type": "message_start",
-                            "message": {
-                                "id": f"fixture-{index}",
-                                "model": "fixture-model",
-                                "usage": {"input_tokens": 1, "output_tokens": 0},
-                            },
-                        },
-                        {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": block,
-                        },
-                        {"type": "content_block_stop", "index": 0},
-                        {
-                            "type": "message_delta",
-                            "delta": {
-                                "stop_reason": "end_turn"
-                                if finish == "stop"
-                                else "tool_use"
-                            },
-                            "usage": {"output_tokens": 1},
-                        },
-                        {"type": "message_stop"},
-                    ]
-                    data = "".join(
-                        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
-                        for event in events
-                    ).encode()
+                data = _sdk_response_stream(index, delta, finish, arguments, path=self.path)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(data)))

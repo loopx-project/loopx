@@ -52,6 +52,8 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         subprocess.run(["git", "init", str(project)], capture_output=True, check=True)
 
     def cli(*args: str) -> tuple[int, dict]:
+        if args[:2] == ("quota", "should-run"):
+            args = (*args, "--context-delivery", "off")
         with monkeypatch.context() as context:
             context.chdir(project)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
@@ -86,9 +88,6 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
     assert rc == 0 and guard["should_run"] is True, guard
     assert guard["work_lane_contract"]["obligation"] == "attempt_due_monitor"
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == MONITOR_ID
-    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
-    writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
-    assert "observation is unavailable" in writeback_step["precondition"]
     lease_args: tuple[str, ...] = ()
     if provider != "markdown":
         rc, lease = cli("task-lease", "acquire", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID,
@@ -96,6 +95,12 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
         assert rc == 0 and lease["acquired"] is True, lease
         lease_args = ("--task-lease-idempotency-key", f"unavailable-{provider}",
                       "--task-lease-expected-version", str(lease["lease"]["version"]))
+    rc, bound = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding, *capabilities)
+    assert rc == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    writeback_step = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    assert "observation is unavailable" in writeback_step["precondition"]
     rc, before = cli("todo", "list", "--goal-id", GOAL_ID, "--todo-id", MONITOR_ID)
     assert rc == 0, before
     fields = {k: before["todo"].get(k) for k in OBSERVATION_FIELDS}

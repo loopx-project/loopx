@@ -22,9 +22,9 @@ from .openai_keys import NoRedirect
 def runtime(value: dict, *, consumer="worker") -> dict | None:
     from .openai_relay import consumer_token, RUNTIME_SCHEMA
     prefix = "/steward" if consumer == "steward" else ""
-    request = urllib.request.Request(f"http://127.0.0.1:{value['port']}{prefix}/runtime",
-        headers={"Authorization": "Bearer " + consumer_token(value, consumer)})
     try:
+        request = urllib.request.Request(f"http://127.0.0.1:{value['port']}{prefix}/runtime",
+            headers={"Authorization": "Bearer " + consumer_token(value, consumer)})
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=1) as response:
             data = response.read(4097)
         row = json.loads(data) if len(data) <= 4096 else None
@@ -40,13 +40,19 @@ def runtime(value: dict, *, consumer="worker") -> dict | None:
     return None
 
 
-def status(owner: NativeAccounts, *, consumer="worker") -> dict:
-    from .openai_relay import route, healthy, BUILD
-    if consumer not in ("worker", "steward"):
-        raise HostError("invalid_policy")
+def _read_route(owner: NativeAccounts) -> dict | None:
+    from .openai_relay import route
     try:
-        value = route(owner)
+        return route(owner)
     except FileNotFoundError:
+        return None
+
+
+def _consumer_status(value: dict | None, consumer: str) -> dict:
+    from .openai_relay import healthy, BUILD
+    if consumer == "steward" and (value is None or "steward_token" not in value):
+        return {"state": "not_configured", "ready": False, "expected_build": BUILD}
+    if value is None:
         return {"state": "not_started", "ready": False, "expected_build": BUILD}
     live = runtime(value, consumer=consumer)
     state = ("ready" if live["build"] == BUILD and live["accepting"] else
@@ -54,6 +60,22 @@ def status(owner: NativeAccounts, *, consumer="worker") -> dict:
              "legacy_upgrade_required" if healthy(value, consumer) else "unavailable")
     return {"state": state, "ready": state == "ready", "expected_build": BUILD,
             "runtime": live}
+
+
+def status(owner: NativeAccounts, *, consumer="worker") -> dict:
+    if consumer not in ("worker", "steward"):
+        raise HostError("invalid_policy")
+    return _consumer_status(_read_route(owner), consumer)
+
+
+def consumer_statuses(owner: NativeAccounts) -> dict[str, dict]:
+    """Read both independent routes from one persisted credential snapshot."""
+    value = _read_route(owner)
+    return {consumer: _consumer_status(value, consumer) for consumer in ("worker", "steward")}
+
+
+def same_instance(left: dict, right: dict) -> bool:
+    return all(left[key] == right[key] for key in ("instance_id", "pid", "build"))
 
 
 def _owner_released(owner: NativeAccounts) -> bool:
@@ -97,11 +119,16 @@ def _drain(value: dict, live: dict):
 
 def reconcile(owner: NativeAccounts, value: dict, *, consumer="worker", legacy_pid=None, timeout=10):
     """Called under the existing state lock; retain the server lock through drain."""
-    from .openai_relay import healthy, BUILD
+    from .openai_relay import consumer_token, healthy, BUILD
+    if consumer == "steward":
+        consumer_token(value, consumer)  # Invalid configuration cannot be repaired by a drain.
     live = runtime(value)
-    if (live and live["build"] == BUILD and live["accepting"]
-            and (consumer == "worker" or healthy(value, consumer))):
-        return
+    if live and live["build"] == BUILD and live["accepting"]:
+        if consumer == "worker":
+            return
+        scoped = runtime(value, consumer=consumer)
+        if scoped and scoped["accepting"] and same_instance(live, scoped):
+            return
     deadline = time.monotonic() + timeout
     if live and live["accepting"]:
         _drain(value, live)

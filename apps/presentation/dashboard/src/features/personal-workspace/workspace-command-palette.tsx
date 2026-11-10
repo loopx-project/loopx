@@ -1,5 +1,5 @@
 import {ContextHelp} from "./context-help";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
 import { filterWorkspaceCommands, isPaletteShortcut, type WorkspaceCommandEntry } from "./workspace-command-entries";
 import "./workspace-command-palette.css";
@@ -41,9 +41,10 @@ export function WorkspaceCommandPalette({ entries, open, enabled, readOnly, unav
     return () => document.removeEventListener("keydown", shortcut, true);
   }, [enabled, open, onOpen, onClose]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!open || !dialog) return;
+    // Reset the previous search before the newly focused input can receive keys.
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     composing.current = false;
     outsidePointer.current = null;

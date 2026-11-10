@@ -9,48 +9,48 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .chat import redact_local_paths
-from .chat.goal_subagent_api import goal_subagent_configuration_enabled
-from .chat.workspace_directory import workspace_goal_directory
-from .codex_app_thread_activity import (
+from ..chat import redact_local_paths
+from .goal_subagent_api import goal_subagent_configuration_enabled
+from .workspace_directory import workspace_goal_directory
+from ..codex_app_thread_activity import (
     codex_delivery_expectations,
     codex_thread_observers,
 )
-from .control_plane.agents.host_thread_activity import (
+from ..control_plane.agents.host_thread_activity import (
     attach_host_delivery_windows,
     attach_host_thread_activity,
 )
-from .control_plane.effect_runtime import (
+from ..control_plane.effect_runtime import (
     EffectRuntimePermanentIOError,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
     effect_runtime_request_scope,
 )
-from .control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
-from .control_plane.runtime.public_safety import (
+from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+from ..control_plane.runtime.public_safety import (
     public_safe_compact_text,
     validate_public_safe_value,
 )
-from .control_plane.todos.contract import (
+from ..control_plane.todos.contract import (
     TODO_STATUS_OPEN,
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_status,
     todo_done_for_status,
 )
-from .control_plane.work_items.task_graph import build_goal_task_map
-from .control_plane.projection_envelope_facts import seal_projection_envelope, source_fact
-from .control_plane.runtime.time import now_utc_iso
-from .feedback import validate_goal_id
-from .history import load_registry
-from .control_plane.projects.registry_codec import load_project_registry
-from .status import collect_status
-from .status_server import (
+from ..control_plane.work_items.task_graph import build_goal_task_map
+from ..control_plane.projection_envelope_facts import seal_projection_envelope, source_fact
+from ..control_plane.runtime.time import now_utc_iso
+from ..feedback import validate_goal_id
+from ..history import load_registry
+from ..control_plane.projects.registry_codec import load_project_registry
+from ..status import collect_status
+from ..status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
     DEFAULT_EXTENSION_PROJECTION_PATH,
     ExtensionPresentationRequestMixin,
     parse_goal_activation_filter,
 )
-from .control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.todos.list_readback import list_goal_todos
 
 
 def goal_read_runtime_root(server: Any) -> str | None:
@@ -241,8 +241,8 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
                     return
             linked = None
             if goal_id and registry.get("goal_source_links"):
-                from .control_plane.status.goal_source import SourceScopeError
-                from .presentation.goal_source_routing import goal_source_catalog
+                from ..control_plane.status.goal_source import SourceScopeError
+                from ..presentation.goal_source_routing import goal_source_catalog
                 catalog = goal_source_catalog(self.server)
                 if delivery_review and catalog.resolve(goal_id, registry):
                     self._send_error("Execution review belongs to the original Goal runtime.", status=403)

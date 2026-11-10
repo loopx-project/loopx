@@ -73,10 +73,10 @@ def test_requester_crash_recovers_original_host_and_return_once(prepared_handoff
 from loopx.capabilities.manager_context.roundtrip import report
 from loopx.control_plane.collaboration.peers import read_inbox
 source_id = delegation['source_request_id']
-items = read_inbox(root / 'runtime', root / 'registry.json', envelope['goal_id'], actor)['items']
+items = read_inbox(root / 'runtime', root / 'registry.json', identity['goal_id'], actor)['items']
 assert any(item['request_id'] == source_id for item in items)
-acknowledge(root / 'runtime', envelope['goal_id'], actor, source_id, 'adopt', 'Read the original request.')
-report(root / 'runtime', envelope['goal_id'], actor, source_id, 'conclusion', 'Original request independently handled.')
+acknowledge(root / 'runtime', identity['goal_id'], actor, source_id, 'adopt', 'Read the original request.')
+report(root / 'runtime', identity['goal_id'], actor, source_id, 'conclusion', 'Original request independently handled.')
 print(json.dumps(build_result"""))
     (root / "hold").touch()
     spawned = []

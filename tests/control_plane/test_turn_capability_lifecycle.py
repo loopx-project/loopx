@@ -100,6 +100,92 @@ def test_invalid_recovered_context_is_omitted_without_gating_work(serialized) ->
     assert project_turn_context({"turn_context_contributions": serialized}) == {}
 
 
+@pytest.mark.parametrize("fault", ["none", "readback", "context-collision", "result-collision", "malformed"])
+def test_context_projection_isolates_one_contribution_and_keeps_order(fault) -> None:
+    from copy import deepcopy
+
+    payload = {"turn_envelope": {
+        "goal_id": "fixture-goal", "agent_id": "fixture-agent", "boundary": {"write_scope": []},
+    }}
+    calls = []
+    registrations = []
+    for name in ("left", "middle", "right"):
+        context_key = "left_context" if name == "middle" and fault == "context-collision" else f"{name}_context"
+        result_key = "left_result" if name == "middle" and fault == "result-collision" else f"{name}_result"
+        result = {
+            "readback": {f"{name}_readback": {"value": name}},
+            "context_fields": {context_key: f"Private {name} advice."},
+            "instructions": [f"Use {name} only as advice."],
+            "result_fields": {result_key: {"type": "string", "maxLength": 128}},
+        }
+
+        def produce(value=result, label=name):
+            calls.append(label)
+            return deepcopy(value)
+
+        registrations.append(TurnContextHookRegistration(
+            f"fixture.{name}", "fixture", (f"{name}_readback",), produce,
+        ))
+    dispatch_turn_context_hooks(payload, registrations)
+    assert calls == ["left", "middle", "right"]
+    if fault == "readback":
+        payload["middle_readback"] = {"value": "changed after registration"}
+    elif fault == "malformed":
+        payload["turn_context_contributions"][1] = {"readback_slots": 3}
+    before = deepcopy(payload)
+    accepted = ["left", "middle", "right"] if fault == "none" else ["left", "right"]
+    expected = {
+        **{f"{name}_context": f"Private {name} advice." for name in accepted},
+        "capability_context_fields": [f"{name}_context" for name in accepted],
+        "capability_instructions": [f"Use {name} only as advice." for name in accepted],
+        "capability_result_fields": {
+            f"{name}_result": {"type": "string", "maxLength": 128} for name in accepted
+        },
+    }
+    assert project_turn_context(payload) == expected
+    assert project_turn_context(payload) == expected
+    assert payload == before and calls == ["left", "middle", "right"]
+    payload["turn_envelope"]["goal_id"] = "another-goal"
+    assert project_turn_context(payload) == {}
+
+
+def test_instruction_only_context_stays_available_without_optional_fields() -> None:
+    payload = {"turn_envelope": {"goal_id": "fixture-goal", "agent_id": "fixture-agent"}}
+    dispatch_turn_context_hooks(payload, (TurnContextHookRegistration(
+        "fixture.advice", "fixture", ("fixture_readback",),
+        lambda: {"readback": {"fixture_readback": None}, "context_fields": {},
+                 "instructions": ["Keep the existing stop condition."], "result_fields": {}},
+    ),))
+    assert project_turn_context(payload) == {
+        "capability_context_fields": [],
+        "capability_instructions": ["Keep the existing stop condition."],
+        "capability_result_fields": {},
+    }
+
+
+def test_context_projection_keeps_advice_near_the_runtime_request_limit() -> None:
+    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    payload = {"turn_envelope": {
+        "goal_id": "fixture-goal", "agent_id": "fixture-agent",
+        "observations": "x" * (MAX_REQUEST_BYTES - 50_000),
+    }}
+    registrations = []
+    for name in ("left", "right"):
+        result = {"readback": {f"{name}_readback": None},
+                  "context_fields": {f"{name}_context": name[0] * 32_000},
+                  "instructions": [], "result_fields": {}}
+        registrations.append(TurnContextHookRegistration(
+            f"fixture.{name}", "fixture", (f"{name}_readback",), lambda value=result: value,
+        ))
+    dispatch_turn_context_hooks(payload, registrations)
+    assert "turn_context_hook_failures" not in payload
+    projected = project_turn_context(payload)
+    assert projected["left_context"] == "l" * 32_000
+    assert projected["right_context"] == "r" * 32_000
+    assert projected["capability_context_fields"] == ["left_context", "right_context"]
+
+
 @pytest.mark.parametrize("guidance_chars", [40_000, 70_000])
 def test_optional_recall_size_never_disables_enabled_ingest(
     guidance_chars: int,

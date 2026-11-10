@@ -248,7 +248,7 @@ try {
       await archivePage.close();
     }
   }
-  const researchPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const researchPage = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   researchPage.on("pageerror", (error) => errors.push(error.message));
   const researchDirectory = { ...directory, goals: ["parent", "case-a", "case-b", "other"].map((id) => ({
     id, display_name: `${id} project`, registry_member: true, activation_state: "active",
@@ -257,6 +257,7 @@ try {
   let releaseParent;
   const parentGate = new Promise((done) => { releaseParent = done; });
   let parentDenied = true;
+  let childDenied = true;
   const exploreReads = [];
   try {
     await researchPage.route("**/status.json*", async (route) => {
@@ -267,7 +268,7 @@ try {
       assert.ok(row);
       if (id === "parent") {
         await parentGate;
-        if (parentDenied) return route.fulfill({ status: 500, json: { ok: false, error_code: "workspace_status_access_denied" } });
+        if (parentDenied) return route.fulfill({ status: 403, json: { ok: false, error_code: "workspace_status_access_denied" } });
       }
       const status = snapshot(id);
       Object.assign(status.run_history.goals[0], row);
@@ -276,7 +277,14 @@ try {
     await researchPage.route("**/api/**", (route) => route.fulfill({ status: 503, json: { ok: false } }));
     await researchPage.route("**/api/chat/explore-results?*", (route) => {
       const query = new URL(route.request().url()).searchParams;
-      exploreReads.push({ goal: query.get("goal_id"), view: query.get("view"), method: route.request().method() });
+      const goal = query.get("goal_id"), view = query.get("view");
+      exploreReads.push({ goal, view, method: route.request().method() });
+      if (view === "history-timing" && ["case-a", "case-b"].includes(goal)) {
+        if (goal === "case-b" && childDenied) return route.fulfill({ status: 403, json: { ok: false } });
+        return route.fulfill({ json: { ok: true, goal_id: goal, source_namespace: null,
+          first_recorded_at: "2026-01-01T00:00:00Z", last_recorded_at: "2026-01-01T00:15:00Z",
+          untimed_record_count: 0, strategy_recorded_at: null } });
+      }
       return route.fulfill({ status: 503, json: { ok: false } });
     });
     await researchPage.goto(`${origin}/chat/?goalId=parent&view=research`);
@@ -286,7 +294,17 @@ try {
     await caseButton.waitFor();
     await notice.waitFor();
     assert.equal(await cards.count(), 2, "directory navigation must stay in the selected Goal hierarchy");
-    assert.deepEqual(exploreReads, [], "the parent directory is enough to navigate, not to read evidence");
+    await researchPage.screenshot({ path: resolve(out, "research-parent-pending-desktop.png") });
+    await caseButton.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
+    assert.match(await caseButton.innerText(), /2026-01-01 08:00[\s\S]*2026-01-01 08:15/, "child clocks use their own dated records in Beijing time while the parent is pending");
+    const deniedChild = cards.filter({ hasText: "case-b project" });
+    await deniedChild.locator(".research-child-timing").filter({ hasText: /无法读取时间|Time unavailable/ }).waitFor();
+    assert.equal(await deniedChild.locator("time").count(), 0, "a denied child must not borrow another child's clock");
+    assert.ok(exploreReads.every(({ goal, view, method }) => goal.startsWith("case-") && view === "history-timing" && method === "GET"), "parent loading permits only independent child timing reads");
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-pending-desktop.png") });
+    await researchPage.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await researchPage.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-pending-narrow.png") });
     await caseButton.press("Enter");
     await researchPage.waitForURL((url) => url.searchParams.get("goalId") === "case-a" && url.searchParams.get("view") === "research");
     await researchPage.locator(".research-parent-goal").waitFor();
@@ -294,18 +312,23 @@ try {
     await researchPage.locator(".research-parent-goal").click();
     await notice.getByRole("button").waitFor();
     await caseButton.waitFor();
-    assert.ok(exploreReads.every(({ goal, view, method }) => goal !== "parent" && view !== "history-timing" && method === "GET"));
+    await caseButton.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
+    assert.ok(exploreReads.every(({ goal, method }) => goal !== "parent" && method === "GET"), "a denied parent must not open its own research evidence");
+    await researchPage.screenshot({ path: resolve(out, "research-child-timing-denied-narrow.png") });
     parentDenied = false;
+    childDenied = false;
     await notice.getByRole("button").click();
     await notice.waitFor({ state: "hidden" });
+    await researchPage.getByRole("button", {name: /^(刷新状态|Refresh status)$/}).click();
     await caseButton.locator(".research-child-timing").waitFor();
+    await deniedChild.locator('time[datetime="2026-01-01T00:15:00Z"]').waitFor();
     assert.equal(await cards.count(), 2);
   } finally {
     releaseParent();
     await researchPage.close();
   }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "stopped-deep-link-loading-error-retry-reload", "absent-goal-after-complete-read", "read-only-bookmark-recovery", "research-navigation-before-parent-snapshot", "research-navigation-during-denial-and-recovery", "bilingual-access", "mobile", "no-render-errors"] }));
+  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "stopped-deep-link-loading-error-retry-reload", "absent-goal-after-complete-read", "read-only-bookmark-recovery", "research-navigation-before-parent-snapshot", "research-child-timing-independent-of-parent", "research-child-timing-denial-and-recovery", "research-navigation-during-denial-and-recovery", "bilingual-access", "mobile", "no-render-errors"] }));
 } finally {
   releaseSlow();
   await cleanupBrowserSmoke({ browser, server, fixturePaths: [] });

@@ -162,6 +162,12 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
+For a private Lark reply, the adapter keeps the thread ID from the verified
+provider context when the incoming event omits it. This lets the App show the
+original body, exact quote and verified thread excerpt together. Redelivery
+can omit that ID and adopt the same request. A conflicting supplied ID still
+fails source verification.
+
 An owner-private steward connection also offers **Use for App steward**. Core
 stores this explicit entry preference alongside the binding set, without
 changing any audience, managed identity or execution grant. Multiple stewards
@@ -329,6 +335,14 @@ their frozen receipts and partial status; upgrades do not silently replay them.
 Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
 long captions, restart, missing/unknown receipts, byte mismatch, revocation and
 provider replacement. Installed provider readback remains a separate gate.
+
+The bound App history also displays a read-only notice for an original Lark
+file, audio or video that Core recorded as unsupported. It verifies the exact
+Session, current local owner binding and both original receipts before showing
+the notice. Its source time participates in history pagination; late rows
+invalidate any affected prefix, and a changed notice refreshes the App's
+transcript even when no Turn runs. The notice carries no resource bytes or
+credentials, creates no Turn, and does not resend the original reply.
 
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
@@ -1392,6 +1406,14 @@ readers mounted, sharing its source readback. Pending or failed discovery still
 gates the ordinary queue. Disposable HTTP/store checks qualify this continuation
 path, not installed native or live-provider acceptance.
 
+After a complete bound Session read, the App can refresh a changed snapshot
+using its proof of up to 5,000 already visible rows. The same endpoint checks
+the current projected prefix, including quotes and return status. Only an
+exact match returns the appended suffix of at most 200 rows. A changed prefix,
+a larger suffix or an older service uses the ordinary full read. The App still
+rechecks the original binding before publishing the combined transcript. This
+transient proof does not replace the frozen cursor or authorize any effect.
+
 Following the newest reply also survives a resized viewport or timeline, including
 image layout and expanded replies, without waiting for another message. Scrolling
 up keeps the reader in history across layout changes; the existing latest-message
@@ -1728,10 +1750,13 @@ All prefixes share the configured hard Turn time budget; it is not renewed for
 each compaction.
 
 A bound Codex steward can retain its working thread across an isolated answer
-review. Before entering review, Core verifies the current working adapter is
-idle and stores its native identity, provider and source-policy basis with the
-review Turn. On return with the same authority, the adapter resumes that native
-thread directly if there are no new visible review answers. Otherwise it uses a
+review. Opening the working adapter under a verified account records its
+native thread, provider and source-policy basis. If the service restarts before
+the review, this saved identity is eligible only while the account, settings
+and binding still match. A live adapter must be idle before Core parks its
+working identity with the review Turn. On return with the same authority, the
+adapter resumes that native thread directly if there are no new visible review
+answers. Otherwise it uses a
 native fork to inherit the compaction checkpoint and injects only those answers.
 The recovered user input already belongs to the original request. It is not a
 new history message. The child is published only after the exact policy, source,
@@ -1986,6 +2011,13 @@ card cannot substitute for final-message readback.
 
 ### Recovering a native result after Core failure
 
+A native terminal error remains a failure. When the complete current invocation
+is idle, every observed step is settled and its final error is done, the adapter
+retires that invocation's cancellation target before returning the structured
+error. Active or unknown steps retain existing bounded cancellation and permission
+handling. Avoiding a second cancellation neither proves effect-free execution
+nor grants replay, recovery, result adoption or business-completion authority.
+
 A quota-failure notice remains pending work. For Antigravity, the original worker
 may reserve one new quota-continuation Turn only after two independent reads of
 the same idle native trajectory prove its latest invocation contains exactly the
@@ -2026,14 +2058,19 @@ metadata. Such work remains pending after the recovered prose is delivered;
 answer restoration does not certify the requested business or handoff complete.
 Cancellation failure retains the primary provider error and unconfirmed cleanup.
 
-After the recovered answer is independently delivered, a malformed batch whose
-only actions are string-brief handoffs can reserve one **format review** through
-the original Session queue. Fresh original native input/answer hashes, current
-binding, source readback and an idle queue are required. The review sends no
-business request again: that invocation disables native tools and user hooks,
-requires exact normal text-only completion, and withholds model prose until
-validation. Each normalized brief must retain its original context text and the
-same ordered recipients. Other actions, changed targets, unknown completion,
+After the original answer is independently delivered and its native result is
+matched, a malformed batch containing only handoffs with bounded textual briefs
+can reserve one **format review** through the original Session queue. Fresh
+original native input/answer hashes, current binding, source readback and an
+idle queue are required. Handoff `inputs` identify shared relative files;
+put PR, issue and other web links in `context`. When a brief is otherwise valid
+and every input is a plain HTTPS link without credentials, a query or a fragment,
+the reserved review on the original adapter retains the entire original brief
+verbatim as context with empty file inputs. It does not fetch URLs or send a
+new model request. Other eligible shapes and the configured Codex fallback
+use the existing tools-disabled, text-only native review;
+model prose is withheld until validation. Both paths preserve the original
+text and ordered recipients. Other actions, changed targets, unknown completion,
 new input, steering, stop or revoked authority admit no handoff.
 
 The existing ingress preserves the original source id, so ordinary publication
@@ -2043,7 +2080,7 @@ The original reply worker returns those receipts in a distinct presentation
 phase alongside the immutable failed Turn, failure notice and recovered answer.
 Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
-Other malformed actions and completed Turns without a recovered native result
+Other malformed actions and completed Turns without a verified native result
 remain explicit holds; this path is not a generic action or execution replayer.
 
 ### Completed private project result reviews
@@ -2064,6 +2101,19 @@ to this source, supplies an antecedent, settles effects or creates missing work
 intent. The original worker independently checks current artifacts and returns
 one read-only answer under this source's own idempotent identity. A legacy review
 cannot seed another legacy review; changed evidence and exhausted attempts hold.
+
+Host event-compaction filesystem stamps are excluded from the two retained Turn
+evidence locations before crossing the JSON/JavaScript boundary; nanoseconds
+must not become rounded answer or authority evidence. All semantic fields stay
+pinned. An already failed legacy preparation can recover once only when the
+canonical trace is exactly queue then local `host_gate`, with no native input,
+delta or response, and fresh native inventory excludes hidden dispatch. This
+retains the failed Turn and reservation in history and uses a distinct, pinned
+preparation receipt/phase. It does not renew the single model invocation: an
+actual dispatch, unknown native work, changed source/evidence, Stop, or a second
+preparation failure remains held. Reservation/queue crashes adopt that receipt.
+Its existing `preparation-1` key carries the explicit read-only preparation tag;
+older readers reject that policy combination before model dispatch on rollback.
 
 A new result review now requires an explicit observation that no original
 writable adapter is attached. An inconclusive effect readback while that owner

@@ -18,6 +18,8 @@ FIXTURE_PATH = REPO_ROOT / "examples" / "control_plane" / "quota_plan_fixtures.p
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
+
 from loopx.control_plane.quota.slot_accounting import (  # noqa: E402
     _latest_unspent_turn_settlement_run,
 )
@@ -63,7 +65,8 @@ def run_quota(root: Path, registry_path: Path, runtime: Path, *args: str) -> tup
         text=True,
     )
     assert result.stdout, result.stderr
-    return json.loads(result.stdout), result.returncode
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body), result.returncode
 
 
 def is_state_or_accounting_command(action: str) -> bool:

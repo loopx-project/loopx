@@ -677,6 +677,29 @@ show an unavailable notice without querying local owners.
 M3, W2/W3, installed behavior and real L1/G1 delivery/original-route return retain their existing owners.
 This candidate does not close those qualification gates.
 
+**Prospective V10 rendering qualification (2026-11-09).**
+The original all-samples 1-second gate remains the criterion for its historical
+results. Subsequent loaded-lens qualification repeats each of the same five
+directed transitions three times on the complete 200-item fixture, starting each
+repeat on Board. Every transition's median must be below 1 second; every sample
+must be below the existing 2-second page-usability ceiling. Three repetitions
+are the smallest odd sample count that separates one moderate outlier from a
+repeated slowdown. Report all 15 click-to-visible samples, the five medians,
+maximum and count above the 1-second target before asserting the budget.
+Playwright action waiting and browser scheduling are included; this is local
+rendering qualification, not pure backend latency or a kernel regression verdict.
+The bounded isolated-overage allowance applies to both a real page delay and
+host scheduling overhead; a median cannot identify their cause. Browser long-task
+entries are reported alongside each measured window when supported, with an
+explicit unavailable signal otherwise. They are diagnostic evidence, not proof
+that an unexplained Linux overrun was host noise. A single real page stall below
+2 seconds may pass this prospective rule; the above-target sample remains visible.
+Every lens retains all 200 items, and classification, selection, no-effect and
+error checks remain independent of timing. Initial rendering and expansion retain
+their existing 2-second checks. Historical failures are not reclassified by this
+rule; cross-host, installed, live-team, full-cost and unrelated CI qualification
+still require their own evidence.
+
 **Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
 and the packaged page on synthetic status; V2 strip and Board sharing the work

@@ -9,9 +9,9 @@ import './research-case-study.css';
 type ResearchGoal = ResearchChildGoal & Pick<WorkspaceGoal, 'parentGoalId' | 'sourceStrategy'>;
 
 /** Parentage organizes explicit source views; it never combines evidence or execution scope. */
-function ResearchGoalNavigation({goalId, goals, zh, onSelect, directoryUrl, active, showTiming, refreshRevision}: {
+function ResearchGoalNavigation({goalId, goals, zh, onSelect, directoryUrl, active, refreshRevision}: {
   goalId: string; goals: ResearchGoal[]; zh: boolean; onSelect: (goalId: string) => void;
-  directoryUrl?: string; active: boolean; showTiming: boolean; refreshRevision: number;
+  directoryUrl?: string; active: boolean; refreshRevision: number;
 }) {
   const selected = goals.find(g => g.goalId === goalId);
   if (!selected) return null;
@@ -24,7 +24,7 @@ function ResearchGoalNavigation({goalId, goals, zh, onSelect, directoryUrl, acti
   return <nav className="research-goal-navigation" aria-label={zh ? '研究 Goal 层级' : 'Research Goal hierarchy'}>
     {parent ? <button type="button" className="research-parent-goal" onClick={() => onSelect(parent.goalId)}>← {parent.title}</button> : null}
     {children.length ? <ResearchChildGoals goals={children} zh={zh} onSelect={onSelect}
-      directoryUrl={directoryUrl} active={active} showTiming={showTiming} refreshRevision={refreshRevision}/> : null}
+      directoryUrl={directoryUrl} active={active} showTiming refreshRevision={refreshRevision}/> : null}
   </nav>;
 }
 
@@ -35,14 +35,14 @@ export function GoalResearchWorkbench(props: {goalId: string; active: boolean; z
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   return <div className="goal-research-workbench">
     {props.statusNotice}
-    {/* The directory supplies navigation while the selected snapshot loads.
-        A denied or stale snapshot still blocks evidence reads. */}
+    {/* Each child timing read validates its own source independently of the
+        selected snapshot, whose failure still blocks this Goal's history. */}
     {props.goals && props.onSelectGoal ? <ResearchGoalNavigation goalId={props.goalId} goals={props.goals}
       zh={props.zh} onSelect={props.onSelectGoal} directoryUrl={props.directoryReadSourceUrl}
-      active={props.active} showTiming={!props.statusNotice} refreshRevision={props.refreshRevision}/> : null}
+      active={props.active} refreshRevision={props.refreshRevision}/> : null}
     {!props.statusNotice ? <>
       <GoalResearchHistory {...props} originalGoalId={source?.original_goal_id}
-        preferHistory={Boolean(source)} sourceStrategy={selected?.sourceStrategy}
+        preferHistory={Boolean(source)}
         onOpenSourceTasks={source ? props.onOpenTasks : undefined}/>
       <details className="research-saved-evidence" open={evidenceOpen} onToggle={event => setEvidenceOpen(event.currentTarget.open)}>
         <summary>{props.zh ? "阅读已保存的结论" : "Read saved findings"}</summary>

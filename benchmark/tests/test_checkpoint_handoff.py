@@ -579,24 +579,41 @@ def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch,
         assert reads == [True]
 
 
-@pytest.mark.parametrize("native_participant", [False, True])
-@pytest.mark.parametrize("native_context", [False, True])
-def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, monkeypatch, native_participant, native_context):
+@pytest.mark.parametrize("native_context,native_participant,tampered_digest", [
+    (False, False, False), (False, True, False),
+    (True, False, False), (True, True, False),
+    (True, False, True), (True, True, True),
+])
+def test_preflight_defers_history_only_when_capture_will_verify_it(
+    tmp_path, monkeypatch, native_participant, native_context, tampered_digest,
+):
+    from pathlib import Path
     from types import SimpleNamespace
     from benchmark.runtime import checkpoint
+    from loopx.control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
     wake = tmp_path / "wakes" / "turn"
     wake.mkdir(parents=True)
     request = tmp_path / "request"
     request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
         "trigger": "fresh_replan", "native_session": native_participant,
         "components": [{"id": "code", "source_path": str(tmp_path / "code")}], "point_metadata": {}}))
+    guard_commands = []
     def guard(command, **kwargs):
-        from pathlib import Path
-        captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
+        guard_commands.append(command)
+        if native_context:
+            assert "--prepared-capture-reference" in command
+            assert "--defer-context-presentation" in command
+            assert "--decision-output-root" not in command
+            captured = Path(command[command.index("--decision-output-dir") + 1])
+        else:
+            captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
         captured.mkdir()
         original = json.dumps({"ok": True, "source": captured.parent.name})
         (captured / "decision.json").write_text(original)
         (captured / "decision.json").chmod(0o600)
+        if native_context:
+            digest = "0" * 64 if tampered_digest else hashlib.sha256(original.encode()).hexdigest()
+            return SimpleNamespace(stdout=json.dumps(prepared_capture_reference(json.loads(original), digest)))
         return SimpleNamespace(stdout=original if native_participant else
                                json.dumps({"ok": True, "view": captured.parent.name}))
     monkeypatch.setattr(checkpoint.subprocess, "run", guard)
@@ -612,26 +629,31 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
     receipt = {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"}
     if native_context:
         env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / "context"))
+    if tampered_digest:
+        with pytest.raises(ValueError, match="prepared capture differs from the original guard"):
+            checkpoint.capture_before_replan(env, receipt, "current work")
+        assert len(guard_commands) == 1 and not observed
+        assert not (wake / "checkpoint-start-guard.json").exists()
+        return
     body = checkpoint.capture_before_replan(env, receipt, "current work")
     assert body.endswith("current work")
     view = wake / "checkpoint-start-view.json"
     assert observed == [not native_participant]
     if native_context:
-        pattern = ("checkpoint-start-*/decision-original/decision.json" if native_participant else
-                   "checkpoint-start-*/checkpoint-start-view.json")
+        pattern = "checkpoint-start-*/decision-original/decision.json"
         original, = wake.glob(pattern)
         assert str(original) in body and hashlib.sha256(original.read_bytes()).hexdigest() in body
+        assert "context-project" in body and "--initial-read" in body
         first_bytes = original.read_bytes()
-        if native_participant:
-            assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
-        else:
-            assert json.loads(first_bytes) == {"ok": True, "view": original.parent.name}
+        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        assert json.loads(first_bytes) == {"ok": True, "source": original.parent.parent.name}
         assert original.stat().st_mode & 0o077 == 0
         resumed = checkpoint.capture_before_replan(env, receipt, "resume")
         second, = set(wake.glob(pattern)) - {original}
         assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
         assert original.read_bytes() == first_bytes != second.read_bytes()
         assert not view.exists()
+        assert len(guard_commands) == 2
     else:
         assert str(view) in body and json.loads(view.read_text())["ok"]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
