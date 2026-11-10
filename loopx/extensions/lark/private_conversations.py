@@ -2081,15 +2081,11 @@ class LarkPrivateConversations:
                     if not turn or turn["status"] not in TERMINAL_TURN_STATES:
                         return 0
                     if turn["status"] == "failed":
-                        retry_info = None
-                        if turn.get("error_code") == "host_gate":
-                            events = self.core.controller.store.events_after(record["session_id"], record["turn_id"], None)
-                            retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
-                                for event in reversed(events) if event.get("kind") == "agent.phase"
-                                and event.get("payload", {}).get("method") == "error"), None)
+                        events = self.core.controller.store.events_after(record["session_id"], record["turn_id"], None
+                            ) if turn.get("error_code") in {"host_gate", "response_timeout"} else []
                         preparation_recovery = (record["source"].get("private_human_message") is True
                             and selected["binding"].get("context_kind") in {"project", "steward"} and not native.get("agent_target"))
-                        response = manager_failure_reply(turn, retry_info=retry_info,
+                        response = manager_failure_reply(turn, phase_events=events,
                             preparation_recovery=preparation_recovery)[1] + " 原会话已保留。"
                     else:
                         response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (

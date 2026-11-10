@@ -660,7 +660,9 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
     && (condition.target_todo_id !== spec.target || spec.target === waitingTodo.todo_id)) return false;
   switch (spec.kind) {
     case "todo_done":
-      return ["open", "deferred"].includes(String(condition.target_status))
+      // A blocked prerequisite is still identified unfinished work. Waiting
+      // for its completion neither resolves its blocker nor resumes its owner.
+      return ["open", "deferred", "blocked"].includes(String(condition.target_status))
         && ["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))
         && (condition.target_archive_state === null || condition.target_archive_state === "active");
     case "monitor_changed": {
