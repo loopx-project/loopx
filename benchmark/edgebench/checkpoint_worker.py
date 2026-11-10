@@ -254,7 +254,7 @@ def _worker_lock(client, container_id: str) -> Path:
 
 def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                    destination: Path, request_file: Path, timeout: float = 30,
-                   seal_within_phase: bool = False) -> dict:
+                   seal_within_phase: bool = False, terminal_scheduler_phases: bool = False) -> dict:
     """Freeze one explicitly owned worker and seal its files with native state.
 
     A fresh identity is required. Failed or uncertain attempts never recapture a
@@ -272,6 +272,8 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
     request = _request(request_file)
     if seal_within_phase and "handoff" not in request:
         raise ValueError("Post-release sealing requires an exact prepared handoff")
+    if terminal_scheduler_phases and "handoff" in request:
+        raise ValueError("Terminal phase discovery cannot change a prepared handoff")
     controller = _controller(controller_file)
     destination = Path(destination)
     _physical(destination.parent)
@@ -312,6 +314,10 @@ def capture_worker(controller_file: Path, *, token: str, capture_id: str,
                     container.reload()
                     if not container.attrs["State"]["Paused"]:
                         raise RuntimeError("Worker writer barrier was not established")
+                    if terminal_scheduler_phases:
+                        from .terminal_capture import _scheduler_components_at_barrier
+                        request = _validate_request({**request, "components": _scheduler_components_at_barrier(
+                            container, request["components"], stage, deadline=deadline)})
                     if "handoff" in request:
                         held = _archive(container, request["handoff"]["source_path"], stage / "held", deadline=deadline)
                         raw = held.read_bytes()

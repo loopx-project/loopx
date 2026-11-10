@@ -15,7 +15,7 @@ from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _PHA
 
 
 def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str]]:
-    """Explicit full-capture participants, without the credential-bearing home."""
+    """Static allowlist; admitted phases are selected at the writer barrier."""
     from benchmark.runtime.research_artifacts import validate_research_scope
 
     validate_research_scope(workspace, ["."])
@@ -45,6 +45,41 @@ def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str
     _validate_request({"container_id": "0" * 64, "components": components,
                        "phase_deadline_path": _PHASE_DEADLINE})
     return components
+
+
+def _scheduler_components_at_barrier(container, components, stage, *, deadline):
+    """Follow only the admitted clock and predecessor chain while paused."""
+    import json
+    import re
+    import docker
+    from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE
+    from benchmark.runtime.scheduler import phase_state_name
+    from .checkpoint_worker import _archive
+
+    root = PurePosixPath(_CONTROL, "scheduler-state.json")
+    if {"id": "terminal_scheduler", "source_path": str(root)} not in components:
+        raise ValueError("Terminal capture requires its original scheduler root")
+    try:
+        clock = _archive(container, _ACTIVE_PHASE_DEADLINE, stage / "active-clock", deadline=deadline)
+    except docker.errors.NotFound:
+        return components  # A fresh worker has no admitted continuation.
+    current = root.with_name(phase_state_name(root, float(clock.read_bytes())))
+    chain = []
+    while current != root:
+        if (current in chain or current.parent != root.parent
+                or not re.fullmatch(re.escape(root.stem) + r"\.phase-[0-9a-f]{20}\.json", current.name)):
+            raise ValueError("Terminal scheduler predecessor chain is invalid")
+        copied = _archive(container, str(current), stage / f"phase-{len(chain)}", deadline=deadline)
+        state = json.loads(copied.read_bytes())
+        if not isinstance(state, dict) or not isinstance(state.get("resume_from"), str):
+            raise ValueError("Terminal scheduler phase has no original predecessor")
+        chain.append(current)
+        parent = PurePosixPath(state["resume_from"])
+        if str(parent) != state["resume_from"]:
+            raise ValueError("Terminal scheduler predecessor is not canonical")
+        current = parent
+    return [*components, *({"id": f"terminal_scheduler_phase_{index}", "source_path": str(path)}
+        for index, path in enumerate(reversed(chain), start=1))]
 
 
 class FailurePreservation:
@@ -111,7 +146,7 @@ class FailurePreservation:
             point = capture_worker(supervisor.controller_file, token=supervisor.token,
                 capture_id=self.receipt["capture_id"],
                 destination=self.supervisor.destination / self.receipt["capture_id"],
-                request_file=request, timeout=CHECKPOINT_CAPTURE_SECONDS)
+                request_file=request, timeout=CHECKPOINT_CAPTURE_SECONDS, terminal_scheduler_phases=True)
             self.receipt.update(capture_succeeded=True, capture=point)
         except Exception as error:
             # No remote message, output, account information or token is retained.

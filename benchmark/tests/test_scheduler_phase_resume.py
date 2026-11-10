@@ -117,7 +117,7 @@ def test_budget_phase_retries_keep_the_same_state_and_original_receipts(tmp_path
     assert new != str(old) and Path(new).parent == old.parent
     clock = tmp_path / "active-phase-deadline"
     admitted_clock = clock.read_bytes()
-    assert float(admitted_clock) <= end < float(admitted_clock) + 1
+    assert float(admitted_clock) == end
     Path(new).write_text('{"host_attempt":{"status":"failed"}}')
     assert resume_state_file(str(old), phase_deadline=end, agent_id="agent", wake_log_dir=str(tmp_path / "wakes")) == new
     state = json.loads(old.read_bytes())
