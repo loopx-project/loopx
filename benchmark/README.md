@@ -1547,14 +1547,17 @@ python -m benchmark.runtime.scheduler \
   --retry-failed-state-sha256 EXACT_FAILED_STATE_SHA256
 ```
 
-The recovery provider requires one returned `quota_exhausted` wake, its original
-session/profile binding, terminated native process group and a stable native
-`failed` tail with the corresponding structured quota error and no pending tool
-effects. Legacy workers can use the same stopped-container proof above, but only
-when the exact last returned failure, original session and complete unchanged
-filesystem are retained. Unknown errors, missing sessions and incomplete history
-remain held. The ordinary completed-checkpoint gate is unchanged; a failed native
-Turn is not rewritten or presented as completed.
+The recovery provider requires the exact failed-state digest, the original
+session/profile binding, a terminated native process group and a stable native
+`failed` tail without pending effects. Quota recovery requires the corresponding
+structured `quota_exhausted` error and accepts the stopped-container proof for
+legacy workers with the exact last failure, original session and retained
+filesystem verified byte-for-byte. For other failures, including `unknown`, the
+provider-selected rollout must identify one failed Turn with start and completion
+records within the original process window through its first observed return. The
+native tail must name that Turn and match the original CLI's terminal error.
+Missing or ambiguous evidence keeps the failure held. Idle handoff and completed
+checkpoints use their own evidence gates.
 
 The shared Turn retry rule decides explicit-retry eligibility. A new append-only
 phase records the original failure, digest, native cursor and deadline, retains

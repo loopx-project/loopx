@@ -5,6 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import type { FileRunner } from '../src/cli.ts'
+import { LoopXCliError } from '../src/cli.ts'
 import {
   apply as applyDriver,
   LoopXContinuationDriver,
@@ -27,6 +28,7 @@ interface FakeAgent {
   readonly nextStep: UserMessage[]
   appendEvent(event: SessionEvent): void
   replaceSession(headerId?: string, events?: SessionEvent[]): void
+  setMaintenanceBusy(busy: boolean): void
   setStatus(status: 'idle' | 'running'): void
 }
 
@@ -45,6 +47,9 @@ function fakeAgent(id = sessionId): FakeAgent {
   let status: 'idle' | 'running' = 'idle'
   let cancelCalls = 0
   let maintenanceCalls = 0
+  let maintenanceBusy = false
+  let idle = Promise.resolve()
+  let releaseMaintenance: (() => void) | undefined
   const inbox = {
     nextTurn,
     nextStep,
@@ -93,9 +98,10 @@ function fakeAgent(id = sessionId): FakeAgent {
     ctx: {},
     get status() { return status },
     cancel() { cancelCalls += 1 },
-    whenIdle: async () => {},
-    runMaintenance: async <T>(task: (signal: AbortSignal) => Promise<T>) => {
+    whenIdle: () => idle,
+    runMaintenance: <T>(task: (signal: AbortSignal) => Promise<T>) => {
       maintenanceCalls += 1
+      if (maintenanceBusy) throw new Error(`agent "${id}" already has active work`)
       return task(new AbortController().signal)
     },
     send(message: UserMessage, target: 'next-turn' | 'next-step') {
@@ -118,6 +124,11 @@ function fakeAgent(id = sessionId): FakeAgent {
         ...session.header,
         ...(headerId === undefined ? {} : { id: headerId }),
       })
+    },
+    setMaintenanceBusy(busy) {
+      maintenanceBusy = busy
+      if (busy) idle = new Promise<void>(resolve => { releaseMaintenance = resolve })
+      else releaseMaintenance?.()
     },
     setStatus(value) { status = value },
   }
@@ -456,6 +467,140 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('same-session LoopX driver', () => {
+  it('retries admission after attach-time maintenance becomes free without an idle event', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    host.setMaintenanceBusy(true)
+
+    try {
+      observeActivated(driver, host)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(host.maintenanceCalls).toBe(1)
+      expect(fixture.calls).toHaveLength(0)
+      expect(host.nextTurn).toHaveLength(0)
+
+      host.setMaintenanceBusy(false)
+      await waitFor(() => host.nextTurn.length === 1)
+      driver.onAgentStatus(host.agent, 'idle')
+      driver.onAgentStatus(host.agent, 'idle')
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+      expect(host.maintenanceCalls).toBe(2)
+      expect(fixture.quotaCalls).toHaveLength(1)
+      expect(fixture.heartbeatCalls).toBe(1)
+      expect(host.nextTurn).toHaveLength(1)
+    } finally {
+      await driver.dispose()
+    }
+  })
+
+  it('waits for persistent maintenance contention without polling or spinning', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const clock = { setTimeout: vi.fn(), clearTimeout: vi.fn() }
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      clock,
+    })
+    const whenIdle = vi.spyOn(host.agent, 'whenIdle')
+    host.setMaintenanceBusy(true)
+
+    try {
+      observeActivated(driver, host)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+      expect(whenIdle).toHaveBeenCalledTimes(1)
+      expect(host.maintenanceCalls).toBe(1)
+      expect(clock.setTimeout).not.toHaveBeenCalled()
+      expect(fixture.calls).toHaveLength(0)
+      expect(host.nextTurn).toHaveLength(0)
+    } finally {
+      await driver.dispose()
+    }
+  })
+
+  it.each(['Pause', 'dispose', 'human input', 'Session replacement', 'Agent disposal'])(
+    'cancels pending maintenance admission retry on %s',
+    async action => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const driver = makeDriver(fixture)
+      host.setMaintenanceBusy(true)
+
+      try {
+        observeActivated(driver, host)
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        expect(host.maintenanceCalls).toBe(1)
+
+        if (action === 'Pause') {
+          await expect(driver.cancelQueued({ agent: host.agent, session: host.agent.session }))
+            .resolves.toEqual({ kind: 'applied' })
+        } else if (action === 'dispose') {
+          await driver.dispose()
+        } else if (action === 'human input') {
+          const human = userMessage('human priority')
+          host.nextTurn.push(human)
+          driver.onInboxInserted(host.agent, human)
+        } else if (action === 'Session replacement') {
+          host.replaceSession(undefined, [])
+          driver.onSessionStart(host.agent)
+        } else {
+          driver.onAgentDisposed(host.agent)
+        }
+        host.setMaintenanceBusy(false)
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+        expect(host.maintenanceCalls).toBe(1)
+        expect(fixture.calls).toHaveLength(0)
+        expect(host.nextTurn.filter(message => message.source.kind === 'loopx-continuation'))
+          .toHaveLength(0)
+      } finally {
+        await driver.dispose()
+      }
+    },
+  )
+
+  it.each([
+    ['typed authority denial', new LoopXCliError('typed_failure', 'denied', false)],
+    ['invalid schema', new LoopXCliError('invalid_schema', 'incompatible', false)],
+    ['missing CLI', new LoopXCliError('missing', 'unavailable', false)],
+    ['cancellation', new LoopXCliError('aborted', 'cancelled', false)],
+    ['busy-looking admission error', new Error(`agent "${sessionId}" already has active work`)],
+  ])('does not retry %s after the maintenance callback starts', async (_label, error) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const whenIdle = vi.spyOn(host.agent, 'whenIdle')
+    let resolutions = 0
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      resolveCommand: async () => {
+        resolutions += 1
+        throw error
+      },
+    })
+    host.setMaintenanceBusy(true)
+
+    try {
+      observeActivated(driver, host)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      host.setMaintenanceBusy(false)
+      await waitFor(() => resolutions === 1)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+      expect(host.maintenanceCalls).toBe(2)
+      expect(whenIdle).toHaveBeenCalledTimes(1)
+      expect(resolutions).toBe(1)
+      expect(fixture.calls).toHaveLength(0)
+      expect(host.nextTurn).toHaveLength(0)
+    } finally {
+      await driver.dispose()
+    }
+  })
+
   it('keeps a newly observed inactive Agent at zero LoopX I/O and zero timers', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
