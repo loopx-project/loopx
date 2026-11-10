@@ -353,6 +353,29 @@ def _prepare_quota_result_context(
     return payload, activation
 
 
+def _emit_scheduler_observation_result(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    context: QuotaCommandContext | None,
+    registry_path: Path,
+    heartbeat_turn_id: str | None,
+    usage_quota_started: int,
+    print_payload: PrintPayload,
+) -> int:
+    """Emit the bounded observer without entering native capture or settlement."""
+    if context is not None:
+        observe_quota_result(
+            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+            started_at=usage_quota_started,
+        )
+    succeeded = payload.get("ok") is True
+    print_payload(project_scheduler_observation(payload), args.format,
+                  _quota_renderer(args, failure=not succeeded))
+    return 0 if succeeded else 1
+
+
 def _emit_quota_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -368,37 +391,37 @@ def _emit_quota_result(
     """Capture the full decision before projecting and printing the CLI view."""
     from ..command_invocation import current_loopx_cli_argv
 
-    scheduler_observation = getattr(args, "scheduler_observation", False)
+    if getattr(args, "scheduler_observation", False):
+        return _emit_scheduler_observation_result(
+            payload, args, context=context, registry_path=registry_path,
+            heartbeat_turn_id=heartbeat_turn_id, usage_quota_started=usage_quota_started,
+            print_payload=print_payload,
+        )
     reader_argv = current_loopx_cli_argv()
     budgeted_spend = (args.quota_command == "spend-slot" and args.format == "json" and context is not None
         and getattr(args, "max_page_output_bytes", None) is not None)
     activation = None
-    if not scheduler_observation:
-        if not budgeted_spend:
-            payload, activation = _prepare_quota_result_context(
-                payload, args, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
-                capture_directory=capture_directory,
-            )
-        # Compose optional capability guidance after recovery has chosen the plan,
-        # before capture/compaction. The observer is not a model-facing capture.
-        cli = (payload.get("interaction_contract") or {}).get("cli_channel")
-        if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
-            from ..capabilities.explore.turn_context import project_settlement_attachment
+    if not budgeted_spend:
+        payload, activation = _prepare_quota_result_context(
+            payload, args, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
+            capture_directory=capture_directory,
+        )
+    # Compose optional capability guidance after recovery has chosen the plan,
+    # before capture/compaction. The quota decision owner stays capability-neutral.
+    cli = (payload.get("interaction_contract") or {}).get("cli_channel")
+    if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
+        from ..capabilities.explore.turn_context import project_settlement_attachment
 
-            cli["settlement_plan"] = project_settlement_attachment(
-                cli["settlement_plan"], registry_path=registry_path,
-                runtime_root=context.runtime_root if context is not None else None,
-            )
+        cli["settlement_plan"] = project_settlement_attachment(
+            cli["settlement_plan"], registry_path=registry_path,
+            runtime_root=context.runtime_root if context is not None else None,
+        )
     if context is not None:
         observe_quota_result(
             args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
-    if scheduler_observation:
-        succeeded = payload.get("ok") is True
-        print_payload(project_scheduler_observation(payload), args.format, _quota_renderer(args, failure=not succeeded))
-        return 0 if succeeded else 1
     if budgeted_spend:
         assert context is not None
         return _emit_bounded_settlement(payload, args, runtime_root=context.runtime_root,
