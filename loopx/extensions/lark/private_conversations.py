@@ -1937,13 +1937,14 @@ class LarkPrivateConversations:
             self._repair_recovery_presentation(path)
             if not self.core.context_recovery_candidate(row["request_ref"]):
                 return 0
-        if row["status"] == "delivered" and row.get("session_id") and row.get("turn_id"):
+        if (row.get("session_id") and row.get("turn_id") and (row["status"] == "delivered"
+                or row["status"] == "accepted" and self.core.context_recovery_candidate(row["request_ref"]))):
             # Legacy terminal delivery may be only a verified failure notice.
             # Core decides whether a migration continuation is safe; preserve
             # the old Turn and every frozen/ambiguous provider attempt.
             recovered = self.core.recover_failed_request(row["request_ref"],
                 source_observation=lambda selected: self._recovery_source_observation(row, selected))
-            if (recovered.get("native_result_recovery")
+            if (row["status"] == "delivered" and recovered.get("native_result_recovery")
                     and recovered["native_result_recovery"]["turn_id"] == recovered.get("turn_id")):
                 return self._reconcile_native_result(path, recovered)
             if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
@@ -2130,7 +2131,8 @@ class LarkPrivateConversations:
                     acknowledge_lark_event_inbox(project=self.runtime_root, config_path=config,
                         message_ids=[record["event"]["message_id"]], execute=True)
                     if native_path.exists():
-                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"), turn_id=record.get("turn_id"))
+                        self.core.record_delivery(record["request_ref"], session_id=record.get("session_id"),
+                            turn_id=record.get("turn_id"), message_text=response)
                     elif record["status"] != "rejected":
                         raise ValueError("delivery request journal unavailable")
                     record["status"] = "delivered"
