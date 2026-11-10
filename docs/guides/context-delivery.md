@@ -75,6 +75,17 @@ One shared preparation call does not prove that every final caller has migrated.
 | Saved-file delta | Verified immutable file versions with compatible identity | Model retention, comprehension or fresh permission |
 | Provider prompt cache | Provider-specific processing/billing reuse of input | Source correctness, task success or LoopX net savings |
 
+Native first reads can also reuse an exact selected Todo note after its whole
+body was observed in the same compatible Host session and context epoch. A fresh
+canonical read must still establish the selected Todo and its source. The
+note binds to its Goal, Agent, Todo, reader and authority source; changing only
+evidence or other Todo metadata does not make the same literal note new. Current
+task text and controls remain fresh, and metadata keeps its current source and
+existing reader. Partial delivery, changed text, incompatible identity or
+compaction returns the full note; explicit recovery reads the same capture.
+This uses observed field coverage, not file existence as retention proof, and
+does not establish model comprehension or net workflow savings.
+
 Replan authoring uses the same-response form: CLI display can reference the
 complete `vision_authoring` in a durable-writeback step. The existing TypeScript
 Turn owner chooses an exact owner and resolves it for ordinary and captured
