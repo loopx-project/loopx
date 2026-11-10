@@ -3147,6 +3147,10 @@ function PersonalGoalHome({
             if (turnId) {
               activeTurnIds.current.set(run.goalId, turnId);
               const controller = new AbortController();
+              const observationKey = `${run.sessionId}:${turnId}`;
+              // History recovery must adopt this correction's observer when
+              // the owner returns to Chat, just as it adopts composer Turns.
+              turnObservers.current.set(observationKey, controller);
               streamControllers.current.set(run.goalId, controller);
               let streamedText = "";
               const messageId = appendManagerAssistantMessage(run.goalId, {
@@ -3181,14 +3185,18 @@ function PersonalGoalHome({
                   text: interrupted ? [streamedText.trim(), "已中断。你可以在当前会话继续发送消息。"].filter(Boolean).join("\n\n") : error instanceof Error ? error.message : "纠偏回合失败。",
                 });
               } finally {
-                activeTurnIds.current.delete(run.goalId);
-                streamControllers.current.delete(run.goalId);
-                recordRuntimeBinding(run.goalId, {
-                  agentId: run.agentId,
-                  resumable: true,
-                  sessionId: run.sessionId,
-                  status: "ready",
-                });
+                if (turnObservers.current.get(observationKey) === controller) turnObservers.current.delete(observationKey);
+                const ownsStream = streamControllers.current.get(run.goalId) === controller;
+                if (ownsStream) streamControllers.current.delete(run.goalId);
+                if (ownsStream && activeTurnIds.current.get(run.goalId) === turnId) {
+                  activeTurnIds.current.delete(run.goalId);
+                  recordRuntimeBinding(run.goalId, {
+                    agentId: run.agentId,
+                    resumable: true,
+                    sessionId: run.sessionId,
+                    status: "ready",
+                  });
+                }
               }
             }
           },
