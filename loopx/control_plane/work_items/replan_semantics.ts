@@ -98,6 +98,7 @@ function requiresStrideDecision(obligation: JsonObject, fallbackStrategy: unknow
 function historicalAckDelta(
   request: JsonObject, candidateSource: JsonObject, selected: string,
 ): JsonObject | null {
+  if (request.guard_scoped !== true) return null;
   const goal = typeof request.goal_id === "string" ? request.goal_id.trim() : "";
   const agent = typeof request.agent_id === "string" ? request.agent_id.trim() : "";
   const guardTurn = typeof request.guard_turn_instance_id === "string"
