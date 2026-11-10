@@ -509,6 +509,23 @@ def test_quota_action_selection_requires_turn_identity() -> None:
     )
 
 
+def test_monitor_change_scope_requires_material_transition() -> None:
+    args = build_parser().parse_args(
+        [
+            "quota",
+            "monitor-poll",
+            "--goal-id",
+            "goal",
+            "--material-change-scope",
+            "case-a/run-1",
+        ]
+    )
+    with pytest.raises(ValueError, match="requires quota monitor-poll --material-change"):
+        validate_quota_command_request(args)
+    args.material_change = True
+    validate_quota_command_request(args)
+
+
 @pytest.mark.parametrize(
     ("extra_args", "expected"),
     [

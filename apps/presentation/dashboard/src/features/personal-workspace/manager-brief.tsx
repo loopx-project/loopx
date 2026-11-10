@@ -67,7 +67,6 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
   goals: WorkspaceGoal[]; onSelectGoal: (goalId: string) => void;
   attention?: WorkspaceAttention[]; onSelectAttention?: (item: WorkspaceAttention) => void;
   operations?: WorkspaceActionPreview[]; onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
-  onViewAllOperations?: () => void;
 }) {
   const { t, locale } = useWorkspaceI18n();
   const active = goals.filter((goal) => goal.activationState === "active" && !goal.loadState);

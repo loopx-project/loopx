@@ -255,6 +255,7 @@ def _observation_packet(
     target_key: str | None,
     result_hash: str | None,
     material_change: bool,
+    material_change_scope: str | None,
     cadence: str | None,
     next_due_at: str | None,
     next_agent_todo: str | None,
@@ -284,6 +285,7 @@ def _observation_packet(
         "target_key": target_key,
         "result_hash": result_hash,
         "material_change": material_change,
+        **({"material_change_scope": material_change_scope} if material_change_scope is not None else {}),
         "cadence": cadence,
         "next_due_at": next_due_at,
         "next_agent_todo": next_agent_todo,
@@ -384,6 +386,7 @@ def build_quota_monitor_poll_event(
     target_key: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
+    material_change_scope: str | None = None,
     authorized_due_monitor_poll: bool | None = None,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
@@ -408,6 +411,7 @@ def build_quota_monitor_poll_event(
         target_key=safe_target_key,
         result_hash=safe_result_hash,
         material_change=material_change,
+        material_change_scope=material_change_scope,
         cadence=None,
         next_due_at=None,
         next_agent_todo=None,
@@ -627,6 +631,7 @@ def _monitor_poll_failure(
     target_key: str | None,
     result_hash: str | None,
     material_change: bool,
+    material_change_scope: str | None,
     reason: str,
     before: dict[str, Any],
     turn_instance_id: str | None = None,
@@ -645,6 +650,7 @@ def _monitor_poll_failure(
         "target_key": target_key,
         "result_hash": result_hash,
         "material_change": material_change,
+        "material_change_scope": material_change_scope,
         "reason": reason,
         "decision_summary": {
             "before": compact_quota_decision(before),
@@ -689,6 +695,7 @@ def _monitor_advancement_authoring_fields(
     *,
     material_change: bool,
     monitor_todo_id: Any,
+    material_change_scope: Any = None,
     successor_todo_ids: list[str],
 ) -> dict[str, Any]:
     """Attach the optional cross-command recipe outside the hot-path reducer."""
@@ -698,6 +705,7 @@ def _monitor_advancement_authoring_fields(
     return {
         "authoring_contract": build_monitor_advancement_authoring_contract(
             monitor_todo_id=str(monitor_todo_id or "") or None,
+            material_change_scope=str(material_change_scope or "") or None,
             successor_todo_ids=successor_todo_ids,
         )
     }
@@ -720,6 +728,7 @@ def _provider_writeback(
         target_key=plan.get("target_key"),
         result_hash=plan.get("result_hash"),
         material_change=plan.get("material_change") is True,
+        material_change_scope=plan.get("material_change_scope"),
         cadence=plan.get("cadence"),
         next_due_at=plan.get("next_due_at"),
         reason_summary=plan.get("reason_summary"),
@@ -764,6 +773,7 @@ def record_quota_monitor_poll_for_decision(
     target_key: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
+    material_change_scope: str | None = None,
     cadence: str | None = None,
     next_due_at: str | None = None,
     next_agent_todo: str | None = None,
@@ -865,6 +875,7 @@ def record_quota_monitor_poll_for_decision(
         target_key=safe_target_key,
         result_hash=safe_result_hash,
         material_change=material_change,
+        material_change_scope=material_change_scope,
         cadence=cadence,
         next_due_at=next_due_at,
         next_agent_todo=next_agent_todo,
@@ -897,6 +908,7 @@ def record_quota_monitor_poll_for_decision(
             target_key=safe_target_key,
             result_hash=safe_result_hash,
             material_change=material_change,
+            material_change_scope=material_change_scope,
             reason=reason,
             before=before,
             turn_instance_id=normalized_turn_id,
@@ -1064,6 +1076,7 @@ def record_quota_monitor_poll_for_decision(
         _monitor_advancement_authoring_fields(
             material_change=result.get("material_change") is True,
             monitor_todo_id=result.get("todo_id"),
+            material_change_scope=result.get("material_change_scope"),
             successor_todo_ids=(
                 [str(item) for item in successor_todo_ids]
                 if isinstance(successor_todo_ids, list)

@@ -21,6 +21,7 @@ from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
 from loopx.extensions.lark.goal_channel_contracts import (
     binding_for_goal,
     read_goal_channel_binding,
+    save_goal_connection,
 )
 from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
 from loopx.extensions.lark.goal_topic_connections import connect_lark_goal_topic
@@ -131,6 +132,7 @@ def _connection_runner(state: dict[str, Any]):
                         "available": True,
                         "verified": True,
                         "appName": "linkmacbot",
+                        **({"openId": state["bot_open_id"]} if "bot_open_id" in state else {}),
                     }
                 },
             }
@@ -3594,3 +3596,606 @@ def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance
         for key, value in expected.items():
             assert row[key] == value
         assert row["content"] == "plain rendered text"
+
+
+def _add_legacy_topic(binding_path: Path, bindings: dict[str, Any], target_ref: str) -> dict[str, Any]:
+    save_goal_connection(
+        binding_path=binding_path, payload=bindings, goal_id="goal-legacy",
+        binding={
+            "enabled": True, "provider": "lark", "target_ref": target_ref,
+            "topic": {"root_message_id": "om_legacy_topic"},
+            "routing": {"ingress_mode": "direct_session", "incoming_mode": "mentions", "reply_mode": "topic_reply"},
+        },
+    )
+    return read_goal_channel_binding(binding_path)
+
+
+@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load", "legacy_topic", "late_binding", "callbacks"), [
+    *((manager, "session_queue", load, False, False, False) for manager in (False, True) for load in (63, 64, 128)),
+    (False, "live_steering", 63, False, False, False), (False, "live_steering", 64, False, False, False),
+    *((False, "session_queue", load, True, False, False) for load in (63, 64, 128)),
+    pytest.param(False, "session_queue", 63, True, True, False, id="late-binding-63-service"),
+    pytest.param(False, "session_queue", 64, True, True, False, id="late-binding-64-service"),
+    pytest.param(False, "session_queue", 128, True, True, False, id="late-binding-128-service"),
+    pytest.param(False, "session_queue", 64, True, True, True, id="late-binding-64-callback-service"),
+])
+def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
+    tmp_path: Path, monkeypatch, manager: bool, ingress_mode: str, ordinary_load: int, legacy_topic: bool,
+    late_binding: bool, callbacks: bool,
+) -> None:
+    """Use the actual listener, Inbox, Chat store, and Codex stdio protocol."""
+    import runpy
+    import stat
+    import time
+
+    from loopx.chat_manager import manager_channel
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.extensions.lark.event_inbox import ingest_lark_event_inbox
+    from loopx.extensions.lark.goal_topic_runtime import (
+        answer_lark_goal_topic,
+        capture_topic_mention,
+        process_lark_goal_topic_event,
+        stream_lark_goal_topic_profile,
+    )
+    from loopx.extensions.lark.manager_context import opaque_digest, session_turn_effect
+    from loopx.extensions.lark.manager_routing import authorized_manager_goal_ids
+
+    fixture = runpy.run_path(str(Path(__file__).parents[2] / "examples/loopx-chat-runtime-smoke.py"))
+    release = tmp_path / "release"
+    executable = tmp_path / "codex"
+    fake = fixture["FAKE_CODEX"].replace("import json\n", "import json\nfrom pathlib import Path\n", 1)
+    fake = fake.replace(
+        "        response = 'Visible steered response.",
+        f"        until = time.monotonic() + 10\n"
+        f"        while not Path({str(release)!r}).exists() and time.monotonic() < until:\n"
+        "            time.sleep(0.01)\n"
+        "        response = 'Visible steered response.",
+        1,
+    )
+    executable.write_text(fake, encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    registry = {"goals": [{"id": "goal-alpha", "repo": str(tmp_path),
+                           "coordination": {"registered_agents": ["codex"]}}]}
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps(registry), encoding="utf-8")
+    store = ChatSessionStore(tmp_path / "chat")
+    runtime_root = tmp_path / "runtime"
+    snapshot: dict[str, Any] = {}
+    controller = ChatRuntimeController(
+        store=store, codex_bin=str(executable), registry_path=registry_path if manager else None,
+        manager_scope_resolver=lambda session: authorized_manager_goal_ids(
+            snapshot, session, runtime_root=tmp_path, registry_path=registry_path,
+            executor_runtime_root=runtime_root,
+        ),
+    )
+    session, _ = controller.open_session(
+        goal_id="goal-alpha", agent_id="codex", work_dir=tmp_path,
+        objective="Review delivery", mode="resume_latest",
+        channel_id=manager_channel(provider="lark", audience="mew\0oc_public_fixture") if manager else "goal.goal-alpha",
+    )
+    session_id = session["session_id"]
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    state: dict[str, Any] = {"bot_open_id": "ou_fixture_bot"}
+    connected = connect_lark_goal_topic(
+        registry=registry,
+        goal_id="goal-alpha", agent_id="codex", session_id=session_id, target_path=target_path,
+        binding_path=binding_path, app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
+        capture_scope="configured_chat_all", ingress_mode=ingress_mode,
+        conversation_kind="manager" if manager else "goal",
+        turn_trigger="human_messages" if manager else None,
+        runner=_connection_runner(state), cli_bin="fake-lark",
+    )
+    assert connected["ok"], connected
+    target_payload = read_goal_channel_targets(target_path)
+    binding_payload = read_goal_channel_binding(binding_path)
+    original_binding = binding_for_goal(binding_payload, "goal-alpha")
+    topic = original_binding["topic"]["root_message_id"]
+    ordinary_topic = topic
+    if legacy_topic:
+        binding_payload = _add_legacy_topic(binding_path, binding_payload, original_binding["target_ref"])
+        ordinary_topic = binding_for_goal(binding_payload, "goal-legacy")["topic"]["root_message_id"]
+    if late_binding:
+        # The App already has a direct-session connection when its listener
+        # opens. Saving a compatible mode later must affect that same stream.
+        save_goal_connection(
+            binding_path=binding_path, payload=binding_payload, goal_id="goal-alpha",
+            binding={**original_binding, "routing": {**original_binding["routing"], "ingress_mode": "direct_session"}},
+        )
+        binding_payload = read_goal_channel_binding(binding_path)
+    snapshot.update(target_payload=target_payload, binding_payloads={
+        "goal-alpha": binding_payload, **({"goal-legacy": binding_payload} if legacy_topic else {}),
+    })
+    starts_in_app = legacy_topic or ingress_mode == "live_steering"
+    ordinary = {"event_id": "evt_native_initial", "message_id": "om_native_initial",
+                "chat_id": "oc_public_fixture", "root_id": ordinary_topic, "content": "wait for steer",
+                "sender_id": "ou_fixture_sender", "sender_type": "user", "message_type": "text",
+                "mentions": [{"id": "ou_fixture_bot"}] if legacy_topic else [],
+                "create_time": "1794140000000"}
+    mention_text = "@Current bot Add the error case.\nKeep both outcomes."
+    mention = {**ordinary, "event_id": "evt_native_mention", "message_id": "om_native_mention",
+               "content": mention_text, "root_id": topic,
+               "mentions": [{"key": "@_user_1", "name": "Current bot", "id": "ou_fixture_bot"}]}
+    attachment = {**mention, "event_id": "evt_native_file", "message_id": "om_native_file",
+                  "message_type": "file", "content": json.dumps({"file_key": "file_fixture"})}
+    wrong_bot = {**mention, "event_id": "evt_other_bot", "message_id": "om_other_bot",
+                 "content": "ordinary input for this connection", "root_id": ordinary_topic,
+                 "mentions": [{"key": "@_user_1", "name": "Current bot",
+                               "id": "ou_fixture_bot" if legacy_topic else "ou_other_bot"}]}
+    backlog = [
+        {
+            **wrong_bot,
+            "event_id": f"evt_other_bot_{index:03d}",
+            "message_id": f"om_other_bot_{index:03d}",
+            "content": f"ordinary backlog {index:03d}\n" + "retained text " * 100 + "\nlast line",
+        }
+        for index in reversed(range(ordinary_load - 2))
+    ] + [wrong_bot]
+    ordinary_ids = {ordinary["message_id"], *(item["message_id"] for item in backlog)}
+    assert len(ordinary_ids) == ordinary_load
+    idle = {**mention, "event_id": "evt_native_idle", "message_id": "om_native_idle",
+            "content": "@Current bot Start normal input."}
+    steered_reply = threading.Event()
+    attachment_reply = threading.Event()
+    ordinary_reply_started = threading.Event()
+    allow_ordinary_reply = threading.Event()
+    ordinary_reader_blocked = threading.Event()
+    last_ordinary_answer = threading.Event()
+    runner = _reply_runner(state)
+
+    def reply(args):
+        if args[3:6] == ["im", "reactions", "create"]:
+            return {"returncode": 0, "stdout": json.dumps({"ok": True, "data": {"reaction_id": "reaction_fixture"}})}
+        if args[3:6] == ["im", "reactions", "delete"]:
+            return {"returncode": 0, "stdout": json.dumps({"ok": True})}
+        result = runner(args)
+        if "+messages-mget" in args:
+            if state.get("reply_text") == "已送达当前回合。":
+                steered_reply.set()
+            if "本轮调整仅支持文字" in state.get("reply_text", ""):
+                attachment_reply.set()
+        return result
+
+    observed_ordinary: list[str] = []
+
+    def answer(route, text):
+        mid = str(route.get("message_id") or "")
+        if not route.get("native_mention"):
+            observed_ordinary.append(mid)
+            if starts_in_app and mid in ordinary_ids:
+                if legacy_topic:
+                    assert route["goal_id"] == "goal-legacy"
+                    assert route.get("ingress_mode", "direct_session") == "direct_session"
+                else:
+                    assert route["live_turn_capture"]["target_turn_id"] == store.turn_for_client(
+                        session_id, initial_id
+                    )["turn_id"]
+                # Hold one ordinary reply while the listener delivers the @
+                # to the active Turn that came from the App.
+                if mid == ordinary["message_id"]:
+                    ordinary_reply_started.set()
+                    assert allow_ordinary_reply.wait(10)
+                if mid == wrong_bot["message_id"]:
+                    last_ordinary_answer.set()
+                return {"response_text": "Ordinary reply.", "effect_receipt": session_turn_effect(route)}
+        if mid.startswith("om_other_bot_") and mid != backlog[0]["message_id"]:
+            return {
+                "response_text": f"Runtime response for {mid}.",
+                "effect_receipt": session_turn_effect(route),
+            }
+        result = answer_lark_goal_topic(
+            route=route, text=text, work_dir=tmp_path, objective="Review delivery", runtime_controller=controller,
+        )
+        if mid == wrong_bot["message_id"]:
+            last_ordinary_answer.set()
+        return result if isinstance(result, Mapping) else {
+            "response_text": result, "effect_receipt": session_turn_effect(route),
+        }
+
+    initial_id = (
+        "app-original" if starts_in_app
+        else "lark." + opaque_digest(ordinary["message_id"], topic)
+    )
+    mention_id = "lark." + opaque_digest(mention["message_id"], topic)
+    wrong_id = "lark." + opaque_digest(wrong_bot["message_id"], topic)
+    idle_id = "lark." + opaque_digest(idle["message_id"], topic)
+    total_events = ordinary_load + 5
+
+    def lines():
+        nonlocal binding_payload
+        if late_binding:
+            save_goal_connection(
+                binding_path=binding_path, payload=binding_payload, goal_id="goal-alpha",
+                binding=original_binding,
+            )
+            binding_payload = read_goal_channel_binding(binding_path)
+            snapshot["binding_payloads"] = {"goal-alpha": binding_payload, "goal-legacy": binding_payload}
+        yield json.dumps(ordinary) + "\n"
+        if starts_in_app:
+            assert ordinary_reply_started.wait(5)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            initial = store.turn_for_client(session_id, initial_id)
+            if initial and initial.get("upstream_turn_id"):
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("the initial Topic input never reached the native executor")
+        def interrupt_fixture_if_blocked():
+            if not steered_reply.is_set():
+                ordinary_reader_blocked.set()
+                controller.interrupt_turn(session_id=session_id, turn_id=initial["turn_id"])
+                allow_ordinary_reply.set()
+
+        watchdog = threading.Timer(8, interrupt_fixture_if_blocked)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            for item in backlog:
+                yield json.dumps(item) + "\n"
+            assert not ordinary_reader_blocked.is_set(), "ordinary backpressure blocked the stream before the mention"
+            assert store.load_turn(session_id, initial["turn_id"])["status"] == "running"
+            yield json.dumps(attachment) + "\n"
+            assert attachment_reply.wait(5), "the original file needs an explicit retained-message reply"
+            yield json.dumps(mention) + "\n"
+            yield json.dumps(mention) + "\n"
+            assert steered_reply.wait(5), "the listener waited for the ordinary answer before handling the mention"
+            assert store.load_turn(session_id, initial["turn_id"])["status"] == "running"
+            assert len([e for e in store.events_after(session_id, initial["turn_id"], None)
+                        if e["kind"] == "turn.steered"]) == 1
+            assert store.steering_receipt(session_id, wrong_id) is None
+            assert store.turn_for_client(session_id, wrong_id) is None
+        finally:
+            watchdog.cancel()
+            release.touch()
+            allow_ordinary_reply.set()
+        assert last_ordinary_answer.wait(40), "the FIFO backlog did not reach its last ordinary input"
+        if not starts_in_app:
+            queued = store.turn_for_client(session_id, wrong_id)
+            assert queued and queued["status"] == "completed"
+        deadline = time.monotonic() + 3
+        while store.load_session(session_id).get("active_turn_id"):
+            assert time.monotonic() < deadline, "the completed Turn did not release the Session"
+            time.sleep(0.02)
+        yield json.dumps(idle) + "\n"
+        yield json.dumps(idle) + "\n"
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            receipt = store.steering_receipt(session_id, idle_id)
+            if receipt and receipt["status"] == "delivered":
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("the idle mention did not enter the same Session queue")
+        yield f"[event] exited — received {total_events} event(s) in 1s (reason: limit)\n"
+
+    class FinishedConsumer:
+        stdout = lines()
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    try:
+        if starts_in_app:
+            started, _ = controller.enqueue_turn(
+                session_id=session_id, client_turn_id=initial_id, message="wait for steer",
+                work_dir=tmp_path, objective="Review delivery", origin="web",
+            )
+            fixture["wait_for_active_turn"](
+                store, session_id=session_id, turn_id=started["turn_id"], require_upstream=True,
+            )
+        options = dict(
+            process_factory=lambda _: FinishedConsumer(), reply_runner=reply,
+            provider_runner=lambda args, **kwargs: subprocess.CompletedProcess(
+                args, 0, json.dumps({"ok": True, "data": {"items": [], "has_more": False}}), "",
+            ),
+        )
+        if late_binding:
+            from loopx.extensions.lark import goal_topic_runtime as runtime
+            from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+            service = LarkGoalTopicRuntimeService(
+                snapshot_provider=lambda: snapshot, runtime_root=runtime_root,
+                runtime_controller=controller, action_service=object() if callbacks else None,
+            )
+            result = {}
+            stream_errors = []
+
+            def owned_stream(**kwargs):
+                nonlocal result
+                try:
+                    result = stream_lark_goal_topic_profile(**{**kwargs, "answer": answer, **options})
+                    return result
+                except Exception as error:
+                    stream_errors.append(error)
+                    raise
+                finally:
+                    service._closed.set()
+                    kwargs["stop"].set()
+
+            # Only provider IO is synthetic: the service supplies the actual
+            # capture callback and owns the real machine/App consumer lease.
+            monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+            monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
+            monkeypatch.setattr(runtime, "start_team_plan_review_callback_stream", lambda **kwargs: None)
+            service._poll_profile("mew", threading.Event())
+            if stream_errors:
+                raise stream_errors[0]
+        else:
+            result = stream_lark_goal_topic_profile(
+                profile="mew", snapshot_provider=lambda: snapshot, stop=threading.Event(), runtime_root=runtime_root,
+                answer=answer, capture_mention=lambda route: capture_topic_mention(route, controller), **options,
+            )
+        assert result["ok"] and result["event_count"] == total_events and result["replied_count"] == total_events - 2, result
+        initial = store.turn_for_client(session_id, initial_id)
+        assert store.turn_for_client(session_id, mention_id) is None
+        assert store.turn_for_client(session_id, idle_id)["status"] == "completed"
+        assert store.steering_receipt(session_id, idle_id)["mode"] == "session_queue"
+        attachment_id = "lark." + opaque_digest(attachment["message_id"], topic)
+        assert store.turn_for_client(session_id, attachment_id) is None
+        receipt = store.steering_receipt(session_id, mention_id)
+        assert receipt["expected_turn_id"] == receipt["active_turn_id"] == initial["turn_id"]
+        assert receipt["status"] == "delivered"
+        user = [msg for msg in store.messages(session_id) if msg["role"] == "user"]
+        assert [msg["text"] for msg in user if msg["text"] == mention_text] == [mention_text]
+        steered = next(msg for msg in user if msg["text"] == mention_text)
+        assert steered["origin"] == "lark" and steered["turn_id"] == initial["turn_id"]
+        assert observed_ordinary == [
+            ordinary["message_id"],
+            *(item["message_id"] for item in backlog),
+        ]
+        ordinary_prompts = [msg["text"] for msg in user if msg["turn_id"] != initial["turn_id"]]
+        expected_ordinary = [idle["content"]]
+        if not starts_in_app:
+            expected_ordinary[:0] = [backlog[0]["content"], wrong_bot["content"]]
+        assert len(ordinary_prompts) == len(expected_ordinary)
+        for prompt, expected in zip(ordinary_prompts, expected_ordinary, strict=True):
+            assert prompt.strip().endswith(expected)
+        assert len([e for e in store.events_after(session_id, initial["turn_id"], None)
+                    if e["kind"] == "turn.steered"]) == 1
+        late = {**mention, "event_id": "evt_native_late", "message_id": "om_native_late"}
+        ended = process_lark_goal_topic_event(
+            **snapshot, event=late, runtime_root=runtime_root, answer=answer, reply_runner=reply,
+            mention_capture={
+                "connection_id": binding_for_goal(binding_payload, "goal-alpha")["connection_id"],
+                "session_id": session_id, "binding_matches": True, "target_turn_id": initial["turn_id"],
+            },
+        )
+        assert ended["ok"] and "已结束或切换" in state["reply_text"], ended
+        late_id = "lark." + opaque_digest(late["message_id"], topic)
+        assert store.turn_for_client(session_id, late_id) is None
+        assert store.steering_receipt(session_id, late_id)["error_code"] == "live_steering_turn_mismatch"
+        interrupted = {**mention, "event_id": "evt_native_interrupted", "message_id": "om_native_interrupted"}
+        stored = ingest_lark_event_inbox(
+            project=runtime_root, config_path=ended["inbox_config_ref"], execute=True,
+            events=[{**interrupted, "schema_version": "lark_event_inbox_event_v0"}],
+        )
+        assert stored["accepted_count"] == 1
+        recovered = process_lark_goal_topic_event(
+            **snapshot, event=interrupted, runtime_root=runtime_root, answer=answer, reply_runner=reply,
+        )
+        assert recovered["ok"] and "送达状态待核实" in state["reply_text"], recovered
+        interrupted_id = "lark." + opaque_digest(interrupted["message_id"], topic)
+        assert store.turn_for_client(session_id, interrupted_id) is None
+        assert store.steering_receipt(session_id, interrupted_id) is None
+
+        if ingress_mode == "live_steering" and ordinary_load == 64:
+            replacement, _ = controller.enqueue_turn(
+                session_id=session_id, client_turn_id="app-replacement", message="wait for steer",
+                work_dir=tmp_path, objective="Review delivery", origin="web",
+            )
+            replacement_id = replacement["turn_id"]
+            fixture["wait_for_active_turn"](
+                store, session_id=session_id, turn_id=replacement_id, require_upstream=True,
+            )
+            for suffix, target, feedback in (
+                ("old", initial["turn_id"], "已结束或切换"),
+                ("idle", None, "没有活动回合"),
+                ("current", replacement_id, "Steered response."),
+            ):
+                message_id = f"om_live_capture_{suffix}"
+                input_event = {**wrong_bot, "message_id": message_id, "event_id": f"evt_live_capture_{suffix}"}
+                reply_result = process_lark_goal_topic_event(
+                    **snapshot, event=input_event, runtime_root=runtime_root, answer=answer, reply_runner=reply,
+                    live_turn_capture={
+                        "connection_id": binding_for_goal(binding_payload, "goal-alpha")["connection_id"],
+                        "session_id": session_id, "binding_matches": True, "target_turn_id": target,
+                    },
+                )
+                assert reply_result["ok"] and feedback in state["reply_text"], reply_result
+                ingress = "lark." + opaque_digest(message_id, topic)
+                receipt = store.steering_receipt(session_id, ingress)
+                assert store.turn_for_client(session_id, ingress) is None
+                if suffix == "old":
+                    assert receipt["error_code"] == "live_steering_turn_mismatch"
+                if suffix == "idle":
+                    assert receipt is None
+                if suffix == "current":
+                    assert receipt["expected_turn_id"] == receipt["active_turn_id"] == replacement_id
+                    assert receipt["status"] == "delivered"
+                steers = [
+                    event["payload"]["client_ingress_id"] for event in store.events_after(session_id, replacement_id, None)
+                    if event["kind"] == "turn.steered"
+                ]
+                assert steers == ([ingress] if suffix == "current" else [])
+    finally:
+        release.touch()
+        allow_ordinary_reply.set()
+        active_id = store.load_session(session_id).get("active_turn_id")
+        if active_id and store.load_turn(session_id, active_id)["status"] in {"starting", "running"}:
+            controller.interrupt_turn(session_id=session_id, turn_id=active_id)
+            controller.wait_for_turn(session_id=session_id, turn_id=active_id, timeout_sec=4)
+        controller.close_session(session_id)
+
+
+@pytest.mark.parametrize(("ingress_mode", "binding_change"), [
+    *((mode, change) for mode in ("session_queue", "live_steering") for change in ("unchanged", "session", "topic")),
+    ("direct_session", "unchanged"), ("direct_session", "topic"),
+])
+def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
+    tmp_path: Path, binding_change: str, ingress_mode: str,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+    from loopx.extensions.lark.manager_context import session_turn_effect
+
+    runtime_root = tmp_path / "runtime"
+    registry = {"goals": [{"id": "goal-alpha", "repo": str(tmp_path),
+                           "coordination": {"registered_agents": ["codex"]}}]}
+    targets_path = tmp_path / "targets.json"
+    binding_path = tmp_path / "binding.json"
+    legacy_topic = ingress_mode == "direct_session"
+    source_goal = "goal-legacy" if legacy_topic else "goal-alpha"
+    original_session = "" if legacy_topic else "session-original"
+    state: dict[str, Any] = {"bot_open_id": "ou_fixture_bot"}
+    assert connect_lark_goal_topic(
+        registry=registry, goal_id="goal-alpha", agent_id="codex",
+        session_id="session-original", target_path=targets_path, binding_path=binding_path,
+        app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
+        capture_scope="configured_chat_all", ingress_mode="session_queue" if legacy_topic else ingress_mode,
+        runner=_connection_runner(state), cli_bin="fake-lark",
+    )["ok"]
+    targets = read_goal_channel_targets(targets_path)
+    bindings = read_goal_channel_binding(binding_path)
+    if legacy_topic:
+        bindings = _add_legacy_topic(binding_path, bindings, binding_for_goal(bindings, "goal-alpha")["target_ref"])
+    topic = binding_for_goal(bindings, source_goal)["topic"]["root_message_id"]
+    binding_payloads = {"goal-alpha": bindings, source_goal: bindings}
+    snapshot = {"target_payload": targets, "binding_payloads": binding_payloads}
+    original = {
+        "event_id": "evt_started", "message_id": "om_started",
+        "chat_id": "oc_public_fixture", "root_id": topic, "content": "Original request.",
+        "create_time": "1794140000000", "sender_type": "user",
+        "sender_id": "ou_fixture_sender", "message_type": "text",
+        "mentions": [{"id": "ou_fixture_bot"}] if legacy_topic else [],
+    }
+    later = [
+        {**original, "event_id": f"evt_{suffix}", "message_id": f"om_{suffix}",
+         "content": f"{suffix}\n" + "Complete source text. " * 100 + "\nLast line."}
+        for suffix in ("second", "first_by_id")
+    ]
+    fresh_legacy = {**original, "event_id": "evt_after_reconnect", "message_id": "om_after_reconnect",
+                    "content": "New ordinary input after reconnect."}
+    entered = threading.Event()
+    release = threading.Event()
+    stop = threading.Event()
+    last_reply = threading.Event()
+    fresh_legacy_reply = threading.Event()
+    answered = []
+
+    def answer(route, text):
+        assert route["goal_id"] == source_goal
+        if route["message_id"] == fresh_legacy["message_id"]:
+            # With no steerable connection, fresh legacy traffic keeps the
+            # original transient lane while already accepted input recovers.
+            assert not list(runtime_root.rglob(".state/topic-intake/om_after_reconnect.json"))
+        if ingress_mode == "live_steering":
+            assert route["live_turn_capture"]["target_turn_id"] == "turn-original"
+        answered.append((route.get("session_id", ""), route["message_id"], text))
+        if route["message_id"] == original["message_id"]:
+            entered.set()
+            assert release.wait(5)
+        return {"response_text": "Verified reply.", "effect_receipt": session_turn_effect(route)}
+
+    def first_consumer():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps(original) + "\n"
+        try:
+            assert entered.wait(5)
+            for row in later:
+                yield json.dumps(row) + "\n"
+        finally:
+            stop.set()
+            release.set()
+
+    runner = _reply_runner(state)
+    first_writes = []
+
+    def unverified_reply(args):
+        if "+messages-reply" in args and "--dry-run" not in args:
+            first_writes.append(args[args.index("--message-id") + 1])
+            return {"returncode": 0, "stdout": '{"data": {}}', "stderr": ""}
+        return runner(args)
+
+    class FinishedConsumer:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def consume(stdout, stop, reply, *, active_turn):
+        return stream_lark_goal_topic_profile(
+            profile="mew", snapshot_provider=lambda: snapshot, runtime_root=runtime_root,
+            stop=stop, answer=answer, process_factory=lambda _: FinishedConsumer(stdout),
+            reply_runner=reply, capture_mention=lambda route: {
+                "connection_id": route["connection_id"], "session_id": route["session_id"],
+                "binding_matches": True, "target_turn_id": active_turn,
+            },
+        )
+
+    stopped = consume(first_consumer(), stop, unverified_reply, active_turn="turn-original")
+    assert stopped["status"] == "stopped"
+    assert answered == [(original_session, original["message_id"], original["content"])]
+    assert first_writes == [original["message_id"]]
+
+    captures = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in runtime_root.rglob(".state/topic-intake/om_*.json")
+    }
+    assert captures[original["message_id"]]["started"] is True
+    for row in later:
+        assert captures[row["message_id"]]["started"] is False
+        assert captures[row["message_id"]]["event"] == row
+
+    rebind = binding_change != "unchanged"
+    connection, = bindings["bindings"][source_goal]["connections"].values()
+    if binding_change == "session":
+        connection["session_id"] = "session-replacement"
+    elif binding_change == "topic":
+        connection["topic"]["root_message_id"] = "om_topic_replacement"
+    if legacy_topic:
+        # The unrelated steering-capable connection can disappear while the
+        # old Topic still owns its accepted inputs.
+        del binding_payloads["goal-alpha"]
+
+    def recovered_reply(args):
+        result = runner(args)
+        if "+messages-reply" in args and "--dry-run" not in args:
+            message_id = args[args.index("--message-id") + 1]
+            if message_id == later[-1]["message_id"]:
+                last_reply.set()
+            elif message_id == fresh_legacy["message_id"]:
+                fresh_legacy_reply.set()
+        return result
+
+    def replacement_consumer():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps({**original, "content": "Redelivered data must not replace the original."}) + "\n"
+        yield json.dumps(later[0]) + "\n"
+        if not rebind:
+            assert last_reply.wait(5), "the original Inbox should recover without provider redelivery"
+            if legacy_topic:
+                yield json.dumps(fresh_legacy) + "\n"
+                assert fresh_legacy_reply.wait(5)
+        yield "[event] exited (reason: timeout)\n"
+
+    resumed = consume(replacement_consumer(), threading.Event(), recovered_reply, active_turn="turn-replacement")
+    assert resumed["status"] == "stream_ended"
+    resumed_rows = [] if rebind else [*later, *([fresh_legacy] if legacy_topic else [])]
+    expected = [(original_session, row["message_id"], row["content"]) for row in resumed_rows]
+    assert answered[1:] == expected
+    replies = [args[args.index("--message-id") + 1] for args in state["calls"]
+               if "+messages-reply" in args and "--dry-run" not in args]
+    assert replies == [row["message_id"] for row in resumed_rows]
+    retained = list(runtime_root.rglob(".state/topic-intake/om_*.json"))
+    assert {path.stem for path in retained} == (
+        set(captures) if rebind else {original["message_id"]}
+    )
+    original_file = next(path for path in retained if path.stem == original["message_id"])
+    assert json.loads(original_file.read_text(encoding="utf-8")) == captures[original["message_id"]]

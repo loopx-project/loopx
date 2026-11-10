@@ -81,6 +81,7 @@ def handle_turn_journal_inspection(
                         agent_id=args.agent_id,
                         turn_key=args.turn_key,
                         retry_failed=bool(args.retry_failed_turn),
+                        require_decision_capture=True,
                         session_binding_resolver=(
                             lambda turn_envelope: codex_cli_session_binding(
                                 runtime_root,
@@ -155,6 +156,7 @@ def handle_turn_journal_inspection(
             agent_id=args.agent_id,
             turn_key=args.turn_key,
             retry_failed=bool(args.retry_failed_turn),
+            require_decision_capture=True,
             session_binding_resolver=(
                 lambda turn_envelope: codex_cli_session_binding(
                     runtime_root,
