@@ -590,7 +590,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && extendsOriginalText(response, result);
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && (expandedResult || metadataOwed || answerReviewOwed || retainedWork || unfinished || turn?.status === "failed"
+      && (expandedResult || metadataOwed || answerReviewOwed || retainedWork || unfinished
+        || turn?.status === "completed" && response?.message === "" && pureResultText(response, true)
+        || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
@@ -659,9 +661,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
 }
 
-function pureResultText(response: JsonObject | null): boolean {
+function pureResultText(response: JsonObject | null, allowEmpty = false): boolean {
   return response?.schema_version === "loopx_chat_agent_response_v0"
-    && typeof response.message === "string" && response.message.length > 0
+    && typeof response.message === "string" && (allowEmpty || response.message.length > 0)
     && Array.isArray(response.proposals) && response.proposals.length === 0
     && ["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].every(key => response[key] == null);
 }
@@ -678,7 +680,7 @@ function unsubmittedMetadata(response: JsonObject | null): boolean {
 function extendsOriginalText(original: JsonObject, result: JsonObject): boolean {
   const metadata = (value: JsonObject) => Object.fromEntries(Object.entries(value)
     .filter(([key, value]) => key !== "message" && value != null));
-  return pureResultText(original) && pureResultText(result)
+  return pureResultText(original, true) && pureResultText(result)
     && (result.message as string).length > (original.message as string).length
     && (result.message as string).startsWith(original.message as string)
     && isDeepStrictEqual(metadata(original), metadata(result));
@@ -693,7 +695,13 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const version = requireInteger(recovery.version, "context representation version");
   if (version < 1) throw new EffectRuntimeRequestError("invalid context representation version");
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true
+  const pendingTurn = recovery.failed_turn as JsonObject | undefined;
+  const pendingResponse = pendingTurn?.response as JsonObject | undefined;
+  // A committed empty answer has no delivered failure to acknowledge first.
+  // It may only adopt its verified native result, never dispatch recovery work.
+  const pendingEmpty = current?.agent_id === "antigravity" && pendingTurn?.status === "completed"
+    && pendingResponse?.message === "" && pureResultText(pendingResponse, true);
+  if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true && !pendingEmpty
       || row.agent_target != null || current.session_id !== row.session_id
       || !["codex", "antigravity"].includes(String(current.agent_id))
       || current.upstream_mode !== (current.agent_id === "antigravity" ? "default" : "chat") || current.status === "closed"
@@ -748,8 +756,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       ? recovery.native_input as JsonObject : null;
     // The lexical hint only bounds read-only probes. It confers no result,
     // source or execution authority; an anchored native final is still needed.
-    const completedText = failed.status === "completed" && pureResultText(originalResponse)
-      && recovery.response_literal_open === true && recovery.queued_input_present === false
+    const completedText = failed.status === "completed" && pureResultText(originalResponse, true)
+      && (recovery.response_literal_open === true || originalResponse!.message === "")
+      && recovery.queued_input_present === false
       && anchor !== null && anchor.thread_id === current.upstream_thread_id
       && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
       && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256);

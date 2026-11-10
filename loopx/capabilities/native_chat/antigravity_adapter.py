@@ -23,6 +23,7 @@ from datetime import datetime
 from ...chat import (
     CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG,
     VisibleResponseStreamFilter,
+    _review_openings,
     parse_agent_response,
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
@@ -124,6 +125,21 @@ def _native_completion_facts(cascade_id: str, current: list[tuple[int, dict[str,
         facts.append(fact)
     return {"thread_id": cascade_id, "start_step_index": current[0][0],
         "total_steps": current[-1][0] + 1, "steps": facts}
+
+
+def _parse_native_final_response(raw: str, *, work_dir: Path,
+                                 team_plan_context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Parse only after the caller verifies this input's normal native final."""
+    parsed = parse_agent_response(raw, protected_paths=[work_dir], team_plan_context=team_plan_context)
+    if not parsed.get("message") and not any(parsed.get(key) for key in
+            ("proposals", "context_handoff", "protected_action", "gate", "goal_draft", "unfinished_work")):
+        # Unlike a generic prefix, this is the verified final planner's prose.
+        # Salvage text only: missing message never opts into compact metadata.
+        openings, _, _ = _review_openings(raw)
+        visible = raw[:openings[0]] if openings else ""
+        if visible.strip():
+            return parse_agent_response(visible, protected_paths=[work_dir], team_plan_context=team_plan_context)
+    return parsed
 
 
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -716,7 +732,7 @@ class AntigravityAdapter:
                     or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"
                     or not isinstance(answer, str) or not answer.strip()):
                 return None
-            response = parse_agent_response(answer, protected_paths=[work_dir])
+            response = _parse_native_final_response(answer, work_dir=work_dir)
             if not response.get("message"):
                 return None
             return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
@@ -1312,9 +1328,9 @@ class AntigravityAdapter:
             except (TypeError, ValueError) as exc:
                 raise CodexChatAgentError("The format review is incomplete or contains other actions; no actions were admitted.",
                                           gate=None, error_code="host_gate") from exc
-        parsed = parse_agent_response(
+        parsed = _parse_native_final_response(
             latest_response_text,
-            protected_paths=[self.work_dir],
+            work_dir=self.work_dir,
             team_plan_context=self.team_plan_context,
         )
         if event_sink is not None:
