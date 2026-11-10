@@ -859,21 +859,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
                         request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        if "claim_source_sha256" not in request:
+                        if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
                             raise LegacyNativePreparationCapture()
                         if request.get("readback_only") is True:
                             preparation_context = codex_execution_preparation_readback_context(request) or ""
                         else:
-                            capture = (
-                                Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
-                                if request.get("turn_instance_id") else None
-                            )
+                            capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                             receipt = execute_codex_execution_preparation(
                                 request,
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
                                 capture_directory=capture,
-                                context_directory=directory if capture is not None else None,
+                                context_directory=Path(directory),
                             )
                             record_native_execution_preparation(
                                 directory,
@@ -884,25 +881,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                             # Publish the decision that the Host just verified;
                             # a model must not need a second guard to obtain its
                             # Goal, task, requirements and settlement contract.
-                            if capture is not None:
-                                source = capture / "decision.json"
-                                # The existing saved-capture owner preserves a
-                                # pinned full recovery even if native projection
-                                # fails. It never rereads authority or admits work.
-                                digest = receipt.pop("capture_sha256")
-                                receipt.pop("capture_path", None)
-                                receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
-                                    **vars(args), "quota_command": "context-project",
-                                    "capture_file": str(source),
-                                    "capture_sha256": digest,
-                                    "goal_id": request["goal_id"], "agent_id": request["agent_id"],
-                                    "turn_instance_id": request["turn_instance_id"],
-                                }), hook_session=event["session_id"])
-                                if receipt["context"].get("ok") is False:
-                                    from ..command_invocation import current_loopx_cli_argv
+                            source = capture / "decision.json"
+                            # The saved-capture reader never rereads authority or admits work.
+                            digest = receipt.pop("capture_sha256")
+                            receipt.pop("capture_path")
+                            receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
+                                **vars(args), "quota_command": "context-project",
+                                "capture_file": str(source),
+                                "capture_sha256": digest,
+                                "goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                                "turn_instance_id": request["turn_instance_id"],
+                            }), hook_session=event["session_id"])
+                            if receipt["context"].get("ok") is False:
+                                from ..command_invocation import current_loopx_cli_argv
 
-                                    receipt["context"]["recovery_command"] = context_capture_read_command(
-                                        source, digest, reader_argv=current_loopx_cli_argv())
+                                receipt["context"]["recovery_command"] = context_capture_read_command(
+                                    source, digest, reader_argv=current_loopx_cli_argv())
                             preparation_context = codex_execution_preparation_context(receipt)
                 except LegacyNativePreparationCapture as error:
                     preparation_context = str(error)

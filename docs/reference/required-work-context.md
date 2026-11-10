@@ -464,6 +464,9 @@ that binding. Older captures and copies with different bytes remain readable.
 Preserve any original claim receipt and use `quota should-run` with the same
 Goal, Agent, Todo and Turn and a fresh capture if preparation is still
 required. A retired lease requires a fresh eligible preparation capture.
+The native hook executes only a preparation bound to a captured Turn. An
+ordinary claim recommendation remains available to its caller; reading one
+or reading an original receipt does not trigger an automatic claim.
 
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
@@ -474,6 +477,8 @@ ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原�
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
 结果准备。已退役的租约需要新的合格 capture。
+原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
+领取回执都不会触发自动领取。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
