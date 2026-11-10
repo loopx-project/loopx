@@ -141,6 +141,23 @@ describe('GoalBar source revision', () => {
       .rejects.toThrow('absolute and normalized')
   })
 
+  it.each([
+    ['a dot segment through a missing directory', '/missing/..'],
+    ['a current-directory segment', '/.'],
+    ['a repeated separator', '//nested'],
+    ['a trailing separator', '/'],
+  ])('rejects an absolute forward-slash cwd with %s', async (_case, suffix) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-noncanonical-'))
+    try {
+      await mkdir(join(cwd, '.loopx'), { recursive: true })
+      await writeFile(join(cwd, '.loopx', 'registry.json'), JSON.stringify({ goals: [] }), 'utf8')
+      await expect(computeGoalBarSourceRevision({ cwd: `${cwd.split(sep).join('/')}${suffix}` }))
+        .rejects.toThrow('absolute and normalized')
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('rejects a registered state path escaping a forward-slash cwd', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'loopx-goalbar-escape-'))
     try {
