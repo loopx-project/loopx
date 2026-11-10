@@ -664,25 +664,36 @@ carrier 增长余量。相同版本增长、变化／缺失控制继续受约束
 [预算 owner 的决定](../../../reference/contracts/interface-budget-contract.md#complete-quota-carrier-differential-qualification)。
 该控制子集不证明完整来源等价、模型采用或效率净收益，不关闭父 C1 验收。
 
-候选现在迁移普通 Markdown `--turn-envelope` 调用者：省略 delivery 或设为 `auto`
-时使用现有完整 v1 Markdown reader，与普通 JSON 及未带该标志的 Markdown 一致。
-格式不再选择有界 v0 视图。`compose_quota_cli_source` 调用同一 typed composition
-owner，只捕获一次结果，并原样交给现有 renderer；没有新增 writer、decoder 或结算规则。
+候选现在把普通 Markdown（有无 `--turn-envelope` 均适用）接到 JSON 使用的同一个
+无会话 progressive owner，适用于省略 delivery 或设为 `auto`。格式不再选择有界
+v0 视图，也不再绕过渐进材料交付。`compose_quota_cli_source` 调用同一 typed
+composition owner，只捕获一次结果。Markdown renderer 在一个 JSON 块里原样展示
+该 owner 返回的当前必需视图或固定 navigation；它不选择事实、虚构会话或拥有结算规则。
 普通 Markdown 结算检查在隔离 File 和 SQLite 上执行实际输出的命令：提前扣额及
 不成立的进展被拒绝，先持久写回再扣额，重放仍只有一次扣额。原生 Codex profile
 继续要求 JSON 和捕获目的地；这次普通 reader 迁移不把原生 Markdown 变成可执行传输。
 
 | Reader 边界 | 候选行为与退役条件 |
 | --- | --- |
-| 普通 Markdown，省略 delivery／`auto` | 完整 v1 块，保留每个捕获字段及原绑定。File／SQLite CLI 检查将其完整解码内容与不可变 capture 对比，再恢复同一来源，不重新准入或扣额。 |
+| 普通 Markdown，省略 delivery／`auto` | 与 JSON 相同的渐进必需视图和固定恢复路径。不重新准入或扣额即可恢复完整来源、原绑定和 receipt。可选私有传输失败时保留已决的完整输入，不跟随或修复不安全目录。 |
 | 显式 `off` 加 `--turn-envelope` | 保留同一次组合产生的有界兼容展示。这个显式调用者仍使用 v0 展示适配器；普通 reader 迁移不删除它。 |
 | Native 与 managed handoff | 保持经校验的完整来源展示和原恢复合同；Markdown 格式不降级 handoff。 |
 | 已记录的 v0 capture、plan 与 request | 保留原版本完整性／恢复 reader，直到未结准入工作及受支持恢复窗口核清。无效新来源不能选择该回退。 |
 
-这改变候选的默认 Markdown 格式合同。完整正文可能显著大于旧动作摘要；现有同源
-progressive reader 仍承担有界材料交付。不能把 reader 退役说成 stdout 或模型成本
-节省。安装态 Host 采用、独立 exact-head review，以及原 quota 单会话成果／完整成本
+这改变候选的默认 Markdown 格式合同。首个引用可以更小，但必要 reader 响应仍可能
+使总输出更大。现有 probe consumer 现在用同一个固定 reader 解码两种格式，校验
+恢复后的合同，分别报告原始首个输出、每次 reader 响应及其总和。历史 narrative／off
+reader、增长预算和原始当前控制值检查继续保留。测试 oracle 的完整读取不成为模型
+必读要求，也不证明留存。不能把 reader 退役说成 stdout 或模型成本节省。
+安装态 Host 采用、独立 exact-head review，以及原 quota 单会话成果／完整成本
 对照仍待完成。显式 off 与历史恢复是各自受支持的边界，不代表活跃的第二个决策 owner。
+
+三个同输入的公开 SQLite fixture 中，Markdown 首个输出从
+26,437／59,055／65,548 字节变为 3,464／3,464／3,494 字节。计入返回的初始读计划
+全部分页后为 12,233／23,715／44,765 字节；若遍历整个必需视图的测试 oracle，则为
+33,213／67,359／71,342 字节，三个场景都超过旧内联载体。JSON 测量不变。
+这个相邻 C1 迁移对照只验证所选读取路径；没有测量后续依赖读取、原 quota 成果或
+完整模型／IO 成本。仅首个输出变小不构成效率净收益证据。
 
 模型行为评测沿既有版本／完整性 owner 读取显式提供的完整来源，实验臂标签不再决定
 是否使用 v0 字段指令。两臂的 schema 和保密边界均在任一 actor 调用前检查完毕。

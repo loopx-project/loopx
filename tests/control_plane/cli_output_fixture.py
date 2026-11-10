@@ -33,15 +33,23 @@ def stable_budget_fixture_root(root: Path):
         shutil.rmtree(fixture)
 
 
-def read_cli_context_for_oracle(text: str) -> tuple[str, dict[str, int]]:
+def read_cli_context_for_oracle(text: str, *, output_format: str = "json") -> tuple[str, dict[str, int]]:
     """Read a fixture's pinned recovery without another decision or admission.
 
     Full traversal is a test oracle, not a model read requirement or retention
     claim. Keep its cost separate from the original, untouched CLI stdout.
     """
-    payload = json.loads(text)
+    body = text
+    if output_format == "markdown":
+        if not text.startswith("# LoopX Turn Envelope\n") or "```json\n" not in text:
+            return text, {}
+        body = text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+    payload = json.loads(body)
+    if output_format == "markdown" and (not isinstance(payload, dict) or payload.get("schema_version")
+            not in ("loopx_turn_envelope_v1", "context_capture_navigation_v1")):
+        return text, {}  # A historical narrative's work-context block is not its carrier.
     if not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_navigation_v1":
-        return text, {}
+        return body, {}
     body, calls, reader_bytes = read_pinned_cli_body(payload["recovery"]["command"])
     navigation_bytes = len(text.encode("utf-8"))
     return body, {
@@ -100,11 +108,10 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
 def measure_cli_context_for_oracle(text, *, output_format, measure):
     """Keep body semantics and both observable output costs in one receipt."""
     measurement = measure(text, output_format=output_format)
-    if output_format != "json":
-        return measurement
-    body, cost = read_cli_context_for_oracle(text)
-    if cost:
+    body, cost = read_cli_context_for_oracle(text, output_format=output_format)
+    if cost or body != text:
         measurement["resolved_payload"] = json.loads(body)
-        measurement["context_body"] = measure(body, output_format=output_format)
+    if cost:
+        measurement["context_body"] = measure(body, output_format="json")
         measurement["context_delivery"] = cost
     return measurement

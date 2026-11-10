@@ -201,10 +201,6 @@ def _receipt_row(
     output_contract_version: str | None = None,
 ) -> dict:
     payload = measurement.get("resolved_payload", measurement.get("payload"))
-    if output_format == "markdown" and output_contract_version == "loopx_turn_envelope_v1":
-        # Validate/observe the complete carrier, not just its old heading. Raw
-        # stdout and compact-payload metric boundaries remain unchanged.
-        payload = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
     plan, material, detail_cost = payload, None, None
     if isinstance(plan, dict) and plan.get("schema_version") == "loopx_turn_plan_v1":
         if "detail_ref" in plan:

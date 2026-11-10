@@ -160,7 +160,7 @@ def apply_context_machine_options(
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
     if explicit is None:
         args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
-    if command == "should-run" and args.format == "json":
+    if command == "should-run":
         args._progressive_context_runtime = str(runtime_root.expanduser().resolve())
     if command != "context-read" and not enabled:
         return  # Stateless presentation needs neither a journal nor native setup.

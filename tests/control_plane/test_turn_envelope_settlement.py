@@ -19,6 +19,7 @@ from loopx.control_plane.quota.turn_envelope import (
 )
 from tests.test_turn_envelope import _full_decision
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID,
     _configure_read_only_todo, _run_cli, _run_generated_cli,
@@ -54,19 +55,20 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
     record_property("markdown_chars", len(result.stdout))
     record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
     assert result.stdout.startswith("# LoopX Turn Envelope\n")
-    assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
     assert source["schema_version"] == "loopx_turn_envelope_v1"
     if delivery == "off" and envelope:
+        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
         assert "- should_run: `True`" in result.stdout
         assert "- effective_action: `normal_run`" in result.stdout
         assert '"schema_version": "loopx_turn_envelope_v1"' not in result.stdout
         assert len(result.stdout) <= 4800
     else:
-        # The public Markdown entrypoint delivers every captured field, not
-        # just an action summary. It uses the already supported complete reader.
-        body = result.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        # Follow the same pinned recovery as JSON; no second admission is
+        # needed to recover every field of this complete synthetic decision.
+        body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
+        record_property("context_delivery", json.dumps(cost))
         shown = json.loads(body)
         assert shown["should_run"] is True
         assert shown["effective_action"] == "normal_run"
@@ -80,6 +82,48 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
         str(capture / "decision.json"), hashlib.sha256(original).hexdigest(), private=True,
     )
     assert recovered == original and restored == source
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("unsafe", ["symlink", "public"])
+@pytest.mark.skipif(os.name != "posix", reason="Unsafe POSIX private transport; other hosts retain complete inline recovery")
+def test_markdown_keeps_original_turn_when_optional_private_transport_is_unsafe(tmp_path, monkeypatch, provider, unsafe):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    transport = runtime / "context-delivery"
+    target = tmp_path / "untrusted"
+    target.mkdir(mode=0o755)
+    if unsafe == "symlink":
+        transport.symlink_to(target, target_is_directory=True)
+    else:
+        transport.mkdir(mode=0o755)
+        transport.chmod(0o755)
+    physical = target if unsafe == "symlink" else transport
+    before_mode = physical.stat().st_mode
+    root = Path(loopx.__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--runtime-root", str(runtime), "--format", "markdown", "quota", "should-run",
+         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+         "--turn-instance-id", TURN_ID, "--runtime-profile", "generic_cli", "--turn-envelope"],
+        cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
+    complete = json.loads(body)
+    assert complete["schema_version"] == "loopx_turn_envelope_v1" and not cost
+    assert complete["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    identity = complete["heartbeat_receipt"]["settlement_identity"]
+    assert identity["turn_instance_id"] == TURN_ID
+    assert identity == complete["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    assert physical.stat().st_mode == before_mode and not list(physical.iterdir())
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
 
@@ -199,7 +243,8 @@ def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, pro
             capture_output=True, text=True, check=False,
         )
         assert delivered.returncode == 0, delivered.stderr or delivered.stdout
-        full = json.loads(delivered.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        body, _ = read_cli_context_for_oracle(delivered.stdout, output_format="markdown")
+        full = json.loads(body)
         plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
     else:
         rc, full = _run_cli(registry, runtime, *args)

@@ -922,12 +922,13 @@ unchanged. See the [owned budget decision](../../../reference/contracts/interfac
 This control subset is not complete-source parity, model adoption or a net
 efficiency result, and does not close the parent C1 acceptance.
 
-The candidate now migrates the ordinary Markdown `--turn-envelope` caller:
-omitted delivery and `auto` use the existing complete-v1 Markdown reader,
-matching ordinary JSON and Markdown without that flag. The format no longer
-selects the bounded v0 view. `compose_quota_cli_source` calls the same typed
-composition owner, captures its result once and passes it unchanged to the
-existing renderer; no new writer, decoder or settlement rule is added.
+The candidate now routes ordinary Markdown, with or without `--turn-envelope`,
+through the same stateless progressive owner as JSON when delivery is omitted
+or `auto`. The format no longer selects the bounded v0 view or bypasses
+progressive material delivery. `compose_quota_cli_source` calls the same typed
+composition owner and captures its result once. The Markdown renderer prints
+that owner's current required view or pinned navigation verbatim in one JSON
+block; it does not select facts, invent a session or own settlement.
 The ordinary Markdown settlement check executes the delivered commands on
 isolated File and SQLite: premature spend and unsupported progress are refused,
 durable writeback precedes spend, and replay leaves one debit. The native Codex
@@ -936,19 +937,32 @@ migration does not make native Markdown an executable transport.
 
 | Reader boundary | Candidate behavior and retirement condition |
 | --- | --- |
-| Ordinary Markdown, omitted delivery / `auto` | Complete-v1 block, with every captured field and the original binding. File/SQLite CLI checks compare its complete decoded content with its immutable capture and recover that same source without admission or spend. |
+| Ordinary Markdown, omitted delivery / `auto` | Same progressive required view and pinned recovery as JSON. Complete source, original binding and receipt remain recoverable without admission or spend. Optional private-transport failure retains that complete decided input, without following or repairing an unsafe root. |
 | Explicit `off` plus `--turn-envelope` | Retains the bounded compatibility display from the same composition. This explicit caller still owns the v0 display adapter; it is not removed by the ordinary-reader migration. |
 | Native and managed handoff | Keep their checked complete-source presentation and original recovery contracts; a Markdown format does not downgrade a handoff. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
 
-This changes the candidate's default Markdown format contract. A complete body
-can be materially larger than the previous action summary; the existing
-same-capture progressive reader remains the bounded material-delivery path.
-Do not call reader retirement a stdout or model-cost saving. Installed host
+This changes the candidate's default Markdown format contract. A first reference
+can be smaller while its necessary reader responses make total output larger.
+The existing probe consumer now decodes either format through the same pinned
+reader, checks the recovered contract and reports literal first output, every
+reader response and their sum separately. Its historical narrative/off readers,
+growth budgets and original-current-control checks remain. A full oracle read
+does not become a model requirement or prove retention. Do not call reader
+retirement a stdout or model-cost saving. Installed host
 adoption, independent exact-head review and the original-quota single-session
 outcome/full-cost comparison remain open. Explicit off and historical recovery
 are separate supported boundaries, rather than evidence of an active second
 decision owner.
+
+On three matched public SQLite fixtures, Markdown first output changes from
+26,437/59,055/65,548 bytes to 3,464/3,464/3,494. Including all pages of the
+delivered initial read plan gives 12,233/23,715/44,765 bytes. Traversing the
+entire required-view oracle instead gives 33,213/67,359/71,342 bytes, exceeding
+the previous inline carrier in every case. JSON measurements are unchanged.
+This adjacent C1 migration comparison qualifies the selected-read path only;
+later dependent reads, original-quota outcomes and complete model/IO costs are
+not measured by it. Smaller first output alone is not net efficiency evidence.
 
 Model-behavior qualification reads an explicitly supplied complete source with
 its existing version/integrity owner; an experimental arm label does not select

@@ -49,7 +49,8 @@ def test_progressive_activation_does_not_require_native_continuity(profile):
 
 
 @pytest.mark.parametrize("host", [(), ("--runtime-profile", "generic_cli"), ("--trae_app",), ("--antigravity_app",)])
-def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host):
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host, output_format):
     import os
     import sys
 
@@ -64,8 +65,11 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
         # The generic acceptance fixture runs machine-facing raw CLI reads.
         # This case exercises the omitted model-facing option instead.
         response = run_source_cli(["--registry", str(registry), "--runtime-root", str(runtime),
-            "--format", "json", *arguments], env=environment, check=False, timeout=30)
-        return response.returncode, json.loads(response.stdout)
+            "--format", output_format, *arguments], env=environment, check=False, timeout=30)
+        text = response.stdout
+        if output_format == "markdown":
+            text = text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        return response.returncode, json.loads(text)
 
     for i in range(8):
         document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": "agent-a",

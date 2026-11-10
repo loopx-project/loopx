@@ -477,18 +477,23 @@ def _emit_quota_result(
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
     deferred_context = getattr(args, "defer_context_presentation", False)
+    renderer = _quota_renderer(args)
     if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface=quota_context_surface(captured_payload, args))
-    if (not deferred_context and args.format == "json" and succeeded and args.quota_command == "should-run"
+    if (not deferred_context and succeeded and args.quota_command == "should-run"
             and activation["progressive_enabled"] and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,
             runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
             directory=capture_directory, reader_argv=reader_argv,
             captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None)
+        if args.format == "markdown":
+            from ..presentation.renderers.turn_envelope_markdown import render_turn_context_markdown
+
+            renderer = render_turn_context_markdown
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         try:
@@ -509,7 +514,7 @@ def _emit_quota_result(
             )
             print_payload(failure, args.format, _quota_renderer(args))
             return 1
-    print_payload(payload, args.format, _quota_renderer(args))
+    print_payload(payload, args.format, renderer)
     return 0 if succeeded else 1
 
 

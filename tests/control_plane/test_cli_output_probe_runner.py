@@ -314,12 +314,18 @@ def _reader_exchange(monkeypatch, *, defect=None, padding=0, body_padding=0):
     return navigation, body, expected, outputs, calls
 
 
-def test_reader_preserves_unicode_body_route_and_all_output_cost(monkeypatch):
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_reader_preserves_unicode_body_route_and_all_output_cost(monkeypatch, output_format):
     navigation, body, expected, outputs, calls = _reader_exchange(monkeypatch)
-    measurement = cli_output_fixture.measure_cli_context_for_oracle(navigation, output_format="json",
+    if output_format == "markdown":
+        navigation = "# LoopX Turn Envelope\n\n```json\n" + navigation + "\n```"
+    measurement = cli_output_fixture.measure_cli_context_for_oracle(navigation, output_format=output_format,
         measure=probe.measure_cli_output)
     assert measurement["resolved_payload"] == expected
-    assert measurement["payload"] == json.loads(navigation)
+    if output_format == "json":
+        assert measurement["payload"] == json.loads(navigation)
+    else:
+        assert measurement["payload"] is None
     assert measurement["chars"] == len(navigation)
     assert measurement["context_body"]["chars"] == len(body)
     assert measurement["context_body"]["utf8_bytes"] == len(body.encode()) > len(body)
@@ -333,10 +339,13 @@ def test_reader_preserves_unicode_body_route_and_all_output_cost(monkeypatch):
 
 
 @pytest.mark.parametrize("defect", ["gap", "digest", "early_eof", "route", "no_progress", "guard"])
-def test_reader_refuses_incomplete_or_changed_recovery(monkeypatch, defect):
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_reader_refuses_incomplete_or_changed_recovery(monkeypatch, defect, output_format):
     navigation, *_rest, calls = _reader_exchange(monkeypatch, defect=defect)
+    if output_format == "markdown":
+        navigation = "# LoopX Turn Envelope\n\n```json\n" + navigation + "\n```"
     with pytest.raises(AssertionError):
-        cli_output_fixture.read_cli_context_for_oracle(navigation)
+        cli_output_fixture.read_cli_context_for_oracle(navigation, output_format=output_format)
     if defect == "guard":
         assert calls == []
 
@@ -420,7 +429,8 @@ def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
             receipt_row(**kwargs, measurement=measure)
 
 
-def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path):
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, output_format):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.testing.canary_harness import import_fixture_authority
     from loopx.rollout_event_log import rollout_event_log_path
@@ -432,15 +442,29 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path):
         "preserving the original constraint. " * 36))
     import_fixture_authority(registry, probe.GOAL_ID)
     command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
-        state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+        state_file=state, output_format=output_format, context_delivery="auto")["quota_should_run"]
     code, navigation = probe._invoke_cli([
         *command, "--todo-id", "todo_fixture_000", "--turn-instance-id", "fixture-signed-rows",
     ])
     assert code == 0, navigation
     events = rollout_event_log_path(runtime, probe.GOAL_ID)
     before = events.read_bytes()
-    view, _ = cli_output_fixture.read_cli_context_for_oracle(navigation)
-    required = json.loads(view)
+    measurement = cli_output_fixture.measure_cli_context_for_oracle(navigation,
+        output_format=output_format, measure=probe.measure_cli_output)
+    required = measurement["resolved_payload"]
+    view = json.dumps(required, ensure_ascii=False)
+    spec = probe.CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"]
+    from loopx.control_plane.testing.cli_output_budget import assert_cli_output_semantics
+    assert_cli_output_semantics("quota_should_run", output_format=output_format,
+        text=navigation, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+    row = runpy.run_path(str(RUNNER))["_receipt_row"](semantics=cli_output_semantics,
+        row_id=f"surface/quota_should_run/multi_agent/{output_format}",
+        surface_id="quota_should_run", scenario="multi_agent", output_format=output_format,
+        qualification_policy=spec.qualification_policy, semantic_json_keys=spec.semantic_json_keys,
+        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version,
+        measurement=measurement, text=navigation)
+    assert len(row["quota_controls"]["field_sha256"]) == 19
     assert "context_reference_instruction" in required
     route = shlex.split(required["context_details"]["command_template"])
     assert route[-2] == "--select"

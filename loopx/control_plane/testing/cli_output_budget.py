@@ -972,12 +972,14 @@ def assert_cli_output_semantics(
             raise AssertionError(f"{output_id} markdown lost semantic anchor {markdown_anchor!r}")
         if output_contract_version is None:
             return
-        # Complete Markdown must retain its machine-readable source. A heading
-        # alone cannot qualify v1; historical narrative contracts stay separate.
+        # Markdown carries the same complete source or pinned progressive
+        # reference as JSON. A heading alone cannot qualify the contract.
         try:
             payload = json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
         except (IndexError, json.JSONDecodeError) as exc:
             raise AssertionError(f"{output_id} lost its complete JSON carrier") from exc
+        if isinstance(payload, dict) and payload.get("schema_version") == "context_capture_navigation_v1":
+            payload = measurement.get("resolved_payload", payload)
     else:
         payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
