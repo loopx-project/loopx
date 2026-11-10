@@ -140,6 +140,16 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
+/** Both declared pairs and first measurements support the same local choice.
+ * This is advisory work context, never another review or evaluation gate. */
+export function workYardstickChoiceGuidance(): string {
+  return "At a meaningful evidence or probe boundary, weigh continuing, a different mechanism or a compatible combination " +
+    "by expected accepted-outcome gain within accepted constraints, remaining horizon and full implementation and validation cost, " +
+    "including search, confirmation and model/control overhead. Keep unknowns as unknown; continuing a supported route is valid, " +
+    "and local improvement alone does not establish the best next investment. Without a material change, continue the authorized slice; " +
+    "this cue requires no extra review, measurement or decision payload. Consider a bounded check when it could change the choice.";
+}
+
 /** Existing work facts, without guessing an outcome/proxy role or adding a gate. */
 export function projectWorkMeasurementFacts(todoId: string, available: ExploreMeasurementFeedback[],
   detailsCommand?: string[], supplementaryReceipt = false): JsonObject | null {
@@ -153,9 +163,10 @@ export function projectWorkMeasurementFacts(todoId: string, available: ExploreMe
   return {todo_id: todoId, measurement_feedback: visible,
     omitted_measurement_feedback: available.length - visible.length,
     ...(detailsCommand ? {details_command: detailsCommand} : {}),
-    guidance: (supplementaryReceipt ? "This write's measurement_feedback is returned separately; these groups supplement it. This cue requires no extra review, measurement or decision payload. " : "") +
+    guidance: (supplementaryReceipt ? "This write's measurement_feedback is returned separately; these groups supplement it. " : "") +
       "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. " +
-      "No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."};
+      workYardstickChoiceGuidance() +
+      " No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."};
 }
 
 function recordedBefore(row: JsonObject, sourceOrder: unknown): boolean {
@@ -204,7 +215,7 @@ function measuredSearchComparison(
     : (reversed ? "The proxy reverses the observed goal order. " : "") +
       "Use the better-scoring candidate under this scope as a comparison base when available. ";
   return {goal, ...(proxy ? {proxy, proxy_order_reversed: reversed} : {}),
-    guidance: opening + "Weigh continuing, a different mechanism or a compatible combination by expected end-to-end gain and full implementation and validation cost. Prefer a bounded check that can change the choice."};
+    guidance: opening + workYardstickChoiceGuidance()};
 }
 
 export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
