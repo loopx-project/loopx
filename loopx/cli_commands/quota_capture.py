@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
@@ -130,7 +131,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
     stateless_ready = (
         progressive_enabled and initial_read_plan is None and context_directory is None and not page_attached
-        and current_document.get("effective_action") == "normal_run"
+        and current_document.get("effective_action") == EffectiveAction.NORMAL_RUN.value
         and current_document.get("normal_delivery_allowed") is True
         and isinstance(channel, dict) and channel.get("delivery_allowed") is True
     )
