@@ -648,21 +648,32 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     _, reference = read_context_read_reference(view["recovery"]["reference_file"])
     raw = Path(reference["path"]).read_bytes()
     source = json.loads(raw)
-    words = shlex.split(view["first_read_command"])
-    for option in ("--page-bytes", "--max-page-output-bytes"):
-        words[words.index(option) + 1] = "4500"
-    content = []
-    for _ in range(20):
-        code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
-        assert code == 0 and page["ok"], page
-        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
-        assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
-        content.append(page["content"])
-        if page["eof"]:
-            break
-        words = shlex.split(page["next_command"])
-    assert page["eof"] and len(content) > 1
-    values = selected_context_values("".join(content))
+    first = shlex.split(view["first_read_command"])
+    _, first_ref = read_context_read_reference(first[first.index("--reference-file") + 1])
+    assert first_ref["path"] == reference["path"] and first_ref["sha256"] == reference["sha256"]
+    assert first_ref.get("selection_paths")
+
+    def read_initial(command):
+        words = shlex.split(command)
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            words[words.index(option) + 1] = "4500"
+        content = []
+        for _ in range(20):
+            code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert code == 0 and page["ok"], page
+            assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
+            assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
+            content.append(page["content"])
+            if page["eof"]:
+                break
+            words = shlex.split(page["next_command"])
+        assert page["eof"] and len(content) > 1
+        return "".join(content)
+
+    content = read_initial(view["first_read_command"])
+    # An independent dynamic read of the same source has identical ordered facts.
+    assert content == read_initial(view["recovery"]["command"] + " --initial-read")
+    values = selected_context_values(content)
     cli_path = "/interaction_contract/cli_channel"
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))

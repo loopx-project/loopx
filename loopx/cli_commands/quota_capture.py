@@ -126,6 +126,25 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             # metadata is optional and never a read/authority receipt.
             pass
 
+    interaction = current_document.get("interaction_contract")
+    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
+    stateless_ready = (
+        progressive_enabled and initial_read_plan is None and context_directory is None and not page_attached
+        and current_document.get("effective_action") == "normal_run"
+        and current_document.get("normal_delivery_allowed") is True
+        and isinstance(channel, dict) and channel.get("delivery_allowed") is True
+    )
+    if stateless_ready:
+        try:
+            navigation_plan = _turn_envelope_result("context_select", context=current_document,
+                select=[""], list_fields=True, include_initial_read_plan=True)
+        except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+            pass
+        else:
+            selection = navigation_plan.get("initial_read_plan")
+            initial_read_plan = {"initial": selection is not None,
+                                 "plan": navigation_plan if selection is None else selection}
+
     if progressive_enabled and initial_read_plan is not None:
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
@@ -136,7 +155,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled and not stateless_first_read:
+    elif progressive_enabled and not stateless_first_read and not stateless_ready:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
