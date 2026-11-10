@@ -159,10 +159,13 @@ function projectVisionWaitFromFacts(input: {request: JsonObject; gaps: JsonObjec
   const summary = request.agent_todo_summary === null ? {} : requireJsonObject(request.agent_todo_summary, "agent_todo_summary");
   const cachedWait = cachedWaitProof(summary, agentId, causalIds);
   if (cachedWait) return cachedWait;
-  const resumePlan = projectTodoResumePlanning(requireJsonObject(request.resume_planning_request, "resume_planning_request"));
+  const basis = request.wait_basis == null ? null : requireJsonObject(request.wait_basis, "wait basis");
+  const resumePlan = basis === null ? projectTodoResumePlanning(requireJsonObject(request.resume_planning_request, "resume_planning_request")) :
+    requireJsonObject(basis.resume_planning, "prepared resume planning");
   const blockers = currentAgentBlockers(summary.current_agent_blocker_items, agentId);
   const candidates = Array.isArray(resumePlan.blocked_successor_items) ? resumePlan.blocked_successor_items as JsonObject[] : [];
-  const lineageRows = Array.isArray(request.lineage_source_items) ? request.lineage_source_items : candidates;
+  const lineageRows = Array.isArray(request.lineage_source_items) ? request.lineage_source_items :
+    basis !== null && Array.isArray(basis.lineage_source_items) ? basis.lineage_source_items : candidates;
   const coverage = projectWaitCoverage(causalIds, candidates, blockers, lineageRows);
   if (coverage.covered !== true) return null;
   const waitSelection = selectedWaitItems(blockers, candidates, new Set(coverage.witness_todo_ids as string[]));

@@ -54,6 +54,9 @@ def test_python_scan_separates_codec_calls_from_direct_json_io() -> None:
             "import json\n"
             "def update(registry_path, payload):\n"
             "    current = load_registry(registry_path)\n"
+            "    old = read_activation_upgrade_registry(registry_path)\n"
+            "    with activation_upgrade_registry_transaction(registry_path):\n"
+            "        pass\n"
             "    with source_session_registry_transaction(registry_path, "
             "operation='test'):\n"
             "        pass\n"
@@ -68,6 +71,8 @@ def test_python_scan_separates_codec_calls_from_direct_json_io() -> None:
         for row in observations
     ] == [
         ("codec_read", "load_registry"),
+        ("codec_read", "read_activation_upgrade_registry"),
+        ("codec_transaction", "activation_upgrade_registry_transaction"),
         ("codec_transaction", "source_session_registry_transaction"),
         ("direct_json_read", "json.loads"),
         ("direct_json_write", "atomic_write_json"),

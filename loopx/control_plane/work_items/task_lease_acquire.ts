@@ -1,10 +1,11 @@
+import {canonicalWriteScope, compactScopeInput as compact, normalizeWriteScopes, writeScopeCandidates} from "./write_scope_codec.ts";
+export {normalizeWriteScopes} from "./write_scope_codec.ts";
 import {HANDOFF_MODES, type HandoffMode} from "../coordination/handoff_mode_vocabulary.ts";
 import {LeaseWorktreeObservationError, observeLeaseWorktree, type LeaseWorkspace} from "./task_lease_workspace.ts";
 import {isCanonicalTodoId} from "../todos/identity.ts";
 import {executeCanonicalTaskLeaseAcquire} from "../coordination/task_lease_acquire.ts";
 import {withCanonicalTaskLeaseAuthority} from "./canonical_task_lease_lifecycle.ts";
 import {
-  canonicalWriteScope,
   evaluateTaskLeaseWriteScopesOverlap,
 } from "./task_lease_acquire_decision.ts";
 import { ShadowManagementError } from "../coordination/shadow_management.ts";
@@ -158,29 +159,6 @@ function optionalInteger(value: unknown, label: string): number | null {
   return value;
 }
 
-function compactString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  switch (typeof value) {
-    case "string":
-      return value;
-    case "number":
-    case "bigint":
-    case "symbol":
-      return value.toString();
-    case "boolean":
-      return value ? "true" : "false";
-    case "function":
-      return Function.prototype.toString.call(value);
-    case "object":
-      return Array.isArray(value) ? value.join(",") : Object.prototype.toString.call(value);
-  }
-  return "";
-}
-
-function compact(value: unknown): string {
-  return compactString(value).trim().split(/\s+/u).filter(Boolean).join(" ");
-}
-
 export function normalizeAgent(value: unknown): string | null {
   const candidate = compact(value).toLowerCase().replaceAll(" ", "-");
   return /^[a-z][a-z0-9_.:@-]{0,79}$/u.test(candidate) ? candidate : null;
@@ -231,37 +209,6 @@ export function normalizeIdempotencyKey(value: unknown): string {
     );
   }
   return key;
-}
-
-function writeScopeCandidates(value: unknown): unknown[] {
-  if (value === null || value === undefined) return [];
-  let raw: unknown[];
-  if (Array.isArray(value)) {
-    raw = value;
-  } else if (typeof value === "string") {
-    raw = value.split(/[,;|]/u);
-  } else {
-    raw = [value];
-  }
-  return raw;
-}
-
-/** Keep request spellings stable for immutable receipts and declared work. */
-export function normalizeWriteScopes(value: unknown): string[] {
-  const raw = writeScopeCandidates(value);
-  const scopes: string[] = [];
-  const seen = new Set<string>();
-  for (const item of raw) {
-    const scope = compact(item);
-    if (
-      canonicalWriteScope(scope) === null || seen.has(scope)
-    ) {
-      continue;
-    }
-    seen.add(scope);
-    scopes.push(scope);
-  }
-  return scopes;
 }
 
 export function requireWriteScopes(value: unknown): string[] {

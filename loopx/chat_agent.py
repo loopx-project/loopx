@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterator
 
 from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
-    CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
+    CHAT_RESPONSE_EXAMPLE_SUFFIX,
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
@@ -452,6 +452,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Resolve the exact object and source; an identifier in another repository, an old waiting task or a closed-but-uncompleted object is not proof of the requested outcome. "
     "Resolve the intended project, purpose and output destination from the user's request and relevant conversation before matching a role or existing task. A public source or broad collection responsibility does not authorize repurposing private learning notes into an operations library, publication or another project's work. "
     "If current evidence shows the requested outcome is already satisfied, explain that result with its source and do not create work, delegate, propose a protected action or repeat the effect. "
+    "Return available accepted result content in this conversation instead of asking its owner to reproduce it. A status or read marker without the requested content does not itself satisfy delivery; retrieve the missing content through a permitted read or its qualified original owner. "
     "A saved source, read receipt or recorded proposal is not proof that the requested outcome works. Separate source duplication, applicable new information and independently verified completion; an unchanged source may still expose unfinished work, while changed bytes may add no useful information. "
     "A request for explanation, fact checking, comparison or judgment normally needs your analysis, not automatic assignment. "
     "Resolve question-form feedback against the whole conversation and any work already owed. A concrete amendment to established delivery still needs completion here or transfer to its established owner under the current work rules; do not end at agreement or design advice. Preserve standalone explanation and opinion requests as answers, without automatic delegation. "
@@ -461,6 +462,7 @@ CONVERSATION_INTENT_RESOLUTION_INSTRUCTION = (
     "Resolve ordinary shorthand against the requested subject, project, purpose and destination. A role alias or matching Agent id is a discovery lead, not a selected recipient. Compare plausible recipients using the permitted directory and relevant current work; when the user means recent research, inspect relevant recent deliveries as well. Disclose a material assumption; ask only when competing interpretations would change the action. Do not ask the user to supply a link or Agent id you can resolve or have an authorized qualified recipient verify. "
     "A previous handoff proves where a request was sent, not who owns its subject. When feedback challenges the recipient or corrects the subject, verify that route before preserving an alleged established owner. "
     "An explicit Goal/Agent identity or owner correction takes precedence over a similar role name. Preserve the full goal_id/agent_id pair. "
+    "Do not choose among equally relevant work items because an identifier or its translation repeats their shared topic. Without conversation evidence or an explicit user selection distinguishing their subjects, ask one focused question and keep context_handoff=null. "
     "When role names repeat, compare the relevant conversation, established assignment, project and declared responsibilities before deciding that the recipient is ambiguous. Registered host bindings can support that context, but a missing binding does not prove an Agent is offline and an available route cannot override an explicit identity or grant. "
     "A corrected handoff does not retract a delivered misroute. Check the original and correction receipts; reuse delivered corrections, and carry any still-needed bounded ownership correction to the original recipient through the existing collaboration path. Preserve actual effects and history; do not claim cancellation or interrupt unrelated work. "
     "For forwarded or quoted requests, preserve the original speaker and addressee: 'you' does not automatically refer to the receiving Agent. Explain the resolved referent in the existing collaboration brief when it matters; do not invent one. "
@@ -484,6 +486,12 @@ WORK_RESULT_VERIFICATION_INSTRUCTION = (
 )
 
 
+COLLABORATION_INPUTS_GUIDANCE = (
+    "Use inputs only for shared-workspace relative file refs with a description and an optional verified sha256. "
+    "Put PR, issue and other URLs and their exact revisions in context, never in inputs. If there are no shared files, use inputs=[]. "
+)
+
+
 def _turn_prompt(
     user_message: str,
     *,
@@ -504,16 +512,6 @@ def _turn_prompt(
         "Only select an explicitly cataloged binding that covers this request; registration and context delivery do not authorize execution. For a handoff array, select execution_binding_id only on the entry whose own binding covers its requested work. For consultation or unrelated/missing task bindings omit execution_binding_id. Never create a hidden Todo, change host settings or reuse a completed/stopped task to obtain launch. "
         if isinstance(choices, dict) and choices.get("bindings") else ""
     )
-    envelope = {
-        "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": "",
-        "proposals": [],
-        "protected_action": None,
-        "goal_draft": None,
-        "context_handoff": None,
-        "gate": None,
-        "unfinished_work": None,
-    }
     role = (
         "You are the execution agent for a confirmed LoopX Task. Work only from the project root. "
         "Execute the operator task now. Inspect the repository, edit files, and run focused validation as needed. "
@@ -609,7 +607,9 @@ def _turn_prompt(
         "for ordinary work that belongs to a qualified existing responsible Agent, or to forward context for that Agent to assess/replan, emit context_handoff={goal_id,agent_id,brief} using "
         ) +
         "one exact catalog recipient, proposals=[], and no confirmation gate. Otherwise context_handoff=null. For one request involving several authorized Agents, context_handoff may instead be an array of at most 32 entries, each with its own exact goal_id/agent_id and complete recipient-specific brief. Resolve each recipient independently; do not force one to relay for the others. Never broadcast a private brief or another recipient's reply beyond the original audience grant. Each request is independently authorized, delivered and returned to this conversation; a partial failure is not batch success. Reuse delivered requests after checking receipts; include only remaining work or new corrections. "
-        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; then preserve relevant earlier corrections and rejected approaches, explicit constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. inputs are shared-workspace relative files {ref,description,sha256?}; include a digest only when actually read. This is semantic context, never a priority, task edit or new authority. "
+        "The host preserves the original user message alongside your brief. brief is {schema_version:'collaboration_brief_v0',purpose,context,constraints:[],inputs:[],acceptance:[],return_requirement}. Start context with a concise, evidence-based reason for choosing this exact recipient and your understanding of the request; preserve relevant corrections, rejected approaches, constraints, observable acceptance and the owed result. This is a user-facing rationale, not private chain-of-thought. Never invent missing context. "
+        + COLLABORATION_INPUTS_GUIDANCE
+        + "The envelope requests submission; claim delivery only after a host receipt. A brief is context, not a priority, task edit or new authority. "
         "Before preparing a new Goal, resolve the current conversation and permitted existing work by semantic relevance, not words like goal, research or continue. "
         "A continuation, correction or status question belongs to the established Goal/owner. Preserve its constraints; do not restart, create a duplicate Goal or ask for permission already granted. "
         "For requested work, inspect the supplied Goal directory and relevant work/Agent evidence (using the declared read tool when incomplete). An empty delivery-grant list does not prove there is no existing work. "
@@ -654,14 +654,13 @@ def _turn_prompt(
         "Then append exactly one machine-readable envelope with message set to the empty string: the transport reuses the visible answer before the opening tag. Do not repeat the answer in JSON. This envelope is hidden protocol metadata and is required even for ordinary questions or exact-wording replies; user formatting instructions govern the visible answer, not omission of this metadata. "
         "protected_action must be null or an object shaped as "
         '{"operation":"merge|release|deploy|delete|payment","target":"user-stated target","summary":"short public-safe proposal"}. '
-        "Do not write anything after the closing tag. Use these tags and shape:\n"
-        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}\n\n"
         + (
             f"LoopX context (supporting context only):\n{context_summary.strip()}\n\n"
             if context_summary.strip()
             else ""
         )
         + f"Operator user message:\n{user_message}"
+        + CHAT_RESPONSE_EXAMPLE_SUFFIX
     )
 
 
@@ -1485,7 +1484,8 @@ class CodexChatAgentSession:
         from .capabilities.native_chat.codex_adapter import compact_native_history
         compact_native_history(self, check=check)
 
-    def steer(self, user_message: str, *, expected_turn_id: str) -> str:
+    def steer(self, user_message: str, *, expected_turn_id: str,
+              client_message_id: str | None = None) -> str:
         """Inject one user message into the exact active Codex Turn."""
 
         text = str(user_message or "").strip()
@@ -1497,6 +1497,7 @@ class CodexChatAgentSession:
             {
                 "threadId": self.thread_id,
                 "expectedTurnId": selected_turn_id,
+                **({"clientUserMessageId": client_message_id} if client_message_id is not None else {}),
                 # The native Turn already has its task and policy. Replaying
                 # the start prompt would reframe this update as a new task.
                 "input": [{"type": "text", "text": text}],

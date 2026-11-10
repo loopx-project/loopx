@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -191,16 +192,28 @@ class _TurnEventBuffer:
         changes = dict(self.progress)
         if not changes.get("first_event_at"):
             changes.pop("first_event_at", None)
-        self.store.update_turn(
-            self.session_id,
-            self.turn_id,
-            expected_statuses={"starting", "running"} if "status" in changes else None,
-            **changes,
-        )
-        self.store.update_session(
-            self.session_id,
-            last_activity_at=str(changes["last_activity_at"]),
-        )
+        try:
+            self.store.update_turn(
+                self.session_id,
+                self.turn_id,
+                expected_statuses={"starting", "running"} if "status" in changes else None,
+                **changes,
+            )
+            self.store.update_session(
+                self.session_id,
+                last_activity_at=str(changes["last_activity_at"]),
+            )
+        except OSError as exc:
+            if force or exc.errno != errno.ENOSPC:
+                raise
+            # An ancillary progress snapshot must not abandon a live provider.
+            # Continue only after its primary event journal is durable; a full
+            # journal must not accumulate an unbounded in-memory backlog.
+            self.store.flush_events(self.session_id, self.turn_id)
+            # Keep it dirty for the next normal checkpoint, without a hot retry
+            # or another model invocation. Start/close still require persistence.
+            self.last_checkpoint_at = now
+            return
         self.metadata_dirty = False
         self.last_checkpoint_at = now
 
@@ -939,8 +952,6 @@ class ChatRuntimeController:
                             payload={"error_code": "server_restarted", "message": failed["error"]},
                         )
         native_recovery = None
-        parked_working = None
-        working_continuation = None
         history_restore = NativeHistoryRestoration(self, session, accepted_turn_id, commit, check_route_configuration, manager_runtime is not None)
         try:
             same_working_route = (manager_runtime is not None and session.get("steward_context") is not None
@@ -948,24 +959,21 @@ class ChatRuntimeController:
                 and session.get("manager_context_version") == MANAGER_CONTEXT_VERSION
                 and session.get("upstream_mode") == "chat" and not manager_profile_changed
                 and not settings_changed and not quota_route and model_allocation is None and not quota_fallback)
-            stored_messages = history_restore.capture(strict=bool(same_working_route
-                and (working_provider or session.get("parked_native_working"))))
+            cold_working = (current is None and answer_fallback and native_account_epoch is not None
+                and session.get("answer_review") is not True and bool(session.get("native_working_checkpoint")))
+            checkpoint_available = working_provider or cold_working or session.get("parked_native_working")
+            stored_messages = history_restore.capture(strict=bool(same_working_route and checkpoint_available))
             history = history_restore.messages(stored_messages)
             legacy_manager_context = history_restore.manager_migration(refresh=(manager_profile_changed
                 or model_allocation is not None or quota_fallback or answer_fallback))
             legacy_provider_context = history_restore.provider_migration(stored_messages)
-            if (same_working_route and (working_provider or session.get("parked_native_working"))
+            if (manager_runtime is not None and same_working_route and checkpoint_available
                     and not legacy_provider_context and not legacy_project_context):
-                affinity = history_restore.working_affinity(
-                    work_dir=work_dir, codex_home=selected_codex_home, runtime=manager_runtime,
-                    account_epoch=native_account_epoch)
-                if answer_fallback:
-                    parked_working = history_restore.park_working_context(
-                        stored_messages, provider=working_provider, affinity=affinity)
-                    if parked_working is not None:
-                        history_restore.check()
-                elif session.get("answer_review") is True and not recovery.get("read_only_review"):
-                    working_continuation = history_restore.restore_working_context(stored_messages, affinity=affinity)
+                history_restore.prepare_working_context(stored_messages, work_dir=work_dir,
+                    codex_home=selected_codex_home, runtime=manager_runtime, account_epoch=native_account_epoch,
+                    working_provider=working_provider, cold_working=cold_working,
+                    answer_review=answer_fallback, read_only_review=bool(recovery.get("read_only_review")))
+            working_continuation = history_restore.working_continuation
             adapter = self._start_adapter(
                 agent_id=str(selected_agent),
                 work_dir=work_dir,
@@ -1070,8 +1078,8 @@ class ChatRuntimeController:
                     }
                     if answer_fallback or session.get("answer_review") is True:
                         changes["answer_review"] = answer_fallback
-                    if parked_working is not None or session.get("parked_native_working") is not None:
-                        changes.update(parked_native_working=parked_working,
+                    if history_restore.parked_working is not None or session.get("parked_native_working") is not None:
+                        changes.update(parked_native_working=history_restore.parked_working,
                             expected_upstream_thread_id=session["upstream_thread_id"])
                     if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
                         # Preserve provenance for read-only checks of failed
@@ -1115,6 +1123,11 @@ class ChatRuntimeController:
                     upstream_mode=("chat" if selected_agent == "codex" else "default") if quota_route
                         else codex_context.managed_upstream_mode(session),
                 )
+                if (isinstance(adapter, CodexAppServerAdapter) and manager_runtime is not None
+                        and native_account_epoch is not None and not recovery.get("metadata_review")
+                        and not recovery.get("answer_review") and not recovery.get("read_only_review")):
+                    history_restore.remember_working_checkpoint(adapter, work_dir=work_dir, codex_home=selected_codex_home,
+                        runtime=manager_runtime, account_epoch=native_account_epoch)
         except Exception:
             with self.lock:
                 owns_adapter = self.adapters.get(session_id) is adapter
@@ -1340,6 +1353,14 @@ class ChatRuntimeController:
                     ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
 
             decision = plan("prepare")
+            if decision["action"] == "unresolved":
+                try:
+                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                        client_ingress_id=ingress_id, message=turn["message"],
+                        _queued_turn_id=queued_turn_id)
+                except Exception:
+                    pass  # Only the original receipt can complete the reservation.
+                decision = plan("settle")
             if decision["action"] == "dispatch":
                 turn = self.store.write_queue_steering(session_id, turn, decision)
                 try:
@@ -1361,9 +1382,19 @@ class ChatRuntimeController:
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
         expected_turn_id: str | None = None, _queued_turn_id: str | None = None,
+        origin: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
         session = self._require_steering_session(session_id)
+        with self.store.steering_delivery_lock(session_id, client_ingress_id):
+            return self._steer_active_turn(session=session, session_id=session_id,
+                client_ingress_id=client_ingress_id, message=message, expected_turn_id=expected_turn_id,
+                _queued_turn_id=_queued_turn_id, origin=origin)
+
+    def _steer_active_turn(
+        self, *, session: Mapping[str, object], session_id: str, client_ingress_id: str,
+        message: str, expected_turn_id: str | None, _queued_turn_id: str | None, origin: str | None,
+    ) -> tuple[dict[str, object], bool]:
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1392,6 +1423,10 @@ class ChatRuntimeController:
                 return turn, False
             if receipt.get("status") == "failed" and receipt.get("error_code") in STEERING_NOT_DELIVERED_CODES:
                 raise RuntimeError(str(receipt["error_code"]))
+            from .capabilities.native_chat.queued_admission import reconcile_steering_delivery
+            recovered = reconcile_steering_delivery(self, session, receipt)
+            if recovered is not None:
+                return recovered, False
             raise RuntimeError("live_steering_delivery_unresolved")
         active_turn_id = str(session.get("active_turn_id") or "")
         if expected_turn_id is not None and active_turn_id != expected_turn_id:
@@ -1442,35 +1477,10 @@ class ChatRuntimeController:
                 error_code="live_steering_turn_not_started",
             )
             raise RuntimeError("live_steering_turn_not_started")
-        try:
-            adapter.steer_turn(message, upstream_turn_id)
-        except Exception:
-            self.store.update_ingress_receipt(
-                session_id,
-                client_ingress_id,
-                status="failed",
-                error_code="live_steering_rejected",
-            )
-            raise
-        if _queued_turn_id is None:
-            self.store.append_message(session_id, role="user", text=message, turn_id=active_turn_id)
-        self.store.append_event(
-            session_id,
-            active_turn_id,
-            kind="turn.steered",
-            payload={"client_ingress_id": client_ingress_id,
-                **({"queued_turn_id": _queued_turn_id} if _queued_turn_id is not None else {})},
-        )
-        self.store.update_ingress_receipt(
-            session_id,
-            client_ingress_id,
-            status="delivered",
-            active_turn_id=active_turn_id,
-            error_code=None,
-        )
-        turn = self.store.load_turn(session_id, active_turn_id)
-        if turn is None:
-            raise RuntimeError("live_steering_turn_missing")
+        from .capabilities.native_chat.queued_admission import send_native_steering
+        turn = send_native_steering(self, adapter, session_id=session_id, active_turn_id=active_turn_id,
+            upstream_turn_id=upstream_turn_id, client_ingress_id=client_ingress_id,
+            message=message, queued_turn_id=_queued_turn_id, origin=origin)
         return turn, True
 
     def enqueue_turn(

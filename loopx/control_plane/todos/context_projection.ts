@@ -24,6 +24,19 @@ const CONTEXT_FIELDS = [
 
 /** Select before redaction; never convert nested scopes or booleans to prose. */
 export function projectTodoContextPage(input: JsonObject): JsonObject {
+  if (input.summary_display_views !== undefined) {
+    if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display views cannot be combined with other views");
+    const source = requireJsonObject(input.summary_display_views, "summary display views");
+    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates")) {
+      throw new EffectRuntimeRequestError("invalid summary display views fields");
+    }
+    requireJsonObject(source.source, "summary source");
+    return {
+      summary: projectTodoSummaryDisplay(source),
+      planning: projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
+      terminal: projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
+    };
+  }
   if (input.summary_display !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display cannot be combined with other views");
     return {items: projectTodoSummaryDisplay(requireJsonObject(input.summary_display, "summary display"))};
@@ -184,18 +197,19 @@ const SUMMARY_FIELDS = [
   "blocked_retry", "no_followup", "successor_todo_ids", "completion_continuation", "completion_recovery",
   "replan_obligation_id", "target_key", "cadence", "next_due_at", "expires_at",
   "watch_only", "last_checked_at", "result_hash", "consecutive_no_change", "material_change",
-  "material_change_generation", "max_no_change_before_replan", "route_continuation_replan_required", "route_continuation_reason", "route_id",
+  "material_change_generation", "material_change_scope", "material_change_scope_generations",
+  "max_no_change_before_replan", "route_continuation_replan_required", "route_continuation_reason", "route_id",
   "route_key", "completed_at", "updated_at", "completion_turn_key", "superseded_by", "handoff_note",
 ];
 
-const SUMMARY_SOURCES = [
+export const SUMMARY_SOURCES = [
   "active_next_action_items", "active_next_action_executable_items", "first_open_items", "backlog_items", "unclaimed_priority_open_items",
   "claimed_open_items", "claimed_advancement_open_items", "claimed_monitor_open_items", "monitor_open_items", "current_agent_claimed_open_items",
   "current_agent_claimed_advancement_items", "current_agent_claimed_monitor_items", "blocker_items", "resume_blocked_items", "monitor_blocked_resume_candidates",
   "current_agent_monitor_blocked_resume_candidates", "unclaimed_monitor_blocked_resume_candidates", "items",
 ];
 
-const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
+export const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
 
 function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
   const row: JsonObject = {index: item.index ?? null, text: body};
@@ -246,6 +260,8 @@ export function projectTodoSummaryDisplay(input: JsonObject, onSource?: (key: st
     return gate.gate_state === "cleared_with_successor" && Array.isArray(gate.successor_todo_ids) ? gate.successor_todo_ids.map(id).filter(Boolean) : [];
   }));
   const selected: {item: JsonObject; text: unknown}[] = [], seen = new Set<string>();
+  const rawIds = new Set<unknown>();
+  const coordinates = new Map<unknown, {all: Set<string>; anonymous?: Set<string>}>();
   if (source) {
     for (const key of planning ? PLANNING_SOURCES : SUMMARY_SOURCES) {
       for (const [index, value] of (Array.isArray(source[key]) ? source[key] as unknown[] : []).entries()) {
@@ -254,7 +270,20 @@ export function projectTodoSummaryDisplay(input: JsonObject, onSource?: (key: st
         let todo = id(item.todo_id);
         if (terminal && !todo) {const legacy = stripPythonWhitespace(pythonFieldText(item, "todo_id")); if (legacy.startsWith("todo_")) todo = legacy;}
         if (!body || (planning ? !todo || !terminal && item.status === "done" || seen.has(todo!) : item.done === true)) continue;
-        if (!planning && selected.some(({item: prior, text}) => item.todo_id && prior.todo_id ? item.todo_id === prior.todo_id : prior.index === item.index && text === body)) continue;
+        if (!planning) {
+          // Either missing ID makes legacy coordinates decisive. Preserve raw
+          // IDs and strict equality: unlike Map keys, NaN never equals itself.
+          const rawId = item.todo_id, coordinate = item.index;
+          const prior = coordinate === coordinate ? coordinates.get(coordinate) : undefined;
+          if (rawId ? rawIds.has(rawId) || prior?.anonymous?.has(body) : prior?.all.has(body)) continue;
+          if (rawId) rawIds.add(rawId);
+          if (coordinate === coordinate) {
+            const entry = prior ?? {all: new Set<string>(), anonymous: undefined};
+            entry.all.add(body);
+            if (!rawId) (entry.anonymous ??= new Set<string>()).add(body);
+            coordinates.set(coordinate, entry);
+          }
+        }
         if (todo) seen.add(todo);
         selected.push({item, text: body});
         onSource?.(key, index);

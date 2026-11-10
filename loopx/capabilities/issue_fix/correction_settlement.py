@@ -9,7 +9,10 @@ from typing import NotRequired, TypedDict
 
 from ...agent_registry import load_goal_from_registry
 from ...control_plane.goals.activation import goal_is_stopped
-from ...control_plane.projects.registry_codec import load_project_registry
+from ...control_plane.projects.registry_codec import (
+    SOURCE_SESSION_PROFILE_ID,
+    load_project_registry,
+)
 from ...control_plane.runtime.time import now_utc_iso
 from ...control_plane.todos.mutation_api import add_goal_todo
 from ...domain_packs.issue_fix import (
@@ -17,7 +20,6 @@ from ...domain_packs.issue_fix import (
     read_issue_fix_pr_lifecycle_ledger_row,
     upsert_issue_fix_pr_lifecycle_ledger_jsonl,
 )
-from ...paths import resolve_runtime_root
 from .pr_lifecycle import recheck_issue_fix_maintainer_correction_effect_gates
 
 
@@ -30,6 +32,16 @@ _SOURCE_EVENT_REFUSALS = {
     "self_or_bot_author",
     "author_not_maintainer",
 }
+
+
+def _require_origin_registry(registry_path: Path) -> None:
+    """Check the origin profile before looking up the request in its store."""
+    try:
+        profile = load_project_registry(registry_path).get("profile_id")
+    except (ValueError, OSError) as exc:
+        raise ValueError("origin registry is unreadable") from exc
+    if profile != SOURCE_SESSION_PROFILE_ID:
+        raise ValueError(f"origin registry requires {SOURCE_SESSION_PROFILE_ID}")
 
 
 def _goal_stopped_for_correction(registry_path: Path | None, goal_id: str | None) -> bool:
@@ -195,6 +207,8 @@ def _settle_maintainer_correction_entries(
                 raise ValueError("origin request identity changed")
             with collaboration_goal_scope(Path(origin["registry_path"]), goal_id=identity["goal_id"],
                     agents=(), require_active=False) as scope:
+                if scope.profile_id != SOURCE_SESSION_PROFILE_ID:
+                    raise ValueError("origin registry profile changed")
                 goal_ref = identity.get("goal_ref") or scope.current_goal_ref or {"goal_id": identity["goal_id"]}
             if origin.get("goal_ref") and goal_ref != origin["goal_ref"]:
                 raise ValueError("origin request identity changed")
@@ -316,7 +330,7 @@ def _settle_maintainer_correction_entries(
     entries = issue_fix_maintainer_correction_entries(row)
     payload["maintainer_corrections"] = entries
     if origin:
-        from ...todos import list_goal_todos
+        from ...control_plane.todos.list_readback import list_goal_todos
         from ...control_plane.collaboration.inbox import reply_status
         from ..manager_context.roundtrip import report
 
@@ -330,9 +344,7 @@ def _settle_maintainer_correction_entries(
                 continue
             returns = entry.setdefault("returns", [])
             operation_id = entry["operation_id"]
-            origin_root = resolve_runtime_root(
-                load_project_registry(Path(origin["registry_path"])),
-                origin["runtime_root"], registry_path=Path(origin["registry_path"]))
+            origin_root = Path(origin["runtime_root"])
             pending = entry.get("pending_return")
             pending_head = pending.get("head_sha") if (
                 isinstance(pending, dict)

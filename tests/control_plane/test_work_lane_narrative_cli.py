@@ -70,7 +70,8 @@ def _guard(
     result = subprocess.run(
         [sys.executable, "-c", "from loopx.cli import main; raise SystemExit(main())",
          "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-         "quota", "should-run", "--goal-id", GOAL_ID, "--runtime-profile", "generic_cli"],
+         "quota", "should-run", "--goal-id", GOAL_ID, "--runtime-profile", "generic_cli",
+         "--context-delivery", "off"],
         cwd=project, capture_output=True, text=True, check=True,
         env={**os.environ, "LOOPX_USAGE_PING": "0"},
     )

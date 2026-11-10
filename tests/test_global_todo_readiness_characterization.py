@@ -149,7 +149,19 @@ raise SystemExit(main())
                 )
                 assert result.returncode == 0, result.stdout + result.stderr
                 outputs.append(result.stdout)
-            assert outputs[0] == outputs[1]
+            if command == "goal-portfolio" and output_format == "json":
+                # Source revisions hash the complete status read. Different
+                # status schemas can identify the same portfolio projection.
+                normalized = []
+                for output in outputs:
+                    snapshot = json.loads(output)
+                    assert len(snapshot["goals"]) == 1
+                    for digest in (snapshot.pop("snapshot_id"), snapshot["goals"][0]["source"].pop("revision")):
+                        assert digest.startswith("sha256:") and len(digest) == 71
+                    normalized.append(snapshot)
+                assert normalized[0] == normalized[1]
+            else:
+                assert outputs[0] == outputs[1]
             if output_format == "json":
                 payload = json.loads(outputs[1])
                 if command == "goal-portfolio":

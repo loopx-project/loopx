@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from loopx.control_plane.testing.model_tool_behavior import (
     QuotaToolContext,
     QUOTA_FIRST_TOOL_INSTRUCTION,
@@ -13,14 +15,16 @@ from loopx.control_plane.testing.model_tool_behavior import (
 )
 from loopx.control_plane.testing.scoped_gate_successor_tool_behavior import (
     SCOPED_GATE_FINALIZATION_MESSAGE,
+    SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS,
     SCOPED_GATE_SUCCESSOR_TODO_ID,
     DoubaoScopedGateSuccessorToolBehaviorActor,
     _build_scoped_gate_fixture,
 )
 
 
+@pytest.mark.parametrize("extra_reads", [0, SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS - 2])
 def test_real_quota_notice_and_selected_successor_execute_in_one_tool_loop(
-    tmp_path: Path,
+    tmp_path: Path, extra_reads: int,
 ) -> None:
     fixture = _build_scoped_gate_fixture(tmp_path / "oracle")
     requests: list[dict[str, Any]] = []
@@ -32,6 +36,7 @@ def test_real_quota_notice_and_selected_successor_execute_in_one_tool_loop(
                 "turn-scoped-001",
             ),
         ),
+        *(_tool_response(f"call-read-{index}", "pwd") for index in range(extra_reads)),
         _tool_response(
             "call-successor",
             "cat fixture/scoped-successor.json",
@@ -66,8 +71,11 @@ def test_real_quota_notice_and_selected_successor_execute_in_one_tool_loop(
     assert receipt["quiet_noop_allowed"] is False
     assert receipt["non_blocking_notice_surfaced"] is True
     assert receipt["selected_action_matched_todo"] is True
+    assert receipt["tool_call_count"] == extra_reads + 2
+    assert receipt["tool_call_limit"] == SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS
     assert receipt["observed_tool_sequence"] == [
         "quota_should_run",
+        *(["workspace_read"] * extra_reads),
         "selected_action",
     ]
     assert receipt["boundary"] == {
@@ -109,10 +117,11 @@ def test_real_quota_notice_and_selected_successor_execute_in_one_tool_loop(
     assert "After the selected Todo tool succeeds, call no more tools" in (
         system_prompt
     )
-    assert "tools" not in requests[2]
-    assert "tool_choice" not in requests[2]
-    assert requests[2]["messages"][-2]["role"] == "tool"
-    assert requests[2]["messages"][-1] == {
+    assert len(requests) == extra_reads + 3
+    assert "tools" not in requests[-1]
+    assert "tool_choice" not in requests[-1]
+    assert requests[-1]["messages"][-2]["role"] == "tool"
+    assert requests[-1]["messages"][-1] == {
         "role": "system",
         "content": SCOPED_GATE_FINALIZATION_MESSAGE,
     }
@@ -167,9 +176,11 @@ def test_model_can_recover_from_one_unexecuted_read_shape(
         _stop_response("User gate: review the unrelated product first screen."),
     ]
     call_count = 0
+    requests: list[dict[str, Any]] = []
 
-    def transport(**_: Any) -> Mapping[str, Any]:
+    def transport(**kwargs: Any) -> Mapping[str, Any]:
         nonlocal call_count
+        requests.append(json.loads(kwargs["body"]))
         response = responses[call_count]
         call_count += 1
         return response
@@ -188,6 +199,14 @@ def test_model_can_recover_from_one_unexecuted_read_shape(
         "workspace_read_rejected",
         "selected_action",
     ]
+    feedback = requests[2]["messages"][-1]
+    assert feedback["role"] == "tool"
+    assert "without executing it" in feedback["content"]
+    assert "`cat <that exact path>`" in feedback["content"]
+    assert "do not rediscover the workspace or inspect state" in feedback["content"]
+    assert "no additional read scope or tool budget" in feedback["content"]
+    assert "using pwd, ls" not in feedback["content"]
+    assert receipt["tool_call_limit"] == SCOPED_GATE_SUCCESSOR_TOOL_BEHAVIOR_MAX_CALLS
 
 
 def test_mutating_command_is_not_retried_as_read_intent(tmp_path: Path) -> None:

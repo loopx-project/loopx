@@ -73,6 +73,7 @@ def test_original_project_worker_reviews_existing_partial_results_without_busine
         retained = artifact.read_bytes()
         if fault not in {"owned-adapter", "background"}:
             runtime.adapters.pop(sid).close_session()
+        owner = runtime.adapters.get(sid)
         Path(store.load_session(sid)["codex_home"]).mkdir(parents=True, exist_ok=True)
         if fault == "source-changed":
             provider.messages[event["message_id"]]["content"] = "Revised request"
@@ -101,8 +102,12 @@ def test_original_project_worker_reviews_existing_partial_results_without_busine
         else:
             selected.reconcile_request(path)
         recovered = selected.core.read_request(ref)
-        if fault in {"background", "source-changed", "stop", "revoked", "queued"}:
+        if fault in {"owned-adapter", "background", "source-changed", "stop", "revoked", "queued"}:
             assert recovered["turn_id"] == original["turn_id"] and not recovered.get("context_recovery")
+            if fault == "owned-adapter":
+                assert runtime.adapters[sid] is owner and owner.healthcheck()
+                calls = [json.loads(line) for line in capture.read_text().splitlines()]
+                assert sum(row.get("method") == "turn/start" for row in calls) == 1
         else:
             assert recovered["turn_id"] != original["turn_id"]
             assert recovered["context_recovery"]["read_only_review"] is True
@@ -608,7 +613,7 @@ def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordina
     def unreadable(*_, **__):
         raise PermissionError("private journal path")
     with monkeypatch.context() as patch:
-        patch.setattr(store, "messages", unreadable)
+        patch.setattr(store, "_paged_history_messages", unreadable)
         code, unavailable = request(path + "?message_limit=200")
     assert code == 503 and "private journal path" not in json.dumps(unavailable)
 

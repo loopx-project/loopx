@@ -1,3 +1,5 @@
+import {canonicalWriteScope, characterClassEnd} from "./write_scope_codec.ts";
+export {canonicalWriteScope, TODO_WRITE_SCOPE_MAX_CHARS} from "./write_scope_codec.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {leaseWorkspace, sameLeaseWorkspace, sameLeaseCheckout, type LeaseWorkspace} from "./task_lease_workspace.ts";
 /** Shared acquire/reclaim admission. IO and durable receipts belong to callers. */
@@ -10,7 +12,6 @@ import type {TodoFact, LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection, repositoryScopesMayOverlap} from "./task_lease_repository.ts";
 
-export const TODO_WRITE_SCOPE_MAX_CHARS = 160;
 
 export interface AcquireDecisionLease {
   present: boolean;
@@ -66,52 +67,6 @@ function stringValue(value: unknown, label: string): string {
     throw new EffectRuntimeRequestError(`${label} must be a string`);
   }
   return value;
-}
-
-function characterClassEnd(pattern: string, start: number): number {
-  let end = start + 1;
-  if (pattern[end] === "!") end += 1;
-  if (pattern[end] === "]") end += 1;
-  return pattern.indexOf("]", end);
-}
-
-/**
- * Canonicalize one repository-relative scope without resolving it against a
- * host filesystem. Glob character classes retain their own slash semantics.
- */
-export function canonicalWriteScope(value: string): string | null {
-  const scope = value.trim();
-  if (
-    scope.length === 0 || scope.length > TODO_WRITE_SCOPE_MAX_CHARS ||
-    scope.startsWith("/") || scope.startsWith("~") || scope.includes("\\") ||
-    /[\s<>]/u.test(scope)
-  ) {
-    return null;
-  }
-  const parts: string[] = [];
-  let start = 0;
-  for (let index = 0; index < scope.length; index += 1) {
-    if (scope[index] === "[") {
-      const closing = characterClassEnd(scope, index);
-      if (closing >= 0) {
-        index = closing;
-        continue;
-      }
-    }
-    if (scope[index] !== "/") continue;
-    parts.push(scope.slice(start, index));
-    start = index + 1;
-  }
-  parts.push(scope.slice(start));
-  const trailingSlash = scope.endsWith("/");
-  const canonical: string[] = [];
-  for (const part of parts) {
-    if (part.length === 0 || part === ".") continue;
-    if (part === "..") return null;
-    canonical.push(part);
-  }
-  if (canonical.length === 0) return trailingSlash ? "./" : null;
-  return `${canonical.join("/")}${trailingSlash ? "/" : ""}`;
 }
 
 /**

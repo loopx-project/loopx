@@ -12,6 +12,7 @@ from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted, read_canonical_todo_fields_if_promoted,
 )
 from loopx.control_plane.goals.goal_frontier.acceptance import acceptance_gaps_from_held_goal_binding
+from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -59,6 +60,8 @@ def test_cli_restore_then_reacquire_preserves_acceptance_and_exact_retry(tmp_pat
                                "--format", "json", *args, "--goal-id", goal],
                               cwd=delivery, capture_output=True, text=True, timeout=60)
         assert proc.returncode == expected, proc.stdout + proc.stderr
+        if args[:2] == ("quota", "should-run"):
+            return QuotaToolContext.from_output(proc.stdout).packet
         return json.loads(proc.stdout)
 
     def inspect():

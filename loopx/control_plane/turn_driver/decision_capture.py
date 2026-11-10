@@ -131,6 +131,39 @@ class StagedTurnDecisionCapture:
             write_decision_capture(self.path, self.observation)
         return self.plan
 
+    def publish_for_host(
+        self, request: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Install the published original input without changing recovery bindings."""
+        plan = self.publish()
+        from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
+
+        if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+            bound_request = {**request, **turn_plan_host_source(plan)}
+            bound_request.pop("turn_envelope", None)
+            return plan, bound_request
+        bound_request = {**request, "turn_envelope": plan["turn_envelope"]}
+        if "work_contract" in plan:
+            contract = plan["work_contract"]
+            bound_request["work_contract"] = dict(contract) if isinstance(contract, Mapping) else contract
+        else:
+            # Only an original historical absence can clear the current input.
+            bound_request.pop("work_contract", None)
+        from ..quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA, captured_turn_host_input
+
+        if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
+            if "work_contract" in plan:
+                bound_request = captured_turn_host_input(bound_request)
+            else:
+                # The immutable original observation, not a bad current source,
+                # owns restoration of a historical request version.
+                from ..quota.turn_envelope import LOOPX_TURN_HOST_REQUEST_SCHEMA
+
+                bound_request["schema_version"] = LOOPX_TURN_HOST_REQUEST_SCHEMA
+                bound_request.pop("source_decision_hash", None)
+                bound_request.pop("detail_ref", None)
+        return plan, bound_request
+
 
 def stage_turn_decision_capture(
     plan: Mapping[str, Any], *, journal_path: Path,
@@ -142,7 +175,10 @@ def stage_turn_decision_capture(
     observation cannot be reconstructed from today's guard. Already committed
     journals remain readable through ordinary no-effect replay.
     """
-    envelope = plan["turn_envelope"]
+    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
+
+    current = plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
+    envelope = turn_plan_host_source(plan) if current else plan["turn_envelope"]
     transaction = plan["transaction"]
     path = journal_path.parent / "decisions" / journal_path.name
     capture = envelope.get("detail_ref", {}).get("captured_decision")
@@ -164,14 +200,24 @@ def stage_turn_decision_capture(
     from ...command_invocation import current_loopx_cli_argv
 
     bound = bind_turn_decision_capture(
-        observation, envelope, captured_decision_path=str(path),
+        observation, None if current else envelope, captured_decision_path=str(path),
         turn_instance_id=str(transaction.get("turn_instance_id") or transaction["turn_key"]),
         turn_key=transaction["turn_key"],
         # New journals have a real immutable source and executable reader.
         # Legacy journals retain their recorded delivery/recovery route.
         reader_argv=current_loopx_cli_argv() if not existing_journal else None,
+        complete_host_request={key: value for key, value in envelope.items() if key != "work_contract"}
+            if current else None,
     )
-    return StagedTurnDecisionCapture({**plan, "turn_envelope": bound}, path, observation, existed)
+    restored = ({**plan, **{key: bound[key] for key in ("source_decision_hash", "detail_ref")}}
+                if current else {**plan, "turn_envelope": bound})
+    if observation.get("schema_version") == "loopx_turn_envelope_v1":
+        restored["work_contract"] = observation
+    else:
+        # Historical observations retain their original input contract. Never
+        # pair an old capture with a freshly observed complete decision.
+        restored.pop("work_contract", None)
+    return StagedTurnDecisionCapture(restored, path, observation, existed)
 
 
 def prepare_turn_decision_capture(
@@ -183,7 +229,50 @@ def prepare_turn_decision_capture(
         decision=decision, existing_journal=existing_journal).publish()
 
 
-def validate_handoff_socket(value: str) -> Path:
+_HANDOFF_CAPTURE_ROOT_LIMIT = 4096
+
+
+def _handoff_capture_root_file(endpoint: Path) -> Path:
+    return endpoint.with_name(endpoint.name + ".capture-root")
+
+
+def bind_handoff_capture_root(socket_path: str, capture_root: Path) -> None:
+    """Publish the current Host's transport destination beside its private socket."""
+    endpoint = validate_handoff_socket(socket_path)
+    raw = os.fsencode(capture_root)
+    if capture_root.resolve() != capture_root or len(raw) > _HANDOFF_CAPTURE_ROOT_LIMIT:
+        raise ValueError("decision handoff requires a physical absolute capture root")
+    binding = _handoff_capture_root_file(endpoint)
+    with os.fdopen(os.open(binding, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+        stream.write(raw)
+
+
+def _validate_handoff_capture_root(endpoint: Path, requested_root: Path) -> None:
+    try:
+        with os.fdopen(open_regular_capture(_handoff_capture_root_file(endpoint)), "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+                raise ValueError("capture root binding must be private to the Host user")
+            bound_root = stream.read(_HANDOFF_CAPTURE_ROOT_LIMIT + 1)
+            if not bound_root or len(bound_root) > _HANDOFF_CAPTURE_ROOT_LIMIT:
+                raise ValueError("invalid capture root binding size")
+    except FileNotFoundError:
+        return  # Earlier Hosts still validate the capture when accepting it.
+    except (OSError, ValueError) as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff binding; no guard was run: {exc}") from exc
+    try:
+        if requested_root.resolve(strict=True) != requested_root:
+            raise ValueError("capture root must remain a physical absolute directory")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff root; no guard was run: {exc}") from exc
+    if bound_root != os.fsencode(requested_root):
+        raise QuotaCommandValidationError(
+            "decision handoff capture root differs from the current Host wake; no guard was run. "
+            "Use the --decision-output-root named by the current wake."
+        )
+
+
+def validate_handoff_socket(value: str, *, capture_root: Path | None = None) -> Path:
     """A caller-owned local transport, not an authority or admission endpoint."""
     path = Path(value)
     try:
@@ -204,6 +293,8 @@ def validate_handoff_socket(value: str) -> Path:
         ) from exc
     except OSError as exc:
         raise QuotaCommandValidationError(f"invalid decision handoff socket: {exc}") from exc
+    if capture_root is not None:
+        _validate_handoff_capture_root(path, capture_root)
     return path
 
 
@@ -299,7 +390,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 
 
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
-                                 navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None) -> Path:
+                                 navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None,
+                                 selection_paths: list[list[str | int]] | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
 
     A short filename locates the document; only its complete stored digests are
@@ -312,6 +404,13 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         payload["navigation"] = navigation
     if observed_read is not None:
         payload["observed_read"] = observed_read
+    if selection is not None and selection_paths is not None:
+        from ..effect_runtime import MAX_REQUEST_BYTES
+
+        # A large descriptor can still use the older selector replay route.
+        with_paths = {**payload, "selection_paths": selection_paths}
+        if len(_decision_json(with_paths).encode("utf-8")) <= MAX_REQUEST_BYTES:
+            payload = with_paths
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
     reference = path.with_name(path.stem + suffix + ".reader.json")
@@ -354,7 +453,9 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     if (not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_read_reference_v1"
             or not isinstance(payload.get("path"), str) or not isinstance(payload.get("sha256"), str)
             or BARE_SHA256_PATTERN.fullmatch(payload["sha256"]) is None
-            or ("selection" in payload and not isinstance(payload["selection"], dict))):
+            or ("selection" in payload and not isinstance(payload["selection"], dict))
+            or ("selection_paths" in payload and (
+                "selection" not in payload or not isinstance(payload["selection_paths"], list)))):
         raise ValueError("reader reference is incomplete or unsupported")
     return path, payload
 
@@ -411,6 +512,8 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
                                read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
                                filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
+    from ...command_invocation import current_loopx_cli_argv
+
     if filename not in ("projection.json", "required-context.json"):
         raise ValueError("unsupported captured context filename")
     projection = directory / filename
@@ -420,7 +523,7 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
         "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
             "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
-        "command": context_capture_read_command(projection, digest),
+        "command": context_capture_read_command(projection, digest, reader_argv=current_loopx_cli_argv()),
     }
 
 
@@ -522,6 +625,10 @@ def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]
     return fields
 
 
+def _pointer_token(key: str | int) -> str:
+    return str(key).replace("~", "~0").replace("/", "~1")
+
+
 def context_selection_transport(payload: dict[str, Any], select: list[str] | None, *,
                                 list_fields: bool, list_depth: int | None) -> dict[str, Any]:
     """Supply the address shape for the TS selector. Values are read from the verified original."""
@@ -549,19 +656,20 @@ def context_selection_transport(payload: dict[str, Any], select: list[str] | Non
         if depth <= 0 and not any(key is not None for key in branch):
             continue
         for key, value in source.items() if isinstance(source, dict) else enumerate(source):
-            token = str(key).replace("~", "~0").replace("/", "~1")
+            token = _pointer_token(key)
             if depth <= 0 and token not in branch:
                 continue
             if isinstance(value, (dict, list)):
                 subtree = branch.get(token, {})
                 # Length matters when validating array indices or listing children.
-                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                child: Any = {} if isinstance(value, dict) else [0] * len(value)
                 target[key] = child
                 pending.append((value, child, subtree, depth - 1))
             else:
-                # Every scalar has the same address behavior. Keep original scalar
-                # types, precision, and byte counts at the file rendering boundary.
-                target[key] = None
+                # Every scalar has the same address behavior. A one-byte marker
+                # also prevents short scalar arrays growing during transport.
+                # Original types, precision and byte counts stay at the renderer.
+                target[key] = 0
     return result
 
 
@@ -603,7 +711,12 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
         selected: Any = payload
         path, pointer = item["path"], item["pointer"]
         for key in path:
-            selected = selected[key]
+            if type(key) is str and isinstance(selected, dict) and key in selected:
+                selected = selected[key]
+            elif type(key) is int and isinstance(selected, list) and 0 <= key < len(selected):
+                selected = selected[key]
+            else:
+                raise ValueError("selected address does not match the original capture")
         if list_fields:
             views.append({"pointer": pointer, "fields": context_index_fields(payload, item["children"])})
         else:
@@ -625,44 +738,72 @@ def context_selection_binding(select: list[str], *, list_fields: bool, list_dept
         "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
 
 
+def initial_context_selection_bytes(payload: dict[str, Any],
+                                    selections: list[dict[str, Any]]) -> tuple[bytes, list[str]]:
+    return _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
+        present_goal_narrative=True)
+
+
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
                                         observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
-    raw, presented = _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
-        present_goal_narrative=True)
+    raw, presented = initial_context_selection_bytes(payload, selections)
     reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
+        selection_paths=[item["path"] for item in selections],
         observed_read=observed_read)
     return reference, raw
+
+
+def _pinned_selection_plan(select: list[str] | None, paths: list[list[str | int]]) -> dict[str, Any]:
+    """Replay TypeScript's resolved addresses from the existing reader reference."""
+    if (not isinstance(select, list) or not select or len(select) != len(paths)
+            or not all(isinstance(pointer, str) for pointer in select) or len(set(select)) != len(select)):
+        raise ValueError("reader selection paths do not match its pinned addresses")
+    selections = []
+    for pointer, path in zip(select, paths, strict=True):
+        if (not isinstance(path, list)
+                or not all(type(key) in (str, int) for key in path)
+                or pointer != "".join("/" + _pointer_token(key) for key in path)):
+            raise ValueError("reader selection paths do not match its pinned addresses")
+        selections.append({"pointer": pointer, "path": path})
+    return {"selections": selections}
 
 
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            initial_read: bool, list_fields: bool, list_depth: int | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
                            present_goal_narrative: bool | None = None,
+                           selection_paths: list[list[str | int]] | None = None,
                            ) -> tuple[dict[str, Any], bytes | None, str | None]:
-    """Replay the TS selector and verify the original digest-pinned view."""
-    from ..quota.turn_envelope import _turn_envelope_result
+    """Render the digest-pinned view from a new or previously resolved plan."""
+    if selection_paths is not None:
+        if initial_read or list_fields or list_depth is not None or not preserve_selection_order or expected_sha256 is None:
+            raise ValueError("reader selection paths require a pinned value selection")
+        plan = _pinned_selection_plan(select, selection_paths)
+    else:
+        from ..quota.turn_envelope import _turn_envelope_result
 
-    context = payload if initial_read else context_selection_transport(
-        payload, select, list_fields=list_fields, list_depth=list_depth)
-    selection = {"initial_read": True} if initial_read else {"select": select}
-    depth = {"list_depth": list_depth} if list_depth is not None else {}
-    order = {"preserve_selection_order": True} if preserve_selection_order else {}
-    plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
-        recover_selection_errors=not initial_read, **selection, **depth, **order)
+        context = payload if initial_read else context_selection_transport(
+            payload, select, list_fields=list_fields, list_depth=list_depth)
+        selection = {"initial_read": True} if initial_read else {"select": select}
+        depth = {"list_depth": list_depth} if list_depth is not None else {}
+        order = {"preserve_selection_order": True} if preserve_selection_order else {}
+        plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
+            recover_selection_errors=not initial_read, **selection, **depth, **order)
     if plan.get("rejected_selection"):
         return plan, None, None
     presentation = initial_read if present_goal_narrative is None else present_goal_narrative
-    def render(plan: dict[str, Any], present: bool):
+
+    def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
             list_depth=list_depth, present_goal_narrative=present)
         return raw, hashlib.sha256(raw).hexdigest(), displayed
 
     raw, digest, displayed = render(plan, presentation)
-    if preserve_selection_order and expected_sha256 != digest:
+    if selection_paths is None and preserve_selection_order and expected_sha256 != digest:
         # Historical explicit references may pin canonical output despite
         # retaining caller order. Only the same source and addresses can replay.
         plan = _turn_envelope_result("context_select", context=context,

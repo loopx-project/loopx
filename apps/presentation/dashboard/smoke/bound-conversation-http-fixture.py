@@ -32,6 +32,8 @@ class SyntheticPrivateSource:
         self.root, self.verified = root, True
         self.steward, self.peer = steward, peer
         self.peer_provider = None
+        default_compact_reply = "0" if os.environ.get("LOOPX_REPLY_BEFORE") == "1" else "1"
+        self.compact_reply = os.environ.get("LOOPX_REPLY_COMPACT_EVENT", default_compact_reply) == "1"
         if peer:
             self.transport_ref = "synthetic-peer"
 
@@ -42,7 +44,7 @@ class SyntheticPrivateSource:
             from loopx.extensions.lark.conversation_identity import identity_ref
             operator = identity_ref(provider, self.reply_event()["sender_id"])
         return {"transport_ref": self.transport_ref, "provider_ref": provider,
-                "operator_ref": operator, "verified": self.verified}
+                "operator_ref": operator, "verified": self.verified, "bot_app_id": "cli_fixture"}
 
     def health_snapshot(self):
         return {"status": "listening"}
@@ -100,26 +102,45 @@ class SyntheticPrivateSource:
             from loopx.extensions.lark.conversation_identity import identity_ref
             from loopx.chat_store import _atomic_write_json
             event = self.reply_event()
-            parent = "原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts."
+            parent = "\n\n".join([
+                "原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts.",
+                "1. Inspect the evidence",
+                "Keep the original records available.",
+                "2. Compare the sources",
+                "Read the relevant sections before deciding.",
+                "3. Report the result",
+                "An independent list can start later:",
+                "7. A retained step\n42. The following step",
+                "A zero-based list:",
+                "0. Initial state",
+                "- Preserve uncertainty.\n- Preserve failed attempts.",
+                "```text\n9. This is literal code, not another list.\n```",
+            ])
             body = "请比较这次修改，并保留原话题中的限制。Compare this change against the original constraints."
-            raw = {**event, "source_conversation_id": event["chat_id"], "reply_context": {
-                "message_id": event["parent_id"], "conversation_id": event["chat_id"], "content": parent},
-                "thread_context": {"conversation_id": event["chat_id"], "root_message_id": event["root_id"],
-                    "thread_id": event["thread_id"], "messages": [
-                        {"message_id": event["root_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
-                         "position": -1, "content": "### 话题背景 / Topic background\n\n" + "完整上下文保持可读。Keep the original context readable. " * 35,
-                         "sender": {"id": "ou_fixture_owner", "kind": "user"}},
-                        {"message_id": event["parent_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
-                         "position": 0, "content": parent, "sender": {"id": "cli_fixture", "kind": "app"}},
-                        {"message_id": event["message_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
-                         "position": 1, "content": body}]}}
-            frozen = conversation_reply_context(raw)["context_text"] + "\n\nCurrent user message:\n" + body
             request = identity_ref(self.observe()["provider_ref"], event["message_id"])
+            record = {"event": event, "profile": self.transport_ref, "request_ref": request}
+            if self.compact_reply:
+                selected = bindings.resolve(binding_id=binding["binding_id"], **source, include_observation=True)
+                frozen = self.capture_compact_reply(runtime, record, selected, body, parent)
+            else:
+                raw = {**event, "source_conversation_id": event["chat_id"], "reply_context": {
+                    "message_id": event["parent_id"], "conversation_id": event["chat_id"], "content": parent},
+                    "thread_context": {"conversation_id": event["chat_id"], "root_message_id": event["root_id"],
+                        "thread_id": event["thread_id"], "messages": [
+                            {"message_id": event["root_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                             "position": -1, "content": self.reply_background,
+                             "sender": {"id": "ou_fixture_owner", "kind": "user"}},
+                            {"message_id": event["parent_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                             "position": 0, "content": parent, "sender": {"id": "cli_fixture", "kind": "app"}},
+                            {"message_id": event["message_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                             "position": 1, "content": body}]}}
+                frozen = conversation_reply_context(raw)["context_text"] + "\n\nCurrent user message:\n" + body
+                record.update(reply_context_message=frozen, reply_context_source_text=body)
             turn, _ = server.chat_store.create_turn(sid, client_turn_id=f"external-{request}", message=frozen, origin="lark")
             correlation = {"request_ref": request, "binding_id": binding["binding_id"], "source": source,
                            "session_id": sid, "turn_id": turn["turn_id"]}
             for directory, value in (("external-requests", {**correlation, "status": "accepted", "command": None, "message": frozen}),
-                    ("lark-private-deliveries", {**correlation, "status": "delivered", "event": event, "reply_context_message": frozen, "reply_context_source_text": body})):
+                    ("lark-private-deliveries", {**record, **correlation, "status": "delivered"})):
                 _atomic_write_json(server.chat_store.root / directory / f"{request}.json", value)
             server.chat_store.update_turn(sid, turn["turn_id"], status="completed")
             server.chat_store.release_active_turn(sid, turn["turn_id"])
@@ -130,11 +151,16 @@ class SyntheticPrivateSource:
                           server.chat_store.sessions_root / sid / "turns" / f"{turn['turn_id']}.json"])
             reply_evidence = {path: path.read_bytes() for path in paths}
             bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        returned_files = {}
+        if "--returned-files" in sys.argv:
+            returned_files, reply_evidence = self.seed_returned_files(server, original)
+            bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
         other, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="", mode="new",
             work_dir=self.root / "project", project_ref=binding["project_ref"])
         server.chat_store.append_message(other["session_id"], role="agent", text="Unrelated desktop conversation — must remain separate.")
         print(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}",
-            "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"]}), flush=True)
+            "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"],
+            **returned_files}), flush=True)
         settings_handler = server.RequestHandlerClass._private_conversations
         history_handler = server.RequestHandlerClass._session_snapshot
         sessions_handler = server.RequestHandlerClass._list_sessions
@@ -208,6 +234,21 @@ class SyntheticPrivateSource:
                                 "Verified results retain their source. Unconfirmed returns remain open for recovery."
                                 for part in range(6)))
                     result = {"populated": True, "messages": len(server.chat_store.messages(sid))}
+                elif command == "history":
+                    for index in range(450):
+                        server.chat_store.append_message(sid, role="agent",
+                            text="Original full body. " * 1000 if index == 201 else f"Paged bound row {index}")
+                    result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command == "history-extra":
+                    server.chat_store.append_message(sid, role="agent", text="A full new original result. " * 150)
+                    result = {"history_rows": len(server.chat_store.messages(sid))}
+                elif command == "history-rewrite":
+                    journal = server.chat_store.sessions_root / sid / "messages.jsonl"
+                    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+                    target = next(row for row in rows if row["text"] == "Paged bound row 10")
+                    target["text"] = "Changed earlier original row 10"
+                    journal.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+                    result = {"history_rows": len(rows)}
                 elif command == "inspect":
                     saved = server.chat_store.load_session(sid)
                     result = {"sessions": len(server.chat_store.list_sessions()), "original_thread": saved["upstream_thread_id"],
@@ -217,6 +258,8 @@ class SyntheticPrivateSource:
                         result.update(model_turns=sum(json.loads(line).get("method") == "turn/start"
                             for line in (self.root / "synthetic-requests.jsonl").read_text().splitlines()),
                             reply_evidence_unchanged=all(path.read_bytes() == content for path, content in reply_evidence.items()))
+                    if returned_files:
+                        result["provider_sends"] = self.file_sender.calls
                 elif command == "stop":
                     server.shutdown()
                     return
@@ -225,11 +268,91 @@ class SyntheticPrivateSource:
                 print(json.dumps(result), flush=True)
         threading.Thread(target=control, daemon=True).start()
 
-    @staticmethod
-    def reply_event():
-        return {"message_id": "om_fixture_reply", "parent_id": "om_fixture_parent", "root_id": "om_fixture_root",
-                "thread_id": "omt_fixture_topic", "chat_id": "oc_fixture_private", "chat_type": "p2p",
-                "sender_type": "user", "sender_id": "ou_fixture_owner"}
+    def seed_returned_files(self, server, session):
+        """Publish once through the real result owner, then test read-only history."""
+        from hashlib import sha256
+        from loopx.capabilities.manager_context import _root, _write, POLICY_SCHEMA, register_ingress, deliver, acknowledge
+        from loopx.capabilities.manager_context.roundtrip import report, drain
+
+        root = server.runtime_controller.coordination_runtime_root
+        store, registry = server.chat_store, server.registry_path
+        sid = session["session_id"]
+        turn, _ = store.create_turn(sid, client_turn_id="synthetic-files", origin="lark",
+            message="请核对结果并返回原文件。Please return the original result files.")
+        target = {"goal_id": "goal-a", "agent_id": "agent-a"}
+        _write(_root(root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": ["owner"], "targets": [target]}}})
+        register_ingress(root, session_id=sid, client_turn_id=turn["client_turn_id"], channel=session["channel_id"],
+            sender_id="owner", message=turn["message"], source_id="lark:om_fixture_files")
+        receipt = deliver(root, registry, session=session, turn=turn, request=target, source_store=store)
+        store.update_turn(sid, turn["turn_id"], status="completing", response={
+            "message": "The receiver will return the original files.", "context_handoff_receipt": receipt})
+        store.finalize_managed_turn_completion(sid, turn["turn_id"])
+        acknowledge(root, "goal-a", "agent-a", receipt["request_id"], "adopt", "Verify the original files")
+        files = {"结果.json": b'\xef\xbb\xbf{"result":"verified"}\r\n', "source.bin": b"\x00\xffbinary source\x00"}
+        for name, raw in files.items():
+            (self.root / "project" / name).write_bytes(raw)
+        report(root, "goal-a", "agent-a", receipt["request_id"], "conclusion",
+            "### 结果已核验 / Verified result\n\n原始结果和文件均已保存。The original results and files are saved.\n\n"
+            "已核对结论、来源和失败记录。The result, sources and failed attempts were checked.",
+            registry=registry, attachment_refs=list(files))
+
+        class Sender:
+            supports_result_files = True
+            calls = 0
+
+            def __call__(self, *_):
+                self.calls += 1
+                return {"ok": True, "reply_verified": True}
+
+        self.file_sender = Sender()
+        assert drain(root, registry, store, self.file_sender) == 1
+        message = next(row for row in store.messages(sid) if row.get("origin") == "manager_followup")
+        paths = list(_root(root).rglob("*.json")) + [store.sessions_root / sid / "messages.jsonl",
+            store.sessions_root / sid / "turns" / f"{turn['turn_id']}.json"]
+        return {"fileMessageId": message["message_id"], "files": [
+            {"name": name, "sha256": sha256(raw).hexdigest(), "size": len(raw)} for name, raw in files.items()]}, {
+                path: path.read_bytes() for path in paths}
+
+    reply_background = ("### 话题背景 / Topic background\n\n"
+                        + "完整上下文保持可读。Keep the original context readable. " * 35)
+
+    def reply_event(self):
+        parent = "om_fixture_parent"
+        return {"message_id": "om_fixture_reply", "parent_id": parent,
+                "root_id": parent if self.compact_reply else "om_fixture_root",
+                **({} if self.compact_reply else {"thread_id": "omt_fixture_topic"}),
+                "chat_id": "oc_fixture_private", "chat_type": "p2p",
+                "sender_type": "user", "sender_id": "ou_fixture_owner", "message_type": "text"}
+
+    def capture_compact_reply(self, runtime, record, selected, body, parent):
+        from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+        event = record["event"]
+        common = {"chat_id": event["chat_id"], "msg_type": "text", "thread_id": "omt_fixture_topic"}
+        current = {**common, "message_id": event["message_id"], "content": body,
+                   "parent_id": event["parent_id"], "root_id": event["root_id"],
+                   "sender": {"id": event["sender_id"], "sender_type": "user"}, "thread_message_position": 1}
+        earlier = {**common, "message_id": "om_fixture_earlier", "content": self.reply_background,
+                   "sender": current["sender"], "thread_message_position": 0}
+        quoted = {**common, "message_id": event["parent_id"], "content": parent,
+                  "sender": {"id": "cli_fixture", "sender_type": "app"}, "thread_message_position": -1,
+                  "thread_replies": [earlier, current]}
+
+        def read(args, *_):
+            if args[3:] == ["api", "GET", f"/open-apis/im/v1/messages/{event['message_id']}", "--as", "bot"]:
+                payload = {"code": 0, "data": {"items": [current]}}
+            else:
+                assert args[3:7] == ["im", "+messages-mget", "--message-ids", event["parent_id"]], args
+                payload = {"ok": True, "data": {"items": [quoted]}}
+            return {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""}
+
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=runtime.store.root.parent,
+            runner=read, cli_bin="lark-cli")
+        # Exercise the real provider-backed freeze before seeding Core history.
+        # Opening the resulting page still does not require any model Turns.
+        return transport._reply_context_message(transport.root / f"{record['request_ref']}.json",
+            record, selected=selected, source_message=current, text=body)
 
 
 def main():
@@ -245,9 +368,10 @@ def main():
             '        output.write(json.dumps(request) + "\\n")\n    method = request.get("method")')
         fake.write_text(model)
         fake.chmod(0o700)
-        steward = any(flag in sys.argv for flag in ("--steward", "--reply-context", "--steward-fallback"))
+        steward = any(flag in sys.argv for flag in ("--steward", "--reply-context", "--steward-fallback", "--returned-files"))
         source = SyntheticPrivateSource(root, steward=steward)
-        peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward and "--reply-context" not in sys.argv else None
+        peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward and not any(
+            flag in sys.argv for flag in ("--reply-context", "--returned-files")) else None
         source.peer_provider = peer
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))

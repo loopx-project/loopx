@@ -229,7 +229,9 @@ def test_granted_external_peer_request_returns_through_original_conversation(ext
         drain(root, registry, ChatSessionStore(root), sender)
     assert len(sent) == 1
     assert sent[0][:3] == (session["channel_id"], session["session_id"], turn["turn_id"])
-    assert sent[0][3].endswith("Stock plan delivered with the independent check.")
+    body, provenance = sent[0][3].split("\n\n", 1)
+    assert body == "Stock plan delivered with the independent check."
+    assert provenance == f"协作回复 · builder · 委托 {parent[:8]}"
     assert not query(root, registry, goal_ids=["delivery"], owner_scope=False,
                      channel_id="manager.external.unrelated")["rows"]
 

@@ -19,7 +19,8 @@ import {
 } from "../effect_runtime_io.ts";
 import { decideFirstPartyHostRuntime } from "../goals/first_party_host_runtime.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
-import { requireNonEmptyString as requiredString, sourceNumberTokens } from "../runtime_decode.ts";
+import { parseJsonSource, parsedSourceNumberTokens, requireNonEmptyString as requiredString,
+  sourceNumberTokens, type SourceNumbers } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import {
   interpretTurnJournalEffect,
@@ -64,8 +65,6 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-type SourceNumbers = WeakMap<object, Map<string, string>>;
-
 function rawNumber(token: string): unknown {
   const rawJSON = (JSON as typeof JSON & {rawJSON?: (text: string) => unknown}).rawJSON;
   if (!rawJSON) throw new EffectRuntimeRequestError("Turn journal number preservation requires JSON.rawJSON", "journal_snapshot_invalid");
@@ -98,20 +97,6 @@ function journalWithoutRecoveryAudit(journal: JsonObject, numbers?: SourceNumber
   return projected;
 }
 
-function parseJournal(encoded: string): {journal: JsonObject; numbers: SourceNumbers} {
-  const numbers: SourceNumbers = new WeakMap();
-  const journal = asObject(JSON.parse(encoded, function (key, value: unknown, context?: {source?: string}) {
-    if (typeof value === "number" && Number.isInteger(value) &&
-        context?.source !== undefined && context.source !== JSON.stringify(value)) {
-      const fields = numbers.get(this) ?? new Map<string, string>();
-      fields.set(key, context.source);
-      numbers.set(this, fields);
-    }
-    return value;
-  }));
-  return {journal, numbers};
-}
-
 interface JournalState {
   status: string;
   completedPhases: string[];
@@ -141,7 +126,7 @@ function samePrefix(left: readonly string[], right: readonly string[]): boolean 
   return left.length <= right.length && left.every((phase, index) => phase === right[index]);
 }
 
-function requireJournalState(journal: JsonObject): JournalState {
+function requireJournalState(journal: JsonObject, numbers?: SourceNumbers): JournalState {
   if (journal.schema_version !== "loopx_turn_journal_v0") {
     throw new EffectRuntimeRequestError(
       "Turn journal has an unsupported schema",
@@ -149,7 +134,10 @@ function requireJournalState(journal: JsonObject): JournalState {
     );
   }
   const plan = asObject(journal.plan);
-  const envelope = asObject(plan.turn_envelope);
+  // These are the caller's declared scope values, not evidence of permission;
+  // interpretation below independently validates the versioned source.
+  const envelope = plan.schema_version === "loopx_turn_plan_v1"
+    ? asObject(asObject(plan.work_contract).agent_identity) : asObject(plan.turn_envelope);
   const goalId = typeof journal.goal_id === "string" ? journal.goal_id : "";
   const agentId = typeof envelope.agent_id === "string" ? envelope.agent_id : "";
   const turnKey = typeof journal.turn_key === "string" ? journal.turn_key : "";
@@ -159,6 +147,7 @@ function requireJournalState(journal: JsonObject): JournalState {
     goal_id: goalId,
     agent_id: agentId,
     turn_key: turnKey,
+    source_number_tokens: parsedSourceNumberTokens(journal, numbers),
   });
   const context = effect.request.context;
   const effectId = journalEffectId(journal);
@@ -368,8 +357,9 @@ export async function commitTurnJournal(
   }
   // Validate and publish the same isolated snapshot when source spellings are
   // supplied. Native objects without metadata retain their historical path.
-  const {journal, numbers} = originalJson === null
-    ? {journal: source, numbers: undefined} : parseJournal(originalJson);
+  const parsed = originalJson === null ? null : parseJsonSource(originalJson);
+  const journal = parsed === null ? source : asObject(parsed.value);
+  const numbers = parsed?.numbers;
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     throw new EffectRuntimeRequestError(
@@ -377,7 +367,7 @@ export async function commitTurnJournal(
       "journal_snapshot_invalid",
     );
   }
-  const incomingState = requireJournalState(journal);
+  const incomingState = requireJournalState(journal, numbers);
   const expectedEffectId = typeof params.expected_effect_id === "string"
     ? params.expected_effect_id.trim()
     : "";
@@ -393,9 +383,9 @@ export async function commitTurnJournal(
       let existing: JsonObject | null = null;
       try {
         const encoded = await readFile(path, "utf8");
-        const previous = parseJournal(encoded);
-        existing = previous.journal;
-        const existingState = requireJournalState(existing);
+        const previous = parseJsonSource(encoded);
+        existing = asObject(previous.value);
+        const existingState = requireJournalState(existing, previous.numbers);
         const existingEffectId = existingState.effectId;
         if (
           existingEffectId &&

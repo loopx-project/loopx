@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity, referenceQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
+
+test("smaller scalar record replacements avoid repeated removal paths and keep sparse edits", () => {
+  const source = {summary: {claim_scope: {rows: [{todo_id: "t", text: "Full constraint.", note: "Evidence.",
+    status: "open", claimed_by: "peer", priority: "P0", action_kind: "inspect"}]}}};
+  const reference = {todo_id: "t", context_ref: "/summary/literal/0"};
+  const projected = {summary: {claim_scope: {rows: [reference]}}};
+  assert.deepEqual(contextProjectionChanges(source, projected).changes,
+    [{path: ["summary", "claim_scope", "rows", 0], value: reference}]);
+  const body = "Keep this complete body. ".repeat(100);
+  assert.deepEqual(contextProjectionChanges({record: {body, status: "open"}},
+    {record: {body, status: "done"}}).changes, [{path: ["record", "status"], value: "done"}]);
+});
+
+test("native projection omits only same-path source copies while identity keeps numeric lineage", () => {
+  const source = {count: 2 ** 60, moved: 1, old: "unchanged"};
+  const projected = {...source, target: source.moved};
+  const origins = new WeakMap([[projected, new Map([
+    ["count", ["count"]], ["target", ["moved"]],
+  ])]]);
+  const tokens = [[["count"], "1152921504606846977"], [["moved"], "1.0"]];
+  assert.deepEqual(contextProjectionChanges(source, projected, origins, undefined, true).changes,
+    [{path: ["target"], from: ["moved"]}]);
+  assert.deepEqual(contextProjectionChanges(source, projected, origins).changes,
+    [{path: ["count"], from: ["count"]}, {path: ["target"], from: ["moved"]}]);
+  assert.notEqual(contextProjectionIdentity(source, projected, tokens, origins),
+    contextProjectionIdentity(source, projected, [], origins));
+});
 
 test("source identity keeps number spellings separate from strings and retains later exact owners", () => {
   const source = {first: {observations: [1, 2 ** 60]},
@@ -40,4 +67,34 @@ test("source edit identities follow retained objects and primitive source refere
     contextProjectionIdentity(source, {body: source.current}, tokens));
   assert.notEqual(contextProjectionIdentity(source, {literal: {value: 0}}, tokens),
     contextProjectionIdentity(source, {literal: value}, tokens, origins));
+});
+
+test("already shared numeric summary arrays reuse their original identity without new copies", () => {
+  const rows = [{todo_id: "task", text: "Keep every original constraint. ".repeat(20), measurement: 1}];
+  const source = {agent_todo_summary: {schema_version: "todo_summary_v0", first_executable_items: rows,
+    backlog_items_ref: "$.agent_todo_summary.first_executable_items"}};
+  const key = contextSourceIdentity(source, [
+    [["agent_todo_summary", "first_executable_items", 0, "measurement"], "1.0"],
+  ]);
+  assert.deepEqual(referenceQuotaSummaryLanes(source, key), source);
+});
+
+test("projected source identity tracks retained and moved values without removed tokens", () => {
+  const source = {first: {values: [1, 2 ** 60]}, second: {values: [1, 2 ** 60]}};
+  const tokens = [
+    [["first", "values", 0], "1.0"], [["first", "values", 1], "1152921504606846977"],
+    [["second", "values", 0], "1.0"], [["second", "values", 1], "1152921504606846977"],
+  ];
+  const identity = contextSourceIdentity(source, tokens);
+  const projected = {saved: source.first, second_ref: "$.saved"};
+  const actual = JSON.parse(identity(projected, []));
+  assert.deepEqual(actual[1], [
+    [["saved", "values", 0], "1.0"], [["saved", "values", 1], "1152921504606846977"],
+  ]);
+  const restored = contextSourceIdentity(projected, actual[1]);
+  assert.equal(restored(projected, []), identity(projected, []));
+  // The complete codec explicitly selects numeric framing. Existing callers
+  // without transport metadata retain their original canonical identity.
+  assert.equal(contextSourceIdentity({n: 1})({n: 1}, []), '{"n":1}');
+  assert.equal(contextSourceIdentity({n: 1}, [])({n: 1}, []), '[{"n":1},[]]');
 });

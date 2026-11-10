@@ -58,6 +58,7 @@ def test_demo_preparation_has_executable_independent_worktree(tmp_path):
             "json",
             "turn",
             "plan",
+            "--include-transaction-detail",
             "--goal-id",
             "allocation-demo",
             "--agent-id",
@@ -75,9 +76,8 @@ def test_demo_preparation_has_executable_independent_worktree(tmp_path):
     plan = json.loads(result.stdout)
     # The test supplies no provider credentials. Qualify the Goal/worktree
     # admission independently of provider availability and never invoke a host.
-    assert plan["turn_envelope"]["execution_policy"]["normal_delivery_allowed"], plan[
-        "turn_envelope"
-    ]["reason"]
+    assert plan["work_contract"]["normal_delivery_allowed"], plan["work_contract"]["reason"]
+    assert plan["route"]["kind"] == "ready_for_host"
     assert not plan["effects"]["host_invoked"]
     # Preparation cannot overwrite an existing state; model runs need explicit opt-in.
     for args in (["prepare"], ["run", "--phase", "builder-1"]):

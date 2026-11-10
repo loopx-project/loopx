@@ -567,7 +567,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     // the reviewer says; neither a delivered review nor its failure is replay authority.
     const originalResult = reservation?.original_turn as JsonObject | undefined;
     const originalResponse = originalResult?.response as JsonObject | undefined;
-    const retainedWork = reservation?.read_only_review === true && reservation.answer_review !== true
+    const retainedWork = reservation != null && reservation.answer_review !== true
+      && (reservation.read_only_review === true || reservation.work_attempt === 1
+        && typeof reservation.completed_review_turn_id === "string" && !pureResultText(response))
       && turn?.client_turn_id === reservation.client_turn_id && originalResult?.status === "completed"
       && originalResult.session_id === row.session_id && originalResult.turn_id === reservation.failed_turn_id
       && originalResult.turn_id !== row.turn_id && originalResponse != null
@@ -710,6 +712,13 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  if (recovery.retained_result_review != null) {
+    if ((row.context_recovery as JsonObject | undefined)?.legacy_result_review === true) {
+      return planRelatedResultReview(recovery, row, current, failed,
+        row.context_recovery as JsonObject, selected, version);
+    }
+    return planWorkAfterResultReview(recovery, row, current, failed, selected, version);
+  }
   const runtimePreparation = planRuntimePreparationRecovery(recovery, row, current, failed, version);
   if (runtimePreparation !== null) return runtimePreparation;
   const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
@@ -830,6 +839,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     ? planExhaustedStewardAnswer(recovery, row, current, failed, previous, version) : null;
   if (exhaustedAnswer !== null) return exhaustedAnswer;
   if (failed.status === "completed" && !steward) {
+    if (recovery.related_result_review != null) {
+      return planRelatedResultReview(recovery, row, current, failed, previous, selected, version);
+    }
     return planUnfinishedWork(recovery, row, current, failed, previous, version);
   }
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
@@ -839,20 +851,24 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
   const attemptKey = `${retryKind}_attempt`;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
+  const attempt = previous?.[attemptKey];
+  const reservedClient = Number.isSafeInteger(attempt) && Number(attempt) >= 1 && Number(attempt) <= 3
+    ? `${client}-${retryKind}-${attempt}`
+    : attempt === undefined && steward && previous?.client_turn_id === client ? client : null;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
-      && Number.isSafeInteger(previous[attemptKey]) && Number(previous[attemptKey]) >= 1
-      && Number(previous[attemptKey]) <= 3 && previous.version === version) {
+      && previous.version === version && reservedClient !== null) {
     // A crash after queue admission must adopt that exact canonical Turn,
     // even if it has already executed. This branch never creates model work.
     const admitted = requireJsonObject(recovery.admitted_turn, "admitted recovery Turn");
-    const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${retryKind}-${previous[attemptKey]}`;
-    if (previous.client_turn_id !== client || admitted.client_turn_id !== client
+    const origin = reservedClient === client && row.origin === undefined ? "lark" : row.origin;
+    if (previous.client_turn_id !== reservedClient || admitted.client_turn_id !== reservedClient
         || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
-        || typeof row.message !== "string" || typeof row.origin !== "string"
-        || admitted.message !== row.message || admitted.origin !== row.origin
+        || typeof row.message !== "string" || typeof origin !== "string"
+        || admitted.message !== row.message || admitted.origin !== origin
         || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
     return {operation: "admit_turn", recovery_candidate: true,
-      recovery_eligible: recovery.source_verified === true, client_turn_id: client,
+      recovery_eligible: recovery.source_verified === true, client_turn_id: reservedClient,
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted recovery Turn"),
       session_id: current.session_id, native_thread_ids: []};
   }
@@ -862,7 +878,6 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
   if (routing !== null) return routing;
   if (!steward) return no;
-  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}`;
   if (previous && (previous.version !== version || previous.failed_turn_id !== row.turn_id
       || previous.client_turn_id !== client)) return no;
   const history = current.upstream_context_history ?? [];
@@ -1128,6 +1143,46 @@ function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   return work;
 }
 
+function planWorkAfterResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  original: JsonObject, selected: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const retained = requireJsonObject(recovery.retained_result_review, "retained result review");
+  const reservation = requireJsonObject(retained.reservation, "original review reservation");
+  const reviewed = requireJsonObject(retained.turn, "completed result review");
+  const previous = requireJsonObject(row.context_recovery, "current recovery reservation");
+  const history = Array.isArray(row.context_recovery_history) ? row.context_recovery_history as JsonObject[] : [];
+  const continuing = previous.work_attempt === 1;
+  const expected = continuing ? history.at(-1) : previous;
+  const work = original.response != null && typeof original.response === "object" && !Array.isArray(original.response)
+    ? unfinishedProjectWork(original.response as JsonObject) : null;
+  // A delivered read-only report retains intent. Only a fresh observation by
+  // the original writable owner can admit the already bounded remaining work.
+  if (selected.context_kind !== "project" || current.agent_id !== "codex" || work === null
+      || !isDeepStrictEqual(expected, reservation) || reservation.read_only_review !== true
+      || reservation.answer_review === true || reservation.history_review === true || reservation.work_attempt != null
+      || reservation.version !== version || !isDeepStrictEqual(reservation.binding_snapshot, selected)
+      || reservation.client_turn_id !== `external-${row.request_ref}-recovery-${version}-review-1`
+      || !isDeepStrictEqual(reservation.original_turn, original) || !isDeepStrictEqual(reservation.unfinished_work, work)
+      || original.status !== "completed" || original.session_id !== current.session_id
+      || original.turn_id !== reservation.failed_turn_id || original.client_turn_id !== `external-${row.request_ref}`
+      || original.message !== row.message || original.origin !== row.origin
+      || reviewed.status !== "completed" || reviewed.session_id !== current.session_id
+      || reviewed.turn_id !== row.turn_id || reviewed.turn_id === original.turn_id
+      || reviewed.client_turn_id !== reservation.client_turn_id || reviewed.message !== row.message
+      || reviewed.origin !== row.origin || typeof reviewed.upstream_turn_id !== "string" || !reviewed.upstream_turn_id
+      || !pureResultText(reviewed.response as JsonObject | null)
+      || history.some(item => item.work_attempt != null)
+      || continuing && (previous.failed_turn_id !== original.turn_id
+        || previous.completed_review_turn_id !== reviewed.turn_id)) return no;
+  const admitted = continuing ? recovery.admitted_turn : null;
+  if (admitted == null && (recovery.live_work_owner !== true || recovery.later_equivalent_input_present !== false)) return no;
+  const proof = recovery.native_observation as JsonObject | null | undefined;
+  if (proof != null && (proof.completed_work !== true || proof.all_effects_settled !== true)) return no;
+  const plan = planUnfinishedWork({...recovery, admitted_turn: admitted}, {...row, turn_id: original.turn_id},
+    current, original, continuing ? previous : null, version);
+  return plan.work_attempt === 1 ? {...plan, completed_review_turn_id: reviewed.turn_id} : no;
+}
+
 function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: JsonObject,
   completed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
@@ -1181,18 +1236,100 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
     && matchesWork(observed.unfinished_work)};
 }
 
+/** A separately delivered review can justify inspecting an older same-question
+ * source, never treating two message IDs as one completed business request. */
+function planRelatedResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  completed: JsonObject, previous: JsonObject | null, selected: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const baseClient = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  const preparationReserved = previous?.review_preparation_attempt === 1;
+  const history = (row.context_recovery_history ?? []) as JsonObject[];
+  if (selected.context_kind !== "project" || current.agent_id !== "codex"
+      || !pureResultText(completed.response as JsonObject | null)
+      || completed.session_id !== current.session_id || completed.status !== "completed"
+      || recovery.attachments_present !== false || recovery.steering_observed !== false
+      || recovery.stop_observed !== false || typeof completed.upstream_turn_id !== "string"
+      || !completed.upstream_turn_id || previous !== null && previous.legacy_result_review !== true
+      || previous?.review_preparation_attempt != null && !preparationReserved
+      || !Array.isArray(history) || history.length && !(preparationReserved && history.length === 1
+        && history[0].legacy_result_review === true && history[0].read_only_review === true
+        && history[0].review_preparation_attempt == null && history[0].client_turn_id === baseClient
+        && history[0].failed_turn_id === completed.turn_id)) return no;
+  const related = recovery.related_result_review as JsonObject | null | undefined;
+  const sibling = related?.request as JsonObject | undefined;
+  const reviewed = related?.turn as JsonObject | undefined;
+  const reserved = sibling?.context_recovery as JsonObject | undefined;
+  const original = reserved?.original_turn as JsonObject | undefined;
+  const work = original?.response ? unfinishedProjectWork(original.response as JsonObject) : null;
+  if (!related || related.steering_observed !== false || !sibling || !reviewed || !reserved || !original || !work
+      || sibling.request_ref === row.request_ref || sibling.binding_id !== row.binding_id
+      || sibling.session_id !== row.session_id || !isDeepStrictEqual(sibling.source, row.source)
+      || sibling.message !== row.message || sibling.origin !== row.origin || sibling.command !== null
+      || sibling.status !== "accepted" || sibling.delivery_verified !== true || sibling.turn_id !== reviewed.turn_id
+      || reserved.read_only_review !== true || reserved.legacy_result_review === true
+      || reserved.answer_review === true || reserved.history_review === true || reserved.work_attempt != null
+      || !isDeepStrictEqual(reserved.binding_snapshot, selected) || !isDeepStrictEqual(reserved.unfinished_work, work)
+      || original.session_id !== current.session_id || original.turn_id !== reserved.failed_turn_id
+      || original.client_turn_id !== `external-${sibling.request_ref}` || original.status !== "completed"
+      || original.message !== row.message || original.origin !== row.origin
+      || reviewed.session_id !== current.session_id || reviewed.status !== "completed"
+      || reviewed.client_turn_id !== reserved.client_turn_id || reviewed.message !== row.message
+      || reviewed.origin !== row.origin || !pureResultText(reviewed.response as JsonObject | null)
+      || !Number.isFinite(Date.parse(String(original.completed_at)))
+      || !Number.isFinite(Date.parse(String(completed.created_at)))
+      || !Number.isFinite(Date.parse(String(reviewed.completed_at)))
+      || !Number.isFinite(Date.parse(String(completed.completed_at)))
+      || Date.parse(String(original.completed_at)) > Date.parse(String(completed.created_at))
+      || Date.parse(String(reviewed.completed_at)) <= Date.parse(String(completed.completed_at))) return no;
+  // A local preparation failure may leave the single model invocation unused.
+  // Require the exact queue/host-gate terminal record, no native input/delta or
+  // response, fresh closed native inventory, and retain this failed reservation.
+  // Never recover a review that actually reached the model or spend twice.
+  const preparation = recovery.result_review_preparation as JsonObject | undefined;
+  const failed = preparation?.turn as JsonObject | undefined;
+  const events = preparation?.events;
+  const preparationOnly = previous !== null && failed?.status === "failed"
+    && failed.session_id === current.session_id && failed.client_turn_id === baseClient
+    && row.turn_id === failed.turn_id && failed.message === row.message && failed.origin === row.origin
+    && failed.error_code === "host_gate" && failed.upstream_turn_id == null && failed.response == null
+    && failed.delta_count === 0 && Array.isArray(events) && events.length === 2
+    && (events[0] as JsonObject).kind === "turn.queued" && (events[1] as JsonObject).kind === "turn.failed"
+    && ((events[1] as JsonObject).payload as JsonObject | undefined)?.error_code === "host_gate"
+    && Number.isFinite(Date.parse(String(failed.completed_at)))
+    && Date.parse(String(recovery.observed_at)) >= Date.parse(String(failed.completed_at)) + 60_000;
+  if (previous !== null && row.turn_id !== completed.turn_id && row.delivery_verified === true && !preparationOnly) return no;
+  const observation = preparationOnly && !preparationReserved ? {...recovery, admitted_turn: null} : recovery;
+  const plan = planCompletedResultReview(observation, row, current, completed, previous, version, null);
+  return preparationOnly && plan.recovery_candidate === true ? {...plan,
+    client_turn_id: `external-${row.request_ref}-recovery-${version}-preparation-1`, review_preparation_attempt: 1,
+    preparation_failed_turn_id: failed!.turn_id, original_result_turn_id: completed.turn_id} : plan;
+}
+
 /** A result-only fallback never consumes or restores the writable retry budget. */
 function planCompletedResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
-  completed: JsonObject, previous: JsonObject | null, version: number, work: JsonObject): JsonObject {
+  completed: JsonObject, previous: JsonObject | null, version: number, work: JsonObject | null): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  // An inconclusive effect observation must not replace the original writable
+  // owner with a result reader. Keep that owner for the next fresh work proof.
+  // Already reserved reviews retain their own adoption and execution checks.
+  if (previous === null && recovery.live_work_owner !== false) return no;
+  // Old readers recognize preparation-1 and reject its read-only policy, so a
+  // rollback holds this receipt instead of treating an unknown key as ordinary input.
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-`
+    + (previous?.review_preparation_attempt === 1 ? "preparation-1" : "review-1");
+  if (work !== null && previous?.review_preparation_attempt != null) return no;
   if (current.steward_context != null || completed.client_turn_id !== `external-${row.request_ref}`
       || completed.message !== row.message || completed.origin !== row.origin
       || previous !== null && (previous.read_only_review !== true || previous.failed_turn_id !== completed.turn_id
         || previous.client_turn_id !== client || previous.version !== version || previous.work_attempt != null
         || previous.answer_review === true || !isDeepStrictEqual(previous.original_turn, completed)
-        || !isDeepStrictEqual(previous.unfinished_work, work))) return no;
-  const candidate = {...no, recovery_candidate: true, read_only_review: true, unfinished_work: work,
+        || (work === null ? previous.legacy_result_review !== true || previous.unfinished_work != null
+          || !isDeepStrictEqual(previous.related_result_review, recovery.related_result_review)
+          : !isDeepStrictEqual(previous.unfinished_work, work)))) return no;
+  const intent = work === null
+    ? {legacy_result_review: true, related_result_review: recovery.related_result_review}
+    : {unfinished_work: work};
+  const candidate = {...no, recovery_candidate: true, read_only_review: true, ...intent,
     failed_turn_id: completed.turn_id, session_id: current.session_id, client_turn_id: client};
   if (previous !== null && recovery.admitted_turn != null) {
     const admitted = requireJsonObject(recovery.admitted_turn, "admitted result review");
@@ -1215,7 +1352,8 @@ function planCompletedResultReview(recovery: JsonObject, row: JsonObject, curren
     && proof.completed_work !== true && proof.all_effects_settled !== true
     && typeof proof.visible_response === "string" && proof.visible_response.trim().length > 0
     && typeof proof.native_inventory_sha256 === "string" && BARE_SHA256_PATTERN.test(proof.native_inventory_sha256)
-    && isDeepStrictEqual(proof.unfinished_work, work)};
+    && isDeepStrictEqual(proof.unfinished_work, work)
+    && (work !== null || proof.untyped_result_review === true && isDeepStrictEqual(proof.response, completed.response))};
 }
 
 function interruptedVisibleResult(value: unknown): boolean {
@@ -1288,7 +1426,7 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   if (recovery.native_observation == null) return candidate;
   const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
-  if (typeof proof.thread_id !== "string" || !nativeThreads.includes(proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
+  if (!nativeThreads.some(thread => thread === proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
       || proof.only_original_user_item !== true || proof.codex_error_info !== "usageLimitExceeded") return candidate;
   const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};

@@ -16,6 +16,7 @@ TODO_OPTION_FIELDS = (
     ("--todo-id", "todo_id"),
     ("--operation-id", "operation_id"),
     ("--claim-operation-id", "claim_operation_id"),
+    ("--recover-execution", "recover_execution"),
     ("--update-operation-id", "update_operation_id"),
     ("--update-expected-provider-revision", "update_expected_provider_revision"),
     ("--turn-instance-id", "turn_instance_id"),
@@ -156,6 +157,7 @@ TODO_ACTION_FIELDS = {
     "update": frozenset(_TODO_UPDATE_MUTABLE_FIELDS) | frozenset({
         "role", "todo_id", "agent_id", "state_file", "project", "dry_run", "authority_reason",
         "claim_operation_id", "update_operation_id", "update_expected_provider_revision",
+        "recover_execution",
     }),
 }
 
@@ -187,12 +189,14 @@ def register_todo_linkage_arguments(
             "For deferred todo add/update, or for an open advancement todo update "
             "paired with --successor-todo-id, declare a machine-readable resume "
             "condition such as todo_done:todo_ab12cd34ef56, "
-            "monitor_changed:todo_monitor123, pr_merged:#532, or "
+            "monitor_changed:todo_monitor123, "
+            "monitor_changed:todo_monitor123@case-a/run-1, pr_merged:#532, or "
             "capacity_available:short_pool; use "
             "resume_at:2026-09-14T09:30:00+08:00 for an exact dated wakeup. "
             "resume_at requires an RFC3339 timezone and is normalized to UTC. "
-            "monitor_changed binds the monitor's "
-            "current material-change generation and resumes only after it advances; "
+            "monitor_changed binds the monitor's current material-change generation; "
+            "an optional @scope binds that scope's generation and ignores unrelated changes. "
+            "The Todo resumes only after its bound generation advances; "
             "the waiting advancement todo must remain status=open and pair with an "
             "independent runnable --successor-todo-id."
         ),
@@ -449,6 +453,20 @@ def validate_todo_update_options(args: argparse.Namespace) -> None:
         )
     if not any(getattr(args, field) for field in _TODO_UPDATE_MUTABLE_FIELDS):
         raise ValueError("todo update requires at least one mutable todo field")
+    if args.status == "deferred" and args.recover_execution:
+        missing = [
+            flag
+            for flag, value in (
+                ("--reason", args.reason),
+                ("--resume-when", args.resume_when),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "todo update --status deferred requires --reason and "
+                "--resume-when; missing: " + ", ".join(missing)
+            )
     validation_fields = (
         args.validation_command,
         args.validation_command_json,
@@ -531,6 +549,50 @@ def validate_todo_complete_options(args: argparse.Namespace) -> None:
     if args.continuation_policy:
         raise ValueError("todo complete does not update --continuation-policy; use todo update first")
     validate_successor_routing_options(args)
+
+
+def validate_todo_execution_recovery_options(args: argparse.Namespace) -> None:
+    """Keep the one-command helper narrower than the typed recovery owner."""
+    if not getattr(args, "recover_execution", False):
+        return
+    if args.todo_command not in {"update", "complete"}:
+        raise ValueError(
+            "--recover-execution is supported only by todo update/complete"
+        )
+    if not args.agent_id:
+        raise ValueError("--recover-execution requires a registered --agent-id")
+    if args.dry_run:
+        raise ValueError(
+            "--recover-execution cannot be combined with --dry-run because the "
+            "retry requires a committed claim reference"
+        )
+    supplied_proof = [
+        flag
+        for flag, present in (
+            ("--claim-operation-id", args.claim_operation_id is not None),
+            (
+                "--task-lease-idempotency-key",
+                args.task_lease_idempotency_key is not None,
+            ),
+            (
+                "--task-lease-expected-version",
+                args.task_lease_expected_version is not None,
+            ),
+        )
+        if present
+    ]
+    if supplied_proof:
+        raise ValueError(
+            "--recover-execution accepts only omitted execution proof; inspect "
+            "and retry explicit stale proof unchanged instead of replacing: "
+            + ", ".join(supplied_proof)
+        )
+    if args.todo_command == "update" and args.update_expected_provider_revision:
+        raise ValueError(
+            "--recover-execution cannot silently rebase "
+            "--update-expected-provider-revision; claim, inspect the same Todo, "
+            "then retry with the reconciled provider revision"
+        )
 
 
 def validate_todo_supersede_options(args: argparse.Namespace) -> None:

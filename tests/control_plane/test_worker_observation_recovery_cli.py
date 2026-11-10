@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import shlex
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 import loopx
 from canonical_authority_fixture import isolate_sqlite_runtime
 from research_worker_readback_fixture import AGENT, GOAL, _write_authority
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.control_plane.quota.host_poll_receipts import (
     read_host_worker_observations,
     receipt_path_for_goal,
@@ -49,7 +51,7 @@ def _run_worker(runtime, registry, count, host, agent):
     ], cwd=host.parent / "project", capture_output=True, text=True, timeout=120)
 
 
-def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_cli"):
+def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_cli", wire=False):
     result = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
@@ -57,7 +59,10 @@ def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_
         "--runtime-profile", profile, *(["--record-host-poll"] if record else []), *extra,
     ], cwd=registry.parent / "project", capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(result.stdout)
+    payload = (
+        json.loads(result.stdout) if wire
+        else read_cli_policy_payload(result.stdout, returncode=result.returncode)
+    )
     assert payload["ok"] is True, payload
     return payload
 
@@ -86,7 +91,7 @@ def test_original_capture_retains_the_emitted_poll_observation(
         native = tmp_path / "native-context"
         native.mkdir(mode=0o700)
         options.extend(["--codex-context-dir", str(native)])
-    emitted = _poll(runtime, registry, AGENT, record=observation != "off", extra=options,
+    emitted = _poll(runtime, registry, AGENT, record=observation != "off", extra=options, wire=True,
                     profile="codex_app_heartbeat" if wire == "native" else "generic_cli")
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
@@ -115,9 +120,25 @@ def test_original_capture_retains_the_emitted_poll_observation(
     elif wire == "envelope":
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
+        # Explicitly disabled context delivery keeps the bounded v0 wire view;
+        # the immutable capture may carry the complete v1 source instead.
+        assert emitted["schema_version"] == "loopx_turn_envelope_v0"
+        assert emitted != source
         # Replan readers bind the full observation, including this receipt.
         # Their hash changes without changing the selected work or debit.
-        without_poll = {key: value for key, value in source.items() if key != "host_poll_receipt"}
+        without_poll = deepcopy(source)
+        del without_poll["host_poll_receipt"]
+        if source.get("schema_version") == "loopx_turn_envelope_v1":
+            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+            from tests.control_plane.test_complete_turn_decision import _resign_contract
+
+            assert_complete_turn_decision(source)
+            with pytest.raises(RuntimeError, match="content integrity mismatch"):
+                assert_complete_turn_decision(without_poll)
+            # A separately signed fixture proves that the poll is part of the
+            # source binding, while work and settlement identity stay fixed.
+            without_poll, _ = _resign_contract(without_poll)
+            assert_complete_turn_decision(without_poll)
         prior = build_turn_envelope(without_poll)
         actual = emitted["action_signature"]
         for key in ("decision", "should_run", "effective_action"):
@@ -134,18 +155,27 @@ def test_original_capture_retains_the_emitted_poll_observation(
                   "--capture-file", str(capture / "decision.json"),
                   "--capture-sha256", hashlib.sha256(original).hexdigest()]
     if wire == "envelope":
-        recovered = json.loads(subprocess.run(reader, check=True, capture_output=True).stdout)
+        recovered = json.loads(subprocess.run(
+            reader, check=True, capture_output=True, text=True, timeout=90,
+        ).stdout)
+        assert recovered == source, "The emitted reader must recover the complete original source"
+        if source.get("schema_version") == "loopx_turn_envelope_v1":
+            assert_complete_turn_decision(recovered)
         assert recovered["host_poll_receipt"] == expected
     else:
         page = subprocess.run([*reader, "--select", "/host_poll_receipt"],
                               check=True, capture_output=True, text=True, timeout=90)
         recovered = json.loads(page.stdout)
-        assert recovered["ok"] is True and recovered["eof"] is True
-        assert json.loads(recovered["content"])["selections"][0]["value"] == expected
+        assert recovered["ok"] is True and recovered["offset"] == 0 and recovered["eof"] is True
+        assert len(recovered["content"].encode()) == recovered["total_bytes"]
+        selections = json.loads(recovered["content"])["selections"]
+        assert [entry["pointer"] for entry in selections] == ["/host_poll_receipt"]
+        assert selections[0]["value"] == expected
     if wire != "native":
         assert emitted["host_poll_receipt"] == expected
     assert receipt.read_bytes() == before, "Recovery must not record a second poll"
     assert (capture / "decision.json").read_bytes() == original
+    assert not count.exists(), "Recovery must not dispatch the Host"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -160,10 +190,10 @@ def test_failed_capture_discloses_the_already_recorded_poll(
     runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
     original_capture = quota_capture.capture_decision
 
-    def failed_publication(directory, payload):
+    def failed_publication(directory, payload, *, args, native_context):
         # Only the capture publisher fails; admission and receipt IO are real.
         with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
-            original_capture(directory, payload)
+            original_capture(directory, payload, args=args, native_context=native_context)
 
     monkeypatch.setattr(quota, "capture_decision", failed_publication)
     monkeypatch.chdir(tmp_path / "project")

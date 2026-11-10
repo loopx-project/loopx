@@ -38,6 +38,35 @@ test("initial navigation keeps unknown supporting-index obligations whole", () =
   }
 });
 
+test("initial outcome ids carry only verified supporting-material addresses", () => {
+  const base = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes";
+  const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0",
+    agent_channel: {work_context: {sources: [{...source, content: {goal_acceptance_contract: {
+      outcome_requirements: {schema_version: "loopx_goal_outcomes_v0", outcomes: [
+        {id: "canonical", supporting_material_pointer: base + "/0"},
+        {id: "alternate", supporting_material_pointer: "/actual/source"},
+        {supporting_material_pointer: base + "/2"},
+      ]}}}}]}}},
+    context_details: {path: "complete.json", sha256: "fixture-digest", outcome_support_from_id: true,
+      instruction: "Derive the outcome address from the selected id.",
+      unread_context_index: {coverage_confirmed: false, read_before_dependent_work: true, pointers: [base + "/0/sources"],
+        source: {path: "complete.json", sha256: "fixture-digest"}}}};
+  const canonicalAlias = base + "/0/supporting_material_pointer";
+  const before = structuredClone(context);
+  const first = initialContextReadPointers(context, []);
+  assert.ok(first.includes(base + "/0/id") && !first.includes(canonicalAlias));
+  assert.ok(first.includes(base + "/1/supporting_material_pointer"), "preserve an explicit different address");
+  assert.ok(first.includes(base + "/2/supporting_material_pointer"), "a missing id cannot carry the address");
+  assert.ok(first.includes("/context_details/instruction"));
+  assert.deepEqual(context, before, "the captured aliases still exist");
+  for (const changed of [{...context.context_details, outcome_support_from_id: undefined},
+    {...context.context_details, path: "different.json"}, {...context.context_details, sha256: "different-digest"},
+    {...context.context_details, instruction: undefined}, {...context.context_details,
+      unread_context_index: {...context.context_details.unread_context_index, future_obligation: true}}]) {
+    assert.ok(initialContextReadPointers({...context, context_details: changed}, []).includes(canonicalAlias));
+  }
+});
+
 test("only supporting materials move; cumulative obligations and merged source guidance survive", () => {
   const payload = {ok: true, interaction_contract: {agent_channel: {work_context: {complete: true, sources: [source]}}}};
   const before = structuredClone(payload);
@@ -99,6 +128,39 @@ test("exact repeated Todo rows preserve membership without collapsing distinct e
   }
   assert.equal(progressiveContextPlan({surface: "quota_packet", payload: {...payload,
     contract_binding: {signature: "signed"}}}).references, undefined);
+});
+
+test("registered claim-scope rows reuse exact literals without changing membership or counts", () => {
+  const row = {schema_version: "todo_item_v0", todo_id: "peer-work", claimed_by: "peer",
+    text: "Preserve the complete peer constraints. ".repeat(16), content_revision: "one"};
+  const revised = {...row, content_revision: "two", note: "Keep new evidence."};
+  const scope = {schema_version: "agent_claim_scope_v0", other_agent_claimed_open_count: 7,
+    other_agent_claimed_items: [revised, row], blocked_claimed_open_count: 7,
+    blocked_claimed_items: [row, {...row, claimed_by: "another-peer"}],
+    future_items: [row]};
+  const payload = {ok: true, agent_todo_summary: {schema_version: "todo_summary_v0",
+    claimed_by_others_items: [row, revised], claim_scope: scope}};
+  const before = structuredClone(payload);
+  const plan = progressiveContextPlan({surface: "quota_packet", payload});
+  const literal = (index: number) => ["agent_todo_summary", "claimed_by_others_items", index];
+  const reference = (lane: string, index: number, owner: number) => ({
+    path: ["agent_todo_summary", "claim_scope", lane, index], from: literal(owner),
+    value: {todo_id: row.todo_id, context_ref: "/agent_todo_summary/claimed_by_others_items/" + owner},
+  });
+  assert.deepEqual(plan.references, [reference("other_agent_claimed_items", 0, 1),
+    reference("other_agent_claimed_items", 1, 0), reference("blocked_claimed_items", 0, 0)]);
+  assert.deepEqual(plan.deferred, []);
+  assert.deepEqual(payload, before);
+  for (const changed of [{...scope, schema_version: "future_scope"}, {...scope, schema_version: undefined}]) {
+    const future = {...payload, agent_todo_summary: {...payload.agent_todo_summary, claim_scope: changed}};
+    assert.equal(progressiveContextPlan({surface: "quota_packet", payload: future}).references, undefined);
+  }
+  for (const changed of [{...row, future_obligation: "Keep inline."},
+    {...row, resume_monitor_generation: 1.25}, {...row, schema_version: "future_item"}]) {
+    const unknown = {...payload, agent_todo_summary: {...payload.agent_todo_summary,
+      claim_scope: {...scope, other_agent_claimed_items: [changed], blocked_claimed_items: []}}};
+    assert.equal(progressiveContextPlan({surface: "quota_packet", payload: unknown}).references, undefined);
+  }
 });
 
 test("first read keeps decision rules and preserves nonstandard Vision obligations whole", () => {

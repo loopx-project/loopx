@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (48)
+## 已接受 (49)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -28,7 +28,7 @@
 | [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md) | [2 条](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC：完整状态恢复与受控重新激活（v0）](complete-state-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：Controller / Executor 会话与统一受治理工作契约（v0）](controller-executor-unified-contract-v0.zh-CN.md) | 已接受 | 无 | [5 条](ledger/controller-executor-unified-contract-v0/) |
+| [RFC：Router—Controller—Worker 架构与统一受治理工作契约（v0）](controller-executor-unified-contract-v0.zh-CN.md) | 已接受 | 无 | [5 条](ledger/controller-executor-unified-contract-v0/) |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [3 条](ledger/external-evidence-research-capability-v0/) |
@@ -44,6 +44,7 @@
 | [RFC：Goal 工作区页面 v0](goal-workspace-surface-v0.zh-CN.md) | 已接受 | 无 | — |
 | [DSH / Pi：L1 观察与 Managed Runtime 选型](harness-selection-dsh-pi-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 分层步幅控制 v0](hierarchical-agent-stride-control-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC: 参考 billion-context 的可回读历史工作集与上下文策略插件化（v0）](history-working-set-context-policy-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：用户确认的垂域操作（v0）](human-confirmed-domain-operations-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：智能化审阅与动态展示面 v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | 已接受 | 无 | — |

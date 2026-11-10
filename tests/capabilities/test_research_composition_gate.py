@@ -13,6 +13,7 @@ from loopx.capabilities.explore.result_log import (
     append_explore_result_event, build_explore_edge_event, build_explore_node_event, explore_result_log_path,
 )
 from loopx.control_plane.work_items.semantic_replan_writeback import qualify_replan_writeback
+from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext
 from loopx.capabilities.explore.research_frontier import prepare_research_replan_evidence
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
@@ -64,6 +65,8 @@ def fixture(tmp_path: Path):
                                  "--runtime-root", str(runtime), *args], capture_output=True, text=True, check=False,
                                 cwd=Path(__file__).resolve().parents[2])
         assert (result.returncode == 0) is success, result.stdout + result.stderr
+        if args[:2] == ("quota", "should-run"):
+            return QuotaToolContext.from_output(result.stdout).packet
         return json.loads(result.stdout)
 
     return cli, log, runtime, registry, state
@@ -329,6 +332,7 @@ def test_invalidated_original_turn_retires_with_no_spend_and_current_frontier_is
     original = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, "--codex-app",
         "--turn-instance-id", "fixture-invalidated")
     packet = original["replan_action_packet"]
+    original_guard = original["heartbeat_receipt"]["semantic_replan_capability_guard"]
     if change == "input":
         append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, node_id="a", title="Research a", status="open"))
     elif change == "scope":
@@ -342,7 +346,7 @@ def test_invalidated_original_turn_retires_with_no_spend_and_current_frontier_is
         "--progress-result-class", "advanced", "--progress-evidence-id", "unrelated", success=False)
     contract = rejected["replan_transition"]["retirement_contract"]
     assert contract["blocking_todo_count"] == 0
-    assert contract["original_guard"] == packet["capability_guard"]
+    assert contract["original_guard"] == original_guard
     progress = contract["progress_observation"]
     # This is a causal lifecycle exit, not a way to count progress or debit.
     invalid_progress = cli("refresh-state", *identity, "--classification", "fixture_false_progress",
@@ -366,7 +370,7 @@ def test_invalidated_original_turn_retires_with_no_spend_and_current_frontier_is
     assert not any(receipt["step_kind"] == "quota_spend" for receipt in denied["settlement_result"]["receipts"])
     replay = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
         "--turn-instance-id", "fixture-invalidated", "--codex-app")
-    assert replay["heartbeat_receipt"]["semantic_replan_capability_guard"] == packet["capability_guard"]
+    assert replay["heartbeat_receipt"]["semantic_replan_capability_guard"] == original_guard
     assert replay["effective_action"] == "heartbeat_settled_skip"
     fresh = cli("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, "--codex-app",
         "--turn-instance-id", "fixture-after-retirement")

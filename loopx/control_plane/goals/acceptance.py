@@ -155,17 +155,20 @@ def refine_goal_outcome(
     *, registry_path: Path, goal_id: str, refinement: dict[str, Any],
     expected_provider_revision: str, operation_id: str, agent_id: str | None = None,
     runtime_root: str | None = None, execute: bool = False,
+    reviewed_work_update: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Record scoped planning intent, never configure validators or attest success."""
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     if "owner_agent_id" in refinement and refinement["owner_agent_id"] not in registered_agent_ids_for_goal(goal):
         raise ValueError("Outcome owner must be a registered Agent")
-    # The registry's legacy omitted-status form denotes an active Goal too.
+    # Registration eligibility is independent of the typed activation gate.
     if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
         raise ValueError("Outcome refinement requires an active Goal")
     return _result("goal.acceptance.refine", {**route, "actor_agent_id": agent_id,
         "expected_provider_revision": expected_provider_revision, "operation_id": operation_id,
-        "refinement": refinement, "dry_run": not execute}, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
+        "refinement": refinement, "dry_run": not execute,
+        **({"reviewed_work_update": reviewed_work_update} if reviewed_work_update is not None else {}),
+    }, timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS)
 
 
 def update_goal_objective(

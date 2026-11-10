@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from loopx.chat_agent import CodexChatAgentSession
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
@@ -95,7 +96,9 @@ def test_core_recovers_bounded_effect_free_transient_attempts_without_reacceptin
     body = {"message": "transport recovery", "client_turn_id": "original-request"}
     accepted = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     tid = accepted["turn_id"]
-    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+    # Four native attempts include paginated readback and durable Core IO.
+    # The retry count and unchanged original input below are the oracle.
+    completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=30)
     assert completed["status"] == expected_status
     duplicate = request(f"/api/chat/sessions/{sid}/turns", body)[1]
     assert duplicate["turn_id"] == tid and not duplicate["created"]
@@ -397,11 +400,16 @@ def test_steering_updates_the_existing_task_without_replaying_start_prompt(
     initial_text = starts[0]["input"][0]["text"]
     assert "LoopX context (supporting context only):" in initial_text
     assert "Inspect a bounded task." in initial_text
-    assert initial_text.endswith("Current user message:\nwait for steer")
+    assert initial_text.endswith("Current user message:\nwait for steer" + CHAT_RESPONSE_EXAMPLE_SUFFIX)
     updates = [row["params"] for row in writes if row.get("method") == "turn/steer"]
+    captured = store.steering_receipt(session_id, "adjust-one")["native_steering"]
+    assert captured["local_turn_id"] == turn_id and captured["turn_id"] == upstream_turn_id
+    assert captured["thread_id"] == session.thread_id
+    assert isinstance(captured["client_message_id"], str) and captured["client_message_id"]
     assert updates == [{
         "threadId": session.thread_id,
         "expectedTurnId": upstream_turn_id,
+        "clientUserMessageId": captured["client_message_id"],
         "input": [{"type": "text", "text": correction.strip()}],
     }]
     users = [row["text"] for row in store.messages(session_id) if row["role"] == "user"]

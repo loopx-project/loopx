@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from contextlib import suppress
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -18,9 +20,7 @@ from .chat import (
     require_matching_message_replay,
     resolve_attached_completion_replay,
 )
-from .capabilities.steward_executor.allocation import (
-    normalize_manager_executor_allocation,
-)
+from .capabilities.steward_executor.allocation import normalize_manager_executor_allocation
 from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
@@ -100,6 +100,10 @@ def _read_jsonl(
         if raise_on_error:
             raise
         return []
+    return _decode_jsonl(lines, strict=strict)
+
+
+def _decode_jsonl(lines: list[bytes], *, strict: bool) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in lines:
         if not line.strip():
@@ -217,6 +221,7 @@ class ChatSessionStore(ChatIngressStore):
         self._event_cache = ChatEventCache(self._event_lock)
         self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
+        self._paged_history: tuple[str, bytes, list[dict[str, Any]]] | None = None
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
@@ -488,7 +493,7 @@ class ChatSessionStore(ChatIngressStore):
                     "requested_agent_model_id", "requested_agent_reasoning_effort",
                     "goal_id",
                     "agent_id", "executor_endpoint_id", "adapter_kind", "manager_quota_block",
-                    "answer_review", "parked_native_working",
+                    "answer_review", "parked_native_working", "native_working_checkpoint",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
@@ -496,35 +501,11 @@ class ChatSessionStore(ChatIngressStore):
                 if "answer_review" in changes and (type(changes["answer_review"]) is not bool
                         or changes["answer_review"] and payload.get("steward_context") is None):
                     raise ValueError("answer review requires a bound steward and a boolean adapter marker")
-                if "parked_native_working" in changes:
-                    parked = changes["parked_native_working"]
-                    prior = payload.get("parked_native_working")
-                    if (expected_upstream_thread_id is None or "answer_review" not in changes
-                            or payload.get("steward_context") is None or payload.get("agent_id") != "codex"):
-                        raise ValueError("working native history must be bound to a steward review transition")
-                    if parked is not None:
-                        if not isinstance(parked, dict) or set(parked) != {
-                            "thread_id", "provider", "affinity_sha256", "prefix_count", "prefix_sha256", "review_turn_ids",
-                        }:
-                            raise ValueError("invalid parked working history")
-                        review_ids = parked["review_turn_ids"]
-                        active = self.load_turn(session_id, payload["active_turn_id"]) if payload.get("active_turn_id") else None
-                        if (changes["answer_review"] is not True or not active or active.get("status") != "queued"
-                                or active.get("upstream_turn_id")
-                                or changes.get("upstream_thread_id") in {None, expected_upstream_thread_id}
-                                or not isinstance(review_ids, list) or not 1 <= len(review_ids) <= 32
-                                or any(not isinstance(tid, str) for tid in review_ids)
-                                or len(set(review_ids)) != len(review_ids) or review_ids[-1] != active["turn_id"]
-                                or not isinstance(parked["provider"], str) or not 1 <= len(parked["provider"]) <= 128
-                                or type(parked["prefix_count"]) is not int or parked["prefix_count"] < 0
-                                or any(not isinstance(parked[key], str) or not re.fullmatch(r"[0-9a-f]{64}", parked[key])
-                                       for key in ("affinity_sha256", "prefix_sha256"))):
-                            raise ValueError("invalid parked working history or review Turn")
-                        if payload.get("answer_review") is True:
-                            if (not isinstance(prior, dict) or {**parked, "review_turn_ids": review_ids[:-1]} != prior):
-                                raise ValueError("a later review cannot replace the original working history")
-                        elif parked["thread_id"] != expected_upstream_thread_id or review_ids != [active["turn_id"]]:
-                            raise ValueError("parked history must name the original working thread")
+                if {"native_working_checkpoint", "parked_native_working"} & changes.keys():
+                    from .capabilities.native_chat.codex_adapter import validate_native_working_update
+                    active_id = payload.get("active_turn_id") if changes.get("parked_native_working") is not None else None
+                    validate_native_working_update(payload, changes, expected_thread=expected_upstream_thread_id,
+                                                   active=self.load_turn(session_id, active_id) if active_id else None)
                 if "manager_quota_block" in changes and "agent_id" not in changes:
                     raise ValueError("quota observation belongs to an executor transition")
                 if any(key in changes for key in ("agent_id", "executor_endpoint_id", "adapter_kind")):
@@ -920,6 +901,26 @@ class ChatSessionStore(ChatIngressStore):
         return _read_jsonl(self._session_dir(session_id) / "messages.jsonl",
                           raise_on_error=strict, strict=strict)
 
+    def _paged_history_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Reuse one bounded parse only after a fresh read of identical bytes."""
+        try:
+            raw = (self._session_dir(session_id) / "messages.jsonl").read_bytes()
+        except FileNotFoundError:
+            raw = b""
+        digest = hashlib.sha256(raw).digest() if len(raw) <= 64 * 1024 * 1024 else None
+        cached = self._paged_history
+        if cached is not None and cached[:2] == (session_id, digest):
+            with suppress(RecursionError):
+                return deepcopy(cached[2])
+        self._paged_history = None
+        lines = raw.split(b"\n")
+        del raw
+        rows = _decode_jsonl(lines, strict=True)
+        if digest is not None and len(rows) <= 8192:
+            with suppress(RecursionError):
+                self._paged_history = (session_id, digest, deepcopy(rows))
+        return rows
+
     def prepared_managed_turn_request(
         self,
         session_id: str,
@@ -1090,23 +1091,18 @@ class ChatSessionStore(ChatIngressStore):
                 agent_id="loopx-chat",
                 operation="accept_managed_chat_turn",
             ):
-                turns = [
-                    payload
-                    for path in (
-                        self._session_dir(session_token) / "turns"
-                    ).glob("*.json")
-                    if (
-                        payload := _read_json(path)
-                    ).get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                ]
-                existing = next(
-                    (
-                        turn
-                        for turn in turns
-                        if turn.get("client_turn_id") == client_id
-                    ),
-                    None,
-                )
+                turns_dir = self._session_dir(session_token) / "turns"
+                turns = []
+                existing = None
+                for path, turn, fresh in self._turn_discovery_rows(session_token, turns_dir, _read_json):
+                    if turn.get("schema_version") != CHAT_TURN_SCHEMA_VERSION:
+                        continue
+                    # The planner needs live prepared Turns and the full
+                    # current request when its client ID matches.
+                    if existing is None and turn.get("client_turn_id") == client_id:
+                        turn = self._matched_discovered_turn(session_token, client_id, path, fresh)
+                        existing = turn
+                    turns.append(turn)
                 session = self.load_session(session_token)
                 active_turn = None
                 if session is not None and session.get("active_turn_id"):
@@ -1442,16 +1438,6 @@ class ChatSessionStore(ChatIngressStore):
                     _atomic_write_json(session_path, session, preserve_mode=True)
                     return turn
                 return None
-
-    def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
-        turns_dir = self._session_dir(session_id) / "turns"
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
-            payload = _read_json(path)
-            if payload.get("client_turn_id") == client_turn_id:
-                return payload
-        return None
 
     def load_turn(self, session_id: str, turn_id: str) -> dict[str, Any] | None:
         payload = _read_json(self._turn_path(session_id, turn_id))
@@ -2135,7 +2121,6 @@ class ChatSessionStore(ChatIngressStore):
             "ok": True,
             "schema_version": CHAT_STORE_SCHEMA_VERSION,
             "session": self.public_session(payload),
-            "messages": (self.messages(session_id, strict=True) if strict_messages
-                         else self.messages(session_id)),
+            "messages": self._paged_history_messages(session_id) if strict_messages else self.messages(session_id),
             "active_turn": active_turn,
         }

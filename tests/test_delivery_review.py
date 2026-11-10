@@ -118,7 +118,7 @@ def test_http_review_discloses_unreadable_map_without_hiding_other_components(wo
     def unreadable(**_kwargs):
         raise PermissionError("synthetic unavailable source")
 
-    monkeypatch.setattr("loopx.chat_status_api.list_goal_todos", unreadable)
+    monkeypatch.setattr("loopx.chat.status_api.list_goal_todos", unreadable)
     status, review = get(server)
     assert status == 200 and review["goal_map"] is None and review["graph"] is not None
     envelope = review["projection_envelope"]
@@ -266,7 +266,7 @@ def test_review_is_cold_and_missing_observations_stay_unknown(workspace, monkeyp
     def collect(**kwargs):
         calls.append(kwargs)
         return {"ok": True, "attention_queue": {"items": []}, "run_history": {"goals": []}}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     assert get(server, "/status.json?goal_id=release-demo")[0] == 200
     assert calls[-1]["include_task_graph"] is False
     _, result = get(server)
@@ -290,14 +290,14 @@ def test_review_respects_origin_selected_goal_and_registry_drift(workspace, monk
     def collect(**kwargs):
         registry.write_text(json.dumps({"goals": []}))
         return {"ok": True}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", collect)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", collect)
     assert get(server)[0] == 409
 
 
 def test_review_failure_does_not_expose_local_diagnostics(workspace, monkeypatch):
     def fail(**kwargs):
         raise OSError("private diagnostic and local filesystem details")
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", fail)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", fail)
     status, payload = get(workspace[0])
     assert status == 500
     assert "private diagnostic" not in json.dumps(payload)
@@ -308,7 +308,7 @@ def test_review_failure_does_not_expose_local_diagnostics(workspace, monkeypatch
     {"ok": True, "attention_queue": {"items": [{"goal_id": "release-demo", "task_graph_projection": {"raw_log": "must not export"}}]}},
 ])
 def test_failed_or_unsafe_projection_cannot_be_exported(workspace, monkeypatch, projection):
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **kwargs: projection)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **kwargs: projection)
     status, result = get(workspace[0])
     assert status in {500, 503}
     assert result["ok"] is False
@@ -385,7 +385,7 @@ def test_review_still_refuses_unsafe_acceptance_and_recovers(workspace, monkeypa
     projection = {"ok": True, "run_history": {"goals": [
         {"id": "release-demo", "acceptance_observation": unsafe},
     ]}}
-    monkeypatch.setattr("loopx.chat_status_api.collect_status", lambda **kwargs: projection)
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", lambda **kwargs: projection)
     status, result = get(server)
     assert status == 500 and result["ok"] is False
     assert "synthetic private" not in json.dumps(result)

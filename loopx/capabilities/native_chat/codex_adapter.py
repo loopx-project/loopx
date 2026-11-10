@@ -5,7 +5,7 @@ here; the Chat controller continues to own Session/Turn admission and effects.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import logging
@@ -22,6 +22,7 @@ from ...chat_agent import (
     _retry_error_details, _routing_discovery_timeout, _event_thread_id, _event_turn_id, _terminal_turn_error,
 )
 from ...chat_codex_goal import CodexGoalDriver
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
@@ -36,6 +37,59 @@ _READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "conte
 
 def _history_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def validate_native_working_update(payload: Mapping[str, Any], changes: Mapping[str, Any], *,
+                                   expected_thread: str | None, active: Mapping[str, Any] | None) -> None:
+    """Check the adapter-specific checkpoint fields under the Session store lock."""
+    from ...chat_store import CHAT_SESSION_MODE_MANAGED
+
+    def provider_and_affinity_valid(value: Mapping[str, Any]) -> bool:
+        return (isinstance(value["provider"], str) and 1 <= len(value["provider"]) <= 128
+                and isinstance(value["affinity_sha256"], str)
+                and bool(BARE_SHA256_PATTERN.fullmatch(value["affinity_sha256"])))
+
+    if "native_working_checkpoint" in changes:
+        checkpoint = changes["native_working_checkpoint"]
+        if (not isinstance(checkpoint, dict) or set(checkpoint) != {"thread_id", "provider", "affinity_sha256"}
+                or payload.get("steward_context") is None or payload.get("answer_review")
+                or payload.get("agent_id") != "codex" or payload.get("upstream_mode") != "chat"
+                or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+                or changes.get("agent_id", "codex") != "codex" or changes.get("upstream_mode", "chat") != "chat"
+                or expected_thread is None or checkpoint["thread_id"] != expected_thread
+                or changes.get("upstream_thread_id", expected_thread) != expected_thread
+                or changes.get("answer_review") is True or not provider_and_affinity_valid(checkpoint)):
+            raise ValueError("working checkpoint requires the same bound native Codex thread")
+
+    if "parked_native_working" not in changes:
+        return
+    if (expected_thread is None or "answer_review" not in changes
+            or payload.get("steward_context") is None or payload.get("agent_id") != "codex"):
+        raise ValueError("working native history must be bound to a steward review transition")
+    parked = changes["parked_native_working"]
+    if parked is None:
+        return
+    if not isinstance(parked, dict) or set(parked) != {
+        "thread_id", "provider", "affinity_sha256", "prefix_count", "prefix_sha256", "review_turn_ids",
+    }:
+        raise ValueError("invalid parked working history")
+    review_ids = parked["review_turn_ids"]
+    if (changes["answer_review"] is not True or not active or active.get("status") != "queued"
+            or active.get("upstream_turn_id")
+            or changes.get("upstream_thread_id") in {None, expected_thread}
+            or not isinstance(review_ids, list) or not 1 <= len(review_ids) <= 32
+            or any(not isinstance(tid, str) for tid in review_ids)
+            or len(set(review_ids)) != len(review_ids) or review_ids[-1] != active["turn_id"]
+            or not provider_and_affinity_valid(parked)
+            or type(parked["prefix_count"]) is not int or parked["prefix_count"] < 0
+            or not isinstance(parked["prefix_sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(parked["prefix_sha256"])):
+        raise ValueError("invalid parked working history or review Turn")
+    if payload.get("answer_review") is True:
+        prior = payload.get("parked_native_working")
+        if not isinstance(prior, dict) or {**parked, "review_turn_ids": review_ids[:-1]} != prior:
+            raise ValueError("a later review cannot replace the original working history")
+    elif parked["thread_id"] != expected_thread or review_ids != [active["turn_id"]]:
+        raise ValueError("parked history must name the original working thread")
 
 
 @dataclass(frozen=True)
@@ -57,16 +111,20 @@ class NativeHistoryRestoration:
     manager: bool
     invalidated: bool = False
     checked: bool = False
+    parked_working: dict[str, Any] | None = None
     working_continuation: NativeWorkingContinuation | None = None
 
     def capture(self, *, strict: bool = False) -> list[dict[str, Any]]:
-        from ...chat_manager import steward_machine_defaults
         stored = self.controller.store.messages(self.session["session_id"], **({"strict": True} if strict else {}))
+        self.capture_scope()
+        return stored
+
+    def capture_scope(self) -> None:
+        from ...chat_manager import steward_machine_defaults
         self.binding_id = (self.session.get("steward_context") or self.session.get("project_context") or {}).get("binding_id")
         self.binding = (next((row for row in self.controller.project_contexts.conversation_bindings.read()["bindings"]
             if row["binding_id"] == self.binding_id), None) if self.binding_id else None)
         self.defaults = steward_machine_defaults(self.controller) if self.manager else None
-        return stored
 
     def messages(self, stored: list[dict[str, Any]]) -> list[dict[str, str]]:
         return [{"role": "assistant" if item.get("role") == "agent" else "user", "content": str(item.get("text") or "")}
@@ -84,6 +142,38 @@ class NativeHistoryRestoration:
             str(work_dir.resolve()), str(codex_home.resolve()), self.binding, self.defaults, account_epoch,
             manager_runtime_session_fields(runtime),
         ])
+
+    def remember_working_checkpoint(self, adapter: CodexAppServerAdapter, *, work_dir: Path, codex_home: Path,
+                                    runtime: Mapping[str, Any], account_epoch: tuple[str, str]) -> None:
+        """Retain the observed working identity before a future process exit."""
+        store, sid = self.controller.store, self.session["session_id"]
+        current = store.load_session(sid)
+        provider = adapter.session.native_model_provider
+        thread_id = adapter.upstream_thread_id
+        if (not provider or len(provider) > 128 or adapter.session.read_only_review or not current
+                or not current.get("steward_context") or current.get("answer_review")
+                or current.get("agent_id") != "codex" or current.get("upstream_mode") != "chat"
+                or current.get("status") not in {"ready", "busy"} or current.get("upstream_thread_id") != thread_id):
+            return
+        working = replace(self, session=current)
+        working.capture_scope()
+        if working.binding is None or working.binding != self.binding or working.defaults != self.defaults:
+            return
+        checkpoint = {"thread_id": thread_id, "provider": provider,
+            "affinity_sha256": working.working_affinity(work_dir=work_dir, codex_home=codex_home,
+                runtime=runtime, account_epoch=account_epoch)}
+        if current.get("native_working_checkpoint") != checkpoint:
+            store.update_session(sid, expected_statuses={current["status"]}, expected_upstream_thread_id=thread_id,
+                                 native_working_checkpoint=checkpoint)
+
+    def cold_working_provider(self, *, affinity: str) -> str | None:
+        checkpoint = self.session.get("native_working_checkpoint")
+        if (isinstance(checkpoint, dict) and checkpoint.get("thread_id") == self.session.get("upstream_thread_id")
+                and checkpoint.get("affinity_sha256") == affinity):
+            provider = checkpoint.get("provider")
+            if isinstance(provider, str) and 1 <= len(provider) <= 128:
+                return provider
+        return None
 
     def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
                              affinity: str) -> dict[str, Any] | None:
@@ -160,6 +250,20 @@ class NativeHistoryRestoration:
         self.working_continuation = NativeWorkingContinuation(parked["thread_id"], parked["provider"], suffix)
         return self.working_continuation
 
+    def prepare_working_context(self, stored: list[dict[str, Any]], *, work_dir: Path, codex_home: Path,
+                                runtime: Mapping[str, Any], account_epoch: tuple[str, str] | None,
+                                working_provider: str | None, cold_working: bool,
+                                answer_review: bool, read_only_review: bool) -> None:
+        affinity = self.working_affinity(work_dir=work_dir, codex_home=codex_home,
+                                        runtime=runtime, account_epoch=account_epoch)
+        if answer_review:
+            provider = self.cold_working_provider(affinity=affinity) if cold_working else working_provider
+            self.parked_working = self.park_working_context(stored, provider=provider, affinity=affinity)
+            if self.parked_working is not None:
+                self.check()
+        elif self.session.get("answer_review") is True and not read_only_review:
+            self.restore_working_context(stored, affinity=affinity)
+
     def manager_migration(self, *, refresh: bool) -> bool:
         from ...chat_manager import MANAGER_CONTEXT_VERSION, is_manager_channel
         from ...chat_codex_goal import UPSTREAM_MODE
@@ -190,7 +294,8 @@ class NativeHistoryRestoration:
             latest = controller.store.load_session(sid)
             if (controller.closed.is_set() or latest is None or latest.get("status") == "closed"
                     or any(latest.get(key) != original.get(key) for key in
-                        ("active_turn_id", "upstream_thread_id", "parked_native_working", "channel_id", "agent_id", "codex_home",
+                        ("active_turn_id", "upstream_thread_id", "parked_native_working", "native_working_checkpoint",
+                         "channel_id", "agent_id", "codex_home",
                          "project_context", "steward_context", "requested_agent_model_id", "requested_agent_reasoning_effort"))
                     or self.accepted_turn_id is not None and (controller.store.load_turn(sid, self.accepted_turn_id) or {}).get("status") != "queued"):
                 self.invalidated = True
@@ -496,7 +601,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
 
 
 def completed_result_review_readback(session: CodexChatAgentSession, turn_id: str, *,
-                                     known_turn_ids: set[str]) -> dict[str, Any] | None:
+                                     known_turn_ids: set[str], allow_untyped: bool = False) -> dict[str, Any] | None:
     """Read a closed partial result, never certify its effects for execution.
 
     A failed command (including a signal exit) is evidence to inspect, not
@@ -543,13 +648,15 @@ def completed_result_review_readback(session: CodexChatAgentSession, turn_id: st
                 return None
         if users != 1 or len(finals) != 1:
             return None
-        work = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
-        if (work is None or turns() != inventory
+        response = parse_agent_response(finals[0], protected_paths=[session.work_dir])
+        work = response.get("unfinished_work")
+        if (work is None and not allow_untyped or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
             return None
         return {"thread_id": session.thread_id, "turn_id": turn_id,
             "read_only_review": True, "completed_result_review": True,
             "unfinished_work": work, "visible_response": finals[0],
+            **({"untyped_result_review": True, "response": response} if work is None else {}),
             "native_inventory_sha256": hashlib.sha256(json.dumps([target, items],
                 sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
@@ -654,6 +761,7 @@ class CodexAppServerAdapter:
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
                                    completed_result_review: bool = False,
+                                   allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
@@ -667,6 +775,8 @@ class CodexAppServerAdapter:
 
         if completed_result_review and not read_only_review:
             raise ValueError("a completed result observation permits only read-only review")
+        if allow_untyped_result_review and not (completed_result_review and read_only_review):
+            raise ValueError("untyped result evidence permits only a completed read-only review")
         process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
             cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -683,7 +793,8 @@ class CodexAppServerAdapter:
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
                 if completed_result_review:
-                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set())
+                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set(),
+                        allow_untyped=allow_untyped_result_review)
                 else:
                     reader = interrupted_result_readback if read_only_review else failed_request_readback
                     proof = reader(native, turn_id)
@@ -873,8 +984,14 @@ class CodexAppServerAdapter:
     def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
         return self.session.send(message, on_event=event_sink)
 
-    def steer_turn(self, message: str, expected_turn_id: str) -> str:
-        return self.session.steer(message, expected_turn_id=expected_turn_id)
+    def steer_turn(self, message: str, expected_turn_id: str, client_message_id: str | None = None) -> str:
+        return self.session.steer(message, expected_turn_id=expected_turn_id,
+                                  **({"client_message_id": client_message_id} if client_message_id is not None else {}))
+
+    def steering_delivery_readback(self, turn_id: str) -> list[dict[str, Any]]:
+        """Read every native item page without dispatching or resuming a Turn."""
+        return list(self.session._control_items("thread/items/list", {"turnId": turn_id},
+                    time.monotonic() + min(self.session.response_timeout_sec, 5.0)))
 
     def start_turn_with_attachments(
         self,

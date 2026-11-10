@@ -22,6 +22,7 @@ from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
+from .codex_readiness import native_readiness_budget
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
@@ -98,16 +99,25 @@ class SForgeWorker(CodexAgent):
                  native_child_limit: int | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
+                 native_readiness_total_seconds: float | None = None,
+                 native_readiness_attempt_seconds: float | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
                  planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
-                 warm_start=None, research_sidecar: bool = False):
+                 warm_start=None, research_sidecar: bool = False,
+                 native_result_scope: dict | None = None):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
+        self.native_readiness_budget = native_readiness_budget(
+            native_readiness_total_seconds, native_readiness_attempt_seconds)
+        if self.native_readiness_budget is not None and (
+            profile in {"official", "single"} or config.agent_api_base_url or warm_start is not None
+        ):
+            raise ValueError("Native readiness budget requires a fresh native Goal or heartbeat worker")
         if not isinstance(turn_envelope, bool) or (
             turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
         ):
@@ -123,6 +133,10 @@ class SForgeWorker(CodexAgent):
         self.execution_observation = resolve_execution_observation(execution_observation)
         if self.execution_observation is not None and not profile.startswith("heartbeat-"):
             raise ValueError("execution_observation requires a heartbeat worker")
+        if native_result_scope is not None and (
+                profile != "heartbeat-explore" or feedback != "native"):
+            raise ValueError("Native result comparison requires native Explore")
+        self.native_result_scope = native_result_scope
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
         if provider_request_admission and not profile.startswith("heartbeat-"):
@@ -279,6 +293,49 @@ class SForgeWorker(CodexAgent):
         if result.exit_code:
             raise RuntimeError("Research directory is unavailable or conflicts with existing task data")
 
+    def _install_native_result_scope(self, backend, handle):
+        from .sforge_native_result import NativeResultScope, _SCOPE_FILE
+
+        assert self.native_result_scope is not None and self.runtime is not None
+        spec = dict(self.native_result_scope)
+        judge_url = spec.pop("judge_url")
+        # This exec runs before the solver and inherits the route supplied
+        # by the run-scoped native registration, not a task's shell override.
+        observed = backend.exec_run(handle, ["/bin/sh", "-c", 'printf "%s" "${SFORGE_FEEDBACK_URL:-}"'],
+                                    user="root")
+        if observed.exit_code:
+            raise RuntimeError("Could not read the native run's feedback route")
+        # Fetch once through the worker's actual route, before its solver starts.
+        # The protected Python/source paths exclude task imports and shell env.
+        context = backend.exec_run(handle, [f"{_PYTHON}/bin/python3", "-I", "-c",
+            f"import json,runpy,sys; sys.path.insert(0, {_SRC!r}); "
+            "from loopx.capabilities.explore.candidate_content import candidate_manifest_sha256; "
+            "from loopx.capabilities.explore.result_writeback import record_work_finding; "
+            "module=runpy.run_path(sys.argv[1]); "
+            "print(json.dumps(module['read_run_evaluation_context'](sys.argv[2])))",
+            f"{_SRC}/benchmark/runtime/sforge_native_result.py", observed.output], user="root")
+        if context.exit_code:
+            raise RuntimeError("Native result product APIs or evaluator conditions are unavailable; disable "
+                               "--native-result-comparison for ordinary native feedback")
+        scope = NativeResultScope(relay=observed.output, goal=self.runtime.goal_id,
+                                  agent=self.runtime.agent_id, evaluation_context=json.loads(context.output), **spec)
+        data = scope.install_bytes(judge_url)
+        target = shlex.quote(str(_SCOPE_FILE))
+        parent = shlex.quote(str(_SCOPE_FILE.parent))
+        prepare = backend.exec_run(handle, ["/bin/sh", "-c",
+            f"test ! -L {parent} && mkdir -p {parent} && chown root:root {parent} && "
+            f"chmod 0755 {parent} && test ! -e {target} && test ! -L {target}"], user="root")
+        if prepare.exit_code:
+            raise RuntimeError("Native result scope cannot be staged safely")
+        with tempfile.TemporaryDirectory(prefix="native-feedback-scope-") as directory:
+            source = Path(directory) / "scope.json"
+            source.write_bytes(data)
+            backend.copy_to_container(handle, source, PurePosixPath(str(_SCOPE_FILE)))
+        protected = backend.exec_run(handle, ["/bin/sh", "-c",
+            f"test ! -L {target} && chown root:root {target} && chmod 0644 {target}"], user="root")
+        if protected.exit_code:
+            raise RuntimeError("Native result scope could not be protected")
+
     def _install_worker(self, backend, handle, log_dir, logger):
         self.backend, self.handle = backend, handle
         self.log_dir = log_dir
@@ -368,6 +425,14 @@ class SForgeWorker(CodexAgent):
                     "defer_codex_home": True} if self.warm_start is not None else {}),
             )
             asyncio.run(self.runtime.install(self.environment))
+            if self.feedback == "native" and (self.execution_observation is not None
+                                              or self.native_result_scope is not None):
+                asyncio.run(self.runtime._install_research_entrypoint(
+                    self.environment, "loopx-bind-native-candidate", "sforge_candidate_binding.py",
+                    "--generated-file", "Native candidate verification is unavailable to the benchmark worker",
+                ))
+            if self.native_result_scope is not None:
+                self._install_native_result_scope(backend, handle)
             if self.warm_start is not None:
                 route_settings = {}
                 if runtime_base_url:
@@ -452,10 +517,14 @@ class SForgeWorker(CodexAgent):
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
+            **({"native_readiness_budget": dict(zip(("total_seconds", "attempt_seconds"),
+                                                    self.native_readiness_budget))}
+               if self.native_readiness_budget is not None else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
+            **({"native_result_comparison": True} if self.native_result_scope is not None else {}),
             **({"execution_observation": self.execution_observation}
                if self.execution_observation is not None else {}),
             **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
@@ -561,8 +630,11 @@ class SForgeWorker(CodexAgent):
         # their own admission path; no observer runs on every heartbeat wake.
         readiness = ""
         if not self._config.agent_api_base_url:
+            readiness_options = (f" --total-seconds {self.native_readiness_budget[0]}"
+                                 f" --attempt-seconds {self.native_readiness_budget[1]}"
+                                 if self.native_readiness_budget is not None else "")
             readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
-                         "-m benchmark.runtime.codex_readiness; ")
+                         f"-m benchmark.runtime.codex_readiness{readiness_options}; ")
         return self._execution_command(
             f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "

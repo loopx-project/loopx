@@ -498,6 +498,7 @@ def _build_fixture(
             "filesystem_write",
         ],
         runtime_profile="codex_app_heartbeat",
+        registry_path=os.path.relpath(global_registry_path, project_root),
     )
     quota_guard_command = str(prompt["quota_guard_command"])
     if quota_guard_command not in str(prompt["task_body"]):
@@ -885,7 +886,10 @@ def _execute_loopx(
     except LoopxCliExecutionError as exc:
         if not fixture.required_vision:
             raise
-        raise _HostToolError("loopx_cli_nonzero", str(exc), exc.returncode) from None
+        # The real writer puts its refusal and recovery in stdout. Keep the
+        # nonzero status and let the shell's existing feedback bound apply.
+        feedback = exc.stdout.strip() if "refresh-state" in tokens else ""
+        raise _HostToolError("loopx_cli_nonzero", feedback or str(exc), exc.returncode) from None
 
 
 def _bounded_workspace_read_plan(

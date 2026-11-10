@@ -28,6 +28,33 @@ test("only the provider-qualified native replay can retain a complete resume bas
   assert.equal(state.context_epoch, "original");
 });
 
+test("a tool workdir can report an exact selected read without changing the native workspace", () => {
+  const sourceDigest = "a".repeat(64), viewDigest = "b".repeat(64);
+  const state = {session_id: "native", cwd: "/host", context_epoch: "original",
+    source_recovery: {sha256: sourceDigest},
+    recovery: {sha256: sourceDigest, total_bytes: 2, target: {context_epoch: "original"}}};
+  const event = {hook_event_name: "PostToolUse", session_id: "native", cwd: "/tool"};
+  const selected = {schema_version: "context_capture_page_v1", ok: true, sha256: viewDigest,
+    source_sha256: sourceDigest, total_bytes: 2, offset: 0, eof: true, next_offset: null, content: "{}",
+    read_sections: {"/source/body": "observed"}};
+  const request = {state, event, new_epoch: "replacement", pages: [selected], pages_verified: true};
+  assert.deepEqual(updateNativeContextLifecycle(request), {...state,
+    consumed_pointers: {"/source/body": "observed"}, confirmed_read_sections: ["/source/body"], section_reads: {}});
+  const full = {schema_version: selected.schema_version, ok: true, sha256: sourceDigest,
+    total_bytes: 2, offset: 0, eof: true, next_offset: null, content: "{}"};
+  for (const rejected of [
+    {...request, pages_verified: false},
+    {...request, event: {...event, session_id: "foreign"}},
+    {...request, event: {...event, agent_id: "child"}},
+    {...request, event: {...event, hook_event_name: "PostCompact"}},
+    {...request, pages: [{...selected, source_sha256: "c".repeat(64)}]},
+    {...request, pages: [full]},
+    {...request, pages: [{...full, ok: false}]},
+  ]) {
+    assert.deepEqual(updateNativeContextLifecycle(rejected), state);
+  }
+});
+
 test("replacements and sparse edits own their values without mutating either capture", () => {
   const original = {registry: {body: "Retain every original requirement. ".repeat(400), changed: {value: 1}},
     current_control: {labels: ["original"]}};

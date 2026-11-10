@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from copy import deepcopy
 
 
 from ..goals.goal_vision_policy import COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD
@@ -71,6 +72,8 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "consecutive_no_change",
     "material_change",
     "material_change_generation",
+    "material_change_scope",
+    "material_change_scope_generations",
     "max_no_change_before_replan",
     "route_continuation_replan_required",
     "route_continuation_reason",
@@ -474,14 +477,105 @@ def select_quota_todo_summary(
     return summary
 
 
+def select_quota_todo_summaries(
+    user_source: Any, agent_source: Any, *, agent_identity: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Compose the refresh caller's two native summaries in one transaction.
+
+    Supplied and expired source references retain the standalone adapters.
+    The native owner still validates every source and independent request.
+    """
+    from .summary_item import _CanonicalTodoSummary
+
+    if isinstance(user_source, _CanonicalTodoSummary) and isinstance(agent_source, _CanonicalTodoSummary):
+        requests = [project_quota_planning(source, all_open_items=[],
+            source_open_count=source.get("open_count"), agent_identity=agent_identity,
+            filter_user_gate_blocks_agent=index == 0, available_capabilities=None,
+            summary_kind="user", request_only=True)
+            for index, source in enumerate((user_source, agent_source))]
+        if all("source_reference" in request["summary_request"] for request in requests):
+            from .goal_todo_projection import project_todo_read
+            from .quota_selection import _decode_quota_summary_wire
+
+            result = project_todo_read({"kind": "quota_projection", "requests": requests})
+            wires = result.get("quota_wires")
+            if not isinstance(wires, list) or len(wires) != 2:
+                raise RuntimeError("invalid complete quota summary response")
+            return (_decode_quota_summary_wire(wires[0], user_source),
+                    _decode_quota_summary_wire(wires[1], agent_source))
+    return (select_quota_todo_summary(user_source, None, agent_identity=agent_identity,
+                filter_user_gate_blocks_agent=True),
+            select_quota_todo_summary(agent_source, None, agent_identity=agent_identity))
+
+
+def select_quota_todo_contexts(
+    user_canonical: Any, user_asset: Any, agent_canonical: Any, agent_asset: Any,
+    *, agent_identity: dict[str, Any] | None, available_capabilities: Any,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """The quota caller explicitly consumes both summaries and Agent displays.
+
+    One native read transaction materializes each complete source. A supplied
+    compatibility source retains its full codec and cannot acquire authority.
+    """
+    from .quota_selection import _decode_quota_summary_wire
+    from .goal_todo_projection import project_todo_read
+
+    values: list[dict[str, Any]] = []
+    roles: list[str] = []
+    requests: list[dict[str, Any]] = []
+    for role, canonical, asset in (("user", user_canonical, user_asset), ("agent", agent_canonical, agent_asset)):
+        selected = _select_todo_source(canonical, asset)
+        if selected is None:
+            continue
+        kind, source = selected
+        values.append(source)
+        roles.append(role)
+        requests.append(project_quota_planning(source, all_open_items=[], source_open_count=source.get("open_count"),
+            agent_identity=agent_identity, filter_user_gate_blocks_agent=role == "user",
+            available_capabilities=available_capabilities, resolve_capacity=True,
+            summary_kind=kind, consume_display_views=role == "agent", request_only=True))
+        requests[-1]["summary_request"]["consume_source_summary"] = role == "user"
+        requests[-1]["summary_request"]["consume_vision_wait_basis"] = role == "agent"
+    summaries: dict[str, dict[str, Any]] = {}
+    views: dict[str, list[dict[str, Any]]] = {"summary": [], "planning": [], "terminal": []}
+    user_rows: list[dict[str, Any]] = []
+    if requests:
+        result = project_todo_read({"kind": "quota_projection", "requests": requests})
+        wires = result.get("quota_wires")
+        if not isinstance(wires, list) or len(wires) != len(requests):
+            raise RuntimeError("invalid complete quota projection response")
+        for role, source, wire in zip(roles, values, wires, strict=True):
+            summaries[role] = _decode_quota_summary_wire(wire, source)
+            if role == "user":
+                user_rows = wire.get("source_summary")
+                if not isinstance(user_rows, list) or any(not isinstance(row, dict) for row in user_rows):
+                    raise RuntimeError("invalid User quota source display")
+            if role == "agent":
+                raw = wire.get("display_views") if isinstance(wire, dict) else None
+                if not isinstance(raw, dict) or set(raw) != set(views) or any(
+                    not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+                    for rows in raw.values()
+                ):
+                    raise RuntimeError("invalid explicit Agent quota display views")
+                views = raw
+                from .summary_item import _QuotaProjectedSummary
+                basis = wire.get("vision_wait_basis")
+                if not isinstance(basis, dict):
+                    raise RuntimeError("invalid prepared quota vision wait basis")
+                summaries[role] = _QuotaProjectedSummary(summaries[role], basis, views["terminal"],
+                    (agent_identity or {}).get("agent_id"))
+    return summaries.get("user"), summaries.get("agent"), views, user_rows
+
+
 def _select_todo_source(
     canonical_value: Any,
     project_asset_value: Any,
-) -> dict[str, Any] | None:
-    sources = (canonical_value, project_asset_value)
+) -> tuple[str, dict[str, Any]] | None:
+    """Keep the projection kind selected by precedence, including aliased values."""
+    sources: tuple[tuple[str, Any], ...] = (("user", canonical_value), ("project_asset", project_asset_value))
     if not is_canonical_attention_todo_summary(canonical_value):
         sources = tuple(reversed(sources))
-    return next((source for source in sources if isinstance(source, dict)), None)
+    return next(((kind, source) for kind, source in sources if isinstance(source, dict)), None)
 
 
 def select_quota_todo_source_items(
@@ -490,8 +584,20 @@ def select_quota_todo_source_items(
 ) -> list[dict[str, Any]]:
     """Return the authoritative pre-hot-path todo source for semantic checks."""
 
-    source = _select_todo_source(canonical_value, project_asset_value)
-    return todo_summary_source_items(source) if source is not None else []
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return todo_summary_source_items(selected[1]) if selected is not None else []
+
+
+def select_quota_todo_display_views(
+    canonical_value: Any,
+    project_asset_value: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Select the source once for the quota caller's three consumed displays."""
+    from .summary_item import todo_source_display_views
+
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return (todo_source_display_views(selected[1]) if selected is not None
+            else {"summary": [], "planning": [], "terminal": []})
 
 
 def select_planning_inventory_source_items(
@@ -502,8 +608,9 @@ def select_planning_inventory_source_items(
 ) -> list[dict[str, Any]]:
     """Select the canonical non-terminal rows shared by planning read models."""
 
-    source = _select_todo_source(canonical_value, project_asset_value)
-    return todo_planning_source_items(source, include_terminal=include_terminal) if source is not None else []
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return (todo_planning_source_items(selected[1], include_terminal=include_terminal)
+            if selected is not None else [])
 
 
 def _task_orchestration_authority_items(
@@ -532,6 +639,7 @@ def select_task_orchestration_authority_items(
     project_asset_value: Any,
     *,
     role: str,
+    fallback_source_items: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     canonical_items = _task_orchestration_authority_items(
         canonical_value,
@@ -551,4 +659,7 @@ def select_task_orchestration_authority_items(
         )
     if selected is not None:
         return selected
+    if fallback_source_items is not None:
+        # Preserve the independent mutable display returned by the old call.
+        return deepcopy(fallback_source_items)
     return select_quota_todo_source_items(canonical_value, project_asset_value)

@@ -27,7 +27,7 @@ def _fixture(tmp_path, monkeypatch, provider, *, replan=True):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if replan:
-        _configure_autonomous_replan_fixture(project, runtime, registry)
+        _configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
     else:
         state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
         state.write_text('---\nstatus: active\nowner_mode: goal\nobjective: "Answer the fixture request."\n---\n\n'
@@ -144,10 +144,12 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     prompt = (project / "received.txt").read_text()
     assert identity["replan_obligation_id"] in prompt
     # Inspect the actual model input, not only the saved complete fixture.
-    authority = json.loads(prompt.split("Turn request:\n", 1)[1])["turn_authority"]
-    packet = authority["replan_action_packet"]
+    request = json.loads(prompt.split("Turn request:\n", 1)[1])
+    authority = request["work_contract"]
+    assert authority["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]
+    packet = request["detail_ref"]["replan_action_packet"]
     assert "read autonomous_replan_obligation.replan_context" not in prompt
-    assert "Read replan_action_packet.review" in prompt
+    assert "Read detail_ref.replan_action_packet.review" in prompt
     assert "core_goal" not in authority  # The mandatory review owns its only model copy.
     stages = {}
     for stage in ("review", "writeback"):
@@ -161,8 +163,8 @@ def test_bound_todoless_planning_executes_and_settles_once(tmp_path, monkeypatch
     assert _classification_count(runtime, "quota_slot_spent") == 1
     # Read the actual source referenced in the Host prompt, preserving the
     # original observation instead of re-entering quota to reconstruct it.
-    envelope = journal["plan"]["turn_envelope"]
-    detail = envelope["detail_ref"]
+    detail = request["detail_ref"]
+    assert journal["plan"]["detail_ref"] == detail
     captured = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True)
     source = json.loads(captured.stdout)
     assert source["replan_action_packet"]["obligation_id"] == identity["replan_obligation_id"]

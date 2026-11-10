@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request.ts";
 import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
+import { todoResumeTransition } from "./todo-resume-condition.ts";
 import "./monitor-readback.test.mjs";
 // Exercise shared reconciliation semantics rather than freezing where its
 // helpers are called in the dashboard's revision-aware observation path.
@@ -58,7 +59,13 @@ for (const operation of ["reassign", "block"]) {
   assert.match(drawer, new RegExp(`operation:\\s*"${operation}"`), `Todo supports ${operation}`);
 }
 assert.match(drawer, /previewTodoTransition\(selection\.item, "defer"/, "Todo defer collects a resume condition before preview");
-assert.match(drawer, /resume_when:\s*resumeWhen/, "Todo defer sends its explicit resume condition");
+assert.match(drawer, /todoResumeTransition\(resumeWhen\)/, "Todo preview carries the validated form intent");
+assert.deepEqual(todoResumeTransition("monitor_changed:todo_watch@case-b/run-2"),
+  {operation: "edit", status: "open", resume_when: "monitor_changed:todo_watch@case-b/run-2"},
+  "A Monitor dependency keeps the Task open and preserves its exact scope");
+assert.deepEqual(todoResumeTransition("resume_at:2026-12-01T09:00:00Z"),
+  {operation: "defer", resume_when: "resume_at:2026-12-01t09:00:00z"},
+  "A time-based pause still uses defer and preserves its explicit condition");
 assert.doesNotMatch(drawer + page, /owner_resume/, "Personal Workspace never emits the unsupported owner_resume sentinel");
 assert.match(drawer, /\["blocked", "deferred"\]\.includes\(selection\.item\.status/, "Paused Todos offer resume through the existing primary action");
 assert.match(drawer, /className="personal-primary-action" onClick=\{\(\) => void previewTodoTransition\(selection\.item, todoAwaitingResume \? "resume" : "complete"/, "The primary Todo action resumes paused work and completes open work through typed preview");
@@ -473,7 +480,7 @@ assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/,
 assert.match(capabilityWorkbench, /capability\.capability_id === "multi_subagent"\) return 3/, "Immature child-agent capacity stays behind mature supported capabilities");
 assert.match(capabilityWorkbench, /availability\?\.includes\("experimental"\)/, "Experimental capabilities share a stable late presentation tier");
 assert.match(capabilityWorkbench, /configuration_editor\.writable_scopes\.length === 0/, "Provider-bound read-only capabilities follow directly actionable settings");
-assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(capabilities, locale\)/, "Machine and Goal catalogs use one presentation-order policy");
+assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(visible, locale\)/, "Machine and Goal search results use the shared presentation-order policy");
 for (const capabilityId of [
   "change_quality_qualification",
   "coordination_runtime_shadow",
