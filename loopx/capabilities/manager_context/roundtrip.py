@@ -592,7 +592,7 @@ def _return_transaction(host, path, phase, request):
             observed[field] = {key: observed[field][key] for key in keys if key in observed[field]}
     result = effect_runtime_result("manager.return_delivery.transact", {
         "schema_version": RETURN_DELIVERY_TRANSACTION,
-        "runtime_root": str(root.resolve()), "request_id": path.parent.name,
+        "runtime_root": str(root), "request_id": path.parent.name,
         "result_key": path.stem, "phase": phase, "now": host["clock"]().isoformat(),
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
@@ -709,7 +709,7 @@ def _pending_return_paths(host, paths):
         candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
         selected = effect_runtime_result("manager.return_delivery.transact", {
             "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
-            "runtime_root": str(root.resolve()), "now": scan_at.isoformat(), "exact": exact,
+            "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
             "candidates": candidates,
         })
         if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
@@ -725,6 +725,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
+
+    # Derive source paths and the typed transaction's root from one directory.
+    root = root.resolve()
 
     def clock() -> datetime:
         return datetime.now(timezone.utc) if now is None else now
