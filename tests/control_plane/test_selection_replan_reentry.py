@@ -99,6 +99,25 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     assert _heartbeat_receipt_count(runtime, turn) == expected_after_resume
     cli = resumed["interaction_contract"]["cli_channel"]
     assert cli["settlement_plan"]["identity"] == identity
+    if binding == "todo":
+        semantic_id = receipt["semantic_replan_obligation_id"]
+        assert cli["replan_settlement_contract"]["settlement_binding"] == {
+            "kind": "todo", "id": selected_id, "cli_argument": "--todo-id",
+        }
+        assert cli["replan_settlement_contract"]["semantic_obligation"] == {
+            "kind": "autonomous_replan", "id": semantic_id,
+            "settlement_bound": False, "discharge": "todo_bound_writeback",
+        }
+        # Recovery before any writeback must keep the same causal Todo and
+        # semantic review. Re-reading a receipt grants no replacement identity.
+        rc, replay = _run_cli(registry, runtime, *guard, "--todo-id", selected_id)
+        assert rc == 0 and replay["should_run"], replay
+        assert replay["selected_todo"]["todo_id"] == selected_id
+        assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+        replay_cli = replay["interaction_contract"]["cli_channel"]
+        assert replay_cli["settlement_plan"]["identity"] == identity
+        assert replay_cli["replan_settlement_contract"] == cli["replan_settlement_contract"]
+        assert _heartbeat_receipt_count(runtime, turn) == expected_after_resume
     refresh = next(c for c in cli["next_cli_actions"] if "refresh-state" in c)
     if binding == "todo":
         decision = tmp_path / "selection-replan-vision.json"
