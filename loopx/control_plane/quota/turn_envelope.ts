@@ -1,6 +1,7 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
-import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan} from "./progressive_context.ts";
+import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
+  progressiveContextPlan, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
@@ -975,9 +976,13 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
     retain(follow, originalFollow, [["recorded_progress_count", "observation_count"]]);
   } else retain(follow, originalFollow, followFields);
   const explore = jsonObject(context.explore_basis) ?? {};
+  const decisionValueReview = jsonObject(jsonObject(packet.stride_control)?.decision_value_review);
   const review = retain({...common,
     core_goal: core,
     planning_guidance: packet.planning_guidance ?? [],
+    // The staged writer only carries authoring rules. Deliver the captured
+    // decision advice here so it can inform the choice before writeback.
+    ...(decisionValueReview ? {decision_value_review: decisionValueReview} : {}),
     ...(acceptanceIndex ? {acceptance_index: acceptanceIndex} : {}),
     triggers: obligation.triggers,
     decision_followthrough: Object.keys(follow).length ? follow : null,
@@ -985,6 +990,10 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
     action_portfolio: payload.action_portfolio ?? null,
     ...(context.explore_basis ? {capabilities: {explore: retain({
       availability: explore.availability, revision: explore.revision,
+      ...(Array.isArray(explore.measurement_feedback) && explore.measurement_feedback.length
+        ? {measurement_count: explore.measurement_feedback.length} : {}),
+      ...(Array.isArray(explore.work_yardsticks) && explore.work_yardsticks.length
+        ? {yardstick_count: explore.work_yardsticks.length} : {}),
       read_action: reads?.explore ?? null,
     }, explore, ["availability", "revision"])}} : {}),
     evidence: (Array.isArray(context.evidence) ? context.evidence : []).map(value => {
@@ -1736,39 +1745,44 @@ export function requireCompleteTurnDecision(value: unknown, numberTokens?: unkno
   return decision;
 }
 
+function requireCompleteHostHeader(request: JsonObject, decision: JsonObject): JsonObject {
+  // The versioned model wire has one complete source. The outer executor has
+  // already checked its private effect adapter; a standalone reader validates
+  // the source and original capture header without recreating that adapter.
+  const header = requireJsonObject(request.complete_host_request, "complete Host request");
+  if (header.schema_version !== "loopx_turn_host_request_v1" ||
+      Object.keys(object(request.envelope)).length !== 0 ||
+      typeof header.turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(header.turn_key)) {
+    throw new EffectRuntimeRequestError("unsupported or invalid complete Host request");
+  }
+  if (Object.hasOwn(header, "source_decision_hash") && header.source_decision_hash !== decisionSourceHash(decision)) {
+    throw new EffectRuntimeRequestError("complete Host request differs from captured source");
+  }
+  const detail = Object.hasOwn(header, "detail_ref") ? requireJsonObject(header.detail_ref, "complete Host detail reference") : {};
+  const hasCapture = Object.hasOwn(detail, "captured_decision");
+  const captured = hasCapture ? requireJsonObject(detail.captured_decision, "complete Host captured decision") : {};
+  // A direct quota capture predates the Host journal and has no Turn key.
+  // Preserve its source observation rather than inventing a journal binding.
+  // A provided journal key keeps the existing exact-key rule.
+  const captureTurnMatches = Object.hasOwn(captured, "turn_key")
+    ? captured.turn_key === header.turn_key
+    : captured.turn_instance_id === (object(decision.heartbeat_receipt).turn_instance_id ?? null);
+  if (hasCapture && (typeof captured.path !== "string" || !captured.path.trim() || captured.path.includes("\0") ||
+      !captureTurnMatches ||
+      captured.goal_id !== decision.goal_id || captured.agent_id !== object(decision.agent_identity).agent_id ||
+      captured.source_hash_ref !== "$.source_decision_hash" || !Object.hasOwn(header, "source_decision_hash"))) {
+    throw new EffectRuntimeRequestError("complete Host request capture binding differs");
+  }
+  return header;
+}
+
 /** One checked source for model input and transport session identity. The
  * historical effect adapter may remain in the request during migration, but it
  * cannot redirect the complete contract to another Goal, Agent or work item. */
 export function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
   const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
-  // The versioned model wire has one complete source. The outer executor has
-  // already checked its private effect adapter; a standalone reader validates
-  // the source and original capture header without recreating that adapter.
   if (Object.hasOwn(request, "complete_host_request")) {
-    const header = requireJsonObject(request.complete_host_request, "complete Host request");
-    if (header.schema_version !== "loopx_turn_host_request_v1" ||
-        Object.keys(object(request.envelope)).length !== 0 ||
-        typeof header.turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(header.turn_key)) {
-      throw new EffectRuntimeRequestError("unsupported or invalid complete Host request");
-    }
-    if (Object.hasOwn(header, "source_decision_hash") && header.source_decision_hash !== decisionSourceHash(decision)) {
-      throw new EffectRuntimeRequestError("complete Host request differs from captured source");
-    }
-    const detail = Object.hasOwn(header, "detail_ref") ? requireJsonObject(header.detail_ref, "complete Host detail reference") : {};
-    const hasCapture = Object.hasOwn(detail, "captured_decision");
-    const captured = hasCapture ? requireJsonObject(detail.captured_decision, "complete Host captured decision") : {};
-    // A direct quota capture predates the Host journal and has no Turn key.
-    // Preserve its source observation rather than inventing a journal binding.
-    // A provided journal key keeps the existing exact-key rule.
-    const captureTurnMatches = Object.hasOwn(captured, "turn_key")
-      ? captured.turn_key === header.turn_key
-      : captured.turn_instance_id === (object(decision.heartbeat_receipt).turn_instance_id ?? null);
-    if (hasCapture && (typeof captured.path !== "string" || !captured.path.trim() || captured.path.includes("\0") ||
-        !captureTurnMatches ||
-        captured.goal_id !== decision.goal_id || captured.agent_id !== object(decision.agent_identity).agent_id ||
-        captured.source_hash_ref !== "$.source_decision_hash" || !Object.hasOwn(header, "source_decision_hash"))) {
-      throw new EffectRuntimeRequestError("complete Host request capture binding differs");
-    }
+    requireCompleteHostHeader(request, decision);
     return {decision, projection: turnActionProjection(decision)};
   }
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
@@ -2287,6 +2301,29 @@ function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = cano
     replan_action_packet: replanActionPacket(payload, reads)};
 }
 
+/** Only the exact list can carry forward. Current boundary controls stay inline. */
+function readyWriteScope(context: JsonObject): ReusableExactBody | undefined {
+  const interaction = jsonObject(context.interaction_contract);
+  const channel = jsonObject(interaction?.agent_channel);
+  const preparation = jsonObject(jsonObject(interaction?.cli_channel)?.execution_preparation);
+  const boundary = jsonObject(context.goal_boundary);
+  const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+  const agent = context.agent_id ?? identityAgent;
+  const todo = jsonObject(context.selected_todo)?.todo_id;
+  const route = [context.registry, context.runtime_root, context.goal_id, agent, todo];
+  if (context.ok !== true || context.should_run !== true || context.effective_action !== EffectiveAction.NORMAL_RUN ||
+      context.normal_delivery_allowed !== true || channel?.delivery_allowed !== true ||
+      jsonObject(channel.work_context)?.complete !== true || jsonObject(interaction?.user_channel)?.action_required !== false ||
+      (identityAgent !== undefined && identityAgent !== agent) ||
+      preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION || preparation.state !== "ready" ||
+      preparation.delivery_allowed !== true || preparation.agent_id !== agent || preparation.todo_id !== todo ||
+      boundary?.rule !== "stay_in_scope_or_stop" || Object.hasOwn(boundary, "write_scope_pointer") ||
+      !Array.isArray(boundary.write_scope) || boundary.write_scope.some(scope => typeof scope !== "string" || !scope) ||
+      !route.every(part => typeof part === "string" && !!part)) return undefined;
+  return {path: ["goal_boundary", "write_scope"],
+    sourceIdentity: JSON.stringify([route, context.goal_ref ?? null, boundary.handoff_mode ?? null])};
+}
+
 /** Present the long scope list on demand only while an ordinary Turn prepares work. */
 function progressivePreparationScope(payload: JsonObject):
   {path: string[]; marker_path: string[]; instruction: string} | undefined {
@@ -2349,6 +2386,31 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
   }
+  if (operation === "capability_automation_source") {
+    // Optional provider participation needs checked identity and capability
+    // gates, not the signed action document or its work context.
+    const host = Object.hasOwn(request, "complete_host_request") || Object.hasOwn(request, "envelope");
+    const checked = host ? completeHostSource(request) : null;
+    const payload = checked?.decision ?? requireJsonObject(request.payload, "quota payload");
+    const projection = checked?.projection ?? turnActionProjection(payload, replanReadPrecision(payload, request.source_number_tokens));
+    assertSupportedQuotaPacket(projection);
+    return {goal_id: payload.goal_id ?? null, agent_id: projection.agent_id ?? null,
+      boundary: {capabilities: object(projection.boundary).capabilities ?? null}};
+  }
+  if (operation === "host_context_binding") {
+    const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    const header = requireCompleteHostHeader(request, decision);
+    if (!Object.hasOwn(header, "source_decision_hash")) {
+      throw new EffectRuntimeRequestError("complete Turn plan requires a source binding");
+    }
+    // Reader addresses are transport metadata. A recorded typed result may
+    // still need the previous basis to recover its optional result schema.
+    return {schema_version: header.schema_version, turn_key: header.turn_key,
+      source_decision_hash: decisionSourceHash(decision),
+      ...(request.recorded_capability_result === true ? {
+        recorded_projection: {goal_id: decision.goal_id ?? null, ...turnActionProjection(decision)},
+      } : {})};
+  }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
@@ -2356,7 +2418,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const precision = replanReadPrecision(payload, request.source_number_tokens);
     const sourceEdits = request.source_edits === true;
     const identity = precision?.identity ?? (sourceEdits ? contextSourceIdentity(payload) : undefined);
-    const view = replanCliView(payload, identity, undefined, precision);
+    const packet = object(payload.replan_action_packet);
+    // A staged capture has already pinned its reader to a checked source.
+    // An unstaged copy needs the path verified by the current capture reader.
+    const view = packet.review !== undefined || packet.writeback !== undefined ? payload
+      : replanCliView(payload, identity, replanReadCommands(payload,
+        request.captured_decision_path ?? payload.replan_read_path), precision);
     return sourceEdits ? contextProjectionChanges(payload, view, precision?.values) : view;
   }
   if (operation === "compose_complete") {
@@ -2473,14 +2540,15 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "context_read_sections") {
     const selected = capturedContextSelection({...request, list_fields: false});
     return {sections: contextReadSectionDigests(request,
-      (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
+      (selected.selections as {path: (string | number)[]}[]).map(row => row.path),
+      readyWriteScope(requireJsonObject(request.context, "read section source")))};
   }
   if (operation === "progressive_context_delivery")
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
     : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request));
+      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);

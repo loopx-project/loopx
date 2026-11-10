@@ -1,0 +1,135 @@
+// Exercise a saved original and its newly available language-specific result
+// through the packaged reader. Both snapshots and citation excerpts come from
+// the native test backend; interception controls only when the result arrives.
+import assert from "node:assert/strict";
+import {spawn} from "node:child_process";
+import {once} from "node:events";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {resolve} from "node:path";
+import {createInterface} from "node:readline";
+import {resolveTestPython} from "../../../../scripts/test-python.mjs";
+import {launchBrowser, loadPlaywright} from "../../../../examples/dashboard-browser-smoke-support.mjs";
+
+const repo = resolve(import.meta.dirname, "../../../..");
+const root = await mkdtemp(resolve(tmpdir(), "loopx-evidence-version-"));
+const assets = process.env.LOOPX_RESEARCH_EVIDENCE_ASSETS ?? resolve(repo, "loopx/web/chat");
+const servers = [];
+let browser;
+let releaseOriginal;
+try {
+  const capture = JSON.parse(await readFile(resolve(import.meta.dirname, "../src/data/fixtures/research-native-readback.json"), "utf8"));
+  const analysis = capture.analyses[0];
+  analysis.config = {model: "fixture", effort: "max", service_tier: "fast", research_synthesis: false};
+  const observation = (line, verdict, reason) => ({
+    assessments: [{episode_id: "search-episode", metric: "benefit_test", verdict, reason,
+      citations: [{source_id: "facts", first_line: line, last_line: line}]}],
+    limitations: ["Synthetic reader fixture."],
+  });
+  analysis.outputs = {original: observation(1, "no", "The saved original examines the first observation.")};
+  const initial = await start("original", capture);
+  analysis.outputs.zh = {...observation(3, "yes", "当前分析判读后续观测。"),
+    episode_questions: [{episode_id: "search-episode", question: "后续观测是否检验了任务进展？"}]};
+  const ready = await start("localized", capture);
+  const endpoints = new URLSearchParams({goal_id: capture.goal_id, output_language: "zh"});
+  const analysisPath = "/api/chat/research-analysis";
+  const getPack = async backend => (await (await fetch(new URL(analysisPath + "?" + endpoints, backend))).json()).pack;
+  const [before, after] = await Promise.all([getPack(initial), getPack(ready)]);
+  assert.equal(before.pack_id, after.pack_id);
+  assert.equal(before.analysis_key, after.analysis_key, "Same requested analysis identity");
+  assert.equal(before.result, null);
+  assert.equal(after.result.output_language, "zh");
+
+  browser = await launchBrowser(loadPlaywright().chromium);
+  const page = await browser.newPage({locale: "zh-CN", viewport: {width: 1200, height: 900}});
+  let localizedReady = false;
+  let holdOriginal = false;
+  await page.route(/\/api\/chat\/research-analysis(?:\/citation)?\?/, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("output_language") === "zh" && localizedReady) {
+      return route.fulfill({response: await route.fetch({url: new URL(url.pathname + url.search, ready).href})});
+    }
+    if (url.pathname.endsWith("/citation") && holdOriginal) {
+      holdOriginal = false;
+      await new Promise(resolveOriginal => {releaseOriginal = resolveOriginal;});
+    }
+    return route.continue();
+  });
+  const citation = page.locator(".analysis-source");
+  const citationButton = page.locator(".analysis-episode[open] .analysis-citations button");
+  const research = new URL("/chat/", initial);
+  research.search = new URLSearchParams({goalId: capture.goal_id, view: "research",
+    research_analysis: capture.goal_id, research_pack: before.pack_id});
+  const refresh = page.getByRole("button", {name: "刷新分析结果", exact: true});
+  const showEpisode = () => page.locator(".analysis-episode > summary").click();
+  async function openOriginal() {
+    localizedReady = false;
+    await page.goto(research.href);
+    await page.getByText("显示已保存的原文分析", {exact: false}).waitFor();
+    await showEpisode();
+  }
+  async function refreshToLocalized() {
+    localizedReady = true;
+    await refresh.click();
+    await page.getByText("显示已保存的原文分析", {exact: false}).waitFor({state: "hidden"});
+    await page.getByRole("button", {name: /收益检验 · 1/}).first().waitFor();
+    assert.equal(await citation.count(), 0, "No prior version citation content or loading state in the new reading");
+  }
+
+  await openOriginal();
+  await citationButton.click();
+  await citation.getByText(/candidate-one/).waitFor();
+  await refreshToLocalized();
+  await showEpisode();
+  await citationButton.click();
+  await citation.getByText(/candidate-three/).waitFor();
+
+  await openOriginal();
+  holdOriginal = true;
+  const requested = page.waitForRequest(request => request.url().includes("/citation?"));
+  await citationButton.click();
+  await requested;
+  await citation.getByText("正在读取引用原文…", {exact: true}).waitFor();
+  await refreshToLocalized();
+  const late = page.waitForResponse(response => response.url().includes("/citation?") && response.ok());
+  assert.equal(typeof releaseOriginal, "function");
+  releaseOriginal();
+  await (await late).finished();
+  await page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
+  assert.equal(await citation.count(), 0, "Late original response cannot reopen the previous evidence");
+  console.log("research evidence version: saved and late original excerpts isolated");
+} finally {
+  releaseOriginal?.();
+  await browser?.close();
+  await Promise.all(servers.map(async child => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const closed = once(child, "exit");
+    child.kill("SIGTERM");
+    await closed;
+  }));
+  await rm(root, {recursive: true, force: true});
+}
+
+async function start(name, capture) {
+  const fixture = resolve(root, name + ".json");
+  await writeFile(fixture, JSON.stringify(capture));
+  const child = spawn(resolveTestPython({repoRoot: repo}), [
+    "-u", "examples/personal-workspace-browser/research-history-backend.py",
+    "--fixture", fixture, "--workspace-directory", "--assets-dir", assets,
+  ], {cwd: repo, env: {...process.env, PYTHONPATH: repo}, stdio: ["ignore", "pipe", "pipe"]});
+  servers.push(child);
+  let error = "";
+  child.stderr.on("data", chunk => {error = (error + chunk).slice(-3000);});
+  const lines = createInterface({input: child.stdout});
+  try {
+    return await new Promise((accept, reject) => {
+      const timer = setTimeout(() => reject(new Error("Research test server startup timed out: " + error)), 25_000);
+      child.once("error", failure => {clearTimeout(timer); reject(failure);});
+      child.once("exit", () => {clearTimeout(timer); reject(new Error("Research test server exited: " + error));});
+      lines.once("line", line => {
+        clearTimeout(timer);
+        try {accept(JSON.parse(line).url);} catch (failure) {reject(failure);}
+      });
+    });
+  } finally {lines.close();}
+}

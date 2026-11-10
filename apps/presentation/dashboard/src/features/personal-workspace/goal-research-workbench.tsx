@@ -42,7 +42,7 @@ export function GoalResearchWorkbench(props: {goalId: string; active: boolean; z
       active={props.active} refreshRevision={props.refreshRevision}/> : null}
     {!props.statusNotice ? <>
       <GoalResearchHistory {...props} originalGoalId={source?.original_goal_id}
-        preferHistory={Boolean(source)} sourceStrategy={selected?.sourceStrategy}
+        preferHistory={Boolean(source)}
         onOpenSourceTasks={source ? props.onOpenTasks : undefined}/>
       <details className="research-saved-evidence" open={evidenceOpen} onToggle={event => setEvidenceOpen(event.currentTarget.open)}>
         <summary>{props.zh ? "阅读已保存的结论" : "Read saved findings"}</summary>

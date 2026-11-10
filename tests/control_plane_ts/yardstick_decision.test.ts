@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture,
-  validateWorkYardstickContinuation, projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
+import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture, projectWorkYardstickPresentation,
+  projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
+import {validateWorkYardstickContinuation} from "../../loopx/control_plane/work_items/yardstick_source.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 import {projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
@@ -100,6 +101,123 @@ test("goal and proxy join the same two candidates regardless of declared order a
     assert.equal(shared.source_finding_id, measured.finding_id);
     assert.deepEqual(shared.search_comparison, result);
   }
+
+  // Same-parent sibling reversal: a rejected sibling (candidate:a) with a
+  // stronger proxy score or a later proxy-only screen (candidate:d) must not
+  // hide the paired proxy reversal between incumbent (candidate:b) and a
+  // second sibling (candidate:c).
+  const siblingSecond = {...measured, finding_id: "finding-sibling-c", recorded_order: 2,
+    work_yardstick: {binding, decision: {...decision, proxy: timeProxy, prior_finding_id: measured.finding_id}},
+    measurements: [
+      {...authoritative, value: 1, candidate_ref: "candidate:c", evidence_ref: "result:goal-c"},
+      {...timeProxy, value: 3, candidate_ref: "candidate:c", evidence_ref: "result:screen-c"},
+    ]};
+  const screenOnly = {...siblingSecond, finding_id: "finding-screen-d", recorded_order: 3,
+    work_yardstick: {binding, decision: {...decision, proxy: timeProxy, prior_finding_id: siblingSecond.finding_id}},
+    measurements: [
+      {...timeProxy, value: 1, candidate_ref: "candidate:d", evidence_ref: "result:screen-d"},
+    ]};
+  for (const rows of [[siblingSecond, measured], [screenOnly, siblingSecond, measured]]) {
+    const feedback = projectExploreMeasurementFeedback(rows);
+    const cue = projectWorkYardstickCue({...binding, enabled: true, findings: rows, measurement_feedback: feedback})!;
+    const comparison = cue.search_comparison as Record<string, any>;
+    assert.equal(comparison.goal.previous_best.candidate_ref, "candidate:b");
+    assert.equal(comparison.goal.latest.candidate_ref, "candidate:c");
+    assert.equal(comparison.goal.preferred_candidate_ref, "candidate:b");
+    assert.equal(comparison.proxy.previous_best.candidate_ref, "candidate:b");
+    assert.equal(comparison.proxy.latest.candidate_ref, "candidate:c");
+    assert.equal(comparison.proxy.preferred_candidate_ref, "candidate:c");
+    assert.equal(comparison.proxy_order_reversed, true);
+    assert.match(comparison.guidance, /proxy reverses the observed goal order/);
+  }
+});
+
+test("a current decision can reuse explicitly cited measurements written before its separate outcome", () => {
+  const preview = {...proxy, input_revision: "preview-inputs-v2"};
+  const cited = ["result:preview-a", "result:preview-b", "result:preview-sibling"];
+  const declared = {...decision, proxy: preview, counterevidence_refs: cited};
+  const source = {...finding, recorded_order: 2, work_yardstick: {decision: declared, binding,
+    source_snapshot: {event_count: 2, event_ids_sha256: "a".repeat(64)}},
+    evidence_refs: [...cited, "result:goal-a", "result:goal-b"], measurements: [
+      {...authoritative, value: 20, candidate_ref: "candidate:a", evidence_ref: "result:goal-a"},
+      {...authoritative, value: 14, candidate_ref: "candidate:b", evidence_ref: "result:goal-b"},
+    ]};
+  const recorded = {finding_id: "recorded-preview", node_id: source.node_id, agent_id: binding.agent_id,
+    recorded_order: 1, last_updated_at: "2026-01-01T00:00:00Z",
+    evidence_refs: [...cited, "result:preview-uncited"], measurements: [
+      {...preview, value: 6, candidate_ref: "candidate:a", evidence_ref: cited[0]!},
+      {...preview, value: 8, candidate_ref: "candidate:b", evidence_ref: cited[1]!},
+      {...preview, value: 98, candidate_ref: "candidate:sibling", evidence_ref: cited[2]!},
+      {...preview, value: 99, candidate_ref: "candidate:uncited", evidence_ref: "result:preview-uncited"},
+    ]};
+  const project = (row = recorded, current = source) => projectWorkYardstickCue({...binding, enabled: true,
+    findings: [current, row], cited_sources: [{source_finding_id: current.finding_id,
+      source_snapshot: current.work_yardstick.source_snapshot, findings: [row]}],
+    measurement_feedback: projectExploreMeasurementFeedback([current, row])})!.search_comparison;
+  const comparison = project();
+  assert.equal(comparison.goal.preferred_candidate_ref, "candidate:a");
+  assert.equal(comparison.proxy?.preferred_candidate_ref, "candidate:b");
+  assert.equal(comparison.proxy_order_reversed, true);
+
+  assert.equal(project({...recorded, agent_id: "peer"}).proxy, undefined);
+  assert.equal(project({...recorded, node_id: "different-question"}).proxy, undefined);
+  const differentInputs = recorded.measurements.map(row => ({...row, input_revision: "different-preview-inputs"}));
+  assert.equal(project({...recorded, measurements: differentInputs}).proxy, undefined);
+  const partial = {...source, work_yardstick: {binding, decision: {...declared, counterevidence_refs: [cited[0]!]}}};
+  assert.equal(project(recorded, partial).proxy, undefined);
+  const differentTarget = {...recorded, work_yardstick: {binding, decision: {...declared,
+    target: {...declared.target, acceptance_ref: "acceptance:another-target"}}}};
+  assert.equal(project(differentTarget).proxy, undefined);
+
+  const later = {...recorded, finding_id: "later-preview", recorded_order: 3,
+    // Claimed observation time is older. Only recorded order binds the citation.
+    last_updated_at: "2025-12-31T23:59:59Z", evidence_refs: [cited[1]!],
+    measurements: [{...recorded.measurements[1]!, value: 1}]};
+  const citedSource = {source_finding_id: source.finding_id, source_snapshot: source.work_yardstick.source_snapshot, findings: [recorded]};
+  const after = projectWorkYardstickCue({...binding, enabled: true, findings: [source, later, recorded], cited_sources: [citedSource]})!;
+  assert.deepEqual(after.search_comparison, comparison);
+  const unknown = projectWorkYardstickCue({...binding, enabled: true,
+    findings: [source, recorded], cited_sources: [{...citedSource, findings: [{...recorded, recorded_order: undefined}]}]})!;
+  assert.equal(unknown.search_comparison.proxy, undefined);
+  const historical = {...source, work_yardstick: {decision: declared, binding}};
+  assert.equal(project(recorded, historical).proxy, undefined,
+    "Historical captures without a frozen source must not acquire later citations");
+  const recovered = {...source, recorded_order: 8};
+  assert.deepEqual(project(recorded, recovered), comparison);
+  const duringOutage = {...later, recorded_order: 3};
+  assert.deepEqual(projectWorkYardstickCue({...binding, enabled: true,
+    findings: [recovered, duringOutage, recorded], cited_sources: [citedSource]})!.search_comparison, comparison);
+});
+
+test("the settlement freezes and verifies the original canonical event prefix", () => {
+  const events = [{goal_id: binding.goal_id, event_id: "original-a"}, {goal_id: binding.goal_id, event_id: "original-b"}];
+  const params = {enabled: true, decision, binding, findings: [], source_events: events};
+  const first = validateWorkYardstickContinuation(params);
+  assert.equal(first.source_snapshot.event_count, 2);
+  assert.equal(first.source_snapshot.event_ids_sha256,
+    "9c39bca70a9d3a82756b561afab02853c5bfdc2f2a2e404d1a9c045093817a0d");
+  const appended = {...params, source_events: [...events, {goal_id: binding.goal_id, event_id: "late"}], source_snapshot: first.source_snapshot};
+  assert.deepEqual(validateWorkYardstickContinuation(appended), first);
+  assert.throws(() => validateWorkYardstickContinuation({...appended,
+    source_events: [{...events[0], event_id: "changed"}, events[1]]}), /snapshot changed/);
+  assert.throws(() => validateWorkYardstickContinuation({...appended, source_events: events.slice(0, 1)}), /snapshot changed/);
+  assert.throws(() => validateWorkYardstickContinuation({...params,
+    source_events: [{goal_id: "another-goal", event_id: "foreign"}]}), /canonical Goal/);
+  assert.deepEqual(validateWorkYardstickContinuation({...appended, source_snapshot: null}), {decision});
+  assert.throws(() => normalizeWorkYardstickDecision({...decision, source_snapshot: first.source_snapshot}), /unsupported/,
+    "The author cannot supply evidence provenance in an attachment");
+});
+
+test("canonical prefix hashing preserves empty and UTF-8 stored digest vectors", () => {
+  const vectors = [
+    {ids: [], digest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
+    {ids: ["事件-🙂", 'quoted"\\id'], digest: "7510a7f2e168cfaff2b09b4c62b3607f15e8811ee9e0f58fd51537820da8507f"},
+  ];
+  for (const {ids, digest} of vectors) {
+    const result = validateWorkYardstickContinuation({enabled: true, decision, binding, findings: [],
+      source_events: ids.map(event_id => ({goal_id: binding.goal_id, event_id}))});
+    assert.deepEqual(result.source_snapshot, {event_count: ids.length, event_ids_sha256: digest});
+  }
 });
 
 test("only strictly older committed replay preserves a stale predecessor as history", () => {
@@ -136,6 +254,16 @@ test("one optional attachment reaches an ordinary task context without creating 
   assert.deepEqual(detail.graph.work_yardsticks[0].authoritative, authoritative);
   assert.deepEqual(on.harness, off.harness);
   assert.equal(on.graph.work_yardstick_capture.optional, true);
+  const measured = {...finding, measurements: [
+    {...authoritative, value: 10, candidate_ref: "candidate:a", evidence_ref: "result:goal-a"},
+    {...authoritative, value: 20, candidate_ref: "candidate:b", evidence_ref: "result:goal-b"},
+    {...proxy, value: 8, candidate_ref: "candidate:b", evidence_ref: "result:screen-b"},
+    {...proxy, value: 9, candidate_ref: "candidate:a", evidence_ref: "result:screen-a"},
+  ]};
+  const reversedCompact = projectExploreTurnContext({...params, projection: {nodes: [], findings: [measured]},
+    yardstick_enabled: true, work_todos: [todo]}).graph.work_yardsticks[0];
+  assert.equal(reversedCompact.comparison_candidate_ref, "candidate:b");
+  assert.equal(reversedCompact.proxy_order_reversed, true);
   // Unknown or unowned work cannot adopt a shared question's decision.
   assert.equal(Object.hasOwn(projectExploreTurnContext({...params, yardstick_enabled: true,
     work_todos: [{...todo, claimed_by: "peer"}]}).graph, "work_yardsticks"), false);
@@ -153,4 +281,10 @@ test("history readback preserves scoped declarations and rejects foreign source 
   assert.throws(() => parseExploreHistoryPage({...page, items: [{...row, evidence_refs: []}]}, "research"), /counterevidence/);
   assert.deepEqual(normalizeWorkYardstickDecision(decision, [...finding.evidence_refs, ...Array.from({length: 12}, (_, i) => `result:extra-${i}`)]), decision,
     "The bounded counterevidence list does not shrink Explore's finding evidence allowance");
+  const internal = {...finding.work_yardstick,
+    source_snapshot: {event_count: 3, event_ids_sha256: "a".repeat(64)}};
+  assert.deepEqual(normalizeWorkYardstickCapture({capture: internal}).source_snapshot, internal.source_snapshot);
+  assert.deepEqual(projectWorkYardstickPresentation({capture: internal}), finding.work_yardstick,
+    "Independently installed presentation readers retain the original v0 capture fields");
+  assert.throws(() => projectWorkYardstickPresentation({capture: internal, goal_id: "foreign"}), /cross Goal/);
 });

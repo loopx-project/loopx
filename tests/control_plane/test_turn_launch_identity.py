@@ -9,6 +9,7 @@ import pytest
 
 from host_process_fixture import write_python_host_fixture
 from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+from loopx.control_plane.quota.turn_envelope import read_turn_plan_work
 
 
 def _host(root: Path, *, material: bool) -> Path:
@@ -81,7 +82,7 @@ def test_native_cli_uses_original_binding_and_replays_without_new_effects(
     obligation_id = None
     subject = todo_id
     if not todo_id:
-        envelope = preview["turn_envelope"]
+        envelope = read_turn_plan_work(preview)
         obligation_id = envelope["replan_action_packet"]["obligation_id"]
         assert obligation_id.startswith("replan-")
         subject = f"autonomous_replan:{obligation_id}"

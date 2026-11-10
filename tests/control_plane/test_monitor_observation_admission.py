@@ -382,15 +382,30 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert resume["identity"]["turn_instance_id"] == turn
     assert resume["grants_new_delivery"] is False
     assert resume["progress_ref"] == "$.settlement_progress"
-    # Matched complete canonical fixtures emit 6,806 writeback characters on
-    # both File and SQLite, unchanged across the compared source revisions.
-    # Keep the full bounded vision/decision guidance, with 694 chars headroom.
+    # The complete current contract emits 8,642 writeback characters on both
+    # providers, including Vision bounds and continuation/cost review. Retain
+    # the historical 7,500 failure and the original 694 chars of headroom.
     # Spend (1,432) and settled (572) retain their 2,000-character ceiling.
     resume_budget = (
-        7_500 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
+        9_336 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
         else 2_000
     )
     assert len(json.dumps(resume, ensure_ascii=False, indent=2)) < resume_budget
+    if (resume["next_step"] or {}).get("kind") == "durable_writeback":
+        # Recovery specializes the completed Task to semantic closeout. Keep
+        # complete authoring bounds and every argument from the admitted path.
+        from loopx.cli import build_parser
+        import shlex
+
+        original_writeback = first["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
+        assert resume["next_step"]["vision_authoring"] == original_writeback["vision_authoring"]
+
+        def parsed_closeout(step):
+            command = step["semantic_closeout_command_template"].replace(
+                "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+            return vars(build_parser().parse_args(shlex.split(command)[1:]))
+
+        assert parsed_closeout(resume["next_step"]) == parsed_closeout(original_writeback)
     after_cli = poll["after"]["interaction_contract"]["cli_channel"]
     assert after_cli["settlement_resume_ref"] == "$.settlement_resume"
     assert after_cli["spend_after_validation"] is False
