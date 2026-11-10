@@ -222,5 +222,6 @@ export function decide(input: {
     .flatMap(a => a.reset_at && a.reset_at > input.now ? [a.reset_at] : []);
   const uncertain = accounts.some(a => allowed.includes(a.slot) && a.availability === "unknown");
   return output(input.manual_slot ? "target_unavailable" : "all_unavailable", null,
-    Math.min(input.now + (uncertain ? 60 : 300), ...(resets.length ? resets : [Infinity])));
+    Math.min(input.now + (uncertain || (onApi && input.policy.api_fallback === true) ? 60 : 300),
+      ...(resets.length ? resets : [Infinity])));
 }
