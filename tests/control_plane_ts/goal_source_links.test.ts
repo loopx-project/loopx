@@ -1,6 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {projectGoalSourceLinks, projectGoalSourceStatus, projectGoalSourceStrategies} from '../../loopx/control_plane/presentation/goal_source_links.ts';
+import {planGoalSourceDocument, projectGoalSourceDocument, projectGoalSourceLinks, projectGoalSourceStatus, projectGoalSourceStrategies} from '../../loopx/control_plane/presentation/goal_source_links.ts';
+
+const documentRegistration = () => ({goals: [{id: 'original', repo: '/source', authority_sources: [
+  {kind: 'goal_doc', role: 'primary_goal_document', path: 'task.md'},
+]}]});
+const abcDigest = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+
+test('an original document needs an exact declared binding, not a display label or guessed basename', () => {
+  const registration = documentRegistration();
+  const plan = planGoalSourceDocument({goal_id: 'original', registration,
+    snapshot: {declared_path: 'task.md', path: '/capture/task.md', sha256: abcDigest}});
+  assert.deepEqual(projectGoalSourceDocument({plan, registration, document: {text: 'abc'}}),
+    {document: {text: 'abc', sha256: abcDigest, captured: true}});
+  assert.throws(() => projectGoalSourceDocument({plan, registration, document: {text: 'abd'}}));
+  assert.throws(() => planGoalSourceDocument({goal_id: 'other', registration}));
+  assert.throws(() => planGoalSourceDocument({goal_id: 'original', registration,
+    snapshot: {declared_path: 'another/task.md', path: '/capture/task.md', sha256: abcDigest}}));
+  for (const refs of [[], [...registration.goals[0].authority_sources, ...registration.goals[0].authority_sources]]) {
+    assert.throws(() => planGoalSourceDocument({goal_id: 'original', registration: {goals: [
+      {...registration.goals[0], display_name: 'Use this title instead', authority_sources: refs},
+    ]}}));
+  }
+});
+
+test('document reads retain whitespace, reject changed declarations and bound complete UTF-8 bytes', () => {
+  const registration = documentRegistration(), plan = planGoalSourceDocument({goal_id: 'original', registration});
+  const text = '\r\n# 原始目标\n\nKeep zero, negative results and `commands` unchanged.\n';
+  assert.equal((projectGoalSourceDocument({plan, registration, document: {text}}).document as {text: string}).text, text);
+  const changed = structuredClone(registration); changed.goals[0].authority_sources[0].path = 'new-task.md';
+  assert.throws(() => projectGoalSourceDocument({plan, registration: changed, document: {text}}));
+  for (const invalid of ['', '\0', '字'.repeat(44000)]) {
+    assert.throws(() => projectGoalSourceDocument({plan, registration, document: {text: invalid}}));
+  }
+});
 
 const link = () => ({goal_id: 'original-solver', parent_goal_id: 'research-parent',
   label: 'Original experiment', namespace: 'a'.repeat(64)});
