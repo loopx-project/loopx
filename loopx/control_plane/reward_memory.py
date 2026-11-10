@@ -18,15 +18,18 @@ def reward_memory_automation_enabled(
 def enabled_reward_memory_automation(
     payload: Mapping[str, Any] | None,
     *operations: str,
+    recall: Mapping[str, Any] | None = None,
 ) -> frozenset[str]:
     """Read the owning binding once for the requested operations.
 
     The experiment resolver owns enablement, config/receipt verification and
     provider policy. A recall packet's presence or old context is not opt-in.
+    An explicit recall observation stays separate from the governing payload,
+    so its participation check never rewrites a complete source's signed fields.
     """
     if not isinstance(payload, Mapping):
         return frozenset()
-    recall = payload.get("reward_memory_recall")
+    recall = payload.get("reward_memory_recall") if recall is None else recall
     experiment = recall.get("experiment") if isinstance(recall, Mapping) else None
     if (
         not isinstance(experiment, Mapping)
@@ -71,14 +74,13 @@ def enabled_reward_memory_automation(
             or identity.get("registered") is not True
         ):
             return frozenset()
-        from .capability_hooks import turn_context_source
         from .quota.turn_envelope import quota_capability_automation_source
 
-        boundary = quota_capability_automation_source(payload).get("boundary")
         try:
-            source = turn_context_source(payload)
-        except ValueError:
+            source = quota_capability_automation_source(payload)
+        except (ValueError, RuntimeError):
             return frozenset()
+        boundary = source.get("boundary")
     else:
         return frozenset()
     capabilities = (

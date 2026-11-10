@@ -37,7 +37,7 @@ def memory_context_result(
     payload: Mapping[str, Any], recall: Mapping[str, Any]
 ) -> dict[str, Any]:
     automation = enabled_reward_memory_automation(
-        {**payload, "reward_memory_recall": recall}, "automatic_recall", "automatic_ingest",
+        payload, "automatic_recall", "automatic_ingest", recall=recall,
     )
     recall_enabled = "automatic_recall" in automation
     ingest_enabled = "automatic_ingest" in automation
@@ -137,7 +137,7 @@ def memory_settlement_registration(
 
         transaction = plan.get("transaction")
         transaction = transaction if isinstance(transaction, Mapping) else {}
-        return run_configured_turn_outcome_ingest_fail_open(
+        provider_result: Mapping[str, Any] = run_configured_turn_outcome_ingest_fail_open(
             registry_path=registry_path,
             goal_id=goal_id,
             agent_id=agent_id,
@@ -145,6 +145,7 @@ def memory_settlement_registration(
             host_result=result,
             settlement_evidence=evidence,
         )
+        return provider_result
 
     return PostSettlementHookRegistration(
         "reward-memory.outcome-ingest", "reward-memory", ingest

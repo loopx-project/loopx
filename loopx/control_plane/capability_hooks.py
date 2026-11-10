@@ -210,6 +210,15 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope
+    if "schema_version" in payload or "contract_binding" in payload:
+        from .quota.turn_envelope import quota_capability_automation_source
+
+        # A declared native contract must pass the same complete-source owner
+        # as participation. Never reinterpret a damaged version as raw quota.
+        source = quota_capability_automation_source(payload)
+        if isinstance(payload.get("heartbeat_receipt"), Mapping):
+            return {**payload, "agent_id": source.get("agent_id")}
+        return {"goal_id": source.get("goal_id"), "agent_id": source.get("agent_id")}
     agent_id = payload.get("agent_id")
     identity = payload.get("agent_identity")
     if isinstance(identity, Mapping):
@@ -269,21 +278,22 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
-            source = _turn_context_binding_source(payload)
             readback_only = (
                 result.get("context_fields") == {}
                 and result.get("instructions") == []
                 and result.get("result_fields") == {}
             )
-            binding: dict[str, Any] = (
-                {"readback_only": True} if readback_only else {"source": source}
-            )
-            if not readback_only and isinstance(source.get("heartbeat_receipt"), Mapping):
-                from .quota.turn_envelope import pack_turn_source
+            if readback_only:
+                binding: dict[str, Any] = {"readback_only": True}
+            else:
+                source = _turn_context_binding_source(payload)
+                binding = {"source": source}
+                if isinstance(source.get("heartbeat_receipt"), Mapping):
+                    from .quota.turn_envelope import pack_turn_source
 
-                transport = pack_turn_source(source)
-                if transport is not None:
-                    binding = {"source_transport": transport}
+                    transport = pack_turn_source(source)
+                    if transport is not None:
+                        binding = {"source_transport": transport}
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
