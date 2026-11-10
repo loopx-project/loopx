@@ -407,6 +407,11 @@ def _agent_scoped_user_todo_override(
                 "the open user gate is scoped to another agent via blocks_agent or "
                 "claimed_by; this agent still has an executable in-scope todo"
             ),
+            "item_patch": {
+                "status": "active_state_agent_todo",
+                "waiting_on": "codex",
+                "recommended_action": selected_action,
+            },
         }
     other_action_count = _open_todo_count(
         {
