@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar
 
+from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import (
     cross_runtime_lock_witness,
     exclusive_cross_runtime_file_lock,
 )
+from .. import compact_control_plane_policy
 from ..coordination.shadow_management import runtime_artifact_lock_target
 from ..effect_runtime import (
     EffectRuntimeRemoteError,
@@ -248,13 +248,23 @@ def _legacy_goal_authority(registry: Mapping[str, Any], goal_id: str) -> dict[st
         activation = goal_activation_state(goal).value
     except ValueError:
         return {"kind": "unavailable"}
-    entry = json.dumps(goal, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    # Legacy registration carries both launch authority and capability settings.
+    # Keep the core policies used by admission and the original registration,
+    # workspace, and source route. Capability settings have their own owners.
+    running_authority = dict(goal)
+    control_plane = running_authority.get("control_plane")
+    if isinstance(control_plane, dict):
+        core_policy = compact_control_plane_policy(control_plane)
+        if core_policy:
+            running_authority["control_plane"] = core_policy
+        else:
+            del running_authority["control_plane"]
     return {
         "kind": "present",
         "goal_id": goal_id,
         "activation_state": activation,
         "registration_status": goal.get("status", "active"),
-        "goal_entry_sha256": hashlib.sha256(entry).hexdigest(),
+        "running_authority_sha256": configuration_payload_revision(running_authority).removeprefix("sha256:"),
     }
 
 
@@ -289,7 +299,7 @@ class FirstPartyHostGoalAdmission:
     legacy_registry_witness: Mapping[str, str] | None = None
     legacy_source_admission: FirstPartyHostGoalAdmission | None = None
     launch_decision_reader: Callable[[Path], Mapping[str, Any]] | None = None
-    legacy_goal_entry_sha256: str | None = None
+    legacy_running_authority_sha256: str | None = None
 
     @classmethod
     def for_plan(
@@ -305,7 +315,7 @@ class FirstPartyHostGoalAdmission:
         source_profile = planned_goal_ref is not None
         legacy_registry_witness = None
         legacy_source_admission = None
-        legacy_goal_entry_sha256 = None
+        legacy_running_authority_sha256 = None
         if not source_profile and requested_registry.is_file():
             source_profile = (
                 load_project_registry(requested_registry).get("profile_id")
@@ -317,9 +327,9 @@ class FirstPartyHostGoalAdmission:
                 ) as transaction:
                     registry = transaction.payload_copy()
                     legacy_registry_witness = transaction.source_read_witness()
-                    legacy_goal_entry_sha256 = _legacy_goal_authority(
+                    legacy_running_authority_sha256 = _legacy_goal_authority(
                         registry, goal_id,
-                    ).get("goal_entry_sha256")
+                    ).get("running_authority_sha256")
                     source_registry = _legacy_source_registry(
                         registry, goal_id, requested_registry,
                     )
@@ -338,9 +348,9 @@ class FirstPartyHostGoalAdmission:
                                 registry_path=source_registry, goal_id=goal_id,
                                 planned_goal_ref=None, source_profile=False,
                                 legacy_registry_witness=transaction.source_read_witness(),
-                                legacy_goal_entry_sha256=_legacy_goal_authority(
+                                legacy_running_authority_sha256=_legacy_goal_authority(
                                     registry, goal_id,
-                                ).get("goal_entry_sha256"),
+                                ).get("running_authority_sha256"),
                             )
                     except (OSError, TypeError, ValueError) as exc:
                         raise FirstPartyHostRuntimeRejected("goal_authority_unavailable") from exc
@@ -351,7 +361,7 @@ class FirstPartyHostGoalAdmission:
             source_profile=source_profile,
             legacy_registry_witness=legacy_registry_witness,
             legacy_source_admission=legacy_source_admission,
-            legacy_goal_entry_sha256=legacy_goal_entry_sha256,
+            legacy_running_authority_sha256=legacy_running_authority_sha256,
         )
 
     @classmethod
@@ -421,7 +431,7 @@ class FirstPartyHostGoalAdmission:
                     self.goal_id,
                 ),
                 **({"goal_id": self.goal_id,
-                    "planned_goal_entry_sha256": self.legacy_goal_entry_sha256}
+                    "planned_running_authority_sha256": self.legacy_running_authority_sha256}
                    if legacy_authority is not None else {}),
                 **({"host_state": host_state} if host_state is not None else {}),
                 **({"launch_decision": dict(launch_decision)} if launch_decision is not None else {}),

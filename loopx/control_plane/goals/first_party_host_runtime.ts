@@ -140,7 +140,7 @@ function registryWitness(value: unknown): {path: string; sha256: string} | null 
     ? {path: witness.path, sha256: witness.sha256} : null;
 }
 
-/** Launch rechecks the registry. An already dispatched Turn checks its Goal entry. */
+/** Launch rechecks the registry. An already dispatched Turn checks its running authority. */
 function legacyRuntime(facts: JsonObject): FirstPartyHostRuntimeDecision {
   const current = jsonObject(facts.authority);
   if (current?.kind === "absent") return {kind: "reject", code: "goal_not_registered"};
@@ -156,8 +156,8 @@ function legacyRuntime(facts: JsonObject): FirstPartyHostRuntimeDecision {
   if (current.activation_state === "stopped") return {kind: "reject", code: "goal_stopped"};
   if (current.activation_state !== "active") return {kind: "reject", code: "goal_authority_unavailable"};
   if (facts.operation === "require_current") {
-    const planned = facts.planned_goal_entry_sha256;
-    const observed = current.goal_entry_sha256;
+    const planned = facts.planned_running_authority_sha256;
+    const observed = current.running_authority_sha256;
     if (typeof planned !== "string" || !BARE_SHA256_PATTERN.test(planned)
       || typeof observed !== "string" || !BARE_SHA256_PATTERN.test(observed)) {
       return {kind: "reject", code: "goal_authority_unavailable"};
@@ -195,7 +195,7 @@ function launchDecisionRejection(facts: JsonObject): FirstPartyHostRuntimeDecisi
  * Decide whether one first-party Host may select state or accept a result.
  *
  * Non-source state I/O retains its historical behavior. Host launch requires
- * the captured registry witness, and a running Turn checks its own entry. The source-session
+ * the captured registry witness, and a running Turn checks its own authority. The source-session
  * profile is exact-only: neither an alias-only plan nor alias-only Host state
  * can be upgraded by inference.
  */

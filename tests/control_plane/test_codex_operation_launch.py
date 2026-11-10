@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -57,6 +58,18 @@ def _cli(arguments: list[str]) -> tuple[int, dict]:
     with contextlib.redirect_stdout(output):
         code = cli_main(arguments)
     return code, json.loads(output.getvalue())
+
+
+def _configure_fixture_goal(registry: Path, runtime: Path, *settings: str) -> dict:
+    result = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+         "--runtime-root", str(runtime), "--format", "json", "configure-goal",
+         "--goal-id", "loopx-turn-fixture", *settings, "--execute"],
+        capture_output=True, text=True, check=False,
+    )
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0 and payload["ok"] and payload["changed"], payload
+    return payload
 
 
 def _bindings(runtime: Path) -> dict[str, bytes]:
@@ -203,7 +216,7 @@ def test_operation_dispatch_releases_goal_lock_before_native_response_wait(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("failure", ["stop", "inventory-unavailable", "authority-unavailable"])
+@pytest.mark.parametrize("failure", ["stop", "inventory-unavailable", "authority-unavailable", "agent-revoked"])
 def test_running_operation_stop_waits_for_owned_native_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, failure: str,
 ) -> None:
@@ -274,6 +287,8 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
         assert turns.exists(), host.result() if host.done() else "native dispatch was not reached"
         if failure == "authority-unavailable":
             authority_unavailable.set()
+        elif failure == "agent-revoked":
+            _configure_fixture_goal(registry, runtime, "--registered-agent", "replacement-agent")
         else:
             stopped = activation_service.set_goal_activation_state(
                 registry_path=registry, goal_id="loopx-turn-fixture", state="stopped",
@@ -287,6 +302,7 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
         "stop": "goal_stopped",
         "inventory-unavailable": "codex_operation_host_stop_unconfirmed",
         "authority-unavailable": "goal_authority_unavailable",
+        "agent-revoked": "stale_goal_authority",
     }[failure]
     assert expected in json.dumps(payload), payload
     expected_events = ["interrupt", "terminate-owned", "owned-gone"] if inventory_available else ["interrupt"]
@@ -296,10 +312,11 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_running_operation_survives_unrelated_goal_registration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+@pytest.mark.parametrize("change", ["unrelated-registration", "review-order"])
+def test_running_operation_survives_non_authority_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, change: str,
 ) -> None:
-    _, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
+    runtime, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
     executable = Path(arguments[arguments.index("--codex-bin") + 1])
     waiting, proceed = tmp_path / "native-waiting", tmp_path / "native-proceed"
     after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
@@ -319,10 +336,14 @@ def test_running_operation_survives_unrelated_goal_registration(
             while not waiting.exists() and not host.done() and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert waiting.exists(), host.result() if host.done() else "native Turn was not acknowledged"
-            with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
-                registry_payload = transaction.payload_copy()
-                registry_payload["goals"].append({"id": "other-goal", "status": "active"})
-                assert transaction.commit(registry_payload)
+            if change == "review-order":
+                configured = _configure_fixture_goal(registry, runtime, "--pr-review-order", "reverse")
+                assert configured["after"]["pull_request_review"]["review_order"] == "reverse"
+            else:
+                with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
+                    registry_payload = transaction.payload_copy()
+                    registry_payload["goals"].append({"id": "other-goal", "status": "active"})
+                    assert transaction.commit(registry_payload)
         finally:
             proceed.touch()
         code, payload = host.result(timeout=12)
