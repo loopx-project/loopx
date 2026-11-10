@@ -60,6 +60,77 @@ def test_automatic_api_handoff_then_recovered_subscription_adoption(setup):
     assert state["calls"].count("switch") == 2
 
 
+def test_exhausted_api_pool_returns_to_a_recovered_subscription(setup):
+    provider, state = setup
+    provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)
+    assert provider.tick(refresh=True)["active_slot"] == "openai-api"
+
+    key = provider.api_keys().status()["keys"][0]
+    provider.api_keys().record(key["id"], status=429, code="insufficient_quota",
+                               model="selected-model", headers={"retry-after": "3600"})
+    state["now"] = 1301  # Past the account-switch cooldown but not the key cooldown.
+    blocked = provider.tick()
+    assert blocked["active_slot"] == "openai-api"
+    assert blocked["action"] == "all_unavailable"
+    assert blocked["retry_at"] <= state["now"] + 60
+    assert state["calls"].count("switch") == 1, "No fallback may claim readiness while every key is exhausted"
+
+    state["b_used"] = 10
+    state["now"] += 60
+    recovered = provider.tick()
+    assert recovered["active_slot"] == "b" and recovered["api_active"] is False
+    assert state["calls"].count("switch") == 2
+
+
+def test_temporary_api_cooldown_is_rechecked_without_manual_refresh(setup):
+    provider, state = setup
+    provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)
+    assert provider.tick(refresh=True)["active_slot"] == "openai-api"
+    state["now"] = 1301
+    key = provider.api_keys().status()["keys"][0]
+    provider.api_keys().record(key["id"], status=429, code="rate_limit_exceeded",
+                              model="selected-model", headers={"retry-after": "30"})
+    assert provider.tick()["action"] == "all_unavailable"
+    state["now"] += 60
+    assert provider.tick()["action"] == "api_active"
+    assert state["calls"].count("switch") == 1
+
+
+@pytest.mark.parametrize("during", ["observe", "prepare"])
+def test_last_key_invalidation_cannot_prepare_or_switch_a_paid_route(setup, monkeypatch, during):
+    provider, state = setup
+    provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)
+    original_transport = provider.transport
+
+    def invalidate():
+        key = provider.api_keys().status()["keys"][0]
+        provider.api_keys().record(key["id"], status=429, code="insufficient_quota",
+                                  model="selected-model", headers={"retry-after": "3600"})
+
+    def transport(adapter, operation, **parameters):
+        result = original_transport(adapter, operation, **parameters)
+        if operation == "observe" and during == "observe":
+            invalidate()
+        return result
+
+    provider.transport = transport
+    if during == "prepare":
+        relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+        original_ensure = relay.ensure
+
+        def ensure(owner):
+            result = original_ensure(owner)
+            invalidate()
+            return result
+
+        monkeypatch.setattr(relay, "ensure", ensure)
+    provider.tick()
+    assert not provider.api_keys().candidates("")
+    assert state["active"] == "a"
+    assert "switch" not in state["calls"] and "enroll_api" not in state["calls"]
+    assert state["relay_starts"] == (1 if during == "prepare" else 0)
+
+
 def test_available_or_unknown_subscription_never_starts_a_paid_handoff(setup):
     provider, state = setup
     provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)

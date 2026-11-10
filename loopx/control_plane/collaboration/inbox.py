@@ -557,7 +557,7 @@ DELIVERY_STATUSES = set(_delivery_contract["delivery_statuses"])
 DELIVERY_ERRORS = set(_delivery_contract["delivery_errors"])
 
 
-def reply_status(root, row, *, include_result_key=None):
+def reply_status(root, row, *, include_result_key=None, observe_result=None):
     """Read current delivery state, optionally selecting result identities first.
 
     The selector narrows IO only; retained results use the same validation and
@@ -597,6 +597,8 @@ def reply_status(root, row, *, include_result_key=None):
             "delivered_at": delivered_at,
             "error": error,
         }
+        if observe_result is not None:
+            observe_result(path, reply)
         if state.get("verification") == "reconciled_after_restart":
             item["verification"] = "reconciled_after_restart"
         result.append(item)

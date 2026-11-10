@@ -6,6 +6,8 @@ import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
+import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -215,19 +217,8 @@ function canonicalValue(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   const source = value as JsonObject;
   return Object.fromEntries(
-    Object.keys(source).sort(comparePythonUnicode).map((key) => [key, canonicalValue(source[key])]),
+    Object.keys(source).sort(authorityUnicodeCompare).map((key) => [key, canonicalValue(source[key])]),
   );
-}
-
-function comparePythonUnicode(left: string, right: string): number {
-  const leftPoints = Array.from(left, (item) => item.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (item) => item.codePointAt(0) ?? 0);
-  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = leftPoints[index] - rightPoints[index];
-    if (difference !== 0) return difference;
-  }
-  return leftPoints.length - rightPoints.length;
 }
 
 function canonicalHash(value: unknown): string {
@@ -888,12 +879,11 @@ function replanView(request: JsonObject): JsonObject {
     requireCompleteTurnDecision(payload, request.source_number_tokens);
   } else requireVisionAuditReferences(payload);
   const precision = replanReadPrecision(payload, request.source_number_tokens);
-  const view = projectReplanView(request, payload, precision);
+  const view = projectReplanView(request, payload, sourceHash, precision);
   return precision ? contextProjectionChanges(payload, view, precision.values, {}) : view;
 }
 
-function projectReplanView(request: JsonObject, payload: JsonObject, precision?: ReplanReadPrecision): JsonObject {
-  const sourceHash = decisionSourceHash(payload);
+function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash: string, precision?: ReplanReadPrecision): JsonObject {
   const retain = precision?.retain ?? ((view: JsonObject) => view);
   requireVisionAuditReferences(payload);
   const originalContract = replanAuthoringContract(payload, precision);
@@ -2378,6 +2368,30 @@ function contextPresentationPlan(request: JsonObject): JsonObject {
   return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
 }
 
+export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source"): JsonObject {
+  const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
+  const {encoding, data} = transport;
+  const maxSourceBytes = 1024 * 1024;
+  if (Object.hasOwn(request, inlineField) || encoding !== "deflate-base64-json-v0" ||
+      typeof data !== "string" || data.length > maxSourceBytes ||
+      data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+  }
+  let source: unknown;
+  try {
+    const compressed = Buffer.from(data, "base64");
+    // Inflate may stop at the first stream and silently leave input unread.
+    // The synchronous info result reports consumed bytes on supported Node versions.
+    const {buffer, engine} = inflateSync(compressed,
+      {info: true, maxOutputLength: maxSourceBytes}) as unknown as {buffer: Buffer; engine: {bytesWritten: number}};
+    if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
+    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(buffer));
+  } catch {
+    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
+  }
+  return requireJsonObject(source, "complete Turn decision source");
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2390,12 +2404,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     // Optional provider participation needs checked identity and capability
     // gates, not the signed action document or its work context.
     const host = Object.hasOwn(request, "complete_host_request") || Object.hasOwn(request, "envelope");
+    if (host && Object.hasOwn(request, "source_transport")) {
+      throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+    }
     const checked = host ? completeHostSource(request) : null;
-    const payload = checked?.decision ?? requireJsonObject(request.payload, "quota payload");
+    const payload = checked?.decision ?? (Object.hasOwn(request, "source_transport")
+      ? decodeTurnSource(request, "payload") : requireJsonObject(request.payload, "quota payload"));
     if (!checked && (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding"))) {
       requireCompleteTurnDecision(payload, request.source_number_tokens);
     }
-    const projection = checked?.projection ?? turnActionProjection(payload, replanReadPrecision(payload, request.source_number_tokens));
+    const projection = checked?.projection ?? turnActionProjection(payload,
+      replanReadPrecision(payload, request.source_number_tokens));
     assertSupportedQuotaPacket(projection);
     if (!checked && payload.agent_id && projection.agent_id && payload.agent_id !== projection.agent_id) {
       throw new EffectRuntimeRequestError("context source has conflicting Agent identities");

@@ -41,6 +41,7 @@ from .chat.goal_subagent_api import (
     add_goal_subagent_capability,
     add_goal_subagent_routes,
 )
+from .chat.result_files_api import ChatResultFilesRequestMixin
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
 from .capabilities.native_chat.queue_api import ChatQueueRequestMixin
 from .chat.status_api import ChatStatusRequestMixin
@@ -498,6 +499,7 @@ class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTP
 
 
 class ChatRequestHandler(
+    ChatResultFilesRequestMixin,
     background_api.BackgroundServicesRequestMixin,
     ChatModelSettingsRequestMixin,
     ChatQueueRequestMixin,
@@ -1122,8 +1124,8 @@ class ChatRequestHandler(
         except CodexChatAgentError as exc:
             self._send_error(str(exc), status=424, error_code=exc.error_code, gate=exc.gate)
             return
-        except RuntimeError as exc:
-            code = str(exc)
+        except (RuntimeError, OSError) as exc:
+            code = str(exc) if isinstance(exc, RuntimeError) else "live_steering_delivery_unresolved"
             not_delivered = code in STEERING_NOT_DELIVERED_CODES
             self._send_error(
                 "本轮追加指令未送达。请检查当前回合与执行器，条件恢复后可重试原文。" if not_delivered
@@ -1626,6 +1628,8 @@ class ChatRequestHandler(
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if self._dispatch_result_file_read(path):
+            return
         peer_parts = path.strip("/").split("/")
         if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
             return self._project_collaboration(peer_parts[3])

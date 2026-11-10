@@ -464,6 +464,9 @@ that binding. Older captures and copies with different bytes remain readable.
 Preserve any original claim receipt and use `quota should-run` with the same
 Goal, Agent, Todo and Turn and a fresh capture if preparation is still
 required. A retired lease requires a fresh eligible preparation capture.
+The native hook executes only a preparation bound to a captured Turn. An
+ordinary claim recommendation remains available to its caller; reading one
+or reading an original receipt does not trigger an automatic claim.
 
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
@@ -474,6 +477,8 @@ ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原�
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
 结果准备。已退役的租约需要新的合格 capture。
+原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
+领取回执都不会触发自动领取。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
@@ -794,6 +799,17 @@ Reuse requires complete observed tool delivery in the same task, session and
 epoch, and a matching digest of the current visible field. A revised field
 appears in full. Losing the observation restores the ordinary initial read.
 A saved delta on its own provides no evidence of model retention.
+
+A ready native Turn can use the same observation for an unchanged
+`vision_authoring` body already delivered in this task and epoch. The initial
+read marks its exact current address and still delivers this Turn's
+precondition, command and settlement identity. If the full instructions are
+unavailable, select the current complete body before composing the Vision.
+Explicit selection and stateless readers keep the literal body.
+
+中文：同一任务、同一原生上下文周期内，首读可以标记已完整交付且未变化的
+`vision_authoring`。本轮前提、命令和结算身份仍读取当前值。如果无法使用完整
+说明，在编写 Vision 前从本次捕获取回该字段。显式选择和无会话读取保留原文。
 
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current

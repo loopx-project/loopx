@@ -452,7 +452,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("case", [
     "same-execution", "released-execution", "after-ready-same-execution",
-    "after-ready-released-execution", "legacy-released-execution",
+    "after-ready-released-execution", "legacy-same-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
@@ -563,7 +563,10 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert "no verified live guard binding" in guidance and "fresh capture" in guidance
         assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
-        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        assert current["active"] is (not released)
+        assert current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        if not released:
+            assert current["lease"] == lease
     else:
         assert len(claims) == 1 and guards == [turn]
         for observed in (result, resume):

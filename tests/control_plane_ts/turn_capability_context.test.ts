@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {deflateSync} from "node:zlib";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
-import {quotaActionSignatureDocument} from "../../loopx/control_plane/quota/turn_envelope.ts";
+import {evaluateTurnEnvelope, quotaActionSignatureDocument} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {validateTurnContextRegistration, validateTurnContextContribution,
   projectTurnContextContribution} from "../../loopx/control_plane/turn_driver/capability_context.ts";
 
@@ -44,6 +45,44 @@ const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   goal_boundary: {write_scope: ["fixture/**"], capabilities: {reward_memory: {
     enabled: true, configured_for_agent: true, experiment_available: true,
     automatic_recall: true, automatic_ingest: false}}}};
+
+test("the shared quota source transport preserves capability gates and contribution binding", () => {
+  const source = {...quotaSource, goal_boundary: {...quotaSource.goal_boundary, stop_condition: "保留原停止条件"}};
+  const source_transport = {encoding: "deflate-base64-json-v0",
+    data: deflateSync(Buffer.from(JSON.stringify(source))).toString("base64")};
+  const operation = "capability_automation_source";
+  const inline = evaluateTurnEnvelope({operation, payload: source});
+  assert.deepEqual(evaluateTurnEnvelope({operation, source_transport}), inline);
+  const contribution = validateTurnContextContribution({registration, result, source});
+  assert.deepEqual(validateTurnContextContribution({registration, result, source_transport}), contribution);
+  assert.throws(() => projectTurnContextContribution({contribution, readback: result.readback,
+    source: {...source, goal_boundary: {...source.goal_boundary, stop_condition: "改动停止条件"}}}));
+  assert.throws(() => evaluateTurnEnvelope({operation, payload: source, source_transport}), /invalid Turn/);
+  assert.throws(() => evaluateTurnEnvelope({operation, envelope: {}, source_transport}), /invalid Turn/);
+  assert.throws(() => validateTurnContextContribution({registration, result, source, source_transport}), /invalid Turn/);
+  const status = {...result, context_fields: {}, instructions: [], result_fields: {}};
+  assert.throws(() => validateTurnContextContribution({registration, result: status, readback_only: true,
+    source_transport}), /readback-only/);
+  assert.throws(() => validateTurnContextContribution({registration, result, source_transport: {
+    ...source_transport, data: "AAAA"}}), /valid compressed JSON/);
+});
+
+for (const [suffixName, suffix] of [
+  ["trailing bytes", Buffer.from([0, 255])],
+  ["a second stream", deflateSync(Buffer.from(JSON.stringify({...quotaSource, goal_boundary: {
+    ...quotaSource.goal_boundary, stop_condition: "A different stop"}})))],
+] as const) {
+  const data = Buffer.concat([deflateSync(Buffer.from(JSON.stringify(quotaSource))), suffix]).toString("base64");
+  const source_transport = {encoding: "deflate-base64-json-v0", data};
+  test(`quota capability gates reject ${suffixName} after the packed source`, () => {
+    assert.throws(() => evaluateTurnEnvelope({operation: "capability_automation_source", source_transport}),
+      /valid compressed JSON/);
+  });
+  test(`quota contribution validation rejects ${suffixName} after the packed source`, () => {
+    assert.throws(() => validateTurnContextContribution({registration, result, source_transport}),
+      /valid compressed JSON/);
+  });
+}
 
 test("an existing quota contribution can replay with its exact legacy reader binding", () => {
   const source = {...quotaSource, replan_read_path: "fixture/decision.json",

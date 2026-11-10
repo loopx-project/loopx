@@ -3,16 +3,18 @@ import assert from "node:assert/strict";
 import {spawn} from "node:child_process";
 import {once} from "node:events";
 import {createInterface} from "node:readline";
-import {mkdir} from "node:fs/promises";
+import {mkdir, readFile} from "node:fs/promises";
+import {createHash} from "node:crypto";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {launchBrowser, loadPlaywright} from "../../../../examples/dashboard-browser-smoke-support.mjs";
 
 const repo = resolve(import.meta.dirname, "../../../..");
+const returnedFiles = process.argv.includes("--returned-files");
 const output = resolve(process.env.LOOPX_REPLY_OUTPUT ?? resolve(repo, "output/playwright/conversation-reply"));
 await mkdir(output, {recursive: true});
 const child = spawn(resolveTestPython({repoRoot: repo}), ["-u",
-  "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", "--reply-context"],
+  "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", returnedFiles ? "--returned-files" : "--reply-context"],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: "0"}, stdio: ["pipe", "pipe", "pipe"]});
 const exited = once(child, "exit"), queue = [], waiting = [];
 let stderr = "", browser;
@@ -27,6 +29,76 @@ function next() {
     if (queue.length) receive(queue.shift()); else waiting.push(receive);
   });
 }
+async function checkReturnedFiles(ready, page, errors, writes) {
+  const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();
+  const answer = snapshot.messages.find(row => row.message_id === ready.fileMessageId);
+  assert.ok(answer.text.includes("Verified result"));
+  await page.goto(ready.origin + "/chat/");
+  await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+  const timeline = page.locator(".personal-channel-timeline");
+  await timeline.getByText("结果已核验 / Verified result", {exact: true}).waitFor();
+  await page.waitForFunction(() => document.body.innerText.includes("已连接"));
+  const baseline = process.env.LOOPX_REPLY_BEFORE === "1";
+  if (baseline) {
+    assert.equal(answer.attachments?.length ?? 0, 0);
+    assert.equal(await timeline.locator("a[download]").count(), 0);
+  } else {
+    assert.equal(answer.attachments.length, ready.files.length);
+    assert.equal(await timeline.locator("a[download]").count(), ready.files.length);
+    assert.equal(await timeline.locator("img[alt='source.bin']").count(), 0);
+    for (const file of ready.files) {
+      const link = timeline.getByRole("link", {name: `下载文件：${file.name}`, exact: false});
+      await link.focus();
+      const completed = page.waitForEvent("download");
+      await page.keyboard.press("Enter");
+      const download = await completed;
+      assert.equal(download.suggestedFilename(), file.name);
+      const raw = await readFile(await download.path());
+      assert.equal(raw.length, file.size);
+      assert.equal(createHash("sha256").update(raw).digest("hex"), file.sha256);
+    }
+  }
+  await page.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-desktop.png`), animations: "disabled"});
+  const opened = page.context().waitForEvent("page");
+  await timeline.getByRole("link", {name: "单独阅读完整答复"}).click();
+  const report = await opened;
+  report.on("pageerror", error => errors.push(error.message));
+  await report.getByRole("heading", {name: "结果已核验 / Verified result", exact: true}).waitFor();
+  assert.equal(await report.locator("a[download]").count(), baseline ? 0 : ready.files.length);
+  await report.screenshot({path: resolve(output, `${baseline ? "before" : "after"}-files-reader.png`), animations: "disabled"});
+  if (!baseline) {
+    for (const file of ready.files) {
+      const completed = report.waitForEvent("download");
+      await report.getByRole("link", {name: `下载文件：${file.name}`, exact: false}).click();
+      const download = await completed;
+      assert.equal(download.suggestedFilename(), file.name);
+      assert.equal(createHash("sha256").update(await readFile(await download.path())).digest("hex"), file.sha256);
+    }
+    await report.setViewportSize({width: 390, height: 844});
+    assert.ok(await report.locator("body").evaluate(node => node.scrollWidth <= innerWidth + 1));
+    await report.screenshot({path: resolve(output, "after-files-reader-narrow.png"), animations: "disabled"});
+    await page.setViewportSize({width: 390, height: 844});
+    await timeline.locator("a[download]").first().scrollIntoViewIfNeeded();
+    assert.ok(await page.locator("body").evaluate(node => node.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path: resolve(output, "after-files-narrow.png"), animations: "disabled"});
+    await report.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+    await report.reload();
+    await report.getByRole("link", {name: "Download file: source.bin", exact: false}).waitFor();
+    await report.screenshot({path: resolve(output, "after-files-reader-english.png"), animations: "disabled"});
+    const url = ready.origin + answer.attachments[0].data_url;
+    assert.equal((await page.request.get(url.replace(ready.sessionId, "unrelated-session"))).status(), 404);
+    assert.equal((await page.request.get(url, {headers: {Origin: "https://unrelated.example"}})).status(), 403);
+  }
+  child.stdin.write("inspect\n");
+  const inspection = await next();
+  assert.equal(inspection.model_turns, 0);
+  assert.equal(inspection.provider_sends, 1);
+  assert.equal(inspection.reply_evidence_unchanged, true);
+  assert.deepEqual(errors, []);
+  assert.ok(!writes.some(path => /\/turns(?:\/|$)/u.test(path)), "Reading cannot submit a Turn");
+  console.log(baseline ? "returned-files-browser: baseline reproduced (published files omitted from history and full reader; zero model Turns or repeat sends)"
+    : "returned-files-browser: passed (real publisher, bound source, original history/reader, byte-exact downloads, desktop/narrow, keyboard, English, zero model Turns or repeat sends)");
+}
 try {
   const ready = await next();
   browser = await launchBrowser(loadPlaywright().chromium);
@@ -35,6 +107,9 @@ try {
   const errors = [], writes = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("request", request => {if (request.method() !== "GET") writes.push(new URL(request.url()).pathname);});
+  if (returnedFiles) {
+    await checkReturnedFiles(ready, page, errors, writes);
+  } else {
   const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();
   const source = snapshot.messages.find(row => row.role === "user" && row.turn_id);
   assert.ok(source.text.startsWith("Referenced message ("), "Canonical model input stays unchanged");
@@ -95,6 +170,7 @@ try {
     assert.equal(inspection.model_turns, 0);
     assert.equal(inspection.reply_evidence_unchanged, true);
     console.log("conversation-reply-browser: passed (real bound source, original body, complete quote, bounded thread, desktop/narrow, keyboard, English and zero model Turns)");
+  }
   }
 } finally {
   await browser?.close();

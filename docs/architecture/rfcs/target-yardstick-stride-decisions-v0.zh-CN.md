@@ -5,7 +5,7 @@
 - **交付成熟度：** M1 源码实现；预算内规划为提案；M2/M3 未资格确认
 - **作者 / 归属：** LoopX maintainers
 - **创建日期：** 2026-11-05
-- **最近规范修订：** 2026-11-09
+- **最近规范修订：** 2026-11-10
 - **实现基线：** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
 - **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
@@ -17,6 +17,10 @@
 合并只接受设计依据，不证明实现、部署、默认启用或效果收益。
 双语版本保持语义一致。后续执行证据沿用 RFC ledger 约定；改变设计时显式修订规范。
 第 11 节记录有界 M1 实现边界；尚未证明长程效果收益，也不提升默认配置。
+
+目标、理论假设、完整反馈案例与设计理由见[预算内研究规划](../../research/budgeted-research-planning.zh-CN.md)。
+该说明把设计连接到首个 EdgeBench 实验，不新增策略 owner，也不把解释性的 Bellman 模型当成
+已经实现的求解器。
 
 ## 1. 决策摘要
 
@@ -100,11 +104,15 @@ M1 owner：成果/代理 profile、引用反证、同候选排序比较、`proxy
 尚未实现已校准的状态转移模型、自动秩相关资格判断、全局代理黑名单或预算最优规划器。
 第 11 节保留 M1 的实际交付边界。
 
-[引用测量（#8382）](https://github.com/loopx-project/loopx/pull/8382)、
-[Stride 反馈投影（#8385）](https://github.com/loopx-project/loopx/pull/8385) 和
-[Controller/Worker 组合（#8378）](https://github.com/loopx-project/loopx/pull/8378)
-等相关工作需在试验前核对并固定版本；PR 提案不等于已交付行为或收益证据。
-预算策略试验可沿既有详情读取和单 Agent 路径开始，不必等待这些改动。
+2026-11-10 源码接续核对：在
+[`bd2af5e`](https://github.com/loopx-project/loopx/tree/bd2af5e0ec5acc9eafb0b0eb6b3d4661206a2eef)
+中，[引用测量（#8382）](https://github.com/loopx-project/loopx/pull/8382) 与
+[Stride 反馈投影（#8385）](https://github.com/loopx-project/loopx/pull/8385) 已合并。
+后者把既有 Explore 的有界测量比较与工作尺子提示带入 Stride basis，并保留省略来源的读取路径。
+这些源码变化证明证据可达，不证明模型采用、数值 fidelity 或规划收益。
+[Controller/Worker 提案（#8378）](https://github.com/loopx-project/loopx/pull/8378)
+仍独立于此，不是单 Agent pilot 的前置。试验前固定实际源码与投影；此日期明确的接续核对
+不改写原 implementation baseline 的审计。
 [整合说明](../long-running-execution-exploration-and-correction.zh-CN.md)
 区分来源交付、实际使用与结果收益。
 
@@ -313,6 +321,9 @@ C13 和 A–D 实验需要证明短提示有帮助，同时不压缩模型能力
 
 ### 5.8 预算内的多步研究规划
 
+[设计依据](../../research/budgeted-research-planning.zh-CN.md#planning-model)解释为什么创造候选、
+获取信息与投资尺子应纳入同一预算比较，以及为什么即时增益／成本只是启发式。
+
 这是既有组合/Stride 决策的扩展，不另建工作图或 scheduler owner。近期调用方是
 [研究计划 §8.7](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)
 中的 EdgeBench 策略试验。计划是跨有用证据边界的可修订接续，不承诺执行全部步骤，
@@ -417,6 +428,14 @@ Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策
 以后若修改 schema，先证明缺失的生产者/消费者事实，再扩展既有版本化 owner，
 验证读回、恢复和关闭状态。Controller–Worker 组合以后可消费同一决策，
 不因此获得更多权限，也不因此证明收益。
+
+原生 measurement adapter 独立记录服务自身的 result、receipt 与评测条件，不要求
+先有本地执行。没有保留上传字节时，已接受归档的摘要仍是稳定 subject；可选文件
+内容证明保留自身较窄的覆盖范围，不重标既有 measurement。各 outcome/proxy
+profile 保留真实 workload revision 与 evaluator。既有 typed 比较 owner 只配对
+适用的声明 subject；producer 所在位置及路径/字节内容相等不证明执行等价。
+普通 current-work 证据还保留原提交时间与 canonical prefix 边界；旧记录延迟写入
+不能变成新 decision 的未引用证据，已显式引用并验证的历史仍可使用。
 
 ## 6. 替代方案与设计选择
 
@@ -558,6 +577,31 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 验收成果指标或代理分类。共享问题关联只表示证据关联，不是该 Todo 执行测量的不可变归属。
 首次决策仍为可选记录；默认关闭及按字段首次读取保留原语义。真实 File/SQLite reader
 资格与实际模型收益分别验收。
+初始测量提示与已有组合的比较在有意义的证据或 probe 边界复用同一局部选择指导：
+验收约束内的预计成果收益、剩余时间，以及完整实现、搜索和确认成本（含模型和控制
+开销）。未知保持未知；证据支持的路线可以继续，无实质变化时继续当前获准工作。
+局部增益本身不决定哪项投入最值得做。该指导不新增必做比较、评测调用、决策附件或
+复盘，也不根据指标名称或近期展示顺序推断 profile。启用时，同一工作的 finding
+receipt 也由共享测量事实 owner 投影这段指导。更大的测量索引继续按需读取，不扩充
+每次首读。真实模型采用与成果收益仍未取得资格。
+
+在尚未结算的回合里，显式 Explore finding 可以使用普通结果附件，并与
+refresh-state 复用同一个 Todo 的规范研究问题。写入回执返回这次写入涉及的
+测量变化。两份候选均在已声明的正式与代理指标下取得确认结果时，回执还可
+给出排序对比。原生适配器负责核验提交并提供测量事实，Explore 和 Yardstick
+负责关联、对比与读回。
+
+新的工作绑定 finding 没有更早的主提交来授权图写入。在本地 File/SQLite、
+legacy 源 registry profile 中，它在图 append 期间同时持有既有 canonical writer
+guard、源 registry 和设备策略锁。Typed 准入 owner 在这些 guard 内复验原
+claim/lease 代际、开放 Todo、注册 actor、Goal Stop 及证据策略的开启状态。
+Release 或 transfer 不能穿过该提交。Lease 准入使用日志锁等待与图 CAS 完成之后的
+新运行时时钟，排队期间到期会被拒绝；完成这一次已准入的 append 不续授执行权。
+提交之后若关联失败，仍可重试关联而不改写
+已提交的 finding。该入口尚未验证 source-session incarnation 或远程 provider
+fence，因而在 append 前拒绝这些路径；本机互斥锁不能证明 PostgreSQL 的分布式
+fence。普通主提交已经成功的附件恢复，继续遵守原有延迟交付契约。
+
 反证要求在下一个具体选择处重新判断，不构成新的硬门、fidelity 认证、放松正确性约束的
 权限或每轮重规划指令。后续有意义的 capture 可复用 execution observation，把前次
 提议方法连到实际方法、候选和证据，也允许有据采用不同方法。

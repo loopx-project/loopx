@@ -12,18 +12,80 @@ import queue
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 
 _locks: dict[Path, threading.Lock] = {}
 _locks_guard = threading.Lock()
+TRANSPORT_PROVIDERS = frozenset({"openai", "loopx_account_api", "loopx_host_chatgpt_http"})
 
 
 class CodexHostAuthUnavailable(RuntimeError):
     def __init__(self) -> None:
         super().__init__("Trusted-host Codex model authentication is unavailable.")
+
+
+def recorded_provider(home: Path, thread_id: str | None) -> str | None:
+    """Read only the original thread's metadata in its already bound store.
+
+    Provider identity survives account transport changes. Native Codex checks
+    both the process and resume against it; rebuilding/importing history is
+    neither necessary nor an authentication fallback.
+    """
+    if not thread_id:
+        return None
+    from .codex_attached import DesktopUnavailable, locate_thread
+    from .codex_history import RECORD_BYTES
+    from ...hosts.codex_rollout_file import open_rollout
+    try:
+        _, path = locate_thread(thread_id, homes=[home])
+    except DesktopUnavailable:
+        return None  # Let native resume report the original missing thread.
+    try:
+        with open_rollout(path) as stream:
+            raw = stream.readline(RECORD_BYTES + 1)
+        if len(raw) > RECORD_BYTES or not raw.endswith(b"\n"):
+            raise ValueError("invalid metadata record")
+        record = json.loads(raw)
+        meta = record["payload"]
+        provider = meta["model_provider"]
+        if (record["type"] != "session_meta" or meta["id"] != thread_id
+                or not isinstance(provider, str) or not provider.strip()):
+            raise ValueError("invalid native identity")
+        return provider
+    except (OSError, ValueError, KeyError, TypeError):
+        raise CodexHostAuthUnavailable() from None
+
+
+def lower_transport_configuration(result: dict[str, Any]) -> dict[str, Any]:
+    """Check alias collisions below our public process flags, not against them."""
+    layers = result.get("layers")
+    if not isinstance(layers, list):
+        return result.get("config", {})  # Older native/fake clients fail closed.
+    providers = {}
+    for layer in layers:
+        if layer.get("disabledReason") or layer.get("name", {}).get("type") == "sessionFlags":
+            continue
+        providers.update(layer.get("config", {}).get("model_providers", {}))
+    return {"model_providers": providers}
+
+
+def transport_arguments(config: dict[str, Any]) -> list[str]:
+    """Launch the same native provider without putting any credential in argv."""
+    provider = config.get("model_provider")
+    if provider not in TRANSPORT_PROVIDERS:
+        raise CodexHostAuthUnavailable()
+    values = {"model_provider": provider}
+    if provider == "openai":
+        if "openai_base_url" in config:
+            values["openai_base_url"] = config["openai_base_url"]
+            values["cli_auth_credentials_store"] = "ephemeral"
+    else:
+        values.update({f"model_providers.{provider}.{key}": value
+                       for key, value in config["model_providers"][provider].items()})
+    return [arg for key, value in values.items() for arg in ("-c", f"{key}={json.dumps(value)}")]
 
 
 def _native_refresh(codex_bin: str, home: Path, *, timeout_sec: float = 8) -> None:
@@ -127,6 +189,12 @@ class CodexApiTransport:
     provider: str = "loopx_account_api"
     env_key: str = "LOOPX_MODEL_RELAY_TOKEN"
 
+    def for_provider(self, provider: str) -> CodexApiTransport:
+        if provider not in TRANSPORT_PROVIDERS:
+            raise CodexHostAuthUnavailable()
+        return replace(self, provider=provider,
+                       env_key="OPENAI_API_KEY" if provider == "openai" else "LOOPX_MODEL_RELAY_TOKEN")
+
     def configuration(self, current: dict[str, Any], effective: dict[str, Any] | None = None) -> dict[str, Any]:
         # Native overlays merge maps, so a lower-layer alias must not supply
         # another URL/header/env key beneath our model-only transport.
@@ -136,13 +204,31 @@ class CodexApiTransport:
         exclude = [*environment.get("exclude", [])]
         if self.env_key not in exclude:
             exclude.append(self.env_key)
-        return {**current, "model_provider": self.provider, "model_providers": {
+        config = {**current, "model_provider": self.provider,
+                  "shell_environment_policy": {**environment, "exclude": exclude}}
+        if self.provider == "openai":
+            # Codex reserves this built-in ID: model_providers.openai is invalid.
+            # Its supported base-URL setting and ephemeral native login preserve it.
+            return {**config, "openai_base_url": self.endpoint}
+        return {**config, "model_providers": {
             **current.get("model_providers", {}), self.provider: {
                 "name": "LoopX account API", "base_url": self.endpoint,
                 "env_key": self.env_key, "wire_api": "responses",
-                "requires_openai_auth": False, "supports_websockets": False}},
-            "shell_environment_policy": {**environment,
-                "exclude": exclude}}
+                "requires_openai_auth": False, "supports_websockets": False}}}
+
+
+def authenticate_api_transport(session, transport: CodexApiTransport | None) -> None:
+    if transport is not None and transport.provider == "openai":
+        # Built-in OpenAI ignores a custom provider env_key. Its native login
+        # is process-only because launch pins the ephemeral credential backend;
+        # never persist the scoped relay token over the owner's real auth.json.
+        try:
+            login = session._request("account/login/start", {
+                "type": "apiKey", "apiKey": transport.token}, request_id=4)
+            if login.get("type") != "apiKey":
+                raise ValueError("unexpected native API authentication mode")
+        except Exception:
+            raise session._runtime_error("Native account API authentication is unavailable.") from None
 
 
 def native_api_transport(runtime_root: Path, base_home: Path, *, consumer: str,
@@ -170,6 +256,31 @@ def prepare_api_transport(runtime_root: Path | None, home: Path, *, isolated_hom
         from ...chat_agent import CodexChatAgentError
         raise CodexChatAgentError("Native account API transport is unavailable.",
             error_code="model_auth_unavailable", gate=None) from None
+
+
+def prepare_conversation_transport(runtime_root: Path | None, base_home: Path, runtime_home: Path,
+        thread_id: str | None, *, current: dict[str, Any], provider: str, eligible: bool,
+        consumer: str, model: str | None, environment: dict[str, str]):
+    """Keep native identity fixed; only the account owner's transport can change."""
+    from .codex_context import shared_chatgpt_transport
+    eligible = eligible and not provider and not current.get("model_provider")
+    original = recorded_provider(runtime_home, thread_id) if eligible else None
+    project_auth = runtime_home / "auth.json"
+    retain = (eligible and original in TRANSPORT_PROVIDERS and (runtime_home == base_home
+              or not (project_auth.exists() or project_auth.is_symlink())))
+    api = prepare_api_transport(runtime_root, base_home,
+        isolated_home=runtime_home if runtime_home != base_home else None,
+        eligible=eligible, consumer=consumer, model=model)
+    if api is not None:
+        if retain:
+            api = api.for_provider(original)
+        if api.provider != "openai":
+            environment[api.env_key] = api.token
+        current, provider = api.configuration(current), api.provider
+    elif retain:
+        current = shared_chatgpt_transport(current, {}, provider=original)
+        provider = original
+    return current, provider, api, retain
 
 
 def authenticate_isolated(session, home: Path, isolated: Path, binary: str, *, api_transport) -> CodexHostModelAuth | None:
