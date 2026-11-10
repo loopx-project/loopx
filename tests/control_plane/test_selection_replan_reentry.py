@@ -410,26 +410,35 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
 
 
 @pytest.mark.parametrize("discovery", [False, True])
-def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery, context_delivery):
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-envelope"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-             "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+             "--agent-id", AGENT_ID, "--turn-instance-id", turn, "--context-delivery", context_delivery,
              )
     if discovery:
         rc, first = _run_cli(registry, runtime, *guard)
+        first = read_cli_policy_payload(json.dumps(first), returncode=rc)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, envelope = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
     assert rc == 0, envelope
     from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
-    assert envelope["schema_version"] == "loopx_turn_envelope_v1"
-    assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
-    # C1's public writer emits the complete contract. The historical executor
-    # adapter must still derive the same first-call action from that source.
-    envelope = build_turn_envelope(envelope)
+    if context_delivery == "on":
+        envelope = read_cli_policy_payload(json.dumps(envelope), returncode=rc)
+        assert envelope["schema_version"] == "loopx_turn_envelope_v1"
+        assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
+        # Progressive delivery keeps the complete source. Its historical
+        # executor adapter still derives the same original first-call action.
+        envelope = build_turn_envelope(envelope)
+    else:
+        # Explicit off retains the requested bounded compatibility view.
+        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
     assert envelope["action_signature"]["matches"] is True
     contract = envelope["contract_capsule"]["interaction_contract"]
     assert contract["mode"] == "autonomous_replan"
