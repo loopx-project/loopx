@@ -418,6 +418,14 @@ Bellman 表达式不会提供状态转移模型；事后峰值不能成为决策
 验证读回、恢复和关闭状态。Controller–Worker 组合以后可消费同一决策，
 不因此获得更多权限，也不因此证明收益。
 
+原生 measurement adapter 独立记录服务自身的 result、receipt 与评测条件，不要求
+先有本地执行。没有保留上传字节时，已接受归档的摘要仍是稳定 subject；可选文件
+内容证明保留自身较窄的覆盖范围，不重标既有 measurement。各 outcome/proxy
+profile 保留真实 workload revision 与 evaluator。既有 typed 比较 owner 只配对
+适用的声明 subject；producer 所在位置及路径/字节内容相等不证明执行等价。
+普通 current-work 证据还保留原提交时间与 canonical prefix 边界；旧记录延迟写入
+不能变成新 decision 的未引用证据，已显式引用并验证的历史仍可使用。
+
 ## 6. 替代方案与设计选择
 
 | 方案 | 选择 / 取舍 |
@@ -558,6 +566,24 @@ Explore evidence 可用；开启该设置不启动工作或自动开启其他 ca
 验收成果指标或代理分类。共享问题关联只表示证据关联，不是该 Todo 执行测量的不可变归属。
 首次决策仍为可选记录；默认关闭及按字段首次读取保留原语义。真实 File/SQLite reader
 资格与实际模型收益分别验收。
+
+在尚未结算的回合里，显式 Explore finding 可以使用普通结果附件，并与
+refresh-state 复用同一个 Todo 的规范研究问题。写入回执返回这次写入涉及的
+测量变化。两份候选均在已声明的正式与代理指标下取得确认结果时，回执还可
+给出排序对比。原生适配器负责核验提交并提供测量事实，Explore 和 Yardstick
+负责关联、对比与读回。
+
+新的工作绑定 finding 没有更早的主提交来授权图写入。在本地 File/SQLite、
+legacy 源 registry profile 中，它在图 append 期间同时持有既有 canonical writer
+guard、源 registry 和设备策略锁。Typed 准入 owner 在这些 guard 内复验原
+claim/lease 代际、开放 Todo、注册 actor、Goal Stop 及证据策略的开启状态。
+Release 或 transfer 不能穿过该提交。Lease 准入使用日志锁等待与图 CAS 完成之后的
+新运行时时钟，排队期间到期会被拒绝；完成这一次已准入的 append 不续授执行权。
+提交之后若关联失败，仍可重试关联而不改写
+已提交的 finding。该入口尚未验证 source-session incarnation 或远程 provider
+fence，因而在 append 前拒绝这些路径；本机互斥锁不能证明 PostgreSQL 的分布式
+fence。普通主提交已经成功的附件恢复，继续遵守原有延迟交付契约。
+
 反证要求在下一个具体选择处重新判断，不构成新的硬门、fidelity 认证、放松正确性约束的
 权限或每轮重规划指令。后续有意义的 capture 可复用 execution observation，把前次
 提议方法连到实际方法、候选和证据，也允许有据采用不同方法。

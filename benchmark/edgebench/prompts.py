@@ -17,7 +17,8 @@ def native_research_guidance() -> str:
     )
 
 
-def research_artifact_instructions(*, checkpoint: bool) -> str:
+def research_artifact_instructions(*, checkpoint: bool, native_probe: bool = False,
+                                   native_result_comparison: bool = False) -> str:
     """Separate reproducibility data from candidate inputs for every native arm."""
     from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
 
@@ -28,6 +29,28 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         "Terminal artifact collection retains this directory for analysis; "
         "that alone does not provide a resumable checkpoint. "
     )
+    binding = (
+        "For native artifact evidence, retain the planned upload with sforge-submit --retain-archive "
+        "when the installed client advertises it, then read the receipt and archive using "
+        "loopx-bind-native-candidate --help. This does not require a local probe or a new submission. "
+        "Keep archive identity and file-content identity distinct: content refs do not cover modes, "
+        "packaging or execution conditions. Record available measurements through ordinary Explore "
+        "writeback with each producer's actual workload and evaluator; missing or non-equivalent "
+        "candidate evidence limits pairing, not retention of either result. Preserve earlier refs.\n\n"
+        if native_probe else ""
+    )
+    if native_result_comparison:
+        binding += (
+            "Read an existing native result with loopx-bind-native-candidate --submission-id ID. "
+            "Its native_measurement uses the service's accepted archive and frozen evaluation conditions; "
+            "no local probe or retained archive is required. Optional --archive adds file-content evidence "
+            "without changing that measurement or counting another evaluation. Record available measurements "
+            "on the current work through loopx explore finding --result-json FILE using its Goal, Agent, "
+            "Todo and Turn. Keep each producer's actual input revision and evaluator. Existing Explore "
+            "comparison and Yardstick receipts apply only to matching declared subjects and conditions; "
+            "unknown or different subject granularity stays separate. Use that feedback for the next "
+            "authorized work choice within the original acceptance, budget and Stop conditions.\n\n"
+        )
     return (
         "### Research Artifacts\n\n"
         f"Use `{RESEARCH_DIRECTORY}` for reusable research artifacts that are not "
@@ -42,6 +65,7 @@ def research_artifact_instructions(*, checkpoint: bool) -> str:
         "explicit until they have been copied and their references updated and checked. "
         "Older checkpoints preserve their original workspace files; this policy does "
         "not relocate or discard historical evidence.\n\n"
+        f"{binding}"
         "This storage guidance does not change submitted files, task acceptance, "
         "feedback access or execution authority. Capture and receiver verification "
         "still determine which artifacts are actually available.\n\n"

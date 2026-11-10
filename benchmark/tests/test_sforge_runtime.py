@@ -1480,16 +1480,18 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     assert receipt.get("context_delivery") == (expected_delivery if expected_delivery != "off" else None)
 
 
-@pytest.mark.parametrize(("profile", "selected"), [
-    ("heartbeat-explore", False), ("heartbeat-explore", True), ("native-goal", True),
+@pytest.mark.parametrize(("profile", "selected", "compare"), [
+    ("heartbeat-explore", False, False), ("heartbeat-explore", True, False), ("native-goal", True, False),
+    ("heartbeat-explore", True, True), ("heartbeat-explore", False, True),
 ])
 def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp_path, monkeypatch, capsys,
-                                                                              profile, selected):
+                                                                              profile, selected, compare):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from types import SimpleNamespace
     from benchmark.edgebench import run
     from benchmark.runtime.harbor import BenchmarkCodex
+    from benchmark.runtime.sforge import SForgeWorker
 
     producer = "local_probe" if selected else None
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -1497,10 +1499,13 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
     monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
     (tmp_path / "fixture.json").write_text("{}")
+    (tmp_path / "BENCHMARK.yaml").write_text("id: fixture\n")
     monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr("benchmark.runtime.source.require_candidate_content", lambda *a, **k: None)
+    monkeypatch.setattr(run, "active_source_receipt", lambda *a, **k: {"commit": "b" * 40})
     monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
     monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
-        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        task_id="fixture", cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     backend = SimpleNamespace(observe_local_images=lambda **keys: {},
@@ -1513,13 +1518,32 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         assert self.execution_observation == producer
         assert self._worker_env(cwd="/task").get("LOOPX_EXECUTION_OBSERVATION") == producer
 
+    installed_tools = []
+
+    async def install_entrypoint(self, environment, name, module, help_flag, failure):
+        assert environment.default_user == "agent"
+        installed_tools.append((name, module, help_flag))
+        installed.append(name)
+
     monkeypatch.setattr(BenchmarkCodex, "install", install_at_transport_boundary)
+    installed = []
+    scopes = []
+    monkeypatch.setattr(BenchmarkCodex, "_install_research_entrypoint", install_entrypoint)
+    monkeypatch.setattr(SForgeWorker, "_install_native_result_scope",
+                        lambda self, backend, handle: scopes.append(self.native_result_scope))
     trial = tmp_path / "runs" / "probe" / "fixture"
 
     def stop_before_model(**kwargs):
         worker = kwargs["agent"]
         worker.install_stop_hook(backend, None, trial, None)
-        assert json.loads((trial / "worker-profile.json").read_text()).get("execution_observation") == producer
+        profile_receipt = json.loads((trial / "worker-profile.json").read_text())
+        assert profile_receipt.get("execution_observation") == producer
+        assert profile_receipt.get("native_result_comparison") is (True if compare else None)
+        assert installed_tools == ([
+            ("loopx-bind-native-candidate", "sforge_candidate_binding.py", "--generated-file")
+        ] if selected or compare else [])
+        assert ("does not require a local probe or a new submission" in worker.feedback_prompt) is selected
+        assert ("content refs do not cover modes" in worker.workspace_instructions) is selected
         raise RuntimeError("isolated install boundary")
 
     monkeypatch.setattr(run, "run_agent", stop_before_model)
@@ -1528,6 +1552,8 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
     if selected:
         args += ["--execution-observation", producer]
+    if compare:
+        args += ["--native-result-comparison"]
     if profile == "native-goal":
         with pytest.raises(SystemExit, match="2"):
             run.main(args)
@@ -1538,3 +1564,71 @@ def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp
         run.main(args)
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt.get("execution_observation") == producer
+    assert receipt.get("native_result_comparison") is (True if compare else None)
+    assert installed == (["loopx-bind-native-candidate"] if selected or compare else [])
+    assert bool(scopes) is compare
+    if compare:
+        scope, = scopes
+        assert scope["run"] == "probe" and scope["task"] == "fixture"
+        import hashlib
+        assert scope["benchmark_sha256"] == hashlib.sha256(
+            (tmp_path / "BENCHMARK.yaml").read_bytes()).hexdigest()
+        assert "scorer_commit" not in scope
+
+
+def test_capture_preflight_requires_the_common_product_api_without_overlay(tmp_path):
+    from benchmark.runtime.source import require_candidate_content
+
+    product, runner = tmp_path / "product", tmp_path / "runner"
+    old, runner_rev = repository(product, "product"), repository(runner, "runner")
+    # Feature off retains the same split pins; capture explicitly rejects the missing API.
+    assert source_pins(product, runner, old, runner_rev) == (old, runner_rev)
+    with pytest.raises(ValueError, match="product pin containing Explore candidate_content"):
+        require_candidate_content(product, old)
+    module = product / "loopx/capabilities/explore/candidate_content.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("def candidate_snapshot(paths, workspace): pass\n"
+                      "def candidate_manifest_sha256(files): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(module)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "capture API"], check=True)
+    new = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    require_candidate_content(product, new)
+    assert (product / "loopx/product.py").read_text() == "product"
+    with pytest.raises(ValueError):
+        require_candidate_content(product, old)
+
+
+def test_formal_preflight_requires_the_existing_product_writeback_and_cli(tmp_path):
+    from pathlib import Path
+    from benchmark.runtime.source import require_candidate_content
+
+    product = tmp_path / "product"
+    repository(product, "product")
+    root = Path(__file__).resolve().parents[2]
+    def copy_and_commit(paths):
+        for name in paths:
+            target = product / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((root / name).read_bytes())
+        subprocess.run(["git", "-C", str(product), "add", *paths], check=True)
+        subprocess.run(["git", "-C", str(product), "commit", "-qm", "product API"], check=True)
+        return subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    content = copy_and_commit(["loopx/capabilities/explore/candidate_content.py"])
+    require_candidate_content(product, content)
+    with pytest.raises(ValueError, match="Explore work finding"):
+        require_candidate_content(product, content, work_finding=True)
+    direct_only = copy_and_commit(["loopx/capabilities/explore/result_writeback.py"])
+    with pytest.raises(ValueError, match="Explore work finding CLI"):
+        require_candidate_content(product, direct_only, work_finding=True)
+    complete = copy_and_commit(["loopx/cli_commands/explore.py"])
+    require_candidate_content(product, complete, work_finding=True)
+    # The earlier API shape alone does not establish guarded commit semantics.
+    old_writer = product / "loopx/capabilities/explore/result_writeback.py"
+    old_writer.write_text("def record_work_finding(): pass\n")
+    subprocess.run(["git", "-C", str(product), "add", str(old_writer)], check=True)
+    subprocess.run(["git", "-C", str(product), "commit", "-qm", "Earlier unguarded product API"], check=True)
+    unguarded = subprocess.check_output(["git", "-C", str(product), "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(ValueError, match="Explore work finding commit guard"):
+        require_candidate_content(product, unguarded, work_finding=True)
+    # Capture-only remains compatible with the earlier product; source pins are never rewritten.
+    require_candidate_content(product, content)

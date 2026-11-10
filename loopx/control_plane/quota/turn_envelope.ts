@@ -7,6 +7,7 @@ import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } fr
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
+import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -2367,6 +2368,30 @@ function contextPresentationPlan(request: JsonObject): JsonObject {
   return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
 }
 
+export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source"): JsonObject {
+  const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
+  const {encoding, data} = transport;
+  const maxSourceBytes = 1024 * 1024;
+  if (Object.hasOwn(request, inlineField) || encoding !== "deflate-base64-json-v0" ||
+      typeof data !== "string" || data.length > maxSourceBytes ||
+      data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+  }
+  let source: unknown;
+  try {
+    const compressed = Buffer.from(data, "base64");
+    // Inflate may stop at the first stream and silently leave input unread.
+    // The synchronous info result reports consumed bytes on supported Node versions.
+    const {buffer, engine} = inflateSync(compressed,
+      {info: true, maxOutputLength: maxSourceBytes}) as unknown as {buffer: Buffer; engine: {bytesWritten: number}};
+    if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
+    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(buffer));
+  } catch {
+    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
+  }
+  return requireJsonObject(source, "complete Turn decision source");
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2379,9 +2404,14 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     // Optional provider participation needs checked identity and capability
     // gates, not the signed action document or its work context.
     const host = Object.hasOwn(request, "complete_host_request") || Object.hasOwn(request, "envelope");
+    if (host && Object.hasOwn(request, "source_transport")) {
+      throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+    }
     const checked = host ? completeHostSource(request) : null;
-    const payload = checked?.decision ?? requireJsonObject(request.payload, "quota payload");
-    const projection = checked?.projection ?? turnActionProjection(payload, replanReadPrecision(payload, request.source_number_tokens));
+    const payload = checked?.decision ?? (Object.hasOwn(request, "source_transport")
+      ? decodeTurnSource(request, "payload") : requireJsonObject(request.payload, "quota payload"));
+    const projection = checked?.projection ?? turnActionProjection(payload,
+      replanReadPrecision(payload, request.source_number_tokens));
     assertSupportedQuotaPacket(projection);
     return {goal_id: payload.goal_id ?? null, agent_id: projection.agent_id ?? null,
       boundary: {capabilities: object(projection.boundary).capabilities ?? null}};
