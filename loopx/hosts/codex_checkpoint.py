@@ -23,6 +23,7 @@ from pathlib import Path
 from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
 
 
@@ -248,7 +249,7 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
     require_host_failure_kind(failure_kind)
     if ((returned_error_sha256 is None and failure_kind != "quota_exhausted") or not session_id
             or (returned_error_sha256 is not None and (not isinstance(returned_error_sha256, str)
-                or re.fullmatch(r'[a-f0-9]{64}', returned_error_sha256) is None))
+                or BARE_SHA256_PATTERN.fullmatch(returned_error_sha256) is None))
             or any(type(x) not in (int, float) or not math.isfinite(x)
                    for x in (process_started_at, process_stopped_at, timeout))
             or process_started_at > process_stopped_at or timeout <= 0):
