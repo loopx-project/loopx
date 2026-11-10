@@ -464,6 +464,9 @@ that binding. Older captures and copies with different bytes remain readable.
 Preserve any original claim receipt and use `quota should-run` with the same
 Goal, Agent, Todo and Turn and a fresh capture if preparation is still
 required. A retired lease requires a fresh eligible preparation capture.
+The native hook executes only a preparation bound to a captured Turn. An
+ordinary claim recommendation remains available to its caller; reading one
+or reading an original receipt does not trigger an automatic claim.
 
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
@@ -474,6 +477,8 @@ ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原�
 快照会保留绑定。旧快照和字节不同的副本仍可读，保留已有领取回执。仍需准备时，用原
 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，再按当前准入
 结果准备。已退役的租约需要新的合格 capture。
+原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
+领取回执都不会触发自动领取。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
@@ -794,6 +799,17 @@ Reuse requires complete observed tool delivery in the same task, session and
 epoch, and a matching digest of the current visible field. A revised field
 appears in full. Losing the observation restores the ordinary initial read.
 A saved delta on its own provides no evidence of model retention.
+
+A ready native Turn can use the same observation for an unchanged
+`vision_authoring` body already delivered in this task and epoch. The initial
+read marks its exact current address and still delivers this Turn's
+precondition, command and settlement identity. If the full instructions are
+unavailable, select the current complete body before composing the Vision.
+Explicit selection and stateless readers keep the literal body.
+
+中文：同一任务、同一原生上下文周期内，首读可以标记已完整交付且未变化的
+`vision_authoring`。本轮前提、命令和结算身份仍读取当前值。如果无法使用完整
+说明，在编写 Vision 前从本次捕获取回该字段。显式选择和无会话读取保留原文。
 
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current
@@ -1405,6 +1421,15 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 
 ### Bounded settlement results / 有界结算结果
 
+A ready Codex App heartbeat with a native session can publish a combined settlement
+plan for its admitted Todo. This includes a claim followed by a ready check of the
+same Turn, when the upgraded receipt matches the plan. Execute the displayed
+writeback command, which runs the owed quota spend and returns the exact receipts.
+After a partial failure, use the
+returned `settlement_owed` command for the original Turn. Read the result's
+supporting snapshot only when needed. Raw delivery, manual plans and other
+profiles retain their original settlement commands.
+
 Generated Turn-bound JSON `quota spend-slot` commands include
 `--max-page-output-bytes 64000`. This output option does not enable Context
 Delivery or create a native continuity baseline. Small results remain complete;
@@ -1429,6 +1454,12 @@ spend receipt. Repair capture privacy or read the same operation without the
 output option; a delivery failure does not prove that the effect failed to commit.
 Never rerun admission or change the original Turn/effect identity to recover
 output. This transport change alone does not prove model retention or savings.
+
+Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可能收到合并结算计划。
+同一 Turn 先领取再复查就绪，升级后的回执与计划匹配时也适用。
+执行计划给出的写回命令。该命令会执行尚欠的扣额，并返回原回执。部分失败时，
+沿返回的 `settlement_owed` 命令恢复原 Turn。结果中的支持快照按需读取。
+原始投递、手动计划和其他运行模式继续使用原结算命令。
 
 生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
 `--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生

@@ -25,6 +25,7 @@ from ..todos.quota_summary import (
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
+    autonomous_replan_ack_candidates_for_obligation,
     latest_monitor_replan_frontier_identity,
     watch_lane_continuation_todo_ids,
 )
@@ -231,6 +232,7 @@ def qualify_replan_writeback(
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
@@ -298,6 +300,9 @@ def qualify_replan_writeback(
             ]
         }
     }
+    status_payload["receipt_bound_replan_ack_candidates"] = autonomous_replan_ack_candidates_for_obligation(
+        newest_first_runs, goal_id=goal_id, agent_id=safe_agent_id,
+        obligation_id=guard_semantic_replan_obligation_id if guard_scoped else None)
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
     context = build_goal_frontier_projection_context_from_status(
@@ -350,6 +355,10 @@ def qualify_replan_writeback(
             stride_strategy=((registry_goal or {}).get("execution_profile") or {}).get(
                 "stride_strategy", "off"
             ),
+            goal_id=goal_id,
+            agent_id=safe_agent_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         )
         if transition_delta is not None:
             # This closes only the selected Turn obligation. The freshly
@@ -380,6 +389,9 @@ def qualify_replan_writeback(
             "receipt_review": receipt_bound_replan_review,
             "transition_candidates": context.get("replan_transition_candidates", []),
             "stride_strategy": context["stride_strategy"],
+            "goal_id": goal_id,
+            "guard_recorded_at": receipt_bound_guard_recorded_at,
+            "guard_turn_instance_id": receipt_bound_guard_turn_instance_id,
         })["obligation"]
         if obligation and not obligation.get("replan_context") and not obligation.get("settlement_action_packet"):
             obligation = attach_receipt_replan_context(
@@ -444,6 +456,7 @@ def enforce_open_replan_writeback(
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
@@ -480,6 +493,7 @@ def enforce_open_replan_writeback(
         capability_evidence=capability_evidence,
         guard_capability=guard_capability,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )
@@ -528,6 +542,7 @@ def qualify_refresh_replan_writeback(
     settlement_guard_scoped: bool,
     settlement_guard_semantic_replan_obligation_id: str | None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
@@ -614,6 +629,7 @@ def qualify_refresh_replan_writeback(
             settlement_guard_semantic_replan_obligation_id
         ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )

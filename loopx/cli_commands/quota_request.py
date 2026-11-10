@@ -43,6 +43,13 @@ def register_quota_monitor_poll_request_arguments(
     quota_parser.add_argument("--target-key", help="Stable monitor target key for `quota monitor-poll` metadata writeback.")
     quota_parser.add_argument("--result-hash", help="Public-safe result hash observed by `quota monitor-poll`.")
     quota_parser.add_argument("--material-change", action="store_true", help="Mark a monitor poll as a material transition instead of unchanged evidence.")
+    quota_parser.add_argument(
+        "--material-change-scope",
+        help=(
+            "Optional public-safe case/run scope for --material-change. Waiting Todos may use "
+            "monitor_changed:<monitor_todo_id>@<scope> so unrelated transitions do not wake them."
+        ),
+    )
     quota_parser.add_argument("--cadence", help="Monitor cadence used to compute the next due timestamp, e.g. 30m, 2h, or 1d.")
     quota_parser.add_argument("--next-due-at", help="Explicit ISO timestamp for the next monitor poll.")
     quota_parser.add_argument(
@@ -118,6 +125,12 @@ def register_quota_monitor_poll_request_arguments(
 
 def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
+    if getattr(args, "material_change_scope", None) and (
+        command != "monitor-poll" or not args.material_change
+    ):
+        raise QuotaCommandValidationError(
+            "--material-change-scope requires quota monitor-poll --material-change"
+        )
     if command != "monitor-poll" and any(
         getattr(args, f"next_{role}_priority", None) is not None for role in ("agent", "user")
     ):
@@ -187,9 +200,36 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         )
 
 
+def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
+    if args.quota_command != "should-run" or args.format != "json" or not args.agent_id:
+        raise QuotaCommandValidationError(
+            "--scheduler-observation requires quota should-run with JSON and --agent-id"
+        )
+    for name in (
+        "begin_turn", "turn_instance_id", "todo_id", "execute", "record_host_poll",
+        "available_capabilities", "decision_output_dir", "decision_output_root",
+        "decision_handoff_socket", "codex_context_dir", "codex_context_root",
+        "context_delivery", "delta_delivery", "turn_envelope", "include_details",
+        "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
+        "defer_context_presentation",
+        "capture_file", "decision_file", "outcome_ref", "source_hash",
+        "initial_read", "select", "list_fields", "list_depth", "reference_file",
+        "capture_sha256", "selection_sha256", "offset", "page_bytes",
+    ):
+        if getattr(args, name, None):
+            option = {
+                "available_capabilities": "available-capability",
+                "include_details": "include-detail",
+                "list_fields": "list",
+            }.get(name, name.replace("_", "-"))
+            raise QuotaCommandValidationError(
+                f"--scheduler-observation cannot be combined with --{option}"
+            )
+
+
 def quota_detail_sections_from_args(args: argparse.Namespace) -> frozenset[str]:
     sections = set(getattr(args, "include_details", None) or ())
-    if bool(getattr(args, "include_scheduler_detail", False)):
+    if getattr(args, "include_scheduler_detail", False) or getattr(args, "scheduler_observation", False):
         sections.add("scheduler")
     if "all" in sections:
         sections.update(

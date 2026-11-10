@@ -345,6 +345,7 @@ export function createEffectRuntimeHandlers(
     ["goal.vision_wait.project", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectGoalVisionWaitState}) => projectGoalVisionWaitState)],
     ["goal.shared_goal_alignment.project", lazyHandler(() => import("./goals/shared_goal_alignment.ts"), ({projectSharedGoalAlignment}) => projectSharedGoalAlignment)],
     ["goal.operator_actions.project", lazyHandler(() => import("./goals/operator_actions.ts"), ({projectGoalOperatorActions}) => projectGoalOperatorActions)],
+    ["goal.activation.migrate", lazyHandler(() => import("./goals/activation_migration.ts"), ({migrateGoalActivationMetadata}) => migrateGoalActivationMetadata)],
     ["goal.amendment.execute", lazyHandler(() => import("./goals/goal_amendment_authority.ts"), ({goalAmendmentLocal}) => goalAmendmentLocal)],
     ["goal.direction.execute", lazyHandler(() => import("./goals/direction_authority.ts"), ({directionLocal}) => directionLocal)],
     ["goal.amendment_proposal.admit", lazyHandler(() => import("./goals/goal_amendment_proposal.ts"), ({admitGoalAmendmentProposal}) => admitGoalAmendmentProposal)],
@@ -448,6 +449,8 @@ export function createEffectRuntimeHandlers(
     ["presentation.goal_sources.project", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceLinks}) => projectGoalSourceLinks)],
     ["presentation.goal_sources.status", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceStatus}) => projectGoalSourceStatus)],
     ["presentation.goal_sources.strategies", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceStrategies}) => projectGoalSourceStrategies)],
+    ["presentation.goal_sources.document_plan", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({planGoalSourceDocument}) => planGoalSourceDocument)],
+    ["presentation.goal_sources.document", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceDocument}) => projectGoalSourceDocument)],
   ["presentation.owner_attention.plan", lazyHandler(() => import("./presentation/owner_attention.ts"), ({planOwnerAttention}) => planOwnerAttention)],
   ["presentation.owner_attention.observe", lazyHandler(() => import("./presentation/owner_attention.ts"), ({observeOwnerAttention}) => observeOwnerAttention)],
   ["presentation.owner_attention.health", lazyHandler(() => import("./presentation/owner_attention.ts"), ({ownerAttentionHealth}) => ownerAttentionHealth)],
@@ -629,6 +632,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
     ["chat.queue.select", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({selectQueuedChatTurns}) => selectQueuedChatTurns)],
+    ["chat.queue.mention", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planNativeMentionIngress}) => planNativeMentionIngress)],
+    ["chat.queue.steering_readback", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planChatSteeringReadback}) => planChatSteeringReadback)],
     ["chat.queue.steer", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planQueuedChatSteering}) => planQueuedChatSteering)],
     ["chat.queue.mutate", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planQueuedChatMutation}) => planQueuedChatMutation)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],
@@ -783,6 +788,8 @@ export function createEffectRuntimeHandlers(
     ],
     ["settlement.turn_scoped_cli_plan", lazyHandler(() => import("./quota/settlement_plan.ts"), ({turnScopedCliSettlementPlan}) => (params) =>
       settlementPlanPayload(turnScopedCliSettlementPlan(params)))],
+    ["settlement.native_cli_projection", lazyHandler(() => import("./quota/settlement_plan.ts"),
+      ({nativeCliSettlementProjection}) => nativeCliSettlementProjection)],
     [
       "settlement.result_payload",
       (params) => settlementResultPayload(
@@ -806,6 +813,8 @@ export function createEffectRuntimeHandlers(
     ["work_item.yardstick.presentation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectWorkYardstickPresentations}) => projectWorkYardstickPresentations)],
     ["work_item.yardstick.sources", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({projectWorkYardstickSourceRequests}) => projectWorkYardstickSourceRequests)],
     ["work_item.yardstick.continuation", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({validateWorkYardstickContinuation}) => validateWorkYardstickContinuation)],
+    ["explore.finding.admit", lazyHandler(() => import("./capabilities/explore_work_finding.ts"), ({admitExploreWorkFinding}) => admitExploreWorkFinding)],
+    ["explore.finding.receipt", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectExploreFindingReceipt}) => projectExploreFindingReceipt)],
     ["explore.configuration.resolve", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreConfiguration}) => resolveExploreConfiguration)],
     ["explore.configuration.goal", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreGoalConfiguration}) => resolveExploreGoalConfiguration)],
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],

@@ -15,6 +15,9 @@ from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
 )
+from loopx.control_plane.work_items.autonomous_replan_obligation import (
+    build_autonomous_replan_cli_actions,
+)
 from loopx.control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     _obligation_was_created_by_current_completion,
@@ -1518,6 +1521,92 @@ def test_matching_non_successor_ack_clears_rotated_vision_obligation(
     )
 
     assert remaining is None
+
+
+def test_later_exact_ack_repairs_older_receipt_without_replaying_work() -> None:
+    runs = _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD)
+    obligation_id = _current_obligation_id(runs)
+    semantic_delta = {
+        "schema_version": "replan_semantic_delta_v0",
+        "accepted": True,
+        "outcomes": ["fresh_vision_path_outcome"],
+        "satisfying_outcomes": ["fresh_vision_path_outcome"],
+        "obligation_id": obligation_id,
+    }
+    later_ack = {
+        "goal_id": GOAL_ID,
+        "agent_id": AGENT_ID,
+        "turn_instance_id": "guided-start:later",
+        "generated_at": "2026-08-13T12:00:02+00:00",
+        "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0",
+            "recorded": True,
+            "source": "refresh_state",
+            "semantic_delta": semantic_delta,
+        },
+    }
+    malformed_exact_ack = {
+        **later_ack,
+        "turn_instance_id": "guided-start:malformed",
+        "generated_at": "2026-08-13T12:00:03+00:00",
+        "autonomous_replan_ack": {
+            **later_ack["autonomous_replan_ack"],
+            "schema_version": "wrong",
+        },
+    }
+    newer_unrelated_ack = {
+        **later_ack,
+        "turn_instance_id": "guided-start:unrelated",
+        "generated_at": "2026-08-13T12:00:04+00:00",
+        "autonomous_replan_ack": {
+            **later_ack["autonomous_replan_ack"],
+            "semantic_delta": {
+                **semantic_delta,
+                "obligation_id": "replan-ffffffffffffffff",
+            },
+        },
+    }
+
+    remaining, recovered_delta = qualify_replan_writeback(
+        newest_first_runs=[newer_unrelated_ack, malformed_exact_ack, later_ack, *runs],
+        state_text=STATE_TEXT,
+        agent_id=AGENT_ID,
+        goal_id=GOAL_ID,
+        guard_scoped=True,
+        guard_semantic_replan_obligation_id=obligation_id,
+        receipt_bound_guard_recorded_at="2026-08-13T12:00:01+00:00",
+        receipt_bound_guard_turn_instance_id="guided-start:original",
+    )
+
+    assert remaining is None
+    assert recovered_delta == semantic_delta
+
+
+def test_historical_ack_closeout_does_not_request_new_semantic_evidence() -> None:
+    actions = build_autonomous_replan_cli_actions(
+        {
+            "replan_action_packet": {
+                "writeback_contract": {
+                    "preferred_input": "exact_historical_ack",
+                    "cli_semantic_args": "--vision-unchanged-reason wrong",
+                }
+            }
+        },
+        goal_id=GOAL_ID,
+        settlement_args=" --todo-id todo-original",
+        scoped_cli_args=(
+            f" --agent-id {AGENT_ID} --turn-instance-id guided-start:original"
+        ),
+        quota_spend_action="loopx quota spend",
+        settlement_chain_ready=True,
+    )
+
+    assert len(actions) == 2
+    assert "--vision-" not in actions[0]
+    assert "--progress-result-class" not in actions[0]
+    assert "--todo-id todo-original" in actions[0]
+    assert "--turn-instance-id guided-start:original" in actions[0]
 
 
 @pytest.mark.parametrize("threshold", [2, 3])

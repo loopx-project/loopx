@@ -30,9 +30,14 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   if (typeof event.agent_id === "string" && event.agent_id) return state;
   const session = requireNonEmptyString(event.session_id, "native session id");
   const cwd = requireNonEmptyString(event.cwd, "native workspace");
-  const same = state.session_id === session && state.cwd === cwd;
+  const sameSession = state.session_id === session;
+  const same = sameSession && state.cwd === cwd;
   const name = event.hook_event_name;
-  if (!same) {
+  // PostToolUse reports the command's workdir. It can verify selected bytes
+  // from this session's current capture, but cannot replace the host workspace.
+  const selectedFromToolWorkdir = !same && sameSession && name === "PostToolUse"
+    && typeof state.cwd === "string" && state.cwd.length > 0 && request.pages_verified === true;
+  if (!same && !selectedFromToolWorkdir) {
     if (name !== "SessionStart") return state;
     state = {session_id: session, cwd};
   }
@@ -123,7 +128,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
       state.section_reads = reads;
       continue;
     }
-    if ("selection_sha256" in page || "selected_pointers" in page || "list_fields" in page) continue;
+    if (selectedFromToolWorkdir || "selection_sha256" in page || "selected_pointers" in page || "list_fields" in page) continue;
     const candidate = jsonObject(state.candidate);
     if (!state.pending && candidate?.capture_sha256 === recovery.sha256
         && candidate?.capture_bytes_verified === true

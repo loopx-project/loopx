@@ -1296,6 +1296,7 @@ loopx quota monitor-poll \
   --agent-id <registered-agent> \
   --result-hash <public-safe-hash> \
   --material-change \
+  --material-change-scope <case-id>/<run-id> \
   --next-agent-todo "<bounded public-safe work>" \
   --next-action-kind <action-kind> \
   --next-task-repository <git-repository> \
@@ -1318,14 +1319,16 @@ loopx todo update \
   --todo-id <waiting-advancement-todo-id> \
   --agent-id <registered-agent> \
   --status open \
-  --resume-when monitor_changed:<monitor-todo-id> \
+  --resume-when monitor_changed:<monitor-todo-id>@<case-id>/<run-id> \
   --successor-todo-id <independent-runnable-successor-id> \
   --reason "<public-safe external-wait rationale>" \
   --format json
 ```
 
-The resume condition removes the waiting Todo from runnable selection until the
-monitor records a newer material-change generation. Do not mark this typed external
+The scoped resume condition removes the waiting Todo from runnable selection until
+that case/run records a newer material-change generation; other cohort launches,
+terminal events, or scores do not wake it. Omit both scope forms only when the wait
+intentionally follows every material transition on the monitor. Do not mark this typed external
 wait `blocked`, and do not use the monitor itself as the runnable successor.
 
 A material user update should include the current countable arm and pair coverage,

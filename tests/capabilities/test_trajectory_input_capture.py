@@ -135,7 +135,7 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert path.read_bytes() == raw
 
 
-@pytest.mark.parametrize("call_kind", ["absent", "direct", "compound"])
+@pytest.mark.parametrize("call_kind", ["absent", "direct", "compound", "bound_guard", "expanded_guard", "replan_view"])
 def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, call_kind):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
@@ -146,6 +146,14 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
         reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
         items = [{"type": "response_item", "payload": item} for item in (call, reply)]
         native_command = []
+        if call_kind in {"bound_guard", "expanded_guard", "replan_view"}:
+            command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+                'loopx quota should-run --turn-instance-id "${LOOPX_TURN:?}"')
+            if call_kind == "expanded_guard":
+                command = command.replace('\nloopx ', '\n*/loopx ')
+            elif call_kind == "replan_view":
+                command = 'loopx quota replan-view --replan-stage review'
+            call["input"] = 'text(await tools.exec_command({cmd: ' + json.dumps(command) + '}))'
         if call_kind == "compound":
             call["input"] = 'text(await Promise.all([tools.exec_command({cmd: "loopx status"}), tools.exec_command({cmd: "pwd"})]));'
             # Same Turn and matching time window, but the command's ID is not the parent tool call ID.
@@ -181,13 +189,14 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
     inventory = view["solver_usage"]["projection"]["tool_context"]
     footprint = view["solver_usage"]["projection"]["loopx_requests"]
     assert footprint["status"] == "observed"
-    if call_kind == "direct":
-        assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
+    if call_kind in {"direct", "bound_guard", "replan_view"}:
+        operation = {"direct": "status", "bound_guard": "quota should-run", "replan_view": "quota replan-view"}[call_kind]
+        assert inventory["operations"] == [{"operation": operation, "calls": 1, "bytes": 5}]
         assert inventory["loopx_tool_output_fraction"] == 1.0
         assert footprint["recognized_requests"] == 1
         assert footprint["tokens"]["input_tokens"] == 100
         assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
-    elif call_kind == "compound":
+    elif call_kind in {"compound", "expanded_guard"}:
         assert view["solver_usage"]["projection"]["request_coverage"]["all_requests"]["input_tokens"] == 100
         assert footprint["recognized_requests"] == 0 and footprint["unclassified_calls"] == 1
         assert footprint["input_fraction"] is None and footprint["uncached_input_fraction"] is None

@@ -476,6 +476,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "scheduler_observation", False):
+        from .quota_request import validate_scheduler_observation_request
+
+        validate_scheduler_observation_request(args)
+        if directory is not None:
+            raise QuotaCommandValidationError("--scheduler-observation does not prepare a capture")
+        return None
     if getattr(args, "prepared_capture_reference", False) and (
         args.quota_command != "should-run" or args.format != "json"
         or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
@@ -520,8 +527,13 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
         raise QuotaCommandValidationError(
             "native Codex context delivery needs JSON and a capture destination")
     if handoff is not None:
-        validate_handoff_socket(handoff)
-        if requested is None and root is None:
+        handoff_root = None
+        if root is not None:
+            handoff_root = Path(root).expanduser().absolute()
+        elif requested is not None:
+            handoff_root = Path(requested).expanduser().absolute().parent
+        validate_handoff_socket(handoff, capture_root=handoff_root)
+        if handoff_root is None:
             raise QuotaCommandValidationError("decision handoff requires an explicit decision capture destination")
     if requested is None and root is None:
         return None
@@ -715,7 +727,19 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
-    """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    """Dispatch captured reads and native lifecycle IO before quota authority access."""
+    if getattr(args, "scheduler_observation", False):
+        from .quota_request import validate_scheduler_observation_request
+
+        try:
+            # Validate the compact observation as a closed request shape before
+            # context-profile defaults or any quota authority can mutate/add
+            # reader, Turn, receipt or capture options.
+            validate_scheduler_observation_request(args)
+        except QuotaCommandValidationError as exc:
+            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
+            return 1
+        return None
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
         print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or JSON context-project"},
                       args.format, str)
@@ -854,21 +878,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
                         request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        if "claim_source_sha256" not in request:
+                        if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
                             raise LegacyNativePreparationCapture()
                         if request.get("readback_only") is True:
                             preparation_context = codex_execution_preparation_readback_context(request) or ""
                         else:
-                            capture = (
-                                Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
-                                if request.get("turn_instance_id") else None
-                            )
+                            capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                             receipt = execute_codex_execution_preparation(
                                 request,
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
                                 capture_directory=capture,
-                                context_directory=directory if capture is not None else None,
+                                context_directory=Path(directory),
                             )
                             record_native_execution_preparation(
                                 directory,
@@ -879,25 +900,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                             # Publish the decision that the Host just verified;
                             # a model must not need a second guard to obtain its
                             # Goal, task, requirements and settlement contract.
-                            if capture is not None:
-                                source = capture / "decision.json"
-                                # The existing saved-capture owner preserves a
-                                # pinned full recovery even if native projection
-                                # fails. It never rereads authority or admits work.
-                                digest = receipt.pop("capture_sha256")
-                                receipt.pop("capture_path", None)
-                                receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
-                                    **vars(args), "quota_command": "context-project",
-                                    "capture_file": str(source),
-                                    "capture_sha256": digest,
-                                    "goal_id": request["goal_id"], "agent_id": request["agent_id"],
-                                    "turn_instance_id": request["turn_instance_id"],
-                                }), hook_session=event["session_id"])
-                                if receipt["context"].get("ok") is False:
-                                    from ..command_invocation import current_loopx_cli_argv
+                            source = capture / "decision.json"
+                            # The saved-capture reader never rereads authority or admits work.
+                            digest = receipt.pop("capture_sha256")
+                            receipt.pop("capture_path")
+                            receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
+                                **vars(args), "quota_command": "context-project",
+                                "capture_file": str(source),
+                                "capture_sha256": digest,
+                                "goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                                "turn_instance_id": request["turn_instance_id"],
+                            }), hook_session=event["session_id"])
+                            if receipt["context"].get("ok") is False:
+                                from ..command_invocation import current_loopx_cli_argv
 
-                                    receipt["context"]["recovery_command"] = context_capture_read_command(
-                                        source, digest, reader_argv=current_loopx_cli_argv())
+                                receipt["context"]["recovery_command"] = context_capture_read_command(
+                                    source, digest, reader_argv=current_loopx_cli_argv())
                             preparation_context = codex_execution_preparation_context(receipt)
                 except LegacyNativePreparationCapture as error:
                     preparation_context = str(error)
@@ -935,6 +953,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         payload = read_context_capture(args, reader_argv=current_loopx_cli_argv())
         print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
+    if args.quota_command == "replan-view":
+        return handle_replan_view(args, print_payload)
     return None
 
 

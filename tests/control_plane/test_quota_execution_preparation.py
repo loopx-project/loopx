@@ -291,7 +291,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert plan["schema_version"] == (
+        "quota_settlement_plan_v2" if scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
+    )
+    if scenario == "codex_app_heartbeat":
+        writeback, spend = [step for step in plan["ordered_steps"]
+                            if step["kind"] in {"durable_writeback", "quota_spend"}]
+        assert "--settle-turn --settlement-receipt" in writeback["command_template"]
+        assert spend["owner"] == "runtime" and "command_template" not in spend
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -452,7 +459,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("case", [
     "same-execution", "released-execution", "after-ready-same-execution",
-    "after-ready-released-execution", "legacy-released-execution",
+    "after-ready-released-execution", "legacy-same-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
@@ -493,7 +500,9 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             guards.append(command[command.index("--turn-instance-id") + 1])
             if not after_ready and len(guards) == 1:
                 raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-        result = run(command, **kwargs)
+        # Reach the deliberate post-ready fault rather than accidentally
+        # injecting the separate pre-commit timeout under test contention.
+        result = run(command, **{**kwargs, "timeout": 30} if after_ready else kwargs)
         if "claim" in command:
             claims.append(json.loads(result.stdout))
         return result
@@ -563,7 +572,10 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert "no verified live guard binding" in guidance and "fresh capture" in guidance
         assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
-        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        assert current["active"] is (not released)
+        assert current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        if not released:
+            assert current["lease"] == lease
     else:
         assert len(claims) == 1 and guards == [turn]
         for observed in (result, resume):

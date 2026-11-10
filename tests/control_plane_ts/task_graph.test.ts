@@ -20,6 +20,9 @@ test("known Todo conditions only: opaque route/capability refs cannot become gra
   }
   assert.equal(todoRef("todo_real"), "todo_real");
   assert.equal(todoRef("monitor_changed:todo_real"), "todo_real");
+  assert.equal(todoRef("monitor_changed:todo_real@case-a/run-1"), "todo_real");
+  assert.equal(todoRef("monitor_changed:todo_real@case-a:run-1"), "todo_real");
+  assert.equal(todoRef("monitor_changed:todo_real@one@two"), null);
   assert.equal(todoRef("todo_done:todo_real"), "todo_real");
 });
 

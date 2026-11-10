@@ -18,6 +18,7 @@ from ..agents.workspace_guard import delivery_workspace_refresh_hint
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
+    SettlementIdentity,
     SettlementStepKind,
     settlement_binding_args,
     settlement_step_command,
@@ -445,6 +446,13 @@ def _turn_scoped_cli_settlement_context(
     goal_id = str(payload.get("goal_id") or "").strip()
     agent_id = str(agent_identity.get("agent_id") or "").strip()
     selected_todo_id = normalize_todo_id(selected_todo.get("todo_id"))
+    receipt = payload.get("heartbeat_receipt")
+    if ((payload.get("replan_action_packet") or {}).get("settlement_only") is True
+            and isinstance(receipt, Mapping) and receipt.get("settlement_identity") is not None):
+        identity = SettlementIdentity.from_runtime_payload(receipt["settlement_identity"])
+        if (identity.goal_id, identity.agent_id, identity.turn_instance_id) != (goal_id, agent_id, turn_instance_id):
+            raise ValueError("receipt settlement projection does not match the original Goal/Agent/Turn")
+        selected_todo_id = identity.todo_id
     semantic_replan_obligation_id = replan_obligation_id_from_packet(
         payload.get("replan_action_packet")
     )

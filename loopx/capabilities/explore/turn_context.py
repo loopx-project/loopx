@@ -96,6 +96,11 @@ def project_work_yardstick_sources(
     return sources
 
 
+def explore_read_route(*, registry_path: Path, runtime_root: Path) -> list[str]:
+    """Retain the caller's exact source when a bounded result needs more detail."""
+    return ["loopx", "--registry", str(registry_path), "--runtime-root", str(runtime_root), "--format", "json"]
+
+
 @effect_runtime_request_scope()
 def explore_turn_context(
     *, registry_path: Path, runtime_root: Path, goal_id: str, agent_id: str,
@@ -152,15 +157,7 @@ def explore_turn_context(
         # Reuse the canonical open-task snapshot, including waiting tasks
         # omitted by the independent planner. The typed owner checks scope.
         focus = {"todo_id": todo_id, "focus_todo": scopes.get(todo_id)}
-    route = [
-        "loopx",
-        "--registry",
-        str(registry_path),
-        "--runtime-root",
-        str(runtime_root),
-        "--format",
-        "json",
-    ]
+    route = explore_read_route(registry_path=registry_path, runtime_root=runtime_root)
     work_todos = [{key: row[key] for key in (
         "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
         for row in todos.get("todos", [])] if yardstick else []

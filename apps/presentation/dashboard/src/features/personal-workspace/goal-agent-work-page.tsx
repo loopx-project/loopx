@@ -87,6 +87,7 @@ function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSessi
   const binding = directory?.bindings.find(row => row.binding_ref === selectedValue);
   const managed = directory?.managed.find(row => `managed:${row.session_id}` === selectedValue);
   const count = (directory?.bindings.length ?? 0) + (directory?.managed.length ?? 0);
+  const selectedUnavailable = Boolean(directory && selectedValue && !binding && !managed);
   return <>
     {directory && count > 0 && (count > 1 || selectedValue && !binding && !managed) ? <label className="attached-session-selection">
       <span>{zh ? "工作会话" : "Conversation"}</span>
@@ -100,12 +101,15 @@ function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSessi
       </select>
     </label> : null}
     {!directory ? <p role="status">{zh ? "正在连接原会话…" : "Connecting to the original conversation…"}</p> : null}
-    {directory?.errors.length && !count ? <p role="alert">{directory.errors.join(" ")} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button></p> : null}
-    {directory?.errors.length && count > 0 ? <ContextHelp label={zh ? "部分会话来源不可用" : "Some conversation sources unavailable"} icon={CircleHelp}>
+    {directory && (selectedUnavailable || directory.errors.length && !count) ? <p role="alert">
+      {selectedUnavailable ? (zh ? "原会话绑定暂不可用。" : "The original conversation binding is unavailable.") : null}
+      {directory.errors.join(" ")} <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button>
+    </p> : null}
+    {directory?.errors.length && count > 0 && !selectedUnavailable ? <ContextHelp label={zh ? "部分会话来源不可用" : "Some conversation sources unavailable"} icon={CircleHelp}>
       {directory.errors.map((error, index) => <p key={index}>{error}</p>)}
       <button type="button" onClick={reconnect}>{zh ? "重新连接" : "Reconnect"}</button>
     </ContextHelp> : null}
-    {directory && !count && !directory.errors.length ? <ContextHelp label={hosts.length ? (zh ? "会话来源未接入" : "Conversation source not connected") : (zh ? "尚无工作会话" : "No work conversations")} icon={CircleHelp}>
+    {directory && !count && !directory.errors.length && !selectedUnavailable ? <ContextHelp label={hosts.length ? (zh ? "会话来源未接入" : "Conversation source not connected") : (zh ? "尚无工作会话" : "No work conversations")} icon={CircleHelp}>
       <p>{hosts.length ? (zh ? `来源：${hosts.join("、")}。此宿主的工作记录与回复尚未接入。` : `Source: ${hosts.join(", ")}. Work records and replies from this host are not connected yet.`)
         : (zh ? "此 Agent 尚无已绑定的工作会话。原 Goal 对话记录仍独立保留。" : "This Agent has no bound work Sessions. Existing Goal conversations remain separate.")}</p>
     </ContextHelp> : null}

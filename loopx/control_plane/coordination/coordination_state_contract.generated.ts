@@ -183,6 +183,8 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
       "consecutive_no_change",
       "material_change",
       "material_change_generation",
+      "material_change_scope",
+      "material_change_scope_generations",
       "max_no_change_before_replan",
       "monitor_effect_id",
       "note",

@@ -12,8 +12,18 @@ import pytest
 
 from test_replan_successor_guard_reentry import AGENT, GOAL, TURN, _add, _fixture, _guard
 from test_external_scheduler_worker import _args, _guarded_host, worker
+from loopx.cli_commands.quota_presentation import project_scheduler_observation
 from loopx.extensions.process_runtime import CappedProcessResult
 from loopx.history import collect_history
+
+
+def _admitted_replan_for_worker(quota, command, turn, **kwargs):
+    # These recovery cases supply a receipt from an explicitly admitted Host
+    # Turn. A normal scheduler observation must not commit that admission.
+    assert command[-1] == "--scheduler-observation"
+    bound = quota([*command[:-1], "--context-delivery", "off", "--include-detail", "scheduler",
+                   "--turn-instance-id", turn], **kwargs)
+    return project_scheduler_observation(bound)
 
 
 def _worker_readback(args):
@@ -83,7 +93,7 @@ def test_real_unresolved_replan_dispatches_once_across_return_and_restart(tmp_pa
     assert len(requests) == 1  # D=1, P=1 in this deterministic Host fixture.
     original = decisions[0]["autonomous_replan_obligation"]["obligation_id"]
     for packet in decisions:
-        assert packet["should_run"] is True
+        assert worker.parse_tick(packet).should_run
         assert packet["effective_action"] == "autonomous_replan_required"
         assert packet["autonomous_replan_obligation"]["obligation_id"] == original
         assert not packet.get("goal_ref"), "the executable legacy entry must not acquire a forged lifetime"
@@ -112,7 +122,7 @@ def test_real_original_receipt_recovery_unblocks_next_work_without_repeating_rep
     def scoped_quota(command, **kwargs):
         # This Host fixture explicitly preserves its original admitted Turn.
         # An ordinary opaque unbound shell command has no such guarantee.
-        packet = real_quota([*command, "--turn-instance-id", current_turn[0]], **kwargs)
+        packet = _admitted_replan_for_worker(real_quota, command, current_turn[0], **kwargs)
         decisions.append(deepcopy(packet))
         return packet
 
@@ -346,7 +356,7 @@ def test_settled_replan_host_failure_allows_only_verified_next_work(tmp_path, mo
     turn, decisions, requests, original = [TURN], [], [], {}
 
     def quota(command, **kwargs):
-        packet = real_quota([*command, "--turn-instance-id", turn[0]], **kwargs)
+        packet = _admitted_replan_for_worker(real_quota, command, turn[0], **kwargs)
         decisions.append(packet)
         return packet
 

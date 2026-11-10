@@ -219,12 +219,11 @@ class StewardTurnHost:
                 ("editorial-response.json", "private-generation.json", "private-delivery.json")),
             "observed_at": time.time()}}
 
-    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
-        """Observe quota recovery, never resume or rewrite the failed native Turn."""
+    def report_failure_observation(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Read the original native failure without starting or resuming work."""
         result = (original.get("response") or {}).get("native_loopx") or {}
         request = original.get("loopx_request") or {}
         if (original.get("status") != "completed" or request.get("work_kind") != "report"
-                or request.get("report_quota_recovery") is not None
                 or result.get("result_kind") != "host_failure" or not original.get("upstream_turn_id")):
             return None
         from .codex_adapter import CodexAppServerAdapter
@@ -244,6 +243,18 @@ class StewardTurnHost:
             codex_home=Path(session["codex_home"]),
             model_auth_home=checked_session_home(self.controller.codex_home, session),
             thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
+        if (not proof or proof.get("turn_id") != original["upstream_turn_id"]
+                or proof.get("thread_id") not in threads or proof.get("only_original_user_item") is not True
+                or not proof.get("codex_error_info")):
+            return None
+        return proof
+
+    def report_quota_request(self, original: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Observe quota recovery, never resume or rewrite the failed native Turn."""
+        request = original.get("loopx_request") or {}
+        if request.get("report_quota_recovery") is not None:
+            return None
+        proof = self.report_failure_observation(original)
         if (not proof or proof.get("only_original_user_item") is not True
                 or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
             return None

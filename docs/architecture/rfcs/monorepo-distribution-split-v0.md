@@ -3294,3 +3294,61 @@ installed-host, PostgreSQL host/wheel, full marginal-cost or model/team adoption
 Keep every historical failure and original acceptance open. The prospective M2
 rule does not turn a historical frozen failure into a pass; unchanged-head
 review, required validation and fresh merge readiness still govern delivery.
+
+### 2026-11-09 — Release qualification partition proposal
+
+Two unchanged-head Release Artifacts runs passed the complete 86-scenario
+packaged browser catalog and original companion flows after approximately
+28 minutes, then cancelled during snapshot qualification at the existing
+30-minute job limit. A constructed snapshot is not a qualified snapshot;
+these cancellations and all earlier frozen latency failures remain failures.
+
+The S12 distribution qualification proposal separates package/sdist/installed
+frontend/DSH and snapshot checks from three isolated browser partitions, using
+the existing catalog, partition selector and packaged catalog/team/craft
+commands. Every original scenario and companion remains required; the craft
+command also includes its existing command-palette check. This changes release
+browser concurrency and repeats dependency setup/static checks. It does not
+change job limits, scenario deadlines, M2 thresholds or the six shared Python
+validation lanes. The first complete Linux qualification,
+[run 42633152296](https://github.com/loopx-project/loopx/actions/runs/42633152296),
+finished preparation in 1m43s, browser workers in 12m46s/9m25s/7m29s and the
+final gate in 22s. All 86 unique scenarios and required companions passed,
+and the snapshot checks completed. The tested synthetic merge `ef048a32c`
+and integrated proposal `5a9fd8020` have the same complete tracked source tree;
+this qualifies that candidate only. Later main integration changes product
+sources and requires fresh packaged qualification. Complete CI cost and
+comparable end-to-end marginal-cost benefit remain unqualified.
+
+The subsequent complete Linux qualification,
+[run 42649914601](https://github.com/loopx-project/loopx/actions/runs/42649914601),
+passed all 86 scenarios, team/craft companions and snapshot checks. Its product
+source `4747408cc36067a9175bd4a00c440466c316ffc3` has the same complete tracked
+tree as proposal `9b4ab03a96eff9c3866193819d7da50945912db7`. Downloaded final
+receipts and bundle checks independently confirm common source, catalog coverage
+and package/runtime digests. Later integration of the merged kernel work and
+current main changes that product tree again; the integrated proposal requires
+its own complete qualification. The separate coverage-enabled source M2 failure
+remains failed. Its prospective measurement repair in
+[#8456](https://github.com/loopx-project/loopx/pull/8456) does not reclassify that
+run or replace this proposal's exact-head CI and merge-readiness gates.
+
+Workers install the same candidate wheel and adopt only the producer's exact
+selected fixture commit/paths. Source-side fixture authorities also receive the
+prebuilt frontend copied from that wheel, validated against the product source;
+they do not rebuild it. The initial partition run omitted these source assets
+and failed two research companion paths; preserve that failed run separately. Package, checksum, snapshot and source digests,
+plus the candidate artifact id, bind the final `build` gate to successful
+partition receipts. The gate imports the actual catalog without starting a
+browser and rejects missing/failed/unknown/duplicate/mispartitioned scenarios,
+wrong provenance and incomplete companions before attestation or the existing
+validated-bundle upload. Publication-only recovery retains its successful
+original-build and immutable-asset checks. Local negative-case qualification
+is separate from a complete GitHub runner qualification.
+
+This is a release-pipeline qualification repair for the minimal-kernel work;
+no kernel code or performance attribution changes here. Exact-head review,
+required validation and fresh ready=true still govern merge. The original task
+and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, full-cost and adoption gaps
+remain open.

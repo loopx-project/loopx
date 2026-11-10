@@ -1509,6 +1509,15 @@ Recovery settles process transport only. Preserved pending semantic replan
 attempts still require their original settlement owner; an interrupted replan
 is not silently declared complete or cleared to force dispatch.
 
+Terminal failure capture discovers the current admitted scheduler phase under
+its existing Docker writer barrier. It reads the active phase clock and follows
+only that phase's `resume_from` chain back to the original scheduler state,
+retaining every intermediate phase and the latest failed attempt. Callers do
+not supply a phase list, and unrelated control files are never selected. Missing,
+malformed, cyclic or out-of-scope predecessors fail preservation without deleting
+the stopped source. The preserved worker and its pending Host witness remain
+necessary for recovery; capture alone grants no continuation or extra budget.
+
 ### Explicitly continue after native account allowance is repaired
 
 A hard native quota failure is still held by default. Repair or replenish the
@@ -1554,6 +1563,16 @@ Goal/Stop/session/work admission. Repeating the request selects that same phase,
 including any later failure; it cannot clear the failure or extend its deadline.
 A later explicit repair must bind that new failure separately. Existing operator
 and account authority remain required; a digest is provenance, not permission.
+
+After in-place continuation is admitted, the scheduler atomically publishes
+`active-phase-deadline` beside its state, preserving that phase's exact existing
+deadline. Replaying the same request republishes the same deadline; a refused
+continuation does not replace it. Both held and terminal captures automatically
+select this physical clock, including when the container is paused or stopped.
+They preserve the original `phase-deadline` file as a recovery witness. Fresh
+workers without a continuation clock keep the standard path. An explicitly
+configured supervisor `phase_deadline_path` still takes precedence; unreadable or
+invalid clocks fail capture instead of silently falling back or granting time.
 
 The explicit failed-phase path additionally uses the installed optional native
 Codex provider's existing availability policy (`loopx-codex-provider-routing`).

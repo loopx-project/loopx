@@ -4,6 +4,7 @@ import {GoalExploreResults} from "./goal-explore-results";
 import {goalHierarchy} from "./goal-hierarchy";
 import type {WorkspaceGoal} from "./personal-workspace-model";
 import {ResearchChildGoals, type ResearchChildGoal} from "./research-child-goals";
+import {GoalSourceDocument} from "./goal-source-document";
 import './research-case-study.css';
 
 type ResearchGoal = ResearchChildGoal & Pick<WorkspaceGoal, 'parentGoalId' | 'sourceStrategy'>;
@@ -41,6 +42,9 @@ export function GoalResearchWorkbench(props: {goalId: string; active: boolean; z
       zh={props.zh} onSelect={props.onSelectGoal} directoryUrl={props.directoryReadSourceUrl}
       active={props.active} refreshRevision={props.refreshRevision}/> : null}
     {!props.statusNotice ? <>
+      {props.readSourceUrl && new URL(props.readSourceUrl, window.location.href).searchParams.has("source_namespace")
+        ? <GoalSourceDocument key={JSON.stringify([props.goalId, props.readSourceUrl])} goalId={props.goalId}
+          originalGoalId={source?.original_goal_id ?? props.goalId} sourceUrl={props.readSourceUrl} zh={props.zh}/> : null}
       <GoalResearchHistory {...props} originalGoalId={source?.original_goal_id}
         preferHistory={Boolean(source)}
         onOpenSourceTasks={source ? props.onOpenTasks : undefined}/>

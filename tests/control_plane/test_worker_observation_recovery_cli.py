@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import shlex
 import subprocess
@@ -119,9 +120,25 @@ def test_original_capture_retains_the_emitted_poll_observation(
     elif wire == "envelope":
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 
+        # Explicitly disabled context delivery keeps the bounded v0 wire view;
+        # the immutable capture may carry the complete v1 source instead.
+        assert emitted["schema_version"] == "loopx_turn_envelope_v0"
+        assert emitted != source
         # Replan readers bind the full observation, including this receipt.
         # Their hash changes without changing the selected work or debit.
-        without_poll = {key: value for key, value in source.items() if key != "host_poll_receipt"}
+        without_poll = deepcopy(source)
+        del without_poll["host_poll_receipt"]
+        if source.get("schema_version") == "loopx_turn_envelope_v1":
+            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+            from tests.control_plane.test_complete_turn_decision import _resign_contract
+
+            assert_complete_turn_decision(source)
+            with pytest.raises(RuntimeError, match="content integrity mismatch"):
+                assert_complete_turn_decision(without_poll)
+            # A separately signed fixture proves that the poll is part of the
+            # source binding, while work and settlement identity stay fixed.
+            without_poll, _ = _resign_contract(without_poll)
+            assert_complete_turn_decision(without_poll)
         prior = build_turn_envelope(without_poll)
         actual = emitted["action_signature"]
         for key in ("decision", "should_run", "effective_action"):
@@ -138,18 +155,27 @@ def test_original_capture_retains_the_emitted_poll_observation(
                   "--capture-file", str(capture / "decision.json"),
                   "--capture-sha256", hashlib.sha256(original).hexdigest()]
     if wire == "envelope":
-        recovered = json.loads(subprocess.run(reader, check=True, capture_output=True).stdout)
+        recovered = json.loads(subprocess.run(
+            reader, check=True, capture_output=True, text=True, timeout=90,
+        ).stdout)
+        assert recovered == source, "The emitted reader must recover the complete original source"
+        if source.get("schema_version") == "loopx_turn_envelope_v1":
+            assert_complete_turn_decision(recovered)
         assert recovered["host_poll_receipt"] == expected
     else:
         page = subprocess.run([*reader, "--select", "/host_poll_receipt"],
                               check=True, capture_output=True, text=True, timeout=90)
         recovered = json.loads(page.stdout)
-        assert recovered["ok"] is True and recovered["eof"] is True
-        assert json.loads(recovered["content"])["selections"][0]["value"] == expected
+        assert recovered["ok"] is True and recovered["offset"] == 0 and recovered["eof"] is True
+        assert len(recovered["content"].encode()) == recovered["total_bytes"]
+        selections = json.loads(recovered["content"])["selections"]
+        assert [entry["pointer"] for entry in selections] == ["/host_poll_receipt"]
+        assert selections[0]["value"] == expected
     if wire != "native":
         assert emitted["host_poll_receipt"] == expected
     assert receipt.read_bytes() == before, "Recovery must not record a second poll"
     assert (capture / "decision.json").read_bytes() == original
+    assert not count.exists(), "Recovery must not dispatch the Host"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

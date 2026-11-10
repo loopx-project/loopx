@@ -13,6 +13,9 @@ import tempfile
 from typing import Any, TypeVar
 
 from ..content_digest import ENVELOPED_SHA256_PATTERN
+from ..goals.activation import require_current_registry_goal_activation
+from ..runtime.document_io import fsync_state_directory
+from ..runtime.private_permissions import protect_private_path, require_private_path
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...paths import GLOBAL_REGISTRY_FILENAME
 
@@ -183,10 +186,22 @@ def _read_document(path: Path) -> _ProjectRegistryDocument:
     return _decode_document(path.read_bytes())
 
 
+def _require_current_goal_activation(payload: dict[str, Any]) -> None:
+    goals = payload.get("goals")
+    for goal in goals if isinstance(goals, list) else []:
+        if isinstance(goal, dict):
+            try:
+                require_current_registry_goal_activation(goal)
+            except ValueError as error:
+                raise ProjectRegistryProtocolError(str(error)) from error
+
+
 def load_project_registry(path: Path) -> dict[str, Any]:
     """Load either supported project-registry wire format."""
 
-    return _read_document(path.expanduser()).payload
+    payload = _read_document(path.expanduser()).payload
+    _require_current_goal_activation(payload)
+    return payload
 
 
 def decode_project_registry(raw_bytes: bytes) -> dict[str, Any]:
@@ -202,12 +217,14 @@ def decode_registry_snapshot(path: Path, raw_bytes: bytes) -> dict[str, Any]:
         payload = json.loads(raw_bytes)
         if not isinstance(payload, dict):
             raise ProjectRegistryError("global registry root must be a JSON object")
+        _require_current_goal_activation(payload)
         return payload
     payload = decode_project_registry(raw_bytes)
     require_runtime_compatible_project_registry(
         payload,
         operation="generic registry read",
     )
+    _require_current_goal_activation(payload)
     return payload
 
 
@@ -369,6 +386,7 @@ class ProjectRegistryTransaction:
             raise RuntimeError("project registry transaction is already finished")
         if not isinstance(payload, dict):
             raise TypeError("project registry payload must be a JSON object")
+        _require_current_goal_activation(payload)
         wrote = not self._existed or payload != self._document.payload
         if not wrote:
             self._finished = True
@@ -403,6 +421,32 @@ class ProjectRegistryTransaction:
             ) from exc
         self._finished = True
         return True
+
+    def backup_preimage(self) -> Path:
+        """Verify a private original-byte backup before a caller's migration."""
+        if not self._existed or self._finished:
+            raise RuntimeError("registry backup requires an open existing transaction")
+        raw = self._document.raw_bytes
+        if self._path.read_bytes() != raw:
+            raise ProjectRegistryMutationError("Registry changed before preimage backup")
+        directory = self._path.parent / "backups" / "registry-preimages"
+        for parent in (directory.parent, directory):
+            if parent.is_symlink():
+                raise OSError("Registry backup path is redirected")
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        protect_private_path(directory, directory=True)
+        target = directory / f"{self._path.name}.{hashlib.sha256(raw).hexdigest()}.bak"
+        if not target.exists():
+            with target.open("xb") as stream:
+                protect_private_path(target)
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            fsync_state_directory(directory)
+        require_private_path(target)
+        if target.read_bytes() != raw:
+            raise ProjectRegistryMutationError("Registry backup does not match original bytes")
+        return target
 
     def remove(self) -> bool:
         if self._finished:
@@ -446,6 +490,7 @@ def _registry_transaction(
     create_document: Callable[[], _ProjectRegistryDocument] | None,
     require_writer: Callable[[_ProjectRegistryDocument], None],
     agent_id: str | None = None,
+    allow_retired_activation: bool = False,
 ) -> Iterator[ProjectRegistryTransaction]:
     expanded = path.expanduser()
     with exclusive_cross_runtime_file_lock(
@@ -465,12 +510,48 @@ def _registry_transaction(
             document = create_document()
             mode = None
         require_writer(document)
+        if not allow_retired_activation:
+            _require_current_goal_activation(document.payload)
         yield ProjectRegistryTransaction(
             expanded,
             document=document,
             existed=existed,
             mode=mode,
         )
+
+
+@contextmanager
+def activation_upgrade_registry_transaction(path: Path) -> Iterator[ProjectRegistryTransaction]:
+    """The upgrade-only writer can read retired metadata, then commit current data.
+
+    Reuse each format's supported writer and exact-byte compensation; never
+    downgrade an envelope or bypass an unknown minimum writer protocol.
+    """
+    with _registry_transaction(path, operation="upgrade_goal_activation_metadata",
+                               create_document=None, require_writer=_require_activation_upgrade_writer,
+                               allow_retired_activation=True) as transaction:
+        yield transaction
+
+
+def _require_activation_upgrade_writer(document: _ProjectRegistryDocument) -> None:
+    if (document.format is _ProjectRegistryFormat.STRICT_ENVELOPE_V2
+            or document.payload.get("profile_id") == SOURCE_SESSION_PROFILE_ID):
+        _require_source_session_writer(document)
+    else:
+        _require_supported_writer(document)
+
+
+def read_activation_upgrade_registry(path: Path) -> dict[str, Any]:
+    """Upgrade-only read: retain wire/writer validation but accept retired fields."""
+    if not path.exists():
+        return {}
+    document = _read_document(path)
+    if path.name == GLOBAL_REGISTRY_FILENAME and document.format is not _ProjectRegistryFormat.LEGACY_OBJECT:
+        raise ProjectRegistryError("global registry root must be a JSON object")
+    _require_activation_upgrade_writer(document)
+    if not isinstance(document.payload.get("goals", []), list):
+        raise ProjectRegistryError("registry goals must be an array")
+    return document.payload
 
 
 def _created_document(

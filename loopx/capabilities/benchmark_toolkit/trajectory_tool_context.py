@@ -12,23 +12,71 @@ import re
 import shlex
 
 
+_TURN_ASSIGNMENT = re.compile(
+    r"LOOPX_TURN=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z)"
+)
+_TURN_PLACEHOLDER = "${LOOPX_TURN:?}"
+_TURN_ARGUMENT = re.compile(r'(?<!\S)--turn-instance-id[ \t]+"' + re.escape(_TURN_PLACEHOLDER) + r'"(?=[ \t]|$)')
+
+
 def _argv(command: str, depth: int = 0) -> list[str] | None:
-    if depth > 2 or "\n" in command or "\r" in command:
+    if depth > 2 or "\r" in command:
         return None
+    bound_turn = None
+    if "\n" in command:
+        # The managed heartbeat assigns one literal UTC Turn ID before the
+        # quota guard. Resolve only its quoted argument, without running shell.
+        assignment, _, command = command.partition("\n")
+        command = command.removesuffix("\n")
+        match = _TURN_ASSIGNMENT.fullmatch(assignment)
+        if (match is None or "\n" in command or "#" in command or command.count(_TURN_PLACEHOLDER) != 1
+                or not _TURN_ARGUMENT.search(command)):
+            return None
+        bound_turn = match[1]
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>")
         lexer.whitespace_split = True
         words = list(lexer)
     except ValueError:
         return None
+    # Keep quoting/escaping until expansion syntax is ruled out. shlex's argv
+    # alone cannot distinguish an unquoted glob from a literal quoted filename.
+    unquoted = re.sub(r"'(?:[^']*)'|\"(?:\\.|[^\"\\])*\"|\\.", "", command)
+    if re.search(r"[\*?\[\]{}~]", unquoted):
+        return None
     if not words or any(word and set(word) <= set(";&|()<>") for word in words):
         return None
+    if bound_turn is not None:
+        if words.count("--turn-instance-id") != 1:
+            return None
+        index = words.index("--turn-instance-id") + 1
+        if words[index:index + 1] != [_TURN_PLACEHOLDER]:
+            return None
+        words[index] = bound_turn
+        from ...cli_runtime import GLOBAL_OPTIONS_WITH_VALUE
+
+        args = words[1:]
+        executable = words[0].rsplit("/", 1)[-1]
+        if executable != "loopx":
+            if (not re.fullmatch(r"python(?:3(?:\.\d+)?)?", executable)
+                    or args[:1] != ["-m"] or args[1:2] not in (["loopx"], ["loopx.cli"], ["loopx.entrypoint"])):
+                return None
+            args = args[2:]
+        while args and args[0] in GLOBAL_OPTIONS_WITH_VALUE:
+            if len(args) < 2:
+                return None
+            args = args[2:]
+        if args[:2] != ["quota", "should-run"]:
+            return None
+
     # Expansion could select another executable or hide shell work. Quoted
     # expansions are conservatively unassigned too; no string is evaluated.
     if any("$" in word or "`" in word for word in words):
         return None
     if words[0].rsplit("/", 1)[-1] in {"bash", "sh"}:
-        return _argv(words[2], depth + 1) if len(words) == 3 and words[1] in {"-c", "-lc"} else None
+        if bound_turn is None and len(words) == 3 and words[1] in {"-c", "-lc"}:
+            return _argv(words[2], depth + 1)
+        return None
     return words
 
 

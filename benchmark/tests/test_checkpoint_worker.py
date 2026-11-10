@@ -115,7 +115,7 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
 
 
 @pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native",
-    "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"])
+    "retention", "retention_default", "retention_off", "retention_pin", "retention_failure", "continued_clock"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from benchmark.edgebench.checkpoint_worker import _archive
@@ -130,6 +130,11 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         "Path('/logs/agent/checkpoint-controller').mkdir(parents=True); "
         "Path('/opt/loopx-benchmark/control').mkdir(parents=True); "
         "Path('/opt/loopx-benchmark/control/phase-deadline').write_bytes(Path('/phase').read_bytes())"]).exit_code == 0
+    continued_clock = "/opt/loopx-benchmark/control/continued-phase-deadline"
+    if fault == "continued_clock":
+        assert container.exec_run(["python", "-c", "from pathlib import Path; "
+            f"Path({continued_clock!r}).write_bytes(Path('/phase').read_bytes()); "
+            "Path('/opt/loopx-benchmark/control/phase-deadline').write_text('1')"]).exit_code == 0
     prepared = _archive(container, "/candidate", tmp_path / "prepared")
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe",
         "components": [{"id": "code", "source_path": str(prepared)}]})
@@ -186,7 +191,8 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             return original_capture(*args, **kwargs)
         monkeypatch.setattr(checkpoint_supervisor, "capture_worker", with_old_point)
     supervisor = CheckpointSupervisor(files[0], tmp_path / "points", retention_policy=policy_file,
-                                      retention_enabled=fault != "retention_off")
+                                      retention_enabled=fault != "retention_off",
+                                      **({"phase_deadline_path": continued_clock} if fault == "continued_clock" else {}))
     supervisor.bind({"SFORGE_TOKEN": token})
     supervisor.start(container)
     try:
@@ -196,15 +202,19 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         supervisor.close()
     response = json.loads((tmp_path / "points" / (nonce + ".json")).read_bytes())
     assert response["ok"] is (fault in {None, "read_race", "retention", "retention_default",
-                                      "retention_off", "retention_pin", "retention_failure"})
+                                      "retention_off", "retention_pin", "retention_failure", "continued_clock"})
     unit = tmp_path / "points" / nonce
-    if fault in {None, "read_race", "retention", "retention_default", "retention_off", "retention_pin", "retention_failure"}:
+    if response["ok"]:
         manifest = json.loads((unit / "checkpoint.json").read_bytes())
         metadata = manifest["point_metadata"]
         assert metadata["synthetic_boundary"] is True
         assert metadata["worker_file_snapshot"]["prepared_source_verified"] is True
         assert (unit / "components/code").read_text() == "retained"
         assert response["capture"]["research_point_qualified"] is False
+        if fault == "continued_clock":
+            capsule = unit / "components" / metadata["worker_file_snapshot"]["native_capsule_component_id"]
+            assert (capsule / "components/host_phase_deadline").read_bytes() == container.exec_run(["cat", "/phase"]).output
+            assert container.exec_run(["cat", "/opt/loopx-benchmark/control/phase-deadline"]).output == b"1"
         if fault in {"retention", "retention_default"}:
             assert not (tmp_path / "points/old").exists()
             receipt = json.loads((tmp_path / "points/retention-last.json").read_bytes())

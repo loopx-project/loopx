@@ -1,6 +1,6 @@
 schema_version = "loopx_extension_manifest_v0"
 id = "loopx-native-account-provider"
-version = "0.15.5"
+version = "0.15.6"
 requires_loopx_api = ">=1,<2"
 permissions = ["model-provider.local-read", "model-provider.transport-manage"]
 

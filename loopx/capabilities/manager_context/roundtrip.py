@@ -12,7 +12,8 @@ import re
 from hashlib import sha256
 import threading
 from itertools import islice
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 from ...extensions.background_runtime import HostedWorker
@@ -250,7 +251,58 @@ def report(
     }
 
 
-def project_chat_return_deliveries(root, session_id, messages, *, source_store=None):
+def _chat_return_files(root, route, path, reply, message, store, registry):
+    """Read the published result, never its mutable workspace source or sender."""
+    if not reply.get("attachments") or store is None:
+        return []
+    session = store.load_session(route["session_id"])
+    turn = store.load_turn(route["session_id"], message.get("turn_id")) if message.get("turn_id") else None
+    if (not session or not turn or message.get("role") not in {"agent", "assistant"}
+            or session.get("channel_id") != route.get("channel_id")
+            or turn.get("client_turn_id") != route.get("client_turn_id")
+            or turn.get("session_id") != session["session_id"]):
+        return []
+    if route.get("goal_ref") and registry is None:
+        return []
+    with (collaboration_goal_scope(registry, goal_id=route["goal_id"], agents=(),
+            caller_goal_ref=route.get("goal_ref")) if route.get("goal_ref") else nullcontext(None)) as scope:
+        row = _entry(root, route["goal_id"], route["agent_id"], route["request_id"], scope=scope)
+        if any(row.get(key) != route.get(key) for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+            return []
+        from ...control_plane.collaboration.inbox import inspect_result_identity
+        inspected = inspect_result_identity(reply, row, path)
+        if inspected is None:
+            return []
+        attachments = inspected["value"].get("attachments") or []
+    base = f"/api/chat/sessions/{quote(session['session_id'], safe='')}/messages/{quote(message['message_id'], safe='')}/files/"
+    return [{"id": f"result-file.{item['sha256']}.{index}", "name": item["name"], "size": item["size"],
+             "mime_type": "application/octet-stream", "data_url": base + f"{item['sha256']}.{index}"}
+            for index, item in enumerate(attachments)]
+
+
+def read_chat_return_file(root, store, session_id, message_id, file_id, *, registry):
+    """Resolve one file through its original saved message, then verify bytes."""
+    match = re.fullmatch(r"([a-f0-9]{64})\.([0-3])", file_id)
+    if not match:
+        raise KeyError("returned file unavailable")
+    digest = match[1]
+    message = next((item for item in store.messages(session_id, strict=True)
+                    if item.get("message_id") == message_id and item.get("origin") == "manager_followup"), None)
+    if message is None:
+        raise KeyError("returned file unavailable")
+    # Only files independently resolved from the immutable result can authorize
+    # a download; persisted input attachments are not file-store locators.
+    projected = project_chat_return_deliveries(root, session_id, [{**message, "attachments": []}],
+        source_store=store, registry=registry)[0]
+    attachment = next((item for item in projected.get("attachments", [])
+                       if item["id"] == "result-file." + file_id), None)
+    if attachment is None:
+        raise KeyError("returned file unavailable")
+    from ...control_plane.collaboration.result_files import read_result_file
+    return attachment, read_result_file(root, {"sha256": digest, "size": attachment["size"]})
+
+
+def project_chat_return_deliveries(root, session_id, messages, *, source_store=None, registry=None):
     """Attach public-safe delivery readback to returned Chat transcript rows."""
 
     from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
@@ -264,7 +316,8 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     }
     if not pending_message_ids:
         return list(messages)
-    statuses = {}
+    statuses, files = {}, {}
+    visible = {message.get("message_id"): message for message in messages}
     routes = _root(root) / "roundtrips"
 
     def candidate_paths():
@@ -312,6 +365,14 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
+            def observe_result(result_path, reply):
+                mid = "handoff." + _hash([request_id, result_path.stem])
+                try:
+                    files[mid] = _chat_return_files(root, route, result_path, reply,
+                        visible[mid], source_store, registry)
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Preserve delivery history even when a file cannot be read.
+                    files[mid] = []
             # A legacy/unmatched row can require the exhaustive route fallback.
             # Match immutable result keys before reading potentially long reply
             # bodies and delivery sidecars for off-page results. The existing
@@ -319,6 +380,7 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             for item in reply_status(
                 root, route,
                 include_result_key=lambda key: "handoff." + _hash([request_id, key]) in pending_message_ids,
+                observe_result=observe_result,
             ):
                 message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
@@ -334,7 +396,11 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             continue
     return [
         (
-            {**message, "return_delivery": statuses[message.get("message_id")]}
+            {**message, "return_delivery": statuses[message.get("message_id")],
+             **({"attachments": [*(item for item in (message.get("attachments") or [])
+                                    if item.get("id") not in {file["id"] for file in files[message["message_id"]]}),
+                                  *files[message["message_id"]]]}
+                if files.get(message.get("message_id")) else {})}
             if message.get("message_id") in statuses
             else message
         )
@@ -373,7 +439,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
-        root, session_id, snapshot["messages"], source_store=store
+        root, session_id, snapshot["messages"], source_store=store, registry=registry
     )
     from .presentation import project_collaboration
     # Use the frozen context to choose the carrier, projecting only this page.

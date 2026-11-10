@@ -13,7 +13,7 @@ import sys
 from typing import Any
 
 from ...agent_registry import load_goal_from_registry
-from ...file_lock import exclusive_file_lock
+from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from ..periodic_report.cadence import report_cadence_next_due_at
 from ..periodic_report.cadence_journal import admit_cadence_window, cadence_intent, read_cadence_journal
 from ..periodic_report.goal_configuration import configuration_summary, normalize_configuration
@@ -22,7 +22,7 @@ from ..periodic_report.private_generation import (
     attempt_directory, freeze_private_report, prepare_private_report, report_prompt,
 )
 from .steward_commands import native_command
-from .steward_managed_mode import StewardManagedMode
+from .steward_managed_mode import ManagedSessionTurn, StewardManagedMode
 
 PRESET = "portfolio-progress"
 
@@ -53,9 +53,12 @@ class StewardReports:
             raise ValueError("prepare the original steward before configuring reports")
         return {**selected, "actor": actor, "session": session}
 
-    def subscription(self, binding_id: str, *, expected_revision: str | None = None) -> dict[str, Any] | None:
+    def subscription(self, binding_id: str, *, expected_revision: str | None = None,
+                     expected_actor: dict[str, Any] | None = None) -> dict[str, Any] | None:
         selected = self.selected(binding_id)
         actor, binding = selected["actor"], selected["binding"]
+        if expected_actor is not None and actor != expected_actor:
+            return None
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
         subscription = resolve_active_goal_periodic_report_subscription(goal)
         if (subscription is None or subscription.get("profile_preset") != PRESET
@@ -99,6 +102,81 @@ class StewardReports:
             and request.get("report_subscription_revision") == window["subscription_revision"]
             and (turn.get("status") in {"failed", "interrupted", "timed_out"}
                 or native.get("status") == "failed"))
+
+    def _failed_without_generation(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
+        """Read a terminal report failure under the original execution fence.
+
+        The cadence owner holds the generation fence. This proves only that
+        the old window has no report to return, with no claim about model/tool
+        effects and no authorization to retry the old Turn.
+        """
+        from ...chat_store import _read_jsonl
+        from ...control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
+        from ...control_plane.turn_driver.turn_journal_runtime import interpret_turn_journal_projection
+        from .steward_turn import StewardTurnHost, report_turn
+
+        store = self.controller.store
+        folder = attempt_directory(self.root, window)
+        if any(path.is_symlink() or not path.is_file()
+                for path in (folder / "source.json", folder / "editorial-request.json")):
+            return False
+        for name in ("editorial-response.json", "generation-bundle.json", "report.md",
+                     "publication-candidate.json", "private-generation.json", "private-delivery.json"):
+            try:
+                (folder / name).lstat()
+            except FileNotFoundError:
+                continue
+            return False
+        sid = actor["session_id"]
+        turn = report_turn(store, actor, window)
+        if not turn or turn.get("status") != "completed" or not turn.get("upstream_turn_id"):
+            return False
+        with try_exclusive_file_lock(store.turn_execution_lock_path(sid, turn["turn_id"]),
+                operation="observe_failed_report_window", preserve_holder=True) as ownership:
+            session = store.load_session(sid)
+            if (ownership is None or not session or session.get("active_turn_id")
+                    or store.queued_turns(sid, strict=True, include_reserved=True)
+                    or report_turn(store, actor, window) != turn):
+                return False
+            request = turn.get("loopx_request") or {}
+            result = (turn.get("response") or {}).get("native_loopx") or {}
+            receipt = result.get("receipt") or {}
+            failure = result.get("host_failure") or {}
+            operation = "report." + window["window_id"]
+            if actor.get("schema_version") == "loopx_managed_session_actor_v0":
+                operation = ManagedSessionTurn(self.controller)._request(sid, actor["agent_id"], operation)["turn_instance_id"]
+            if (turn.get("origin") != "native_loopx" or turn.get("loopx_execution") is not True
+                    or turn.get("session_id") != sid or request.get("actor") != actor
+                    or request.get("work_kind") != "report" or request.get("report_window_id") != window["window_id"]
+                    or request.get("report_subscription_revision") != window["subscription_revision"]
+                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery"}
+                    or not request.get("todo_id") or result.get("status") != "failed"
+                    or result.get("result_kind") != "host_failure" or failure.get("retryable") is not False
+                    or receipt.get("ok") is not True or receipt.get("failed_phase") != "host_execute"
+                    or receipt.get("completed_phases") != []
+                    or result.get("effects") != {"host_invoked": True, "state_written": False,
+                        "quota_spent": False, "scheduler_acknowledged": False}):
+                return False
+            events = _read_jsonl(store._event_path(sid, turn["turn_id"]), raise_on_error=True, strict=True)
+            results = [event["payload"] for event in events if event["kind"] == "native_loopx.result"]
+            if results != [result]:
+                return False
+            goal_id, agent_id = actor["goal_id"], actor["agent_id"]
+            key = result["resume_turn_key"]
+            path = turn_journal_path(self.root, goal_id=goal_id, turn_key=key)
+            with try_exclusive_file_lock(path, operation="observe_failed_report_turn", preserve_holder=True) as locked:
+                journal = load_turn_journal(path) if locked is not None else None
+                if (not journal or journal.get("status") != "failed" or journal.get("receipt") != receipt
+                        or journal.get("host_failure") != failure):
+                    return False
+                identity = journal["plan"]["transaction"]["settlement_plan"]["identity"]
+                if (identity.get("todo_id") != request["todo_id"]
+                        or identity.get("turn_instance_id") != request["turn_instance_id"]):
+                    return False
+                inspection = interpret_turn_journal_projection(journal, goal_id=goal_id, agent_id=agent_id, turn_key=key)
+                return (inspection.get("journal_consistent") is True
+                    and inspection.get("completed_phases") == []
+                    and StewardTurnHost(self.controller).report_failure_observation(turn) is not None)
 
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:
@@ -192,7 +270,9 @@ class StewardReports:
         """Recheck the exact original read grant before every outbound part."""
         from ...chat_manager_context import manager_authorization_scope_id_for_registry
         from ..periodic_report.pending_intent import _canonical_digest
-        if self.subscription(binding_id, expected_revision=window["subscription_revision"]) is None:
+        subscription, current = self.current_window(binding_id)
+        if (subscription is None or subscription["effective_revision"] != window["subscription_revision"]
+                or current != window):
             return False
         selected = self.selected(binding_id)
         session = selected["session"]
@@ -294,7 +374,8 @@ class StewardReports:
             return None, False
         admitted = admit_cadence_window(runtime_root=self.root, goal_id=actor["goal_id"],
             agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
-            subscription_resolver=lambda: self.subscription(owner_key))
+            subscription_resolver=lambda: self.subscription(owner_key, expected_actor=actor),
+            can_replace_failed_window=lambda window: self._failed_without_generation(actor, window))
         if admitted["status"] != "pending":
             return None, False
         window = admitted["window"]
@@ -352,7 +433,7 @@ class StewardReports:
         response = candidate.pop("editorial_response", None)
         if not isinstance(response, dict):
             raise ValueError("the original reporting Agent returned no editorial response")
-        return freeze_private_report(root=self.root, window=window, response=response)
+        return freeze_private_report(root=self.root, window=window, response=response, require_current_window=True)
 
 
 def report_service(controller: Any, actor: dict[str, Any]):
@@ -428,7 +509,7 @@ class ManagedSessionReports(StewardReports):
     """
     def selected(self, session_id: str) -> dict[str, Any]:
         from pathlib import Path
-        from .steward_managed_mode import ManagedSessionTurn, managed_session_identity
+        from .steward_managed_mode import managed_session_identity
         session = self.controller.store.load_session(session_id)
         if not session or not session.get("managed_agent_id"):
             raise ValueError("select the original registered Agent Session")
@@ -438,8 +519,11 @@ class ManagedSessionReports(StewardReports):
             workspace=Path(actor["workspace_path"]), session=session)
         return {"session": session, "actor": actor}
 
-    def subscription(self, session_id: str, *, expected_revision: str | None = None) -> dict[str, Any] | None:
+    def subscription(self, session_id: str, *, expected_revision: str | None = None,
+                     expected_actor: dict[str, Any] | None = None) -> dict[str, Any] | None:
         actor = self.selected(session_id)["actor"]
+        if expected_actor is not None and actor != expected_actor:
+            return None
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
         # Only an explicit Goal override can choose this exact Session; a
         # machine default cannot implicitly enroll another Goal/conversation.
@@ -452,7 +536,6 @@ class ManagedSessionReports(StewardReports):
         return subscription
 
     def _submit(self, owner_key: str, actor: dict[str, Any], window: dict[str, Any], todo: dict[str, Any]):
-        from .steward_managed_mode import ManagedSessionTurn
         return ManagedSessionTurn(self.controller).submit(owner_key, agent_id=actor["agent_id"],
             operation_id="report." + window["window_id"], todo_id=todo["todo_id"], report_window=window)
 
@@ -518,7 +601,9 @@ class ManagedSessionReports(StewardReports):
             and frozen.get("request_digest") == _canonical_digest({k: v for k, v in frozen.items() if k != "request_digest"})) else None
 
     def delivery_current(self, session_id: str, window: dict[str, Any]) -> bool:
-        return (self.subscription(session_id, expected_revision=window["subscription_revision"]) is not None
+        subscription, current = self.current_window(session_id)
+        return (subscription is not None and subscription["effective_revision"] == window["subscription_revision"]
+            and current == window
             and self._frozen_actor(window) == self.selected(session_id)["actor"])
 
     def publish(self, session_id: str, window: dict[str, Any]) -> bool:

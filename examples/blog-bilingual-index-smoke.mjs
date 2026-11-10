@@ -77,6 +77,40 @@ function listingDates(html, language, articleSlugs) {
 }
 
 export async function validateBilingualBlog(blogDir) {
+  const auditPath = resolve(blogDir, "data/long-horizon-audit.json");
+  if (existsSync(auditPath)) {
+    const audit = JSON.parse(await readFile(auditPath, "utf8"));
+    const tasks = audit.context.tasks;
+    const sum = key => tasks.reduce((total, task) => total + task[key], 0);
+    deepStrictEqual([tasks.length, sum("wakes"), sum("baseline_wakes"), sum("delta_wakes")],
+      [8, 213, 101, 112], "Publication keeps its two wake cohorts separate");
+    deepStrictEqual([sum("full_bytes"), sum("progressive_bytes"), sum("delta_bytes")],
+      [22408690, 7285951, 4488335], "Totals are independently reconciled against published per-task rows");
+    for (const row of audit.stride.transitions) {
+      deepStrictEqual(row.improved + row.flat + row.regressed + row.unreconciled, row.total,
+        "Missing transition outcomes cannot silently become flat or regressed");
+    }
+    deepStrictEqual(audit.stride.latest.scored_transitions, 17);
+    for (const locale of ["", "zh/"]) {
+      const article = await readFile(resolve(blogDir, `${locale}context-delivery/index.html`), "utf8");
+      const table = article.split('<h3 id="multitask-context-byte-ratios">')[1]?.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1];
+      const rows = [...(table ?? "").matchAll(/<tr>([\s\S]*?)<\/tr>/g)];
+      deepStrictEqual(rows.length, tasks.length + 1, "Published table keeps all task rows and its total");
+      for (const [index, task] of tasks.entries()) {
+        const cells = [...rows[index][1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)]
+          .map(cell => cell[1].replace(/<[^>]*>/g, ""));
+        const firstNumber = cell => Number(cell.match(/[\d,]+/)?.[0].replaceAll(",", ""));
+        deepStrictEqual(cells.slice(2, 5).map(firstNumber),
+          [task.full_bytes, task.progressive_bytes, task.delta_bytes],
+          "Each published task row agrees with the source cells");
+      }
+      assertIncludes(article, `data-audit-progressive-bytes="${sum("progressive_bytes")}"`,
+        "Both published editions must use the recomputed total");
+      assertIncludes(article, "32.5%", "The weighted share matches the public rows");
+      if (/7,479,469|33\.4%|69\.9 KB|57\.1ms/.test(article))
+        throw new Error("Unreconciled totals or unsupported C1 attribution reappeared");
+    }
+  }
   const englishSlugs = await collectArticleSlugs(blogDir, { exclude: ["zh"] });
   const chineseSlugs = await collectArticleSlugs(resolve(blogDir, "zh"));
   if (JSON.stringify(englishSlugs) !== JSON.stringify(chineseSlugs)) {

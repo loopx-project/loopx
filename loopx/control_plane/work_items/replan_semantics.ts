@@ -95,6 +95,33 @@ function requiresStrideDecision(obligation: JsonObject, fallbackStrategy: unknow
  * A successor frontier duty stays with the next decision; this receipt cannot
  * discharge an unrelated duty or certify completion of the settlement Todo.
  */
+function historicalAckDelta(
+  request: JsonObject, candidateSource: JsonObject, selected: string,
+): JsonObject | null {
+  if (request.guard_scoped !== true) return null;
+  const goal = typeof request.goal_id === "string" ? request.goal_id.trim() : "";
+  const agent = typeof request.agent_id === "string" ? request.agent_id.trim() : "";
+  const guardTurn = typeof request.guard_turn_instance_id === "string"
+    ? request.guard_turn_instance_id.trim() : "";
+  const admitted = typeof request.guard_recorded_at === "string"
+    ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
+  if (!goal || !agent || !guardTurn || admitted === null) return null;
+  const ack = object(candidateSource.historical_ack);
+  const delta = object(ack.semantic_delta);
+  const ackTurn = typeof ack.turn_instance_id === "string" ? ack.turn_instance_id.trim() : "";
+  const generated = typeof ack.generated_at === "string"
+    ? parseTodoTimestampMicros(ack.generated_at) : null;
+  const outcomes = strings(delta.outcomes);
+  const satisfying = strings(delta.satisfying_outcomes);
+  return ack.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
+    ack.goal_id === goal && ack.agent_id === agent && ackTurn && ackTurn !== guardTurn &&
+    generated !== null && generated > admitted &&
+    delta.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
+    delta.obligation_id === selected && outcomes.length > 0 && satisfying.length > 0 &&
+    outcomes.every(outcome => KNOWN_OUTCOMES.has(outcome)) &&
+    satisfying.every(outcome => outcomes.includes(outcome)) ? delta : null;
+}
+
 function projectTurnTransition(request: JsonObject): JsonObject {
   if (typeof request.guard_scoped !== "boolean" || !Array.isArray(request.transition_candidates)) {
     throw new EffectRuntimeRequestError("turn transition requires a scoped guard and source-bound transition candidates");
@@ -107,6 +134,11 @@ function projectTurnTransition(request: JsonObject): JsonObject {
   if (request.guard_scoped && selected !== null) {
     for (const value of request.transition_candidates) {
       const candidateSource = object(value);
+      const historical = historicalAckDelta(request, candidateSource, selected);
+      if (historical !== null) {
+        delta = historical;
+        break;
+      }
       const sourceObligation = object(candidateSource.obligation);
       if (sourceObligation.obligation_id !== selected) continue;
       if (requiresStrideDecision(sourceObligation, request.stride_strategy)) continue;
@@ -233,6 +265,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   }
   let original: JsonObject | null = null;
   let delta: JsonObject | null = null;
+  let historicalAckRecorded = false;
   for (const value of request.transition_candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
@@ -241,10 +274,18 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
         selected_obligation_id: selected, agent_id: request.agent_id});
       if (recovered) return {obligation: recovered};
     }
+    const historical = historicalAckDelta(request, candidate, selected);
+    if (historical !== null) {
+      delta = historical;
+      historicalAckRecorded = true;
+      break;
+    }
     if (obligation.obligation_id !== selected || !requiredSemanticOutcomes(obligation).includes("new_runnable_successor")) continue;
     const result = projectTurnTransition({guard_scoped: request.guard_scoped,
       selected_obligation_id: selected, transition_candidates: [candidate],
-      stride_strategy: request.stride_strategy});
+      stride_strategy: request.stride_strategy, goal_id: request.goal_id,
+      agent_id: request.agent_id, guard_recorded_at: request.guard_recorded_at,
+      guard_turn_instance_id: request.guard_turn_instance_id});
     if (result.semantic_delta !== null) {
       original = obligation;
       delta = result.semantic_delta as JsonObject;
@@ -255,6 +296,8 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   if (delta !== null || writebackCommitted) {
     const reason = writebackCommitted
       ? "The original Turn writeback is verified. Settle its existing quota receipt once; do not repeat work or select its successor."
+      : historicalAckRecorded
+      ? "A later durable Turn accepted this exact review. Record only the original Turn writeback and settle its receipt; do not repeat work or borrow the current frontier."
       : "The original Turn has a revalidated canonical successor transition. Finish its writeback before any quota debit; do not repeat planning or execute the successor.";
     return {obligation: {
       ...(original ?? {}), required: true, obligation_id: selected,
@@ -265,12 +308,14 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       resolution_mode: "receipt_bound_replan_settlement", todo_actions: [], guidance_actions: [reason],
       settlement_action_packet: {
         schema_version: "replan_action_packet_v0", obligation_id: selected,
-        decision: writebackCommitted ? "settlement_pending" : "successor_transition_recorded",
+        decision: writebackCommitted ? "settlement_pending"
+          : historicalAckRecorded ? "historical_ack_recorded" : "successor_transition_recorded",
         required_outcome: writebackCommitted ? "quota_spend_receipt" : "durable_writeback_receipt",
         successor_todo_id: delta?.successor_todo_id ?? null,
         semantic_delta: delta, settlement_only: true,
         writeback_contract: {
-          preferred_input: writebackCommitted ? "verified_replan_writeback" : "canonical_successor_transition",
+          preferred_input: writebackCommitted ? "verified_replan_writeback"
+            : historicalAckRecorded ? "exact_historical_ack" : "canonical_successor_transition",
           cli_semantic_args: "--vision-unchanged-reason 'The canonical successor changes the path; original acceptance remains open.'",
           rule: reason,
         },

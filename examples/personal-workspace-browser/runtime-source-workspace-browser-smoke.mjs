@@ -13,15 +13,26 @@ const output = resolve(root, "output/playwright/runtime-source-workspace");
 const temporary = await mkdtemp(resolve(tmpdir(), "loopx-runtime-reader-"));
 const failFile = resolve(temporary, "unavailable");
 const backend = spawn(resolveTestPython(), ["-u", "-c", `
-import json, pathlib, sys, threading
+import hashlib, json, pathlib, sys, threading
 from datetime import datetime, timedelta, timezone
 from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
-from loopx.control_plane.status.goal_source import GoalSource
+from loopx.control_plane.status.goal_source import GoalSource, GoalDocumentSnapshot
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_edge_event
 class Source(GoalSource):
     def __init__(self, name):
         goal_id = 'other-goal' if name == 'Distinct' else 'same-goal'
-        super().__init__(name,name,'/registry','/runtime','/cli','/python','/bin','local','host',goal_id)
+        folder = pathlib.Path(sys.argv[1]).parent / name
+        folder.mkdir()
+        document = folder / 'captured.md'
+        document.write_text('# '+name+' original task\\n\\n## Accepted outcome\\n\\n'+
+            'Compare complete outcomes, including zero, negative evidence and unknown costs. '*45+
+            '\\n\\n<script>window.documentExecuted=true</script>\\n\\n## Original boundary\\n\\nNo extra execution authority.\\n')
+        registry = folder / 'registry.json'
+        declared = '/original/task.md'
+        registry.write_text(json.dumps(dict(goals=[dict(id=goal_id,repo='/original',authority_sources=[
+            dict(kind='goal_doc',role='primary_goal_document',path=declared)])])))
+        super().__init__(name,name,str(registry),'/runtime','/cli',sys.executable,'/bin','local','host',goal_id,
+            goal_document_snapshot=GoalDocumentSnapshot(declared,str(document),hashlib.sha256(document.read_bytes()).hexdigest()))
     def read_status(self, goal_id=None):
         self.check_access(goal_id)
         if pathlib.Path(sys.argv[1]).exists() and self.id == 'Fresh': raise OSError('unavailable fixture')
@@ -48,6 +59,9 @@ class Source(GoalSource):
                         adoption_criterion='Independent acceptance.',cost_bound='Existing authorized bound.',minimum_evidence='Original result and complete cost.'),
                         previous_review=dict(lesson='A replan record does not demonstrate adoption.')))))
         return dict(ok=True,goal_filter=self.goal_id,goals=[dict(id=self.goal_id,registry_member=True,unique_runs=len(rows),latest_runs=rows)])
+    def read_registry_goal(self, goal_id):
+        self.check_access(goal_id)
+        return json.loads(pathlib.Path(self.registry).read_text())
     def read_events(self, goal_id):
         self.check_access(goal_id)
         if self.id == 'Distinct': return []
@@ -81,9 +95,15 @@ try {
   const url = new URL("/chat/", catalog[0].status_url);
   url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json",
     messageSession: "saved-session", message: "saved-answer" });
-  let holdAnalysis = true, failAnalysis = false, releaseAnalysis, readStarted;
+  let holdAnalysis = process.env.LOOPX_RUNTIME_READER_BEFORE !== "1", failAnalysis = false, releaseAnalysis, readStarted;
   let analysisWrites = 0;
   let strategyReads = 0, failStrategies = false;
+  let documentReads = 0, failDocument = false;
+  await page.route("**/api/chat/goal-source-document?*", async route => {
+    assert.equal(route.request().method(),"GET"); documentReads++;
+    if (failDocument) return route.fulfill({status:503,json:{error:"Synthetic document failure"}});
+    return route.continue();
+  });
   await page.route("**/api/chat/goal-source-strategies?*", async route => {
     assert.equal(route.request().method(), "GET"); strategyReads++;
     if (failStrategies) return route.fulfill({status:503,json:{error:"Synthetic source failure"}});
@@ -98,7 +118,11 @@ try {
   await page.goto(url.toString());
   await page.getByRole("heading", { name: "Retained research", exact: true }).waitFor();
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
+    await page.locator(".personal-goal-tabs").getByRole("button",{name:"研究",exact:true}).click();
+    await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.screenshot({path:resolve(output,"before-desktop.png")});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(output,"before-phone.png")});
   } else {
     await page.waitForFunction(() => new URL(location.href).searchParams.get("statusUrl")?.includes("source_namespace"));
     assert.equal(new URL(page.url()).searchParams.get("messageSession"), "saved-session", "initial alias binding preserves the original answer's Session");
@@ -139,6 +163,28 @@ try {
     await history.locator(".analysis-read-loading").waitFor({state:"hidden"});
     assert.equal(analysisWrites,0,"Read recovery never starts an analysis");
     await page.setViewportSize({width:1512,height:982});
+    assert.equal(documentReads,0,"Ordinary research never eagerly reads task documents");
+    const originalTask = page.locator(".source-goal-document");
+    await originalTask.locator(":scope > summary").click();
+    await originalTask.getByRole("heading",{name:"Retained original task",exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.documentExecuted),undefined,"Original document text cannot execute HTML");
+    assert.ok(await originalTask.locator("article p").first().evaluate(element=>parseFloat(getComputedStyle(element).fontSize)>=16));
+    await page.screenshot({path:resolve(output,"original-task-desktop.png")});
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.screenshot({path:resolve(output,"original-task-phone.png")});
+    failDocument = true;
+    await originalTask.getByRole("button",{name:"刷新原始任务",exact:true}).click();
+    await originalTask.getByRole("alert").waitFor();
+    await originalTask.getByRole("heading",{name:"Retained original task",exact:true}).waitFor();
+    await page.screenshot({path:resolve(output,"original-task-failure-phone.png")});
+    failDocument = false;
+    await originalTask.getByRole("button",{name:"重试读取原始任务",exact:true}).click();
+    await originalTask.getByRole("alert").waitFor({state:"hidden"});
+    await originalTask.locator("article").focus();await page.keyboard.press("Escape");
+    assert.equal(await originalTask.getAttribute("open"),null);
+    await page.waitForFunction(()=>document.activeElement?.matches('.source-goal-document > summary'));
+    await page.setViewportSize({width:1512,height:982});
     assert.equal(strategyReads,0,"Normal Explore reading does not eagerly read strategy history");
     await page.screenshot({path:resolve(output,"strategies-before-desktop.png")});
     await page.locator(".research-strategy-entry").click();
@@ -175,6 +221,11 @@ try {
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_state"),null);
     assert.equal(await strategies.count(),0,"A source switch clears the old strategy reading selection");
+    assert.equal(await originalTask.locator("article").count(),0,"A source switch clears the previous document synchronously");
+    await originalTask.locator(":scope > summary").click();
+    await originalTask.getByRole("heading",{name:"Fresh original task",exact:true}).waitFor();
+    assert.equal(await originalTask.getByRole("heading",{name:"Retained original task",exact:true}).count(),0);
+    await originalTask.locator(":scope > summary").click();
     await page.goBack();
     await strategies.getByText("Retained original objective 0",{exact:true}).waitFor();
     await page.setViewportSize({width:390,height:844});
@@ -319,6 +370,14 @@ try {
     await page.screenshot({path:resolve(output,"phone.png")});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     assert.equal(analysisWrites,0);
+    await page.evaluate(()=>localStorage.setItem("loopx-pw-locale","en"));
+    await page.reload();
+    await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
+    await originalTask.locator(":scope > summary").filter({hasText:"Original task"}).click();
+    await originalTask.getByRole("heading",{name:"Fresh original task",exact:true}).waitFor();
+    await page.getByRole("region",{name:"Original task file",exact:true}).waitFor();
+    await page.screenshot({path:resolve(output,"original-task-phone-en.png")});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     assert.deepEqual(errors,[]);
   }
   console.log("runtime source workspace browser smoke: ok");
