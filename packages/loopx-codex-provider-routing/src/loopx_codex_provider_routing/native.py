@@ -371,7 +371,11 @@ class NativeAccounts:
     def _prepare_api(self, state: dict, native: dict) -> dict:
         self._validate_api(native)
         from .openai_relay import ensure
+        if not self.api_keys().candidates(""):
+            raise HostError("api_relay_unavailable")
         endpoint = ensure(self)
+        if not self.api_keys().candidates(""):
+            raise HostError("api_relay_unavailable")
         if native.get("api_slot") is None:
             return self.transport(state["adapter"], "enroll_api", **endpoint)
         return native
@@ -459,11 +463,6 @@ class NativeAccounts:
                     state["failure_count"] = 0
                 # Inspect the active account even when it is not an authorized
                 # destination. Candidates stay strictly inside the allowlist.
-                api = None
-                if state["policy"].get("api_fallback") or native.get("api_slot"):
-                    ready = bool(state["policy"].get("api_fallback") and native.get("api_fallback_supported")
-                                 and self.api_keys().status()["keys"])
-                    api = {"slot": native.get("api_slot") or "openai-api", "ready": ready}
                 slots = list(dict.fromkeys([native["active_slot"], *state["policy"]["slots"]]))
                 slots = [slot for slot in slots if slot != native.get("api_slot")]
                 failures = {} if refresh or manual_slot else {
@@ -473,6 +472,13 @@ class NativeAccounts:
                 }
                 observed = self.transport(state["adapter"], "observe", slots=slots,
                                           expected_revision=native["selection_revision"], auth_failures=failures)
+                api = None
+                if state["policy"].get("api_fallback") or native.get("api_slot"):
+                    # External observation can outlive a key's eligibility.
+                    # Sample candidates afterwards, before the typed decision.
+                    ready = bool(state["policy"].get("api_fallback") and native.get("api_fallback_supported")
+                                 and self.api_keys().candidates(""))
+                    api = {"slot": native.get("api_slot") or "openai-api", "ready": ready}
                 public_observations = [{k: v for k, v in row.items() if k != "credential_revision"}
                                        for row in observed["observations"]]
                 decision = policy({"now": self.clock(), "policy": state["policy"], "active": native["active_slot"],
