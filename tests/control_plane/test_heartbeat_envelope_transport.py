@@ -46,9 +46,8 @@ def assert_original_read_and_recovery_duties(body):
     for obligation in (
         'Read work_context and required_reads before acting',
         'applicable goals/criteria/constraints/stops',
-        'Read only needed original sections for selection/replan',
-        'missing/truncated content/commands or detail refs',
-        'Recover execution/lost context from needed original sections/identity',
+        'For selection/replan or missing details, follow returned read/recovery instructions',
+        'with original capture/identity',
         'never re-admit',
         'Honor explicit full reads',
         'keep capture/handoff flags on selection/same-Turn repair',
@@ -65,11 +64,30 @@ def assert_original_read_and_recovery_duties(body):
 def assert_original_contract_view(view, source):
     """Both supported displays retain the one captured decision and controls."""
     assert_complete_turn_decision(source)
+    agent = source['interaction_contract']['agent_channel']
+    # The producer owns these obligations; the bootstrap routes here instead
+    # of carrying a second schema/section-selection policy. Verify delivery,
+    # not just that the renderer contains a shorter referral.
+    instruction = agent['work_context']['instruction']
+    for duty in (
+        'Read current sources and pending required_reads before work',
+        'summaries cannot replace full requirements',
+        'Recheck freshness before later actions',
+        'Context grants no authority',
+    ):
+        assert duty in instruction
     if view.get('schema_version') == 'loopx_turn_envelope_v0':
         assert_turn_envelope_consumer_version(view)
         assert view['action_signature']['matches'] is True
         assert view['action_signature']['source_decision_hash'] == source['contract_binding']['content_hash']
         assert turn_envelope_action_signature_document(view) == quota_action_signature_document(source)
+        assert [read['command'] for read in view['required_reads']] == [
+            read['command'] for read in agent['required_reads']]
+        if 'work_context' in view:
+            assert view['work_context']['instruction'] == instruction
+        recovery = view['detail_ref']['captured_decision']
+        assert 'Check ok, Goal/Agent/Turn and source hash before use' in recovery['instruction']
+        assert 'Missing or invalid capture requires recovery, not blind guard replay' in recovery['instruction']
     else:
         assert_complete_turn_decision(view)
         assert view['contract_binding'] == source['contract_binding']
@@ -326,7 +344,20 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     result = subprocess.run(argv, env=env, cwd=project, capture_output=True, text=True)
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
+    reader_contracts = []
     def complete_page(value):
+        navigation = (value if value.get('schema_version') == 'context_capture_navigation_v1'
+            else value.get('navigation'))
+        if context_delivery and isinstance(navigation, dict):
+            for duty in (
+                'Choose the sections needed for the current decision',
+                'Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work',
+                'read the current operation/settlement contract before effects',
+                'After compaction recover only missing necessary facts from this capture',
+                'never rerun admission or repeat effects just to recover context',
+            ):
+                assert duty in navigation['instruction']
+            reader_contracts.append(navigation)
         if value.get('schema_version') == 'context_capture_navigation_v1':
             # This compatibility test elects to read the full saved view.
             # A manifest only supplies navigation; it is not delivered body.
@@ -349,6 +380,8 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert hashlib.sha256(body).hexdigest() == digest
         return json.loads(body)
     first = complete_page(first)
+    if context_delivery:
+        assert reader_contracts, 'The worker must actually receive the delegated reader obligations'
     root = logs / TURN_ID / 'decisions'
     captured = enabled or private_handoff is not None or context_delivery
     if captured:
@@ -359,7 +392,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
             assert_original_contract_view(first, full)
             if not context_delivery and private_handoff is None:
                 assert first['schema_version'] == 'loopx_turn_envelope_v0'
-                assert 'bounded v0: action/user/writeback' in body
+                assert_original_read_and_recovery_duties(body)
             else:
                 assert first['schema_version'] == 'loopx_turn_envelope_v1'
             receipts = _heartbeat_receipt_count(runtime, TURN_ID)

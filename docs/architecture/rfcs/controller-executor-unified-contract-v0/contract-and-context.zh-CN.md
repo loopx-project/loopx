@@ -460,10 +460,11 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 早期仅状态路径的 RPC 减少不证明模型窗口或整任务收益，native 签名退役仍未完成。
 
 集成 main `5988be01` 保留共享的静默完成规则，没有恢复已退役的另一套 heartbeat
-正文。这不构成 C1 资格：当前长 scope thin 与完整能力 CLI 夹具仍超过原 5,100 展示
-预算，捕获长路由的 Agent JSON 仍超过 5,400 上限。一次临时展示预算扩容因削弱既有
+正文。该检查点的长 scope thin 与完整能力 CLI 夹具超过原 5,100 展示预算，捕获长
+路由的 Agent JSON 超过 5,400 上限。一次临时展示预算扩容因削弱既有
 超长 scope 负例且未解决独立 JSON 失败而被放弃；完整指令和原上限均保留，继续按
-同一 caller 完整修复。这些失败与独立评审、原 quota 成果及完整成本资格继续开放。
+同一 caller 完整修复。这些失败与被放弃的试验保留为历史证据，以下修复仍由原上限
+约束；独立评审、原 quota 成果及完整成本资格继续开放。
 
 当前 Todo 备注现已采用 [main 的字段 registry](https://github.com/loopx-project/loopx/pull/8386)，
 C1 删除自身独立的备注规则和重复的原生回归。共享身份绑定 Goal、registry/runtime 路由、
@@ -676,12 +677,25 @@ carrier 余量通过本身不够。
 保留 main 的 raw/v0 corpus 和 actual-default portfolio；C1 候选默认值仍属于本提案。
 本地 API 和脚本化 provider 验证不证明模型采用，也不证明原 quota 成果／完整成本收益。
 
-薄提示同时说明完整与有界视图的控制字段位置；绑定 Turn 时间戳保留共同结算指令，
-不会把完整来源路径强加给仍受支持的 v0 展示。两种视图均不另持结算方案。
+薄启动提示现将 selection／replan 和缺失详情导向返回的 read／recovery 指令，删除
+重复的字段布局与分节选择规则。既有 Core work-context 指令负责必读和新鲜度；原生
+navigation 负责所需分节与同 capture 恢复；受支持的 v0 capture 引用保留完整性和恢复
+指令。不新增决策 owner 或 reader 格式。绑定 Turn 时间戳仍保留共同结算指令，
+两种视图均不另持结算方案。
 
-薄提示明确从原来源的所需分节及原身份恢复，保留行动前工作上下文、显式全文义务和
-capture／handoff flags。完整来源可用，不等于丢失上下文后无条件重读整包。措辞和
-成功 fixture 都不证明 retention，也不授权重新准入。原 quota 单会话的成果／完整
+| 义务 | 修改启动提示后的交付 |
+| --- | --- |
+| 依赖工作前读取适用 Goal、验收、约束与停止条件 | 启动提示保留该顺序，Core 继续交付当前来源与 pending required reads；摘要不得替代完整需求。 |
+| Selection／replan、缺失或截断的正文／命令及详情引用 | 启动提示将这些需要导向返回指令。原生 navigation 选择必要分节；有界引用从原来源恢复省略内容。 |
+| 丢失上下文时恢复，不重新准入或重复效果 | 启动提示保留原 capture／identity，并禁止为缺失详情重新准入；原生 navigation 保留 Turn／capture／effect 身份；历史引用要求完整性核对并禁止盲目重放 guard。权限实际变化仍遵守既有新鲜度检查。 |
+| 显式全文、capture／handoff flags、有序结算与不确定效果 | 启动提示及同一返回契约保留原义务；时间戳绑定不会另换来源。 |
+
+相同完整能力 CLI 输入现满足未改动的 5,100 字符上限：动态 Turn 从 5,293 降至
+5,087，绑定 Turn 从 5,160 降至 4,954。较长路由负例仍超限；scope、能力声明、
+可执行路由和其余正文均保留。File／SQLite worker 检查实际交付的 Core 指令、受支持
+有界引用、选择／重入、原 capture 回读及只结算一次。Reader 检查保留摘要校验、缺失
+指针、截断／分页和同 capture 恢复失败。这只验证 caller 边界，不证明自然模型理解了
+引用式指令；措辞和成功 fixture 都不证明 retention，也不授权重新准入。原 quota 单会话的成果／完整
 成本、真实 caller 退役、维护资格及独立审阅仍开放，之后才考虑双会话实验。
 
 ### C1 基线边界与复用盘点

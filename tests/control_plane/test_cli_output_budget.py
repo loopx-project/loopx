@@ -2044,10 +2044,10 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
             assert '$LOOPX_TURN = "<current_time_iso>"' not in body
             # Timestamp binding retains the shared, version-neutral dispatch.
             assert body.count("Settle current settlement_plan.ordered_steps in order") == 1
-            assert "Controls: interaction_contract (agent_channel/user_channel/cli_channel)" in body
-            assert "bounded v0: action/user/writeback" in body
+            assert "follow returned read/recovery instructions with original capture/identity" in body
+            assert "never re-admit" in body
         # Preserve the historical 4,500-character failure as a characterized
-        # input; the allowance changes, not the complete emitted instructions.
+        # input; the existing allowance and complete workload stay unchanged.
         assert budget["budget_char_count"] > 4500
         assert budget["max_chars"] == 5100
         assert budget["within_budget"] is within_budget, budget

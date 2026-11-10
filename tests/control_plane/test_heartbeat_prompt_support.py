@@ -64,12 +64,13 @@ def test_thin_cli_keeps_dependency_reads_and_original_capture_recovery(tmp_path,
     assert code == 0 and payload["ok"], payload
     body = payload["task_body"]
     assert "Read full capture, work_context, required_reads before acting" not in body
-    # The correction removes the ordinary whole-file obligation, preserving
-    # the positive read, control, conditional recovery and transport duties.
+    # The bootstrap retains ordering/identity and delegates section selection
+    # to the returned source/reader, whose real delivery is qualified in the
+    # worker transport tests for complete and supported bounded responses.
     for obligation in (
         "work_context and required_reads before acting", "applicable goals/criteria/constraints/stops",
-        "only needed original sections", "selection", "replan", "missing/truncated",
-        "detail refs", "execution/lost context", "needed original sections/identity",
+        "selection/replan or missing details", "follow returned read/recovery instructions",
+        "with original capture/identity",
         "never re-admit", "explicit full reads", "capture/handoff flags",
         "same-Turn repair", "settlement_plan.ordered_steps",
     ):

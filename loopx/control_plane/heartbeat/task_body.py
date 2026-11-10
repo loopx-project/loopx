@@ -672,8 +672,9 @@ def render_thin_heartbeat_task_body(
         if pr_review_pre_quota_command
         else ""
     )
-    # New captures use one complete contract; the old caller option no longer
-    # chooses a separate execution view. Historical saved bodies remain intact.
+    # Core's returned read/recovery contract owns section selection and recovery;
+    # the bootstrap routes to that owner instead of copying layout-specific rules.
+    # Historical saved bodies remain intact.
     return f"""Advance `{goal_id}` from {active_state}.
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
@@ -681,10 +682,8 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Controls: interaction_contract (agent_channel/user_channel/cli_channel); bounded v0: action/user/writeback + root work_context/required_reads.
 Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
-Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs.
-Recover execution/lost context from needed original sections/identity; never re-admit.
+For selection/replan or missing details, follow returned read/recovery instructions with original capture/identity; never re-admit.
 Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair.
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh

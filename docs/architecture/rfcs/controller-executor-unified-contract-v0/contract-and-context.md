@@ -629,14 +629,14 @@ The earlier status-only RPC reduction does not qualify model-window or whole-tas
 benefit, and native signature retirement remains open.
 
 Integration with main `5988be01` retains the shared quiet-completion rule and
-keeps the retired alternate heartbeat body deleted. It does not qualify C1:
-current long-scope thin and complete-capability CLI fixtures exceed the retained
+keeps the retired alternate heartbeat body deleted. At that checkpoint,
+long-scope thin and complete-capability CLI fixtures exceeded the retained
 5,100 presentation budget, and the captured long-route Agent JSON remains above
 its 5,400 ceiling. A provisional presentation allowance increase was rejected
 because it weakened an existing oversized-scope negative and left the independent
-JSON failure. Keep the complete instructions and original limits while repairing
-this caller coherently; these failures remain open alongside independent review
-and original-quota outcome/full-cost qualification.
+JSON failure. Those failures and the rejected trial remain historical evidence;
+the original limits continue to govern the caller repair below. Independent
+review and original-quota outcome/full-cost qualification remain open.
 
 Selected Todo notes now adopt the [main field registry](https://github.com/loopx-project/loopx/pull/8386).
 C1 removes its separate note rule and duplicate native regression. The shared
@@ -941,16 +941,31 @@ actual-default portfolio; C1's candidate default remains part of this proposal.
 Local API and scripted-provider validation do not qualify model adoption or
 original-quota outcome/full-cost benefit.
 
-Thin prompts also name the complete and bounded control locations; binding a
-Turn timestamp preserves the common settlement dispatch instead of forcing the
-complete-source path onto the supported v0 display. Neither view owns a second
-settlement recipe.
+Thin bootstrap now routes selection/replan and missing details to the returned
+read/recovery instructions, instead of copying a second field-layout and
+section-selection recipe. The existing Core work-context instruction owns
+required reads and freshness; native navigation owns needed sections and
+same-capture recovery; the supported v0 capture reference retains its integrity
+and recovery instructions. No new decision owner or reader format is introduced.
+Binding a Turn timestamp preserves the common settlement dispatch; neither view
+owns a second settlement recipe.
 
-Thin recovery now explicitly asks for needed sections of the original source
-and its identity, while retaining current work context before action, explicit
-full-read duties and capture/handoff flags. Complete-source availability does
-not impose an unconditional full reread after context loss. Neither the wording
-nor a successful fixture proves retention or authorizes fresh admission.
+| Obligation | Delivery after the bootstrap change |
+| --- | --- |
+| Before dependent work, read applicable goals, acceptance, constraints and stops | Bootstrap keeps this ordering; Core still delivers current sources and pending required reads. Summaries cannot replace full requirements. |
+| Selection/replan, missing or truncated content/commands and detail references | Bootstrap routes these needs to the returned instructions. Native navigation selects necessary sections; bounded references recover omitted context from the original source. |
+| Recover lost context without new admission or repeated effects | Bootstrap preserves the original capture/identity and forbids re-admission for missing details. Native navigation preserves Turn/capture/effect identities; historical references require integrity checks and prohibit blind guard replay. Actual changed authority retains its existing freshness checks. |
+| Explicit full reads, capture/handoff flags, ordered settlement and ambiguous effects | Existing duties remain in the bootstrap and the same returned contract; timestamp binding does not replace their source. |
+
+Matched complete-capability CLI inputs now fit the unchanged 5,100-character
+limit: dynamic Turn 5,293 → 5,087, bound Turn 5,160 → 4,954. Longer-route negative
+inputs remain over budget; scope, capability declarations, executable routes and
+the rest of the body are preserved. File/SQLite worker checks exercise delivered
+Core instructions, supported bounded references, selection/reentry, original
+capture readback and once-only settlement. Reader checks retain digest, missing
+pointer, truncation/paging and same-capture recovery failures. This qualifies the
+caller boundary, not natural-model understanding of the referral. Neither wording
+nor successful fixtures prove retention or authorize fresh admission.
 Original-quota single-session outcomes/full costs, real caller retirement,
 maintenance qualification and independent review remain open before dual runs.
 
