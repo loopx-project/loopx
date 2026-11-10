@@ -786,6 +786,11 @@ causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablati
 [联合决策 §5.8](target-yardstick-stride-decisions-v0.zh-CN.md#budgeted-planning)
 定义决策语义，§5.9 定义后续校准/学习路径。这是拟议实验，尚未执行或证明收益。
 
+[目标与理论说明](../../research/budgeted-research-planning.zh-CN.md)解释预算目标、依赖进展、
+测量价值与因果比较，其中的[完整闭环案例](../../research/budgeted-research-planning.zh-CN.md#worked-loop)
+把决策时证据连到实际采用的工作与终局成果。按这些理由理解实验合同；一次合理的局部决策
+本身不是完整预算收益的证据。
+
 #### 首个实现切片
 
 复用现有单 Agent 的 Stride/Yardstick/Explore 路径。固定版本的 benchmark treatment
@@ -834,6 +839,11 @@ memory、待返回结果、可用预算及 native 提交历史/cooldown 必须�
 十八小时的策略效应。
 
 #### 完整预算收益与后续细化
+
+区分候选泛化和控制策略泛化。运行中可以按冻结的 treatment 使用 Native 反馈；
+冻结策略是冻结如何响应反馈的规则，不是禁止适应。用来调参、筛选该规则的任务与结果，
+属于开发证据，不是独立迁移测试。新任务确认使用冻结的控制策略，保留独立候选检查与
+控制策略留出任务的区别；同题重复 seed 不能替代任务覆盖。
 
 pilot 有用后，从头比较**强 Official 接续、当前 LoopX、选中的规划 treatment**，
 按 task/model/seed 匹配，单次预算十八小时。确认性结果采集前冻结重复次数、资源
