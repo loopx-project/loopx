@@ -828,13 +828,19 @@ journal 中捕获的原件，两个角色的沙箱均隔离 Core 私有文件。
 回执被拒绝后，经授权可由原只读 Controller 修正；保留 Worker 已完成的工作，限制自动
 修正次数，回包丢失时回读原记录。下一次新准入可以切换拓扑或回退到单 Worker。
 
-**两个角色实际交换什么。** 一次准入最多包含三段 Worker 工作。下表用缩短的示例说明
-消息字段。Host 持有两个会话 ID，并告知各角色本次的实际权限。指令中可以进一步限定
-“只写 `results/`”。具体任务范围由指令说明，原生沙箱强制执行已配置的工作区边界。
+**两个角色实际交换什么。** Controller 交付原任务目标、验收条件和相关材料。
+任务指定了方法时遵循原要求，其余求解方式由 Worker 自选。Host 原样转发指令，
+在执行时强制实施文件和工具边界。阶段截止覆盖整个往返。只要原准入仍有效且时间充足，
+Controller 可以根据返回的证据再派一段工作。调用方提供 Worker 任务文件时，首条指令为
+`dispatch`，Host 按准入时固定的内容原样发送文件，包括题目本身的规则。EdgeBench
+通过这条路径交付原题。只有 Controller 持有补充材料时，由它撰写派工指令。两种路径都
+可以在后续回合纠偏。首份 Worker 返回之后，Controller 才收到 Core 回执的详细写法。
+原生沙箱在执行时实施约束，角色提示省去权限说明。
 
 | 发送方 → 接收方 | 消息 | 后续动作 |
 | --- | --- | --- |
-| Controller → Worker | `{"instruction":"比较实测候选，将最佳结果写入 results/ 并回读。","result":null}` | Host 把指令交给 Worker 会话，Worker 使用其权限内的工具执行。 |
+| Controller → Host，调用方提供了原题 | `{"instruction":"dispatch","result":null}` | Worker 收到与原文件逐字节一致的任务。 |
+| Controller → Worker，自拟派工 | `{"instruction":"寻找实测成本最低的解，将最佳结果保存到 results/。","result":null}` | Host 把指令交给 Worker 会话，Worker 使用其权限内的工具执行。 |
 | Worker → Controller | `{"finding":"候选 B 的实测成本最低，回读时发现缺一行。","artifacts":["results/best.txt"]}` | Host 将发现和产物路径送回原 Controller 会话。 |
 | Controller → Worker，需要返工时 | `{"instruction":"补齐缺行，重新检查整个文件。","result":null}` | 同一个 Worker 续跑，仍用 `finding` 和 `artifacts` 返回。 |
 | Controller → Core | `instruction=null`，`result` 是完整的类型化 Turn 回执，包含 `result_kind`、`work_evidence` 和 `validation_evidence` | Core 检查回执，对实质性成果运行独立 validator，再结算原准入。 |
@@ -858,7 +864,7 @@ Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与
 有界阶段，正式 guest 的嵌套沙箱仍不可用。完整双角色分数、效果和成本打平仍需多题
 同条件重复验证，并以独立验收和完整成本决定是否调整默认配置。
 
-随后用相同的 150 秒预算，在同一题的四候选阶段对比了两种 CLI 拓扑。两组交付相同排列，
+先前用相同的 150 秒预算，在同一题的四候选阶段对比了两种 CLI 拓扑。两组交付相同排列，
 独立黑盒复算通过，固定版本 judge 均给出 0.0000000033 分，通过五项中的四项，各结算一次。
 单 Worker 消耗 44.07 秒、115,498 token，双角色消耗 121.53 秒、206,253 token，
 后者按两个独立会话汇总。耗时包含独立回读与评测。先前失败的尝试暴露了账户 MCP 配置继承、
@@ -866,11 +872,16 @@ shell 临时文件受限、模型服务容量不足，以及 Controller 将自�
 另一次按完整协议启动的双角色任务在标准 guest 的原生沙箱预检处停止，未派发模型，
 评测轮次为零。这个用例支持保留单 Worker 默认值。
 
+开放搜索使用原题的公开黑盒，算法由求解者选择。在 240 秒阶段的原生调试中，已逐字节
+核对 Worker 首条任务消息和调用方提供的完整原题。求解命令在固定版本的原始离线工作镜像
+中运行，分配两个 CPU。此前也观察到 Host 到期时尚未返回回执，但已有提交可由独立
+judge 评分。分别记录最后验证的分数、黑盒调用次数、完整 token 和 Core 结算。实现 PR
+保留各拓扑的实验读回与标准 guest 的验证边界。[实验记录](https://github.com/loopx-project/loopx/pull/8484)
+
 **产品接入。** Managed Host、Chat、Steward 在资格验证后复用同一 Turn provider。
 两个 headless 角色均使用 `codex exec`，与标准 heartbeat 和单 Worker Turn 的 CLI
 入口一致。后续调用用 `codex exec resume` 指定各自的原会话 ID。角色通过有界指令和
-结构化返回交接，无需注册 MCP。Host 明确告知 Controller 本次 Worker 的工作区权限，
-在停止或到期时中断运行中的 CLI。复用桌面或 Chat 现有连接时，需验证其
+结构化返回交接，无需注册 MCP。Host 在停止或到期时中断运行中的 CLI。复用桌面或 Chat 现有连接时，需验证其
 归属、角色隔离、中断与向原对话返回结果。其他 Host 各自验证原生传输。先接通一个
 工作单元，再验证由 Steward 路由多个独立工作单元。
 

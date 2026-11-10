@@ -1017,15 +1017,24 @@ on an authorized retry by the original read-only Controller. Preserve the Worker
 completed work, bound automatic corrections and read back a lost reply.
 A later admission can switch topology or roll back to single worker.
 
-**What the roles exchange.** One admitted Turn can contain up to three Worker
-segments. The following shortened example illustrates the wire fields. The Host
-owns both session IDs and delivers the actual grants. A narrower instruction
-such as “write only under `results/`” further scopes the task in prose. The
-native sandbox enforces the configured workspace boundary.
+**What the roles exchange.** The Controller gives the Worker the original
+objective, the success criteria and relevant task material. The Worker chooses
+its method unless the task prescribes one. The Host delivers the instruction
+verbatim and enforces the filesystem and tool boundary at execution. The
+operator's phase deadline covers the entire exchange. The Controller can
+request another segment while the original admission and budget remain live.
+When the caller supplies a Worker task file, the initial instruction is the
+literal `dispatch`. The Host sends the pinned file verbatim, including its task
+rules. EdgeBench uses this path for the original problem. With Controller-only
+material, the Controller authors the task instruction. Subsequent feedback can
+revise either path. Detailed Core receipt guidance arrives at the Controller
+after the first Worker return. Native sandbox enforcement stays active even
+when its permissions briefing is omitted. The example covers both initial paths.
 
 | Sender → receiver | Message | What happens next |
 | --- | --- | --- |
-| Controller → Worker | `{"instruction":"Compare the measured candidates, write the best result under results/, and read it back.","result":null}` | The Host sends the instruction to the Worker's session. The Worker uses its scoped tools. |
+| Controller → Host, original task supplied | `{"instruction":"dispatch","result":null}` | The Worker receives the original task text byte for byte. |
+| Controller → Worker, authored task | `{"instruction":"Find a solution with the lowest measured cost. Save the best result under results/.","result":null}` | The Host sends the instruction to the Worker's session. The Worker uses its scoped tools. |
 | Worker → Controller | `{"finding":"Candidate B had the lowest observed cost. Readback found a missing row.","artifacts":["results/best.txt"]}` | The Host resumes the original Controller with the finding and artifact paths. |
 | Controller → Worker, if needed | `{"instruction":"Regenerate the missing row and check the complete file.","result":null}` | The same Worker resumes. Its next return uses the same `finding` and `artifacts` fields. |
 | Controller → Core | `instruction=null`, with a complete typed Turn `result` containing `result_kind`, `work_evidence` and `validation_evidence` | Core checks the receipt, runs the independent validator for a material outcome and settles the original admission. |
@@ -1056,7 +1065,7 @@ and settled once. Its constrained workload and the guest's unavailable nested
 sandbox leave the full dual-role score comparison open. Use repeated matched
 cases with independent acceptance and complete costs for a promotion decision.
 
-A subsequent matched CLI diagnostic gave each topology 150 seconds to select
+An earlier matched CLI diagnostic gave each topology 150 seconds to select
 among four measured candidates on that case. Both returned the same permutation,
 passed independent cost recomputation, scored 0.0000000033 on the pinned judge
 (four of five checks), and settled once. Single Worker took 44.07 seconds and
@@ -1068,13 +1077,21 @@ its own read-only grant to the Worker. A separate full-protocol dual launch in
 the standard guest stopped at the native sandbox probe before inference, with
 zero evaluation rounds. This case supports retaining the single-worker default.
 
+Open optimization uses the original public black-box task and gives the solver
+its choice of algorithm. A native diagnostic with a 240-second stage verified
+that the Worker's first received message matched the entire supplied task file.
+The original offline work image ran solver commands on two CPUs. Earlier trials
+also produced independently scorable submissions when the Host reached its
+deadline before returning a receipt. Report the last verified score, black-box
+call count, full tokens, and Core settlement separately. The implementation PR
+records the observed outcomes for each topology and the guest qualification
+boundary. [Experiment readback](https://github.com/loopx-project/loopx/pull/8484)
+
 **Product adoption.** Managed Host, Chat and Steward consume the same admitted
 Turn provider after qualification. Both headless roles use `codex exec`, the same CLI entry as
 standard heartbeat and single-worker Turn. Each role resumes its own explicit
 session ID with `codex exec resume`. The peer handoff uses a scoped instruction
-and a structured return. It requires no MCP registration. The Host tells the
-Controller the Worker's admitted workspace grant and interrupts a running CLI
-on stop or deadline. An attached desktop or Chat connection needs a verified owner,
+and a structured return. It requires no MCP registration. The Host interrupts a running CLI on stop or deadline. An attached desktop or Chat connection needs a verified owner,
 role isolation, interruption and result return to its original conversation.
 Each other Host qualifies its own transport. Connect one working unit before
 qualifying a Steward routing several independent units.
