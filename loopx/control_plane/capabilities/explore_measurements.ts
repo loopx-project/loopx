@@ -2,7 +2,7 @@
  * explicitly matching scopes. No ranking of tasks, acceptance or launch authority.
  */
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 
@@ -109,6 +109,7 @@ export function projectExploreMeasurementFeedback(
   includeMeasurement?: (finding: JsonObject, measurement: ExploreMeasurement) => boolean,
 ): ExploreMeasurementFeedback[] {
   const groups = new Map<string, ExploreMeasurementFeedback>();
+  const measuredEvidence = new Set<string>();
   const ordered = findings.filter(finding => finding.measurements !== undefined);
   // Canonical readers derive this ordinal from append order; it is not stored
   // or inferred from source timestamps, which can tie or arrive out of order.
@@ -128,7 +129,16 @@ export function projectExploreMeasurementFeedback(
     if (executionMeasurementError(measurements, finding.execution_observation) !== null) continue;
     for (const measurement of measurements) {
       if (includeMeasurement && !includeMeasurement(finding, measurement)) continue;
-      const key = comparisonKey(node, measurement), prior = groups.get(key);
+      const key = comparisonKey(node, measurement);
+      const work = jsonObject(finding.work_binding);
+      if (work && measurement.value !== null) {
+        // A later note can cite the same result but cannot turn it into a new evaluation.
+        const evidence = JSON.stringify([work.goal_id, work.agent_id, work.todo_id, key,
+          measurement.candidate_ref, measurement.evidence_ref]);
+        if (measuredEvidence.has(evidence)) continue;
+        measuredEvidence.add(evidence);
+      }
+      const prior = groups.get(key);
       const previous = prior?.best ?? null;
       const point = measurement.value === null ? null : {finding_id: id,
         candidate_ref: measurement.candidate_ref, evidence_ref: measurement.evidence_ref, value: measurement.value};
