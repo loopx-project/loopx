@@ -71,8 +71,18 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     assert.equal(result(renewed).status, "applied", JSON.stringify(renewed));
     const followupNote = "Validated readback after lease renewal";
     assert.equal(result(await call({...progress, request_id: "progress-two", note: followupNote})).status, "applied");
-    const release: RemoteAuthorityRequest = {...base("todo_journey"), operation: "release",
+    const staleRelease: RemoteAuthorityRequest = {...base("todo_journey"), operation: "release",
       idempotency_key: String(lease(renewed).idempotency_key), expected_version: Number(lease(renewed).version)};
+    // Normal progress may maintain its active execution, advancing the version.
+    // The transport must not silently rebase a stale lifecycle command.
+    const beforeRelease = await fixture.store.loadAuthority();
+    assert.equal(result(await call(staleRelease)).status, "failed");
+    assert.deepEqual(await fixture.store.loadAuthority(), beforeRelease);
+    const current = (await call({...base("todo_journey"), operation: "read"})).lease as JsonObject;
+    assert.equal(current.owner, "actor-a");
+    assert.equal(current.lease_epoch, lease(renewed).lease_epoch);
+    assert(Number(current.version) > Number(lease(renewed).version));
+    const release: RemoteAuthorityRequest = {...staleRelease, expected_version: Number(current.version)};
     const released = await call(release); assert.equal(result(released).status, "applied");
     assert.equal(result(await call(release)).status, "replayed");
     const read = await call({...base("todo_journey"), operation: "read"});

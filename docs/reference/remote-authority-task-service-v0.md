@@ -72,8 +72,12 @@ POST JSON to `/v0/tasks/execute` with a `Bearer` credential. Every command inclu
 | `release` | `idempotency_key`, `expected_version` | Release execution; this does not clear the task's assignment or complete it. |
 
 Use the lease key/version returned by claim or renewal for lifecycle commands.
-Progress names the original claim's client `request_id`; it cannot adopt another
-execution generation. Claim/progress request IDs identify immutable intent within
+Progress names the original claim's client `request_id`; normal activity can
+maintain that execution and advance its lease version. Before a later lifecycle
+command, use `read` to confirm the same owner/epoch and obtain the current version
+while retaining the original lease key. Stale versions fail without an automatic
+rebase. Progress cannot adopt another execution generation.
+Claim/progress request IDs identify immutable intent within
 the principal/tenant/Goal/actor scope. Reusing one with different intent fails.
 Renew/release retain the canonical lease operation identity. Their receipts also
 verify the admitted principal, actor and request digest before reuse.
