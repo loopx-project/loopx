@@ -980,6 +980,9 @@ def _resolve_quota_should_run_route(
     replan_decision_allowed = run_decision.replan_decision_allowed
     receipt_bound_replan_decision = bool(
         replan_decision_allowed
+        # A Todo may own settlement while retaining a semantic replan guard.
+        # That guard must not erase the already bound Todo from this packet.
+        and prepared.receipt_bound_todo_id is None
         and isinstance(prepared.replan_obligation, Mapping)
         and prepared.replan_obligation.get("selection_binding")
         == "heartbeat_receipt"
