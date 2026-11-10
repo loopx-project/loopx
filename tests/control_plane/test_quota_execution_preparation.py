@@ -291,12 +291,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
-    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
-    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert writeback["owner"] == spend["owner"] == "agent"
-    assert "--settle-turn" not in writeback["command_template"]
-    assert "command_template" in spend
+    assert plan["schema_version"] == (
+        "quota_settlement_plan_v2" if scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
+    )
+    if scenario == "codex_app_heartbeat":
+        writeback, spend = [step for step in plan["ordered_steps"]
+                            if step["kind"] in {"durable_writeback", "quota_spend"}]
+        assert "--settle-turn --settlement-receipt" in writeback["command_template"]
+        assert spend["owner"] == "runtime" and "command_template" not in spend
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -498,7 +500,9 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
             guards.append(command[command.index("--turn-instance-id") + 1])
             if not after_ready and len(guards) == 1:
                 raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-        result = run(command, **kwargs)
+        # Reach the deliberate post-ready fault rather than accidentally
+        # injecting the separate pre-commit timeout under test contention.
+        result = run(command, **{**kwargs, "timeout": 30} if after_ready else kwargs)
         if "claim" in command:
             claims.append(json.loads(result.stdout))
         return result

@@ -5,10 +5,12 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 from importlib import import_module
+from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .quota_presentation import (
+    _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
     attach_quota_settlement_guidance, budgeted_spend_result, compose_quota_cli_source,
@@ -25,6 +27,7 @@ from ..control_plane.turn_driver.decision_capture import (
 from ..usage_goal import observe_quota_result
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -319,6 +322,17 @@ def _prepare_quota_result_context(
             raise
         # Preserve the original validation error when activation itself failed.
         activation = {"progressive_enabled": False, "enabled": False}
+    if args.quota_command == "should-run":
+        if (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
+                and activation.get("scenario") == "codex_app_heartbeat"
+                and (getenv("CODEX_THREAD_ID") or getattr(args, "prepared_capture_reference", False))
+                and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+                and not getattr(args, "turn_envelope", False)
+                and payload.get("ok") is True and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
+                and payload.get("normal_delivery_allowed") is True):
+            payload = _project_native_cli_settlement(payload)
+    attach_quota_settlement_guidance(payload, registry_path=registry_path,
+        runtime_root=context.runtime_root if context is not None else None)
     bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
     if capture_directory is not None and payload.get("replan_action_packet"):
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
@@ -357,11 +371,11 @@ def _emit_quota_result(
 
     reader_argv = current_loopx_cli_argv()
     scheduler_observation = getattr(args, "scheduler_observation", False)
-    if not scheduler_observation:
-        attach_quota_settlement_guidance(payload, registry_path=registry_path,
-            runtime_root=context.runtime_root if context is not None else None)
     budgeted_spend = (args.quota_command == "spend-slot" and args.format == "json" and context is not None
         and getattr(args, "max_page_output_bytes", None) is not None)
+    if budgeted_spend:
+        attach_quota_settlement_guidance(payload, registry_path=registry_path,
+            runtime_root=context.runtime_root if context is not None else None)
     activation = None
     if not (budgeted_spend or scheduler_observation):
         payload, activation = _prepare_quota_result_context(

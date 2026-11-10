@@ -9,7 +9,9 @@ import json
 import os
 from pathlib import Path
 import sys
+from threading import Event
 import time
+from hashlib import sha256
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,6 +25,51 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.control_plane.status.goal_source import GoalSource
+
+
+def test_original_document_alias_binding_and_recovery(workspace):
+    raw, request, protected = native_source(workspace)
+    registry = Path(raw['registry'])
+    registered = json.loads(registry.read_text())
+    declared = '/source/retained/primary-task.md'
+    registered['goals'][0]['authority_sources'] = [
+        {'kind': 'goal_doc', 'role': 'primary_goal_document', 'path': declared}]
+    registry.write_text(json.dumps(registered))
+    protected[registry] = registry.read_bytes()
+    document = registry.parent / 'captured-task.md'
+    original = b'# Original objective\r\n\nKeep the full original task and its constraints.\n'
+    document.write_bytes(original)
+    raw['goal_document_snapshot'] = {'declared_path': declared, 'path': str(document),
+        'sha256': sha256(original).hexdigest()}
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    path = '/api/chat/goal-source-document?' + urlencode({'goal_id': 'case-alias', 'source_namespace': namespace})
+    result = request(path)
+    assert result['goal_id'] == 'solver-goal'
+    assert result['source']['namespace'] == namespace
+    assert result['document'] == {'text': original.decode(), 'sha256': sha256(original).hexdigest(), 'captured': True}
+    assert 'path' not in result['document']
+    document.write_bytes(b'changed after capture')
+    with pytest.raises(HTTPError) as failed:
+        request(path)
+    assert failed.value.code == 503
+    document.write_bytes(original)
+    assert request(path)['document']['text'] == original.decode()
+    with pytest.raises(HTTPError) as wrong_scope:
+        request(path.replace(namespace, '0' * 64))
+    assert wrong_scope.value.code == 409
+    # Updating the attachment keeps physical identity but replaces the cached
+    # reader, so the original binding cannot silently survive a new capture.
+    replacement = b'# Another captured original\n'
+    document.write_bytes(replacement)
+    raw['goal_document_snapshot']['sha256'] = sha256(replacement).hexdigest()
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    assert GoalSource.parse(raw).namespace == namespace
+    assert request(path)['document']['text'] == replacement.decode()
+    for file, content in protected.items():
+        assert file.read_bytes() == content
 
 
 def native_source(w, name='original', task_text='Check the original question against its evidence', done=False,
@@ -313,6 +360,64 @@ def test_app_parent_directory_reads_original_tasks_history_and_explicit_analysis
     assert request(endpoint + '?' + query)['pack']['job']['status'] == 'succeeded'
     assert len(w['count'].read_text().splitlines()) == 1
     assert all(path.read_bytes() == data for path, data in before.items())
+
+
+@pytest.mark.parametrize(("view", "source_fails"), [
+    ("history", False), ("findings", False), ("history", True),
+])
+def test_linked_analysis_does_not_wait_for_history_page_io(workspace, monkeypatch, view, source_fails):
+    raw, request, before = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    analysis_runtime = workspace['tmp_path'] / 'runtime' / 'goal-sources' / namespace
+    pack = register_pack(runtime_root=analysis_runtime, owner_goal_id='solver-goal',
+        input_path=workspace['tmp_path'] / 'input.json', source_root=workspace['sources'],
+        title='Original source evidence')
+    query = {'goal_id': 'solver-goal', 'source_namespace': namespace}
+    catalog = '/api/chat/research-analysis?' + urlencode(query)
+    history = '/api/chat/explore-results?' + urlencode({**query, 'view': view})
+    fresh = '/api/chat/explore-results?' + urlencode({**query, 'view': 'history-timing'})
+    entered, resume = Event(), Event()
+    read_events = GoalSource.read_events
+
+    def slow_events(self, goal_id):
+        if self.namespace == namespace:
+            entered.set()
+            assert resume.wait(25)
+        return read_events(self, goal_id)
+
+    monkeypatch.setattr(GoalSource, 'read_events', slow_events)
+    source_registry = Path(raw['registry'])
+    try:
+        with ThreadPoolExecutor(max_workers=2) as clients:
+            pending_page = clients.submit(request, history)
+            try:
+                assert entered.wait(12)
+                if source_fails:
+                    source_registry.unlink()
+                    with pytest.raises(HTTPError) as unavailable:
+                        clients.submit(request, fresh).result(timeout=7)
+                    assert unavailable.value.code == 503
+                else:
+                    analysis = clients.submit(request, catalog).result(timeout=7)
+                    assert analysis['pack']['pack_id'] == pack['pack_id']
+                assert not pending_page.done()
+            finally:
+                resume.set()
+            if source_fails:
+                with pytest.raises(HTTPError) as invalidated:
+                    pending_page.result(timeout=12)
+                assert invalidated.value.code == 409
+            else:
+                page = pending_page.result(timeout=12)
+                assert page['source']['namespace'] == namespace
+                assert page['total'] == (3 if view == 'history' else 0)
+    finally:
+        if source_fails:
+            source_registry.write_bytes(before[source_registry])
+    assert request(catalog)['pack']['pack_id'] == pack['pack_id']
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert not workspace['count'].exists()
 
 
 @pytest.mark.parametrize('retry', [False, True])

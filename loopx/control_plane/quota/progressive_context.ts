@@ -989,7 +989,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const [writeback, spend] = settlementSteps ?? [];
   const manualSettlement = plan?.schema_version === "quota_settlement_plan_v1";
   // Recorded v2 captures retain their original runtime-owned receipt step.
-  // New complete sources use the canonical v1 plan; reading history does not rewrite it.
+  // Native CLI projection may compose the current plan before binding; history remains unchanged.
   const composedSettlement = plan?.schema_version === "quota_settlement_plan_v2" && writeback?.owner === "agent"
     && spend?.owner === "runtime" && !Object.hasOwn(spend, "command_template");
   const templates = manualSettlement ? [writeback?.command_template, spend?.command_template]

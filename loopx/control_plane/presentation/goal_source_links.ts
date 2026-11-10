@@ -2,6 +2,48 @@
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireJsonObject, requireNonEmptyString, type JsonObject} from "../runtime_decode.ts";
+import {createHash} from "node:crypto";
+
+/** Locate a declared document, never reconstruct Goal intent from a title or plan. */
+export function planGoalSourceDocument(input: JsonObject): JsonObject {
+  const goalId = requireNonEmptyString(input.goal_id, "original Goal");
+  const registration = requireJsonObject(input.registration, "source registration");
+  if (!Array.isArray(registration.goals) || registration.goals.length !== 1) throw new Error("Choose one registered original Goal");
+  const goal = requireJsonObject(registration.goals[0], "original Goal");
+  if (goal.id !== goalId || !Array.isArray(goal.authority_sources)) throw new Error("Original Goal declaration is unavailable");
+  const documents = goal.authority_sources.map(value => requireJsonObject(value, "declared source"))
+    .filter(row => row.kind === "goal_doc" && row.role === "primary_goal_document");
+  if (documents.length !== 1) throw new Error("Choose one declared primary Goal document");
+  const declared = requireNonEmptyString(documents[0].path, "declared document path");
+  const repo = typeof goal.repo === "string" ? goal.repo : "";
+  let path = declared, expected: string | null = null;
+  if (input.snapshot !== null && input.snapshot !== undefined) {
+    const snapshot = requireJsonObject(input.snapshot, "captured document binding");
+    if (Object.keys(snapshot).length !== 3 || snapshot.declared_path !== declared
+        || typeof snapshot.sha256 !== "string" || !BARE_SHA256_PATTERN.test(snapshot.sha256)) {
+      throw new Error("The captured document must match the original declaration");
+    }
+    path = requireNonEmptyString(snapshot.path, "captured document path"); expected = snapshot.sha256;
+  }
+  if ([declared, path, repo].some(value => /[\0\r\n]/.test(value))) throw new Error("Invalid document location");
+  return {goal_id: goalId, path, repo, expected_sha256: expected,
+    registration_digest: canonicalAuthoritySha256(registration)};
+}
+
+export function projectGoalSourceDocument(input: JsonObject): JsonObject {
+  const plan = requireJsonObject(input.plan, "document plan");
+  const registration = requireJsonObject(input.registration, "source registration");
+  if (canonicalAuthoritySha256(registration) !== plan.registration_digest) throw new Error("The original declaration changed during reading");
+  const document = requireJsonObject(input.document, "original document");
+  const text = document.text;
+  if (typeof text !== "string" || !text.length || text.includes("\0") || Buffer.byteLength(text, "utf8") > 128 * 1024) {
+    throw new Error("The complete original document is unavailable");
+  }
+  const digest = createHash("sha256").update(text, "utf8").digest("hex");
+  if (plan.expected_sha256 !== null && plan.expected_sha256 !== digest) throw new Error("The captured document changed");
+  // Paths remain in the source adapter, not browser payloads or public sinks.
+  return {document: {text, sha256: digest, captured: plan.expected_sha256 !== null}};
+}
 
 export function projectGoalSourceLinks(input: JsonObject): JsonObject {
   if (!Array.isArray(input.local_goal_ids) || !Array.isArray(input.links) || input.links.length > 32) {

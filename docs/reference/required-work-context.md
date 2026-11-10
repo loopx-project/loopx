@@ -500,16 +500,6 @@ Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，
 原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
 领取回执都不会触发自动领取。
 
-For each verified live guard, the private native journal reserves the first
-automatic preparation before running the claim. If it is interrupted,
-the hook offers one readback for the original claim receipt and current
-lease, even after the same saved decision is presented again. Use the
-same-Turn readiness check after verifying the matching active lease.
-
-对经验证的同一原始准入，Hook 在认领前记录一次自动准备。中断后提供一次
-原认领回执和当前租约的读回入口，重新展示同一快照也不会重复自动认领。
-核对原租约仍有效后，按同轮准入复查 ready。
-
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
 internal context-projection bridge, preserving the complete progressive read

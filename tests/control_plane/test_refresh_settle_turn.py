@@ -299,6 +299,10 @@ def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, p
     return nav, original
 
 
+
+
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("case", ["combined", "after_claim", "after_claim_off", "interrupted"])
 def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monkeypatch, provider, case):
@@ -318,11 +322,11 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     validate, writeback, spend, terminal = plan["ordered_steps"]
     assert validate["command_condition"] == "todo_deliverable_complete"
     assert terminal["conditional"] is True and terminal["owner"] == "agent"
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
-    assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
-    assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
-    assert spend["owner"] == "agent"
     if not off:
+        assert plan["schema_version"] == "quota_settlement_plan_v2"
+        assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
+        assert spend["owner"] == "runtime" and "command_template" not in spend
+        assert cli["next_cli_actions"] == [writeback["command_template"]]
         _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
         projected = json.loads(Path(recovery["path"]).read_bytes())
         assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
@@ -340,6 +344,11 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
             cli_path = "/interaction_contract/cli_channel"
             assert cli_path + "/next_cli_actions" not in values
             assert values[cli_path + "/settlement_plan/ordered_steps/1/command_template"] == writeback["command_template"]
+    else:
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
+        assert "--settle-turn" not in writeback["semantic_closeout_command_template"]
+        assert cli["next_cli_actions"] == [writeback["command_template"], spend["command_template"]]
+        assert spend["owner"] == "agent"
 
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({
@@ -354,9 +363,6 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
                        "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
         command = command.replace(key, value)
     command += " --no-global-sync --suppress-external-sinks"
-    if not off:
-        # Composition is an explicit operation, independent of context delivery.
-        command += " --settle-turn --settlement-receipt"
     if case == "interrupted":
         from contextlib import chdir, redirect_stdout
         from io import StringIO

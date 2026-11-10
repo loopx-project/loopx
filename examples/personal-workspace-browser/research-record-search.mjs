@@ -282,8 +282,10 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.match(await groupSummary.innerText(), /Refuted.*Resolved.*2 records/);
       assert.equal(await results.locator(".research-record-entry").count(), 3, "Identical titles and times leave independent attempts and absent links separate");
       await groupSummary.press("Enter");
-      await grouped.getByRole("paragraph").filter({hasText: "The alternative missed the target."}).waitFor();
-      assert.equal(await grouped.locator(".research-record-group-history > li").count(), 2);
+      const groupHistory = grouped.locator(".research-record-group-history");
+      await groupHistory.waitFor();
+      assert.match(await grouped.innerText(), /The alternative missed the target\./);
+      assert.equal(await groupHistory.locator(":scope > li").count(), 2);
       await grouped.locator(".research-record-sources > summary").last().click();
       await grouped.getByText("synthetic:negative", {exact: true}).waitFor();
       await groupSummary.press("Escape");
