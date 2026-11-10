@@ -85,15 +85,27 @@ def handle_turn_command(
             raise ValueError("a native task validator requires its original host connection")
         if native_execution_preparer is not None and native_host_runner is None:
             raise ValueError("native task preparation requires its original host connection")
+        runtime_root = resolve_status_projection_cache_runtime_root(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_arg,
+        )
+        resume_instance = getattr(args, "resume_turn_instance_id", None)
+        if resume_instance is not None:
+            from ..control_plane.turn_driver.journal_store import find_loopx_turn_key_by_instance
+
+            # Resolve before work selection, delegation and start hooks. All
+            # admission and recovery decisions then use the recorded plan.
+            args.resume_turn_key = find_loopx_turn_key_by_instance(
+                runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+                turn_instance_id=resume_instance,
+            )
+            if args.resume_turn_key is None:
+                raise ValueError("No confirmed journal for the original Turn instance; reconcile before retrying")
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
             or any(getattr(args, key, None) for key in ("resume_goal_id", "resume_agent_id", "resume_todo_id"))
         ):
             raise ValueError("--todo-id selects fresh work and cannot retarget a resumed Turn or session")
-        runtime_root = resolve_status_projection_cache_runtime_root(
-            registry_path=registry_path,
-            runtime_root_override=runtime_root_arg,
-        )
         delegated_context = None
         if getattr(args, "delegation_context_json", None) is not None:
             if getattr(args, "resume_turn_key", None):

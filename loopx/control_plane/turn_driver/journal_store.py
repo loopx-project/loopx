@@ -155,15 +155,29 @@ def find_loopx_turn_key_by_settlement_identity(
 ) -> str | None:
     """Find one validated history; unreadable or conflicting history blocks retry."""
 
+    return _find_turn_key("turn_journal.find_settlement", {
+        "runtime_root": str(runtime_root.resolve()),
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "todo_id": todo_id,
+        "turn_instance_id": turn_instance_id,
+        **({"request_subject": dict(request_subject)} if request_subject is not None else {}),
+    })
+
+
+def find_loopx_turn_key_by_instance(
+    runtime_root: Path, *, goal_id: str, agent_id: str, turn_instance_id: str,
+) -> str | None:
+    """Recover a unique original journal locator after a lost reply."""
+    return _find_turn_key("turn_journal.find_instance", {
+        "runtime_root": str(runtime_root.resolve()),
+        "goal_id": goal_id, "agent_id": agent_id, "turn_instance_id": turn_instance_id,
+    })
+
+
+def _find_turn_key(method: str, params: dict[str, Any]) -> str | None:
     try:
-        payload = effect_runtime_result("turn_journal.find_settlement", {
-            "runtime_root": str(runtime_root.resolve()),
-            "goal_id": goal_id,
-            "agent_id": agent_id,
-            "todo_id": todo_id,
-            "turn_instance_id": turn_instance_id,
-            **({"request_subject": dict(request_subject)} if request_subject is not None else {}),
-        })
+        payload = effect_runtime_result(method, params)
     except EffectRuntimeConflict as exc:
         # Preserve the public ambiguity exception; the native owner also
         # rejects incomplete history rather than authorizing a fresh Turn.

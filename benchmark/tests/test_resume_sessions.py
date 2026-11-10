@@ -58,6 +58,30 @@ def test_launch_admission_exit_interrupt_reaps_started_host(tmp_path, monkeypatc
             process.stdin.close()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX owned Host process groups")
+@pytest.mark.parametrize("member_state", ["absent", "zombie", "live"])
+def test_reaped_native_group_permission_error_requires_no_live_descendant(monkeypatch, member_state):
+    from types import SimpleNamespace
+    from benchmark.runtime import worker
+    from loopx.extensions import process_runtime
+
+    # Reproduce Darwin refusing signals after the leader exited. Another
+    # group is always visible so an unavailable snapshot cannot prove absence.
+    process = SimpleNamespace(pid=12345, poll=lambda: 0, wait=lambda timeout: 0)
+    snapshot = "  900 S\n" + {"absent": "", "zombie": "12345 Z\n", "live": "12345 S\n"}[member_state]
+    def refused(group, number):
+        raise PermissionError("signal refused")
+    monkeypatch.setattr(worker.os, "killpg", refused)
+    monkeypatch.setattr(process_runtime.sys, "platform", "darwin")
+    monkeypatch.setattr(process_runtime.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=0, stdout=snapshot))
+    if member_state == "live":
+        with pytest.raises(PermissionError, match="signal refused"):
+            worker._reap_child_process(process)
+    else:
+        worker._reap_child_process(process)
+
+
 @pytest.mark.parametrize("existing", ["valid", "malformed", "dangling"])
 def test_absent_only_session_admission_preserves_every_existing_binding(tmp_path, existing):
     """The no-replacement condition is checked under the session owner's lock."""

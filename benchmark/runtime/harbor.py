@@ -43,12 +43,13 @@ _AGENT_ID = "benchmark-agent"
 
 
 # Non-LoopX workers stage only these paths; keep this list closed over the
-# loopx-internal import closure of native_codex_goal.py (see the import test).
+# native Host and process-cleanup imports (see the staged-source test).
 NATIVE_GOAL_SOURCE_PATHS = (
     "benchmark/runtime",
     "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
     "loopx/capabilities/benchmark_toolkit/native_codex_process.py",
     "loopx/control_plane/turn_driver/codex_stdio.py",
+    "loopx/extensions/process_runtime.py",
 )
 
 

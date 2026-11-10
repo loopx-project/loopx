@@ -150,7 +150,7 @@ flowchart TB
 | 原受众返回 | [`return_delivery.ts`](../../../loopx/control_plane/collaboration/return_delivery.ts) 区分 provider 已写入但无定位符与未写入 | Router 汇总不得重新执行任务来补投递；投递不等于 requester 采用 |
 | 受管操作复用 | Codex/DSH 均调用 [`managed_operation_host.py`](../../../loopx/control_plane/turn_driver/managed_operation_host.py) 与 `select_managed_operation_session` | C3.1 的通用 handler 抽取已存在；复用并检查剩余调用方，不重复开重构项目 |
 | 双角色绑定 | [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) 按 Goal/Agent/Todo 或 Agent scope 保存 session；尚无本提案的 controller/worker 成对绑定 | C3 需要同一 Agent 的 role/generation 与独立队列、连续性；仅有两个 thread ID 不够 |
-| 统一工作契约 | quota / Turn 活跃格式分支仍在；[#7430](https://github.com/loopx-project/loopx/pull/7430) 是开放的 C1 提案，本次核对头 `3a4f6f64f288ab6c663c829ed5f5670c42d72595` | 与其既有 owner 协同，保留原单会话成果/成本验收；不把 router 多单元交付追加为它的合入条件 |
+| 统一工作契约 | C1 在 [#8266](https://github.com/loopx-project/loopx/pull/8266) 继续；[#8480](https://github.com/loopx-project/loopx/pull/8480) 已把单 Worker EdgeBench 入口与丢回包恢复合入该分支，尚未进入 main | 将完整适配器/恢复切片独立提向 main，不等待 C1 writer 切换。保留原单会话成果/完整成本验收；router 多单元交付不是 C1 合入条件 |
 | 通用 Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) 仍为 Draft，本次核对头 `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | 可作为适配器候选；bounded 调用不证明双向长期 session/异步控制，不把 OAR 或全 Host 重写设为先决条件 |
 
 旧的逐字段审计与实验保留原版本，位于下面的技术附录；其中历史 Draft/测试记录不能
