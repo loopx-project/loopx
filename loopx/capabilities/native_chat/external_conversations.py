@@ -402,7 +402,8 @@ class ChatExternalConversations:
                     and not row.get("delivery_verified")):
                 return True
             if not row.get("delivery_verified"):
-                return False
+                return self._context_recovery_plan(row, discovery_only=True,
+                    discovery_reads=discovery_reads).get("recovery_candidate") is True
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
             if not turn or turn.get("status") not in {"failed", "completed"}:
                 return False
@@ -1739,13 +1740,15 @@ class ChatExternalConversations:
         return facts
 
     def todo_confirmation_reply(self, request_ref: str, response: dict[str, Any]) -> str:
-        """Project an external owner's Todo preview through the existing action owner.
+        """Project the completed reply and optional Todo preview through Core.
 
         The original request journal freezes expiry and idempotency before IO.
         This creates an action preview only; the authenticated /confirm worker
         remains the sole route to the canonical Todo writer.
         """
         message = str(response.get("message") or "")
+        if not message.strip():
+            message = self.native_result_reply(request_ref) or ""
         proposals = [p for p in response.get("proposals") or [] if p.get("kind") == "todo"]
         if not proposals:
             return message
@@ -1915,7 +1918,8 @@ class ChatExternalConversations:
         if row.get("commission_gate"):
             row["response"] += "首轮执行有待处理 Gate；请在本机查看该 Goal 的操作回执。"
 
-    def record_delivery(self, request_ref: str, *, session_id: str | None, turn_id: str | None) -> None:
+    def record_delivery(self, request_ref: str, *, session_id: str | None, turn_id: str | None,
+                        message_text: str | None = None) -> None:
         # This transport receipt does not alter a canonical Turn or grant.
         path = self.root / f"{request_ref}.json"
         with exclusive_file_lock(path, operation="record_external_chat_delivery"):
@@ -1927,6 +1931,10 @@ class ChatExternalConversations:
             if (row.get("session_id"), row.get("turn_id")) != (session_id, turn_id):
                 raise ValueError("delivery correlation changed")
             row["delivery_verified"] = True
+            recovered = row.get("native_result_recovery")
+            if (recovered and recovered.get("turn_id") == turn_id
+                    and message_text == recovered.get("message_text")):
+                recovered["delivery_verified"] = True
             _atomic_write_json(path, row)
 
     def recover(self, *, request_ref: str | None = None) -> None:

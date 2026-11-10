@@ -23,6 +23,7 @@ from datetime import datetime
 from ...chat import (
     CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG,
     VisibleResponseStreamFilter,
+    _review_openings,
     parse_agent_response,
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
@@ -124,6 +125,21 @@ def _native_completion_facts(cascade_id: str, current: list[tuple[int, dict[str,
         facts.append(fact)
     return {"thread_id": cascade_id, "start_step_index": current[0][0],
         "total_steps": current[-1][0] + 1, "steps": facts}
+
+
+def _parse_native_final_response(raw: str, *, work_dir: Path,
+                                 team_plan_context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Parse only after the caller verifies this input's normal native final."""
+    parsed = parse_agent_response(raw, protected_paths=[work_dir], team_plan_context=team_plan_context)
+    if not parsed.get("message") and not any(parsed.get(key) for key in
+            ("proposals", "context_handoff", "protected_action", "gate", "goal_draft", "unfinished_work")):
+        # Unlike a generic prefix, this is the verified final planner's prose.
+        # Salvage text only: missing message never opts into compact metadata.
+        openings, _, _ = _review_openings(raw)
+        visible = raw[:openings[0]] if openings else ""
+        if visible.strip():
+            return parse_agent_response(visible, protected_paths=[work_dir], team_plan_context=team_plan_context)
+    return parsed
 
 
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -716,7 +732,7 @@ class AntigravityAdapter:
                     or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"
                     or not isinstance(answer, str) or not answer.strip()):
                 return None
-            response = parse_agent_response(answer, protected_paths=[work_dir])
+            response = _parse_native_final_response(answer, work_dir=work_dir)
             if not response.get("message"):
                 return None
             return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
@@ -1034,12 +1050,27 @@ class AntigravityAdapter:
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
         previous_progress: Any = None
         saw_running_or_new_step = False
+        observed_native_errors: set[int] = set()
+
+        def timeout(kind: str) -> None:
+            limit = self.hard_timeout_sec if kind == "hard" else ANTIGRAVITY_IDLE_TIMEOUT_SEC
+            detail = {"kind": kind, "limit_seconds": limit,
+                      "native_error_count": len(observed_native_errors)}
+            if event_sink is not None:
+                event_sink("agent.phase", {"method": "native/timeout", "timeout": detail,
+                    "label": "原生助手达到执行时限" if kind == "hard" else "等待原生助手进展超时"})
+            error = CodexChatAgentError(
+                f"Antigravity did not finish before the turn deadline ({kind} timeout).",
+                gate=None, error_code="response_timeout")
+            error.native_error_info = {"timeout": detail}
+            raise error
 
         while True:
             now = time.monotonic()
-            if (deadline is not None and now >= deadline) or now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
-                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
-                                          gate=None, error_code="response_timeout")
+            if deadline is not None and now >= deadline:
+                timeout("hard")
+            if now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
+                timeout("idle")
             self._check_interrupted()
             self._interrupted.wait(0.25)
             self._check_interrupted()
@@ -1176,6 +1207,15 @@ class AntigravityAdapter:
                             # API attempts and cleared errors. The native host
                             # owns retry: only its settled terminal error ends
                             # this turn. Do not cancel its in-flight backoff.
+                            if (step_status != "CORTEX_STEP_STATUS_CLEARED"
+                                    and step_idx not in observed_native_errors):
+                                observed_native_errors.add(step_idx)
+                                if event_sink is not None:
+                                    # Error bodies can contain credentials, URLs
+                                    # and private host paths. Publish only the
+                                    # occurrence, never that native payload.
+                                    event_sink("agent.phase", {"method": "native/error",
+                                        "label": "原生助手记录了调用错误"})
                             continue
 
             # A running status alone is not progress. Observe only this input's
@@ -1195,8 +1235,7 @@ class AntigravityAdapter:
                 last_progress_at = now
             self._check_interrupted()
             if deadline is not None and now >= deadline:
-                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
-                                          gate=None, error_code="response_timeout")
+                timeout("hard")
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
@@ -1289,9 +1328,9 @@ class AntigravityAdapter:
             except (TypeError, ValueError) as exc:
                 raise CodexChatAgentError("The format review is incomplete or contains other actions; no actions were admitted.",
                                           gate=None, error_code="host_gate") from exc
-        parsed = parse_agent_response(
+        parsed = _parse_native_final_response(
             latest_response_text,
-            protected_paths=[self.work_dir],
+            work_dir=self.work_dir,
             team_plan_context=self.team_plan_context,
         )
         if event_sink is not None:

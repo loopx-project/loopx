@@ -16,6 +16,354 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": ""}, {"message": "  "}])
+def test_missing_final_message_preserves_visible_answer_without_promoting_metadata(tmp_path, language_server, message_field):
+    from test_antigravity_steward_adapter import adapter_for
+
+    raw = f'Original [report]({tmp_path}/report.md).\n<loopx-review-json>' + json.dumps({
+        **message_field, "decision": "none", "summary": "HIDDEN_NATIVE_SUMMARY", "context_handoff": [],
+    }) + '</loopx-review-json>'
+    language_server.update(plain_text=True, answers={0: raw})
+    adapter = adapter_for(tmp_path)
+    result = adapter.start_turn("Return the original result")
+    assert result["message"] == "Original report."
+    assert result["proposals"] == [] and result["gate"] is None
+    assert not result.get("context_handoff") and result["protected_action"] is None
+    assert "HIDDEN_NATIVE_SUMMARY" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": " "}])
+@pytest.mark.parametrize("metadata", [
+    {"proposals": [{"kind": "todo", "text": "Preview a task"}]},
+    {"protected_action": {"operation": "merge", "target": "PR #1", "summary": "Review first"}},
+    {"gate": {"kind": "host_tool_gate", "summary": "Check the original gate", "next_action": "Review"}},
+])
+def test_missing_final_message_keeps_the_existing_metadata_contract(tmp_path, language_server, message_field, metadata):
+    from test_antigravity_steward_adapter import adapter_for
+    from loopx.chat import parse_agent_response
+
+    raw = 'Unrelated prefix\n<loopx-review-json>' + json.dumps({**message_field, **metadata}) + '</loopx-review-json>'
+    expected = parse_agent_response(raw, protected_paths=[tmp_path])
+    assert expected["message"] == ""
+    language_server.update(plain_text=True, answers={0: raw})
+    adapter = adapter_for(tmp_path)
+    assert adapter.start_turn("Preserve the existing typed metadata") == expected
+
+
+@pytest.mark.parametrize("fault", [None, "source-changed", "closed", "stop", "native-unavailable", "action", "lost-ack"])
+def test_original_queue_returns_missing_final_message_from_retained_native_result_without_replay(
+    steward, language_server, monkeypatch, fault,
+):
+    from loopx.chat import parse_agent_response
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    store, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward")
+    metadata = {"decision": "none", "summary": "HIDDEN_NATIVE_SUMMARY", "context_handoff": []}
+    if fault == "action":
+        metadata["proposals"] = [{"kind": "todo", "text": "Unsubmitted action"}]
+    language_server.update(plain_text=True, answers={0: 'Original verified result.\n<loopx-review-json>'
+        + json.dumps(metadata) + '</loopx-review-json>'})
+
+    def legacy_parser(text, **kwargs):
+        return {**parse_agent_response(text, **kwargs), "message": ""}
+
+    monkeypatch.setattr(native, "parse_agent_response", legacy_parser)
+    event = provider.event("steward-app", "missing-final-message", "Complete the original request")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    completed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+    assert completed["status"] == "completed" and completed["response"]["message"] == ""
+    turn_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    event_bytes = store._event_path(row["session_id"], row["turn_id"]).read_bytes()
+    assert store.native_result(row["session_id"], row["turn_id"])
+    monkeypatch.setattr(native, "parse_agent_response", parse_agent_response)
+    monkeypatch.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued business"))
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed business"))
+    monkeypatch.setattr(native.AntigravityAdapter, "start_turn", lambda *_, **__: pytest.fail("Result recovery ran a model"))
+    if fault == "source-changed":
+        provider.messages[event["message_id"]]["content"] = "Changed original source"
+    elif fault == "closed":
+        store.update_session(row["session_id"], status="closed")
+    elif fault == "native-unavailable":
+        monkeypatch.setattr(native.AntigravityAdapter, "completed_result_observation", lambda **_: None)
+    elif fault == "lost-ack":
+        provider.lose_next_reply = True
+    writes = len(provider.writes)
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+        runner=provider, cli_bin="lark-cli")
+    if fault == "stop":
+        monkeypatch.setattr(restarted.core, "_source_stop_observed", lambda *_, **__: True)
+    restarted.reconcile()
+    recovered = restarted.core.read_request(ref).get("native_result_recovery")
+    if fault == "lost-ack":
+        assert recovered and recovered["delivery_verified"] is False
+        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        assert journal["deliveries"]["terminal"]["started"]
+        assert not journal["deliveries"]["terminal"].get("attempt")
+        after = list(provider.writes)
+        restarted.reconcile()
+        assert provider.writes == after and len(provider.writes) == writes + 1
+        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        assert journal["deliveries"]["terminal"]["blocker"] == "provider_delivery_receipt_unknown"
+    elif fault == "action":
+        assert recovered is None
+        assert all("待办尚未写入" in text for _, text in provider.writes[writes:])
+        assert restarted.core.read_request(ref).get("native_result_recovery") is None
+    elif fault:
+        assert recovered is None and len(provider.writes) == writes
+    else:
+        assert recovered["delivery_verified"] is True
+        assert restarted.core.read_request(ref)["delivery_verified"] is True
+        journal = json.loads((restarted.root / f"{ref}.json").read_text())
+        assert journal["status"] == "delivered" and journal["deliveries"]["terminal"]["verified"]
+        terminal = journal["deliveries"]["terminal"]
+        assert "Original verified result." in terminal["text"]
+        assert "HIDDEN_NATIVE_SUMMARY" not in terminal["text"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        after = list(provider.writes)
+        assert restarted.reconcile() == 0 and provider.writes == after
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == turn_bytes
+    assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == event_bytes
+    assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+
+
+@pytest.mark.parametrize("status, expected", [
+    ("DONE", "completed"), ("ERROR", "failed"), ("RUNNING", None),
+    ("GENERATING", None), ("WAITING", None), ("CANCELED", None), ("CLEARED", None),
+])
+def test_native_code_action_reports_only_its_observed_tool_result(tmp_path, status, expected):
+    from loopx.capabilities.native_chat.antigravity_activity import AntigravityActivity
+
+    activity = AntigravityActivity(tmp_path)
+    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+        "plannerResponse": {"toolCalls": [{"id": "native-call", "name": "write_file",
+            "argumentsJson": "NATIVE_CODE_PRIVATE_SENTINEL"}]}}
+    started = activity.observe(1, planner)
+    tool_id = started[0]["step"]["id"]
+    assert not any(row["method"] == "item/completed" for row in started)
+    action = {"type": "CORTEX_STEP_TYPE_CODE_ACTION", "status": "CORTEX_STEP_STATUS_" + status,
+        "metadata": {"toolCall": {"id": "native-call", "name": "write_file",
+            "argumentsJson": "NATIVE_CODE_PRIVATE_SENTINEL", "thinkingSignature": "NATIVE_CODE_PRIVATE_SENTINEL"}},
+        "codeAction": {"actionSpec": {"createFile": {"content": "NATIVE_CODE_PRIVATE_SENTINEL"}},
+            "actionResult": {"edit": {"private": "NATIVE_CODE_PRIVATE_SENTINEL"}}}}
+    rows = activity.observe(2, action)
+    completed = [row for row in rows if row["method"] == "item/completed"]
+    if expected:
+        assert [(row["step"]["id"], row["step"]["state"]) for row in completed] == [(tool_id, expected)]
+        assert activity.observe(2, action) == []
+    else:
+        assert not completed
+    assert "NATIVE_CODE_PRIVATE_SENTINEL" not in json.dumps(started + rows)
+
+
+@pytest.mark.parametrize("native_id", ["other-call", None, []])
+def test_native_code_action_does_not_complete_an_unrelated_planner_call(tmp_path, native_id):
+    from loopx.capabilities.native_chat.antigravity_activity import AntigravityActivity
+
+    activity = AntigravityActivity(tmp_path)
+    started = activity.observe(1, {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "plannerResponse": {"toolCalls": [{"id": "original-call", "name": "write_file"}]}})
+    rows = activity.observe(2, {"type": "CORTEX_STEP_TYPE_CODE_ACTION", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"toolCall": {"id": native_id, "name": "write_file"}}, "codeAction": {"actionResult": {"edit": {}}}})
+    assert rows and all(row["step"]["id"] != started[0]["step"]["id"] for row in rows)
+    assert any(row["method"] == "item/completed" for row in rows)
+
+
+def test_native_code_action_ambiguous_call_identity_keeps_both_requests_open(tmp_path):
+    from loopx.capabilities.native_chat.antigravity_activity import AntigravityActivity
+
+    activity = AntigravityActivity(tmp_path)
+    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "plannerResponse": {"toolCalls": [
+        {"id": "duplicate-call", "name": "write_file"}, {"id": "duplicate-call", "name": "other_tool"}]}}
+    requested = activity.observe(1, planner)
+    assert activity.observe(1, planner) == []
+    completed = activity.observe(2, {"type": "CORTEX_STEP_TYPE_CODE_ACTION", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"toolCall": {"id": "duplicate-call", "name": "write_file"}}, "codeAction": {}})
+    ids = {row["step"]["id"] for row in requested}
+    assert completed and all(row["step"]["id"] not in ids for row in completed)
+    assert completed[-1]["step"]["state"] == "completed"
+
+
+@pytest.mark.parametrize("tool_status, expected", [("DONE", "completed"), ("ERROR", "failed")])
+def test_original_native_code_action_result_survives_later_timeout_without_replay(
+    steward, language_server, monkeypatch, tool_status, expected,
+):
+    from test_antigravity_steward_adapter import _native_clock
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    store, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.hard_timeout_sec = None
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "plannerResponse": {"toolCalls": [{"id": "native-call", "name": "write_file"}]}}
+    action = {"type": "CORTEX_STEP_TYPE_CODE_ACTION", "status": "CORTEX_STEP_STATUS_RUNNING",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}, "toolCall": {"id": "native-call", "name": "write_file"}},
+        "codeAction": {"actionSpec": {"createFile": {}}, "actionResult": {"edit": {}}}}
+    finished = {**action, "status": "CORTEX_STEP_STATUS_" + tool_status}
+    error = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 3}}, "errorMessage": {"error": {"shortError": "EOF"}}}
+    frames = [{"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"} for at, steps in [
+        (1.0, [user, planner, action]), (2.0, [user, planner, finished]), (305.0, [user, planner, finished, error])]]
+    _native_clock(monkeypatch, language_server, frames)
+    source = provider.event("steward-app", "native-code-action-source", "Complete the original task")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+    assert failed["status"] == "failed" and failed["error_code"] == "response_timeout"
+    events = store.events_after(row["session_id"], row["turn_id"], None)
+    tool_results = [event["payload"]["step"] for event in events if event.get("kind") == "agent.phase"
+        and event.get("payload", {}).get("method") == "item/completed"
+        and event["payload"].get("step", {}).get("title") == "write_file"]
+    assert len(tool_results) == 1 and tool_results[0]["state"] == expected
+    from loopx.extensions.lark.private_progress import project_progress
+    visible = project_progress({}, events, owner_private=True)
+    label = "已结束当前步骤，继续处理" if expected == "completed" else "当前步骤失败，Agent 正在处理"
+    assert visible and label in visible
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    assert transport.reconcile() == 1
+    terminal = json.loads((transport.root / f"{ref}.json").read_text())["deliveries"]["terminal"]
+    assert terminal["verified"] and "没有生成完整答复" in terminal["text"] and "不会自动重放" in terminal["text"]
+    assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == source["chat_id"]
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+        runner=provider, cli_bin="lark-cli")
+    writes = list(provider.writes)
+    assert restarted.reconcile() == 0 and provider.writes == writes
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+    assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+
+
+@pytest.mark.parametrize("hard_limit, native_error", [(None, True), (150.0, True), (None, False)])
+def test_native_timeout_reports_its_clock_without_extending_native_retry(
+    tmp_path, language_server, monkeypatch, hard_limit, native_error,
+):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+            "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}}
+    steps, frames = [user], []
+    for idx, at in enumerate((1.0, 120.0, 240.0, 305.0), 1):
+        if native_error:
+            steps = [*steps, {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": idx}},
+                "errorMessage": {"error": {"shortError": f"EOF {idx} NATIVE_PRIVATE_SENTINEL /private/host"}}}]
+        frames.append({"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING"})
+    _native_clock(monkeypatch, language_server, frames)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path, hard_timeout_sec=hard_limit).start_turn(
+            "Original task", lambda kind, data: events.append((kind, data)))
+    assert raised.value.error_code == "response_timeout"
+    diagnostic = next(data["timeout"] for kind, data in events
+        if kind == "agent.phase" and data.get("method") == "native/timeout")
+    assert diagnostic["kind"] == ("hard" if hard_limit is not None else "idle")
+    assert diagnostic["limit_seconds"] == (hard_limit or 300.0)
+    assert diagnostic["native_error_count"] == ((3 if hard_limit else 4) if native_error else 0)
+    assert raised.value.native_error_info == {"timeout": diagnostic}
+    assert language_server["now"] == (240.0 if hard_limit else 305.0)
+    assert language_server["cancelled"].is_set()
+    assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+    assert not any(kind in {"answer.final", "turn.native_result"} for kind, _ in events)
+    serialized = json.dumps(events)
+    assert "NATIVE_PRIVATE_SENTINEL" not in serialized and "/private/host" not in serialized
+    errors = [data for kind, data in events if data.get("method") == "native/error"]
+    assert len(errors) == diagnostic["native_error_count"]
+
+
+@pytest.mark.parametrize("kind, expected", [
+    ("idle", "等待原生助手有效进展超时"), ("hard", "原生助手达到本次执行时限"),
+    ("unknown-host-value", "等待助手响应超时"), (None, "等待助手响应超时"),
+])
+def test_original_lark_timeout_keeps_typed_reason_and_never_replays(
+    steward, language_server, monkeypatch, kind, expected,
+):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    starts = []
+
+    def fail_after_observed_progress(_adapter, message, event_sink):
+        starts.append(message)
+        event_sink("turn.started", {"upstream_turn_id": "synthetic-timeout"})
+        event_sink("agent.phase", {"method": "native/timeout", "label": "private label",
+            "timeout": {"kind": kind, "native_error_count": 4, "raw": "NATIVE_PRIVATE_SENTINEL"}})
+        raise CodexChatAgentError("Private host diagnostic NATIVE_PRIVATE_SENTINEL", gate=None,
+                                  error_code="response_timeout")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", fail_after_observed_progress)
+    store, runtime, provider, transport, binding, _, _ = steward
+    native_route = kind in {"idle", "hard"}
+    if native_route:
+        from test_antigravity_steward_adapter import _native_clock, _native_frames
+        monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+        monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        runtime.hard_timeout_sec = 150.0 if kind == "hard" else None
+        frames = _native_frames(stagnant=True)
+        for index, frame in enumerate(frames):
+            frame["steps"] += [{"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+                "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2 + attempt}},
+                "errorMessage": {"error": {"shortError": "EOF NATIVE_PRIVATE_SENTINEL"}}}
+                for attempt in range(index)]
+        _native_clock(monkeypatch, language_server, frames)
+    source = provider.event("steward-app", "native-timeout-source", "Complete this original request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+    assert failed["status"] == "failed" and failed["error_code"] == "response_timeout"
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    assert transport.reconcile() == 1
+    saved = json.loads((transport.root / f"{ref}.json").read_text())
+    terminal = saved["deliveries"]["terminal"]
+    assert terminal["verified"] and expected in terminal["text"]
+    assert ("期间原生助手记录了调用错误" in terminal["text"]) is (kind in {"idle", "hard"})
+    assert "不会自动重放" in terminal["text"]
+    assert "NATIVE_PRIVATE_SENTINEL" not in terminal["text"] and "private label" not in terminal["text"]
+    returned = provider.messages[terminal["attempt"]["message_ref"]]
+    assert returned["chat_id"] == source["chat_id"]
+    assert expected in json.dumps(returned["body"], ensure_ascii=False)
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+        runner=provider, cli_bin="lark-cli")
+    before = list(provider.writes)
+    assert restarted.reconcile() == 0
+    assert restarted.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+    assert (not starts and [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
+            if native_route else len(starts) == 1)
+    assert provider.writes == before
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+
+
+@pytest.mark.parametrize("info", [None, [], {"kind": []}, {"kind": {}}, {"kind": "idle", "native_error_count": True}])
+def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+    code, text = manager_failure_reply({"error_code": "response_timeout", "error": "NATIVE_PRIVATE_SENTINEL"},
+        phase_events=[{"kind": "agent.phase", "payload": {"method": "native/timeout", "timeout": info}}])
+    assert code == "processing_failed" and "超时" in text and "不会自动重放" in text
+    assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
+
+
+@pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
+def test_native_error_labels_preserve_shared_admission_failure_category(source_code):
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+    code, _ = manager_failure_reply({"error_code": source_code})
+    assert code == "processing_failed"
+
+
 @pytest.mark.parametrize("fault, expected", [
     ("done", True), ("error", True), ("canceled", True), ("cleared", True),
     ("running", False), ("generating", False), ("waiting", False),
@@ -344,6 +692,11 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
             restarted.admit("steward-app", later)
             next_row = restarted.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
             next_turn = runtime.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=15)
+            preparation = next_turn["native_context_preparation"]
+            assert preparation["source_thread_id"] == "working-thread", "observe the inherited working thread, not the isolated review"
+            assert preparation["planned_method"] == ("thread/resume" if fault == "checkpoint-empty" else "thread/fork")
+            assert preparation["history_message_count"] == (0 if fault == "checkpoint-empty" else 1)
+            assert preparation["native_checkpoint_requested"] and preparation["working_checkpoint_available"]
             packets = [json.loads(line) for line in capture.read_text().splitlines()][len(calls):]
             methods = [packet["method"] for packet in packets]
             assert "thread/start" not in methods and "thread/compact/start" not in methods
