@@ -336,9 +336,14 @@ def register_turn_commands(
         action="store_true",
         help="Retry a failed transaction from its last side-effect-safe phase.",
     )
-    run_once.add_argument(
+    resume = run_once.add_mutually_exclusive_group()
+    resume.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
+    )
+    resume.add_argument(
+        "--resume-turn-instance-id",
+        help="After a lost reply, resume only the unique original journal for this Goal, Agent and Turn instance.",
     )
     run_once.add_argument(
         "--no-global-sync",

@@ -198,6 +198,7 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
          f"import sys; sys.path.insert(0, {str(staged)!r}); "
          "import loopx.capabilities.benchmark_toolkit.native_codex_goal as goal; "
          "import loopx.capabilities.benchmark_toolkit.native_codex_process as process; "
+         "from loopx.extensions.process_runtime import _darwin_owned_group_has_exited; "
          "import benchmark.runtime.codex_readiness; "
          "print(goal.__name__, process.__name__)"],
         cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,

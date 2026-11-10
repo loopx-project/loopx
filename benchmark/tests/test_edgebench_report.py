@@ -684,3 +684,23 @@ def test_report_rejects_unbound_horizon_setting(trial, receipt, profile):
         write(path, value)
     with pytest.raises(ValueError, match="planning_horizon_goal"):
         export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
+@pytest.mark.parametrize("profile_digest", ["valid", "different", "missing"])
+def test_turn_report_requires_the_same_validator_argv(trial, profile_digest):
+    runs, selection, output, _ = trial
+    task = runs / "run" / "case"
+    for name, key in (("runtime-receipt", "worker"), ("worker-profile", "profile")):
+        path = task / (name + ".json")
+        record = json.loads(path.read_text())
+        record[key] = "turn-resume"
+        if name == "runtime-receipt" or profile_digest != "missing":
+            record["validation_argv_sha256"] = ("b" if name == "worker-profile" and profile_digest == "different" else "a") * 64
+        write(path, record)
+    if profile_digest == "valid":
+        export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+        config = json.loads((output / "settings/run.json").read_text())
+        assert config["runner"]["validation_argv_sha256"] == config["worker_profile"]["validation_argv_sha256"] == "a" * 64
+    else:
+        with pytest.raises(ValueError, match="validator argv"):
+            export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
