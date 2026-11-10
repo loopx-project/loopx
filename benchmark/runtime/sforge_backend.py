@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import io
 import inspect
 import ipaddress
 import json
 import tarfile
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from docker.errors import ImageNotFound
@@ -191,6 +191,24 @@ class RecordingDockerBackend(DockerBackend):
             raise RuntimeError("Best-only publisher is unavailable")
         self.feedback.start(self, handle)
 
+    def _extract_artifact_archive(self, handle, remote, target):
+        """Collect one native archive without materializing it as Python bytes."""
+        chunks, _ = self._raw(handle).get_archive(str(remote))
+        try:
+            # A seekable spool preserves the existing tar extraction/filter
+            # behavior. Its lifetime is independent of TarFile reference cycles.
+            with tempfile.TemporaryFile() as archive_file:
+                for chunk in chunks:
+                    archive_file.write(chunk)
+                archive_file.seek(0)
+                target.mkdir(exist_ok=True)
+                with tarfile.open(fileobj=archive_file) as archive:
+                    archive.extractall(target, filter="data")
+        finally:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+
     def cleanup_container(self, handle, logger=None):
         native_failure = getattr(self, "native_failure_evidence", None) if handle is not None else None
         try:
@@ -223,11 +241,8 @@ class RecordingDockerBackend(DockerBackend):
                     sources.append((RESEARCH_DIRECTORY, "research"))
                 for remote, name in sources:
                     try:
-                        data = self.copy_from_container(handle, PurePosixPath(remote))
-                        target = self.log_dir / name
-                        target.mkdir(exist_ok=True)
-                        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-                            archive.extractall(target, filter="data")
+                        self._extract_artifact_archive(
+                            handle, PurePosixPath(remote), self.log_dir / name)
                         observations.append({"artifact": name, "collected": True})
                     except Exception as error:
                         observations.append({"artifact": name, "collected": False,
