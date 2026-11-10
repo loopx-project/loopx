@@ -70,6 +70,7 @@ def test_scheduler_observation_preserves_native_wake_context(
         assert failure["ok"] is False
         assert "--scheduler-observation" in failure["reason"]
     for extra in (
+        ("--capture-file", str(tmp_path / "capture.json")),
         ("--initial-read",),
         ("--list",),
         ("--list", "--list-depth", "2"),
