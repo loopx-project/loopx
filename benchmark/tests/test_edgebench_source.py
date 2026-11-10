@@ -221,7 +221,7 @@ def test_production_default_is_a_reviewed_immutable_source():
     assert re.fullmatch(r"[0-9a-f]{40}", defaults["ref"])
     assert defaults == {
         "repository": "https://github.com/huangruiteng/EdgeBench.git",
-        "ref": "4e58265952449fa04c1e15fc00ea948cfafa2b0a",
+        "ref": "476b34d17e759a7dbcf9ec36a12ff42b757b462a",
         "compatibility_patch": {
             "id": "nonfinite-checkpoint-v2",
             "relative_path": "compatibility/nonfinite-checkpoint-v2.patch",

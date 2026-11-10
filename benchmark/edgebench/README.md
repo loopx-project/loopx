@@ -21,7 +21,7 @@ never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
 selects the reviewed provider commit
-[`4e58265952449fa04c1e15fc00ea948cfafa2b0a`](https://github.com/huangruiteng/EdgeBench/commit/4e58265952449fa04c1e15fc00ea948cfafa2b0a)
+[`476b34d17e759a7dbcf9ec36a12ff42b757b462a`](https://github.com/huangruiteng/EdgeBench/commit/476b34d17e759a7dbcf9ec36a12ff42b757b462a)
 and the versioned
 [`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
 This LoopX-owned patch fixes the native checkpoint representation of nonfinite
