@@ -7,6 +7,7 @@ from ..runtime.time import parse_timestamp
 from .progress_observation import FRESH_VISION_PATH_DISPOSITIONS
 
 AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW = 20
+AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT = 8
 # A normal delivery appends both a durable run record and a neutral quota-spend
 # record. Keep enough internal history to observe the full material-run
 # threshold even when those records are interleaved, with headroom for other
@@ -192,9 +193,15 @@ def compact_autonomous_replan_ack(run: dict[str, Any] | None) -> dict[str, Any] 
                 if isinstance(item, dict)
             ][:6],
         }
+    goal_id = str(run.get("goal_id") or "").strip()
+    if goal_id:
+        result["goal_id"] = goal_id
     agent_id = str(run.get("agent_id") or "").strip()
     if agent_id:
         result["agent_id"] = agent_id
+    turn_instance_id = str(run.get("turn_instance_id") or "").strip()
+    if turn_instance_id:
+        result["turn_instance_id"] = turn_instance_id
     frontier_identity = str(ack.get("frontier_identity") or "").strip()
     if frontier_identity:
         result["frontier_identity"] = frontier_identity
@@ -207,6 +214,56 @@ def compact_autonomous_replan_ack(run: dict[str, Any] | None) -> dict[str, Any] 
         # The canonical source reader validates it before legacy ACK recovery.
         result["todo_source"] = dict(todo_source)
     return result
+
+
+def autonomous_replan_ack_candidates_for_obligation(
+    newest_first_runs: list[dict[str, Any]] | None,
+    *,
+    goal_id: str | None,
+    agent_id: str | None,
+    obligation_id: str | None,
+    limit: int = AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT,
+) -> list[dict[str, Any]]:
+    """Project a bounded set of exact durable ACK candidates for recovery.
+
+    This lookup prevents a newer unrelated ACK from hiding an older ACK for a
+    receipt-bound obligation.  It only narrows journal IO by stable identity;
+    the TypeScript settlement owner still validates schema, outcomes,
+    chronology, and the distinct durable Turn before accepting any candidate.
+    """
+
+    safe_goal_id = str(goal_id or "").strip()
+    safe_agent_id = str(agent_id or "").strip()
+    safe_obligation_id = str(obligation_id or "").strip()
+    if not safe_goal_id or not safe_agent_id or not safe_obligation_id or limit <= 0:
+        return []
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for run in newest_first_runs or []:
+        compact = compact_autonomous_replan_ack(run)
+        if not isinstance(compact, dict):
+            continue
+        semantic_delta = compact.get("semantic_delta")
+        if not isinstance(semantic_delta, dict):
+            continue
+        if (
+            compact.get("goal_id") != safe_goal_id
+            or compact.get("agent_id") != safe_agent_id
+            or semantic_delta.get("obligation_id") != safe_obligation_id
+        ):
+            continue
+        identity = (
+            str(compact.get("turn_instance_id") or "").strip(),
+            str(compact.get("generated_at") or "").strip(),
+            safe_obligation_id,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.append(compact)
+        if len(candidates) >= limit:
+            break
+    return candidates
 
 
 def latest_blocked_successor_frontier_identity(

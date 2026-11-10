@@ -8882,3 +8882,103 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
     assert fresh["unsettled_host_turn_recovery"]["binding_id"] == (
         ALTERNATIVE_TODO_ID
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("complete_history", [True, False])
+def test_later_exact_ack_preserves_original_todo_settlement(
+    tmp_path: Path, provider: str, complete_history: bool,
+) -> None:
+    from copy import deepcopy
+
+    from loopx.history import write_reserved_run_artifacts
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "guided-start:historical-ack-recovery"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, turn)
+    identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    obligation_id = admitted["autonomous_replan_obligation"]["obligation_id"]
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc)
+    ack = {
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID,
+        "turn_instance_id": "guided-start:later-exact-ack",
+        "generated_at": now.isoformat(), "classification": "bounded_replan_progress",
+        "autonomous_replan_ack": {
+            "schema_version": "autonomous_replan_ack_v0", "recorded": True,
+            "source": "refresh_state_semantic_delta",
+            "semantic_delta": {
+                "schema_version": "replan_semantic_delta_v0", "accepted": True,
+                "outcomes": ["fresh_vision_path_outcome"],
+                "satisfying_outcomes": ["fresh_vision_path_outcome"],
+                "obligation_id": obligation_id,
+            },
+        },
+    }
+    unrelated = deepcopy(ack)
+    unrelated["turn_instance_id"] = "guided-start:newer-unrelated-ack"
+    unrelated["generated_at"] = (now + timedelta(microseconds=1)).isoformat()
+    unrelated["autonomous_replan_ack"]["semantic_delta"]["obligation_id"] = (
+        "replan-ffffffffffffffff"
+    )
+    # Isolated migration input: the exact ACK is hidden by a newer unrelated
+    # one. Complete artifacts keep the success case independent of health
+    # recovery; the index-only variant proves that health still blocks debit.
+    for row in (ack, unrelated):
+        if complete_history:
+            write_reserved_run_artifacts(
+                runs_dir=index.parent, generated_at=row["generated_at"],
+                record=row, index_record=dict(row), payload={},
+                render_markdown=lambda _: "# Historical ACK fixture",
+            )
+        else:
+            with index.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+    binding = (
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn, "--todo-id", SELECTED_REPLAN_TODO_ID,
+    )
+    rc, recovery = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    assert rc == 0, recovery
+    assert recovery["replan_action_packet"]["decision"] == "historical_ack_recorded"
+    assert recovery["replan_action_packet"]["settlement_only"] is True
+    assert recovery.get("selected_todo") is None
+    channel = recovery["interaction_contract"]["cli_channel"]
+    assert channel["settlement_plan"]["identity"] == identity
+    command = next(action for action in channel["next_cli_actions"] if "refresh-state" in action)
+    assert "--vision-" not in command and "--progress-result-class" not in command
+    args = _projected_cli_args(command, turn_instance_id=turn)
+    # A semantic obligation cannot replace this Todo's settlement identity.
+    wrong = list(args)
+    position = wrong.index("--todo-id")
+    wrong[position:position + 2] = ["--replan-obligation-id", obligation_id]
+    rc, rejected = _run_cli(registry, runtime, *wrong, cwd=project)
+    assert rc == 1 and "binding does not match" in rejected["error"], rejected
+    assert _classification_count(runtime, "bounded_replan_progress") == 2
+    rc, written = _run_cli(
+        registry, runtime, *args, "--delivery-workspace-path", str(project),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert rc == 0 and written["ok"], written
+    assert written["settlement_identity"] == identity
+    spend_args = _projected_cli_args(written["settlement_owed"]["command"], turn_instance_id=turn)
+    rc, spent = _run_cli(registry, runtime, *spend_args, cwd=project)
+    if not complete_history:
+        assert rc == 1 and spent["ok"] is False, spent
+        assert _classification_count(runtime, "quota_slot_spent") == 0
+        return
+    assert rc == 0 and spent["appended"] is True, spent
+    assert spent["settlement_identity"] == identity
+    assert spent["settlement_progress"]["next_step"] is None
+    rc, replay = _run_cli(registry, runtime, *spend_args, cwd=project)
+    assert rc == 0 and replay["ok"] and replay["appended"] is False, replay
+    assert _classification_count(runtime, "quota_slot_spent") == 1
+    assert _classification_count(runtime, "bounded_replan_progress") == 3
+    rc, closed = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    assert rc == 0 and closed["should_run"] is False, closed
+    assert closed["effective_action"] == "heartbeat_settled_skip"
+    assert _heartbeat_receipt_count(runtime, turn) == 1

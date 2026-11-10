@@ -68,7 +68,12 @@ def test_capacity_readback_uses_the_completed_native_turn_boundary(language_serv
     ("CORTEX_STEP_STATUS_DONE", None, True),
 ])
 def test_idle_native_error_keeps_only_unsettled_work_cancellable(
-    tmp_path, language_server, monkeypatch, prior_status, error_status, cancellation_needed,
+    tmp_path,
+    language_server,  # noqa: F811 - imported pytest fixture
+    monkeypatch,
+    prior_status,
+    error_status,
+    cancellation_needed,
 ):
     from test_antigravity_steward_adapter import _native_clock, _native_frames, adapter_for
     from loopx.chat_agent import CodexChatAgentError
@@ -104,7 +109,10 @@ def test_idle_native_error_keeps_only_unsettled_work_cancellable(
     assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
 
 
-def test_settled_native_error_releases_core_for_independent_input(tmp_path, language_server):
+def test_settled_native_error_releases_core_for_independent_input(
+    tmp_path,
+    language_server,  # noqa: F811 - imported pytest fixture
+):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
 

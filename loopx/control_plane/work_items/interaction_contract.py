@@ -18,6 +18,7 @@ from ..agents.workspace_guard import delivery_workspace_refresh_hint
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
+    SettlementIdentity,
     SettlementStepKind,
     settlement_binding_args,
     settlement_step_command,
@@ -433,6 +434,7 @@ def _turn_scoped_cli_settlement_context(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    receipt_bound_identity: SettlementIdentity | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if selection.action_portfolio_requires_explicit_selection(payload):
         return None, None
@@ -448,6 +450,15 @@ def _turn_scoped_cli_settlement_context(
     semantic_replan_obligation_id = replan_obligation_id_from_packet(
         payload.get("replan_action_packet")
     )
+    if receipt_bound_identity is not None:
+        if ((payload.get("replan_action_packet") or {}).get("settlement_only") is not True
+                or receipt_bound_identity.goal_id != goal_id
+                or receipt_bound_identity.agent_id != agent_id
+                or receipt_bound_identity.turn_instance_id != turn_instance_id
+                or (receipt_bound_identity.replan_obligation_id is not None
+                    and receipt_bound_identity.replan_obligation_id != semantic_replan_obligation_id)):
+            raise ValueError("receipt-bound settlement identity does not match replan recovery")
+        selected_todo_id = receipt_bound_identity.todo_id
     replan_settlement_contract = None
     todo_id = selected_todo_id
     replan_obligation_id = None
@@ -1319,6 +1330,7 @@ def _build_interaction_cli_channel(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    receipt_bound_identity: SettlementIdentity | None = None,
 ) -> dict[str, Any]:
     if selection_recovery_required:
         return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
@@ -1336,6 +1348,7 @@ def _build_interaction_cli_channel(
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
             registry_path=registry_path,
+            receipt_bound_identity=receipt_bound_identity,
         )
     )
     channel = {
@@ -1649,6 +1662,7 @@ def _build_interaction_contract_projection(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    receipt_bound_identity: SettlementIdentity | None = None,
 ) -> tuple[InteractionContractPacket, SchedulerArbitration]:
     execution_obligation = (
         cast(dict[str, Any], payload.get("execution_obligation"))
@@ -1754,6 +1768,7 @@ def _build_interaction_contract_projection(
             turn_instance_id=turn_instance_id,
             runtime_root=runtime_root,
             registry_path=registry_path,
+            receipt_bound_identity=receipt_bound_identity,
         ),
     }
     if turn_binding_required:
@@ -1789,10 +1804,12 @@ def build_interaction_contract(
     turn_instance_id: str | None = None,
     runtime_root: str | None = None,
     registry_path: str | None = None,
+    receipt_bound_identity: SettlementIdentity | None = None,
 ) -> InteractionContractPacket:
     contract, _arbitration = _build_interaction_contract_projection(
         payload, agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id, runtime_root=runtime_root, registry_path=registry_path,
+        receipt_bound_identity=receipt_bound_identity,
     )
     return contract

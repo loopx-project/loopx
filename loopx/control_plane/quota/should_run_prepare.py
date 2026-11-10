@@ -197,6 +197,9 @@ def _preserve_receipt_bound_replan_obligation(
     transition_candidates: list[dict[str, Any]] | None = None,
     stride_strategy: str = "off",
     receipt_review: Mapping[str, Any] | None = None,
+    goal_id: str | None = None,
+    guard_recorded_at: str | None = None,
+    guard_turn_instance_id: str | None = None,
 ) -> dict[str, Any] | None:
     preserved_replan_id = normalize_todo_replan_obligation_id(
         receipt_bound_replan_obligation_id
@@ -213,6 +216,9 @@ def _preserve_receipt_bound_replan_obligation(
             "transition_candidates": transition_candidates or [],
             "stride_strategy": stride_strategy,
             "receipt_review": receipt_review,
+            "goal_id": goal_id,
+            "guard_recorded_at": guard_recorded_at,
+            "guard_turn_instance_id": guard_turn_instance_id,
         })
     except EffectRuntimeRejected as exc:
         if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
@@ -246,6 +252,7 @@ def _prepare_quota_replan_context(
     receipt_bound_replan_guard_scoped: bool,
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None,
     receipt_bound_guard_recorded_at: str | None,
+    receipt_bound_guard_turn_instance_id: str | None,
     receipt_bound_replan_review: Mapping[str, Any] | None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -282,6 +289,9 @@ def _prepare_quota_replan_context(
             transition_candidates=goal_frontier_context.get("replan_transition_candidates"),
             stride_strategy=goal_frontier_context["stride_strategy"],
             receipt_review=receipt_bound_replan_review,
+            goal_id=safe_goal_id,
+            guard_recorded_at=receipt_bound_guard_recorded_at,
+            guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         )
     )
     if replan_obligation and not replan_obligation.get("replan_context") and not replan_obligation.get("settlement_action_packet"):
@@ -674,6 +684,7 @@ def _prepare_quota_should_run_item(
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
 ) -> _QuotaDecisionPreparation:
     quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
@@ -980,6 +991,7 @@ def _prepare_quota_should_run_item(
         receipt_bound_replan_guard_scoped=receipt_bound_replan_guard_scoped,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
         receipt_bound_replan_review=receipt_bound_replan_review,
         replan_explore_reader=replan_explore_reader,
     )

@@ -55,13 +55,38 @@ def _receipt_bound_guard_fields(
     """Adapt the recorded guard identity and time for the shared decision owner."""
     guard = getattr(readback, "semantic_replan_guard", None)
     receipt = getattr(readback, "heartbeat_receipt", None) or {}
+    raw_details = receipt.get("details")
+    receipt_details = raw_details if isinstance(raw_details, Mapping) else {}
+    guard_selected_obligation_id = (
+        guard.get("selected_obligation_id")
+        if isinstance(guard, Mapping)
+        else None
+    )
+    # Receipts written before semantic_replan_guard was persisted still bind
+    # the exact replan generation directly.  Treat that durable identity as
+    # the scoped guard; otherwise compact status loses the only route to the
+    # historical ACK lookup and asks the agent to repeat a blocked closeout.
+    receipt_selected_obligation_id = receipt.get(
+        "semantic_replan_obligation_id"
+    ) or receipt_details.get("semantic_replan_obligation_id")
     return {
         "receipt_bound_replan_guard_scoped": bool(
-            isinstance(guard, Mapping)
-            and guard.get("scope") == "turn_guard"
-            and guard.get("selected_obligation_id") == obligation_id
+            obligation_id
+            and (
+                (
+                    isinstance(guard, Mapping)
+                    and guard.get("scope") == "turn_guard"
+                    and guard_selected_obligation_id == obligation_id
+                )
+                or receipt_selected_obligation_id == obligation_id
+            )
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_guard_turn_instance_id": (
+            receipt.get("turn_instance_id")
+            or receipt.get("run_id")
+            or receipt_details.get("turn_instance_id")
+        ),
         "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
@@ -597,6 +622,51 @@ def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
         recommendation["spend_policy"] = reason
 
 
+def _attach_receipt_bound_ack_candidates(
+    status_payload: dict[str, Any], *, guard_fields: Mapping[str, Any],
+    obligation_id: str | None, goal_id: str, agent_id: str | None,
+    runtime_root: Path,
+) -> None:
+    """Read the exact journal generation without widening ordinary status."""
+    if not guard_fields["receipt_bound_replan_guard_scoped"] or not obligation_id or not agent_id:
+        return
+    from ...history import load_index
+    from ..runtime.time import chronology_key
+    from ..work_items.autonomous_replan_ack import autonomous_replan_ack_candidates_for_obligation
+
+    durable_runs, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
+    newest_first = [run for _, run in sorted(enumerate(durable_runs),
+        key=lambda item: (*chronology_key(item[1].get("generated_at")), item[0]), reverse=True)]
+    status_payload["receipt_bound_replan_ack_candidates"] = autonomous_replan_ack_candidates_for_obligation(
+        newest_first, goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id,
+    )
+
+
+def _attach_original_replan_settlement(
+    payload: dict[str, Any], readback: QuotaSettlementReadback | None, *,
+    available_capabilities: list[str] | None,
+    scheduler_execution_context: SchedulerExecutionContextResolution,
+    turn_instance_id: str | None, registry_path: Path, runtime_root: Path,
+    goal_ref: Mapping[str, object] | None,
+) -> bool:
+    original_replan_settlement = (
+        (payload.get("replan_action_packet") or {}).get("settlement_only") is True
+    )
+    if original_replan_settlement and readback is not None:
+        attach_settlement_progress(payload, readback,
+            registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref)
+        # Settlement retains the verified receipt identity without restoring a
+        # runnable Todo or granting another delivery.
+        payload["interaction_contract"] = build_interaction_contract(
+            payload, available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id,
+            registry_path=str(registry_path), runtime_root=str(runtime_root),
+            receipt_bound_identity=readback.identity.value,
+        )
+    return original_replan_settlement
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -674,7 +744,15 @@ def build_live_quota_should_run_decision(
         agent_id=agent_id,
         todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
-        replan_obligation_id=receipt_bound_replan_obligation_id,
+        # A Todo-bound receipt may also carry the semantic replan generation
+        # admitted by that Turn.  Its settlement identity remains the Todo;
+        # passing both bindings makes the readback owner treat the receipt as a
+        # conflicting replan-only identity and drops its semantic guard.
+        replan_obligation_id=(
+            None
+            if receipt_bound_todo_id
+            else receipt_bound_replan_obligation_id
+        ),
         registry_path=registry_path,
         goal_ref=goal_ref,
     )
@@ -686,6 +764,11 @@ def build_live_quota_should_run_decision(
     )
     receipt_bound_guard_fields = _receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
+    )
+    _attach_receipt_bound_ack_candidates(
+        decision_status_payload, guard_fields=receipt_bound_guard_fields,
+        obligation_id=receipt_bound_replan_obligation_id, goal_id=goal_id,
+        agent_id=agent_id, runtime_root=runtime_root,
     )
     fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
         turn_start_hook_dispatch
@@ -814,13 +897,11 @@ def build_live_quota_should_run_decision(
     # unsettled Turn here can overwrite the settled-skip route with a recovery
     # obligation and then select a successor against the immutable receipt
     # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
-    original_replan_settlement = (
-        (payload.get("replan_action_packet") or {}).get("settlement_only") is True
+    original_replan_settlement = _attach_original_replan_settlement(
+        payload, settlement_readback, available_capabilities=available_capabilities,
+        scheduler_execution_context=resolved_context, turn_instance_id=turn_instance_id,
+        registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
     )
-    if original_replan_settlement and settlement_readback is not None:
-        attach_settlement_progress(payload, settlement_readback,
-            registry_path=registry_path, runtime_root=runtime_root,
-            goal_ref=goal_ref)
     if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
         apply_unsettled_host_turn_recovery_if_required(
             payload,
@@ -836,6 +917,7 @@ def build_live_quota_should_run_decision(
     if (
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
+        and not original_replan_settlement
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
         and (
             receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
