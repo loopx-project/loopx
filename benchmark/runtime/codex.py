@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -69,6 +70,12 @@ class Execution:
             raise ValueError("mode=turn requires an independent validation_command")
         if self.mode != "turn" and self.validation_command:
             raise ValueError("validation_command is only used by mode=turn")
+
+    def validation_receipt(self) -> dict[str, str]:
+        if self.mode != "turn":
+            return {}
+        encoded = json.dumps(self.validation_command, separators=(",", ":")).encode()
+        return {"validation_argv_sha256": hashlib.sha256(encoded).hexdigest()}
 
     @property
     def uses_loopx(self) -> bool:

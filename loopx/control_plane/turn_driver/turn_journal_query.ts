@@ -75,10 +75,15 @@ function observedCapabilities(envelope: JsonObject): string[] {
   return [...observed];
 }
 
+// A lost Host acknowledgement may retain the wake address before the caller
+// has seen the selected Todo or replan. Its only permitted result is a locator
+// for the original journal. Settlement and capability reads remain fully bound.
+type JournalAddress = Pick<BoundSettlementIdentity, "goal_id" | "agent_id" | "turn_instance_id">;
+
 function evidenceForJournal(
   value: unknown,
   turnKey: string,
-  expected: BoundSettlementIdentity,
+  expected: JournalAddress | BoundSettlementIdentity,
   expectedGoalRef: ExactGoalRef | null,
   numbers: SourceNumbers,
 ): JournalEvidence | null {
@@ -92,7 +97,9 @@ function evidenceForJournal(
   if (!addresses.some(value => typeof value === "string" && value.trim())) {
     journalConflict("Turn journal history has no recovery address; reconcile it before retrying");
   }
-  if (!addresses.includes(expected.turn_instance_id) && rawIdentity?.effect_id !== expected.effect_id) return null;
+  const settlement = "effect_id" in expected ? expected : null;
+  if (!addresses.includes(expected.turn_instance_id) &&
+      (settlement === null || rawIdentity?.effect_id !== settlement.effect_id)) return null;
   if (journal?.schema_version !== "loopx_turn_journal_v0" || !transaction) {
     journalConflict("Turn journal history has an unsupported snapshot; reconcile it before retrying");
   }
@@ -104,8 +111,9 @@ function evidenceForJournal(
   // effect_id alone is insufficient: legacy delimiter-based identities can
   // have the same rendered id while binding different structured fields.
   if (actual.goal_id !== expected.goal_id || actual.agent_id !== expected.agent_id ||
-      actual.binding_kind !== expected.binding_kind || actual.binding_id !== expected.binding_id ||
-      actual.turn_instance_id !== expected.turn_instance_id || actual.effect_id !== expected.effect_id) return null;
+      actual.turn_instance_id !== expected.turn_instance_id) return null;
+  if (settlement !== null && (actual.binding_kind !== settlement.binding_kind ||
+      actual.binding_id !== settlement.binding_id || actual.effect_id !== settlement.effect_id)) return null;
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     journalConflict(`Turn journal GoalRef binding is invalid: ${goalBinding.violation}`);
@@ -135,9 +143,9 @@ function evidenceForJournal(
   };
 }
 
-async function querySettlementJournal(
+async function queryTurnJournal(
   runtimeRootValue: unknown,
-  identity: BoundSettlementIdentity,
+  identity: JournalAddress | BoundSettlementIdentity,
   goalRef: ExactGoalRef | null,
 ): Promise<JournalEvidence | null> {
   const runtimeRoot = requireNonEmptyString(runtimeRootValue, "runtime_root");
@@ -197,7 +205,17 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
     request_subject: params.request_subject as import("../effect_program.ts").ExecutionRequestSubject | undefined,
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
-  const evidence = await querySettlementJournal(params.runtime_root, identity, null);
+  const evidence = await queryTurnJournal(params.runtime_root, identity, null);
+  return { turn_key: evidence?.turn_key ?? null };
+}
+
+export async function findTurnJournalByInstance(params: JsonObject): Promise<{ turn_key: string | null }> {
+  const address = {
+    goal_id: requireNonEmptyString(params.goal_id, "goal_id"),
+    agent_id: requireNonEmptyString(params.agent_id, "agent_id"),
+    turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
+  };
+  const evidence = await queryTurnJournal(params.runtime_root, address, null);
   return { turn_key: evidence?.turn_key ?? null };
 }
 
@@ -211,7 +229,7 @@ export async function readTurnJournalCapabilities(params: JsonObject): Promise<{
       "Turn journal query GoalRef conflicts with its settlement identity",
     );
   }
-  const evidence = await querySettlementJournal(
+  const evidence = await queryTurnJournal(
     params.runtime_root,
     identity,
     goalRef,

@@ -145,7 +145,12 @@ def test_original_capture_retains_the_emitted_poll_observation(
         from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
         from tests.control_plane.test_complete_turn_decision import _resign_contract
 
-        assert emitted == source
+        # The compatibility view identifies the complete captured source. The
+        # observation must survive both paths without recording another poll.
+        assert emitted["schema_version"] == "loopx_turn_envelope_v0"
+        assert emitted["action_signature"]["matches"] is True
+        assert emitted["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+        assert shlex.split(emitted["detail_ref"]["full_decision"]) == ["cat", "--", str(capture / "decision.json")]
         assert_complete_turn_decision(source)
         # Removing the poll changes the original signed content. A separately
         # signed fixture without the poll keeps the decision and settlement.
