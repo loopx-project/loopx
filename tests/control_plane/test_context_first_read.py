@@ -373,8 +373,17 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
         + " --offset " + str(pages[0]["next_offset"]))
     assert code != 0 and not rejected["ok"] and "digest changed" in rejected["reason"]
     assert "content" not in rejected
+    recovery = shlex.split(rejected["recovery_command"])
+    assert recovery[recovery.index("--offset") + 1] == "0"
+    assert recovery[recovery.index("--capture-file") + 1] == view["recovery"]["path"]
+    assert recovery[recovery.index("--capture-sha256") + 1] == view["recovery"]["sha256"]
+    assert not {"--initial-read", "--select", "--selection-sha256"} & set(recovery)
+    wrong_capture = recovery.copy()
+    wrong_capture[wrong_capture.index("--capture-sha256") + 1] = "0" * 64
+    code, invalid = invoke(shlex.join(wrong_capture))
+    assert code != 0 and not invalid["ok"] and "recovery_command" not in invalid
     restored = b""
-    command = original
+    command = rejected["recovery_command"]
     while True:
         code, page = invoke(command)
         assert code == 0 and page["offset"] == len(restored), page
