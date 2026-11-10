@@ -16,6 +16,7 @@ import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRe
   contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
+import {completeCliSettlementChannel} from "./settlement_plan.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -1918,6 +1919,8 @@ function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string |
 export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const request = requireJsonObject(value, "complete Turn decision request");
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
+  const composedSettlement = request.composed_settlement === undefined ? false
+    : requireBoolean(request.composed_settlement, "composed_settlement");
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
@@ -1932,21 +1935,25 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
   }
   requireCompleteDecisionSource(payload);
-  const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens ?? []);
+  const cliSource = object(object(payload.interaction_contract).cli_channel);
+  const composedCli = composedSettlement ? completeCliSettlementChannel(payload) : cliSource;
+  const prepared = composedCli === cliSource ? payload : {...payload,
+    interaction_contract: {...object(payload.interaction_contract), cli_channel: composedCli}};
+  const sourceIdentity = contextSourceIdentity(prepared, request.source_number_tokens ?? []);
   // A complete input must carry the original-Turn successor instructions that
   // used to exist only in the staged writer. Compose them before hashing and
   // capture; a later material read must not add a competing execution contract.
-  const packet = object(payload.replan_action_packet);
-  const interaction = object(payload.interaction_contract);
+  const packet = object(prepared.replan_action_packet);
+  const interaction = object(prepared.interaction_contract);
   const cli = object(interaction.cli_channel);
   const plan = object(cli.settlement_plan);
-  let source = payload;
+  let source = prepared;
   if (packet.obligation_id && packet.settlement_only !== true &&
       payload.effective_action !== EffectiveAction.GOVERNED_CAPABILITY_INTENT &&
       packet.obligation_id === object(object(payload.autonomous_replan_obligation).replan_context).obligation_id &&
       typeof object(plan.identity).turn_instance_id === "string") {
     const contract = bindReplanSuccessorContract(object(packet.writeback_contract), plan);
-    source = {...payload, replan_action_packet: {...packet, writeback_contract: contract},
+    source = {...prepared, replan_action_packet: {...packet, writeback_contract: contract},
       ...(typeof contract.successor_command === "string" ? {
         interaction_contract: {...interaction, cli_channel: {...cli,
           next_cli_actions: [contract.successor_command]}},

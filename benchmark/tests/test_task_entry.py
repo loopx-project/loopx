@@ -23,6 +23,9 @@ from benchmark.runtime.worker import run_once
         {"task_entry": "unknown"},
         {"mode": "plain", "task_entry": "loopx-planned"},
         {"mode": "native-goal", "task_entry": "loopx-planned"},
+        {"mode": "plain", "complete_turn": True},
+        {"complete_turn": True, "turn_envelope": True},
+        {"complete_turn": "true"},
     ],
 )
 def test_invalid_entry_rejected_before_model_call(kwargs):
@@ -1173,13 +1176,27 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 @pytest.mark.parametrize("producer", [None, "local_probe"])
-def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_env, context, producer):
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
+        planning_env, context, producer, complete, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
     from benchmark.runtime.research_probe import execution_observation_guidance
 
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
+    if complete:
+        env["LOOPX_COMPLETE_TURN"] = "1"
     if producer is not None:
         env["LOOPX_EXECUTION_OBSERVATION"] = producer
+    if checkpoint_preflight:
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent
+        root.mkdir(parents=True, exist_ok=True)
+        request = root / "checkpoint-request.json"
+        request.write_text(json.dumps({"destination": str(root / "checkpoints"),
+            "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
+            "evaluation_opportunity": True, "controller_handoff": True,
+            "components": [{"id": "workspace", "source_path": env["LOOPX_PROJECT"]}], "point_metadata": {}}))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
     assert run_once(env)["ok"]
     binary = Path(env["CODEX_BIN"])
     binary.write_text(
@@ -1210,6 +1227,13 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_
         assert "Research-loop execution evidence:" not in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
+        assert receipt.get("complete_turn") is (True if complete else None)
+        assert ("--complete-turn" in body) is complete
+        if checkpoint_preflight:
+            original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
+            assert json.loads(original.read_bytes()).get("schema_version") == (
+                "loopx_turn_envelope_v1" if complete else None)
+            assert "Do not repeat the initial guard below" in body
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     # Runtime clocks remain internal and never change task/completion authority.
     assert Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes() == before

@@ -77,6 +77,25 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+def test_complete_guard_protocol_is_explicit_and_saved_selection_retains_it(tmp_path):
+    from loopx.cli_commands.quota_context_reader import bind_capture_selection_transport
+
+    original = {"schema_version": "loopx_turn_envelope_v1", "interaction_contract": {"cli_channel": {
+        "selection_command": {"command_args_template": "quota should-run --todo-id <todo-id>"}}}}
+    legacy = deepcopy(original)
+    bind_capture_selection_transport(legacy, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
+    command = legacy["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+    assert "--complete-turn" not in shlex.split(command)
+    selected = deepcopy(original)
+    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=True))
+    command = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+    assert shlex.split(command).count("--complete-turn") == 1
+    bind_capture_selection_transport(selected, Namespace(decision_output_root=str(tmp_path), complete_turn=False))
+    recovered = selected["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+    assert shlex.split(recovered).count("--complete-turn") == 1
+    assert "--complete-turn" not in original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+
+
 def pinned_initial_view(payload, directory):
     base = native_context_capture_view(payload, directory)
     from loopx.control_plane.quota import turn_envelope

@@ -34,8 +34,11 @@ def resolve_heartbeat_capture_root(
     codex_context_root: str | None = None,
     context_delivery: str = "off",
     turn_envelope: bool = False,
+    complete_turn: bool = False,
 ) -> Path | None:
     """Validate capture transport for an already resolved host-owned Turn."""
+    if complete_turn and (turn_envelope or native_goal_host or not thin):
+        raise ValueError("--complete-turn requires a thin host-owned heartbeat without --turn-envelope")
     enabled = context_delivery == "on"
     if enabled and not (codex_context_dir or codex_context_root):
         raise ValueError("context-delivery requires a native context location")

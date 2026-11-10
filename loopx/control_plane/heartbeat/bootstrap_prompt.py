@@ -87,6 +87,8 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
         command += ["--cli-bin", args.cli_bin]
     if getattr(args, "turn_envelope", False):
         command.append("--turn-envelope")
+    if getattr(args, "complete_turn", False):
+        command.append("--complete-turn")
     if legacy:
         if args.codex_app:
             command.append("--codex-app")
@@ -138,6 +140,7 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
             "--trae_app": "trae_app",
             "--antigravity_app": "antigravity_app",
             "--turn-envelope": "turn_envelope",
+            "--complete-turn": "complete_turn",
             **{"--" + name.replace("_", "-"): name for name in ("full", "compact", "brief", "thin")},
         }
         index = 3
