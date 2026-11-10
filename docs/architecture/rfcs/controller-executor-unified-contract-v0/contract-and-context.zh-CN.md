@@ -6,6 +6,18 @@
 
 ### C1 源码核对：已有共享 owner 与剩余分叉
 
+[#8480](https://github.com/loopx-project/loopx/pull/8480) 的完整单 Worker EdgeBench 入口与原轮次恢复，
+现已独立提向 main：[#8499](https://github.com/loopx-project/loopx/pull/8499)，23 文件、+493/−119，
+其中 18 个完整文件与 C1 候选逐字一致。获准合入 main 后，C1 可通过集成消除这些重复差异。
+在此之前保留可用 caller 和 [#8484](https://github.com/loopx-project/loopx/pull/8484) 的既有依赖；
+历史实验记录仍放在一起。这次拆分不证明原 quota 成果或完整成本收益。
+
+普通 guided-start 与 visible-Goal 调用保留原来源中 Agent 负责的手动结算；只有既有、
+具备资格的 native publisher 才可展示 runtime 负责的组合步骤。完整 carrier 或渐进展示
+不能选择这一归属。C1 的 5 项 CLI 预期误要求普通调用也组合结算，当前 main 实际回读
+确认应保留手动归属；修正后的测试核对原身份、spend 来源与命令，并验证完整来源，
+不通过改变生产语义来迎合测试。
+
 当前完整来源 validator 也将可执行必读校验交给既有 interaction owner。显式
 command／ordering 不得消失或引入不支持的执行顺序；纯文字和合法待执行义务保持
 完整。同一规则无需调用方各加判断即可到达 quota、managed preview 和真实 Turn／Host
