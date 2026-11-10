@@ -51,8 +51,6 @@ def manager_failure_reply(
         "unauthorized": "上游身份验证失败",
         "idle_timeout": "等待上游响应超时",
         "hard_timeout": "处理超过时间限制",
-        "response_timeout": "等待助手响应超时",
-        "antigravity_step_error": "原生助手调用失败",
         "interrupted": "处理已中断",
         "manager_authorization_unavailable": "当前连接的授权范围不可用",
         # host_gate is a generic host failure. It does not establish whether
@@ -70,12 +68,12 @@ def manager_failure_reply(
             "管家连接自动重绑未能完成，旧连接已保留；请在连接设置中查看修复状态"
         ),
     }
-    code = str(
+    source_code = str(
         error.get("error_code", "")
         if isinstance(error, Mapping)
         else getattr(error, "error_code", "")
     )
-    code = code if code in labels else "processing_failed"
+    code = source_code if source_code in labels else "processing_failed"
     events = phase_events or []
     if code == "host_gate" and retry_info is None:
         retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
@@ -83,8 +81,8 @@ def manager_failure_reply(
             and event.get("payload", {}).get("method") == "error"), None)
     timeout_info = next((event.get("payload", {}).get("timeout")
         for event in reversed(events) if event.get("kind") == "agent.phase"
-        and event.get("payload", {}).get("method") == "native/timeout"), None) if code == "response_timeout" else None
-    if code == "response_timeout" and isinstance(timeout_info, Mapping):
+        and event.get("payload", {}).get("method") == "native/timeout"), None) if source_code == "response_timeout" else None
+    if source_code == "response_timeout" and isinstance(timeout_info, Mapping):
         # Use only the adapter's typed observation. Do not infer the deadline
         # from error prose or publish arbitrary host diagnostics.
         kind = timeout_info.get("kind")
@@ -112,7 +110,11 @@ def manager_failure_reply(
         return code, "上游响应流曾中断，自动重试后本轮仍未完成。没有生成完整答复，本次请求不会自动重放。"
     if code == "server_overloaded":
         return code, "当前模型繁忙，本轮未完成。请先查看 /status 与已有结果，再决定是否稍后重试；本次请求不会自动重放。"
-    return code, f"已收到你的消息，但本次未能完成：{labels.get(code, '管家处理失败')}。没有生成完整答复，本次请求不会自动重放。"
+    # This owner also supplies failure codes to group admission. Improve the
+    # display without promoting previously generic errors into routing input.
+    label = labels.get(code) or {"response_timeout": "等待助手响应超时",
+        "antigravity_step_error": "原生助手调用失败"}.get(source_code, "管家处理失败")
+    return code, f"已收到你的消息，但本次未能完成：{label}。没有生成完整答复，本次请求不会自动重放。"
 
 
 def session_turn_effect(route: Mapping[str, Any]) -> dict[str, Any]:

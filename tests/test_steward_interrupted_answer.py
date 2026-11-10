@@ -125,8 +125,15 @@ def test_timeout_presentation_does_not_trust_unknown_diagnostic_text(info):
     from loopx.extensions.lark.manager_context import manager_failure_reply
     code, text = manager_failure_reply({"error_code": "response_timeout", "error": "NATIVE_PRIVATE_SENTINEL"},
         phase_events=[{"kind": "agent.phase", "payload": {"method": "native/timeout", "timeout": info}}])
-    assert code == "response_timeout" and "超时" in text and "不会自动重放" in text
+    assert code == "processing_failed" and "超时" in text and "不会自动重放" in text
     assert "NATIVE_PRIVATE_SENTINEL" not in text and "期间原生助手记录了调用错误" not in text
+
+
+@pytest.mark.parametrize("source_code", ["response_timeout", "antigravity_step_error", "unknown"])
+def test_native_error_labels_preserve_shared_admission_failure_category(source_code):
+    from loopx.extensions.lark.manager_context import manager_failure_reply
+    code, _ = manager_failure_reply({"error_code": source_code})
+    assert code == "processing_failed"
 
 
 @pytest.mark.parametrize("fault, expected", [
