@@ -3,13 +3,13 @@ export type MarkdownBlock = {startLine: number; endLine: number} & (
   | {type: "code"; text: string}
   | {type: "table"; headers: string[]; rows: string[][]}
   | {type: "heading"; level: number; text: string}
-  | {type: "list"; ordered: boolean; items: string[]}
+  | {type: "list"; ordered: boolean; start?: number; items: string[]}
   | {type: "paragraph"; lines: string[]}
 );
 type BlockContent = MarkdownBlock extends infer T ? T extends MarkdownBlock ? Omit<T, "startLine" | "endLine"> : never : never;
 
 const UNORDERED = /^\s*[-*•]\s+(.*)$/;
-const ORDERED = /^\s*\d{1,9}[.、)]\s+(.*)$/;
+const ORDERED = /^\s*(\d{1,9})[.、)]\s+(.*)$/;
 
 function tableCells(line: string) {
   return line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, "|"));
@@ -68,14 +68,15 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
     }
     if (UNORDERED.test(line) || ORDERED.test(line)) {
       flushParagraph();
-      const start = i, ordered = ORDERED.test(line), items: string[] = [];
+      const start = i, firstOrdered = line.match(ORDERED), ordered = firstOrdered !== null, items: string[] = [];
       const pattern = ordered ? ORDERED : UNORDERED;
       while (i < lines.length) {
         const item = lines[i].match(pattern);
         if (!item) break;
-        items.push(item[1]); i += 1;
+        items.push(item[ordered ? 2 : 1]); i += 1;
       }
-      push({type: "list", ordered, items}, start, i);
+      const number = Number(firstOrdered?.[1] ?? 1);
+      push({type: "list", ordered, items, ...(number !== 1 ? {start: number} : {})}, start, i);
       continue;
     }
     if (line.trim() === "") {

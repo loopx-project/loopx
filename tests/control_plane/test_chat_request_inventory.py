@@ -39,6 +39,146 @@ def test_inventory_pins_code_revision_but_rereads_original_source(api, monkeypat
     assert len(scans) == 2, "Each HTTP read must qualify its own runtime revision"
 
 
+def test_inventory_preserves_idle_holder_and_waits_for_existing_writers(api, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import time
+
+    from loopx import file_lock
+    from loopx.file_lock import _effect_mutation_lock_path, exclusive_file_lock, lock_holder_path
+
+    _, _, route = _source(api)
+    _, fixture, _ = api
+    path = _root(fixture["runtime"]) / "request-locks" / route["request_id"]
+    with exclusive_file_lock(path, operation="request_writer"):
+        pass
+    previous_holder = lock_holder_path(path).read_bytes()
+
+    code, first = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and first["matched"] == 1
+    assert lock_holder_path(path).read_bytes() == previous_holder
+
+    # A caller that only holds the kernel fence must still exclude inventory.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with exclusive_file_lock(path, operation="older_request_writer"):
+            reading = pool.submit(_inventory, api, route["session_id"], view="history")
+            marker = _effect_mutation_lock_path(path)
+            deadline = time.monotonic() + 3
+            while not marker.exists() and not reading.done() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert marker.exists() and not reading.done()
+        code, recovered = reading.result(timeout=5)
+    assert code == 200 and recovered["matched"] == 1
+    assert recovered["snapshot_digest"] == first["snapshot_digest"]
+    assert not marker.exists()
+
+    # A marker-only writer must also exclude inventory, even with a free kernel lock.
+    waiting_for_marker = Event()
+    reclaim = file_lock._reclaim_stale_effect_mutation_lock
+
+    def observe_marker_conflict(marker_path):
+        reclaimed = reclaim(marker_path)
+        if marker_path == marker:
+            waiting_for_marker.set()
+        return reclaimed
+
+    monkeypatch.setattr(file_lock, "_reclaim_stale_effect_mutation_lock", observe_marker_conflict)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with file_lock.exclusive_mutation_file_lock(path, operation="marker_writer"):
+            reading = pool.submit(_inventory, api, route["session_id"], view="history")
+            assert waiting_for_marker.wait(timeout=10) and not reading.done()
+        code, recovered = reading.result(timeout=15)
+    assert code == 200 and recovered["snapshot_digest"] == first["snapshot_digest"]
+    assert not marker.exists()
+
+
+def test_inventory_contenders_do_not_name_the_released_kernel_holder(api, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import json
+    import os
+    import subprocess
+    import sys
+    from threading import Event
+
+    from loopx.control_plane.collaboration import conversation_inventory
+    from loopx.file_lock import _effect_mutation_lock_path, lock_holder_path, lock_incident_path
+
+    script = """
+import json
+import sys
+from pathlib import Path
+from loopx.file_lock import (
+    LockAcquireTimeoutError, exclusive_file_lock, exclusive_mutation_file_lock,
+)
+
+path, operation = Path(sys.argv[1]), sys.argv[2]
+lock = exclusive_mutation_file_lock if operation == "marker_waiter" else exclusive_file_lock
+try:
+    with lock(path, operation=operation):
+        if operation != "previous_writer":
+            raise AssertionError("waiter entered while the history read held its fence")
+except LockAcquireTimeoutError as error:
+    print(json.dumps({"message": str(error), **error.to_payload()}))
+"""
+    _, _, route = _source(api)
+    _, fixture, _ = api
+    path = _root(fixture["runtime"]) / "request-locks" / route["request_id"]
+
+    def contender(operation):
+        return subprocess.run(
+            [sys.executable, "-c", script, str(path), operation],
+            check=True, capture_output=True, text=True, timeout=25,
+        ).stdout
+
+    contender("previous_writer")
+    previous_holder = lock_holder_path(path).read_bytes()
+    historical = json.loads(previous_holder)
+    assert historical["released_at"] and historical["pid"] != os.getpid()
+    code, idle = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and idle["matched"] == 1
+    assert lock_holder_path(path).read_bytes() == previous_holder
+
+    entered, release = Event(), Event()
+    read_receipts = conversation_inventory._read_receipt_batch
+
+    def read_while_contended(root, rows):
+        entered.set()
+        assert release.wait(timeout=40)
+        return read_receipts(root, rows)
+
+    monkeypatch.setattr(conversation_inventory, "_read_receipt_batch", read_while_contended)
+    marker = _effect_mutation_lock_path(path)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        reading = pool.submit(_inventory, api, route["session_id"], view="history")
+        try:
+            assert entered.wait(timeout=30) and not reading.done()
+            assert json.loads(marker.read_text(encoding="utf-8"))["pid"] == os.getpid()
+            assert lock_holder_path(path).read_bytes() == previous_holder
+            waits = {name: pool.submit(contender, name) for name in ("kernel_waiter", "marker_waiter")}
+            results = {name: json.loads(wait.result(timeout=30)) for name, wait in waits.items()}
+        finally:
+            release.set()
+        code, recovered = reading.result(timeout=30)
+
+    assert code == 200 and recovered["snapshot_digest"] == idle["snapshot_digest"]
+    assert not marker.exists()
+    assert lock_holder_path(path).read_bytes() == previous_holder
+    incidents = [json.loads(line) for line in lock_incident_path(path).read_text(encoding="utf-8").splitlines()]
+    messages = {operation: result["message"] for operation, result in results.items()}
+    assert all(f"holder pid {historical['pid']}" not in message for message in messages.values()), messages
+    for operation, result in results.items():
+        incident = result["lock_timeout"]
+        action = result["operator_action"]
+        assert incident["waiter"]["operation"] == operation
+        assert incident["waiter"]["waited_seconds"] >= 5.0
+        assert result["incident_recorded"] and incident in incidents
+        assert "current holder unknown" in result["message"]
+        assert incident["holder"] == {}
+        assert incident["last_kernel_holder"] == historical
+        assert action["holder_pid"] is None and action["holder_host"] is None
+        assert "terminating" not in " ".join(action["steps"])
+
+
 def test_original_history_pins_code_revision_per_http_read_but_rereads_receipts(api, monkeypatch):
     from loopx.control_plane import effect_runtime
 

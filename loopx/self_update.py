@@ -576,8 +576,13 @@ def build_rollback_plan(
     release_id: str,
     doctor_payload: dict[str, Any] | None = None,
     home: Path | None = None,
+    registry_path: Path | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
-    doctor = doctor_payload or collect_doctor()
+    doctor = doctor_payload or (
+        collect_doctor(registry_path=registry_path, runtime_root_override=runtime_root)
+        if registry_path is not None or runtime_root is not None else collect_doctor()
+    )
     current_release_root = _release_root_from_doctor(doctor)
     releases_dir = _user_releases_dir(home)
     releases = _list_release_roots(releases_dir)
@@ -1174,6 +1179,15 @@ def _execute_python_distribution_update(
     return updated
 
 
+def _runtime_route_arguments(registry_path: Path | None, runtime_root: str | None) -> list[str]:
+    arguments = []
+    if registry_path is not None:
+        arguments += ["--registry", str(registry_path.resolve())]
+    if runtime_root is not None:
+        arguments += ["--runtime-root", runtime_root]
+    return arguments
+
+
 def execute_update_plan(
     payload: dict[str, Any], *, timeout_seconds: int = 600,
     registry_path: Path | None = None, runtime_root: str | None = None,
@@ -1181,11 +1195,7 @@ def execute_update_plan(
 ) -> dict[str, Any]:
     if not payload.get("plan", {}).get("apply_supported", True):
         return dict(payload, ok=False, changes_applied=False)
-    route_arguments = []
-    if registry_path is not None:
-        route_arguments += ["--registry", str(registry_path.resolve())]
-    if runtime_root is not None:
-        route_arguments += ["--runtime-root", runtime_root]
+    route_arguments = _runtime_route_arguments(registry_path, runtime_root)
     lifecycle = (
         payload.get("install_lifecycle")
         if isinstance(payload.get("install_lifecycle"), dict)
@@ -1375,6 +1385,8 @@ def execute_rollback_plan(
     *,
     timeout_seconds: int = 600,
     home: Path | None = None,
+    registry_path: Path | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
     if os.name == "nt":
         updated = dict(payload)
@@ -1394,6 +1406,7 @@ def execute_rollback_plan(
         return payload
     release_root = Path(str(selected_release_root))
     target_script = _release_script(release_root)
+    route_arguments = _runtime_route_arguments(registry_path, runtime_root)
     loopx_bin = _user_loopx_bin(home)
     previous_link_target = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
     execution: dict[str, Any] = {
@@ -1405,14 +1418,19 @@ def execute_rollback_plan(
     updated = dict(payload)
     try:
         compatible = subprocess.run(
-            [str(target_script), "--format", "json", "authority-archive", "upgrade",
+            [str(target_script), *route_arguments, "--format", "json", "authority-archive", "upgrade",
              "--all-known", "--require-current"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout_seconds,
         )
+        execution.update(
+            compatibility_returncode=compatible.returncode,
+            compatibility_stdout_tail=compatible.stdout[-2000:],
+            compatibility_stderr_tail=compatible.stderr[-2000:],
+        )
         if compatible.returncode != 0:
-            raise RuntimeError("Rollback target cannot read current authority formats. "
-                               "Keep the current runtime; recover a verified backup into an isolated store first.")
+            raise RuntimeError("Rollback target authority check failed. Keep the current runtime "
+                               "and inspect the compatibility readback before retrying.")
         loopx_bin.parent.mkdir(parents=True, exist_ok=True)
         temp_link = loopx_bin.with_name(f".{loopx_bin.name}.rollback.{os.getpid()}")
         if temp_link.exists() or temp_link.is_symlink():
@@ -1420,7 +1438,7 @@ def execute_rollback_plan(
         temp_link.symlink_to(target_script)
         os.replace(temp_link, loopx_bin)
         doctor_result = subprocess.run(
-            [str(loopx_bin), "--format", "json", "doctor"],
+            [str(loopx_bin), *route_arguments, "--format", "json", "doctor"],
             text=True, encoding="utf-8", errors="replace",
             capture_output=True,
             timeout=timeout_seconds,
@@ -1436,6 +1454,7 @@ def execute_rollback_plan(
             extension_doctor_result = subprocess.run(
                 [
                     str(loopx_bin),
+                    *route_arguments,
                     "--format",
                     "json",
                     "extension",
@@ -1537,14 +1556,23 @@ def render_update_plan_markdown(payload: dict[str, Any]) -> str:
                 ["", "## Rollback Command", "", "```bash", str(rollback_command), "```"]
             )
         if execution:
-            lines.extend(
-                [
-                    "",
-                    "## Execution",
-                    "",
-                    f"- Doctor return code: `{execution.get('doctor_returncode')}`",
-                ]
-            )
+            lines.extend(["", "## Execution", ""])
+            for stage, label in (
+                ("compatibility", "Authority compatibility"),
+                ("doctor", "Doctor"),
+                ("extension_doctor", "Extension doctor"),
+            ):
+                returncode = execution.get(f"{stage}_returncode")
+                if returncode is None:
+                    continue
+                lines.append(f"- {label} return code: `{returncode}`")
+                if returncode != 0:
+                    for stream in ("stdout", "stderr"):
+                        output = execution.get(f"{stage}_{stream}_tail")
+                        if output:
+                            lines.extend(["", f"### {label} {stream}", "", "```text", str(output), "```"])
+            if execution.get("error"):
+                lines.extend(["", f"Error: {execution['error']}"])
         return "\n".join(lines) + "\n"
 
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
