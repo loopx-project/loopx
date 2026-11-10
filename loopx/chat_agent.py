@@ -1733,6 +1733,7 @@ class CodexChatAgentSession:
         project_collaboration: bool = False,
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        check_running: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         text = str(user_message or "")
         if not text.strip():
@@ -1829,7 +1830,9 @@ class CodexChatAgentSession:
             if self.hard_timeout_sec is not None:
                 deadline = min(deadline, started_at + self.hard_timeout_sec)
             try:
-                message = self._next_event(deadline=deadline)
+                message = self._next_event(
+                    deadline=deadline, **({"check": check_running} if check_running is not None else {}),
+                )
             except CodexChatAgentError:
                 now = time.monotonic()
                 if self.hard_timeout_sec is not None and now - started_at >= self.hard_timeout_sec:

@@ -108,6 +108,24 @@ test("legacy native launch consumes the current quota owner without weakening so
   {kind: "reject", code: "goal_instance_id_missing"});
 });
 
+test("a running legacy Turn requires the selected Goal entry and still sees Stop", () => {
+  const entry = "a".repeat(64);
+  const authority = {kind: "present", goal_id: "release", registration_status: "active",
+    activation_state: "active", goal_entry_sha256: entry};
+  const running = {profile_id: null, operation: "require_current", goal_id: "release",
+    planned_goal_entry_sha256: entry, authority};
+  assert.deepEqual(decideFirstPartyHostRuntime(running), {kind: "legacy"});
+  assert.deepEqual(decideFirstPartyHostRuntime({
+    ...running, authority: {...authority, goal_entry_sha256: "b".repeat(64)},
+  }), {kind: "reject", code: "stale_goal_authority"});
+  assert.deepEqual(decideFirstPartyHostRuntime({
+    ...running, authority: {...authority, goal_entry_sha256: "invalid"},
+  }), {kind: "reject", code: "goal_authority_unavailable"});
+  assert.deepEqual(decideFirstPartyHostRuntime({
+    ...running, authority: {...authority, activation_state: "stopped", goal_entry_sha256: "b".repeat(64)},
+  }), {kind: "reject", code: "goal_stopped"});
+});
+
 test("current exact GoalRef admits each host runtime checkpoint", () => {
   assert.deepEqual(decideFirstPartyHostRuntime(facts("select_state")), {
     kind: "start_new",

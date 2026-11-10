@@ -140,8 +140,8 @@ function registryWitness(value: unknown): {path: string; sha256: string} | null 
     ? {path: witness.path, sha256: witness.sha256} : null;
 }
 
-/** A legacy launch rechecks its captured registry; it gains no GoalRef. */
-function legacyLaunch(facts: JsonObject): FirstPartyHostRuntimeDecision {
+/** Launch rechecks the registry. An already dispatched Turn checks its Goal entry. */
+function legacyRuntime(facts: JsonObject): FirstPartyHostRuntimeDecision {
   const current = jsonObject(facts.authority);
   if (current?.kind === "absent") return {kind: "reject", code: "goal_not_registered"};
   if (current?.kind !== "present" || typeof facts.goal_id !== "string" || !facts.goal_id
@@ -155,6 +155,15 @@ function legacyLaunch(facts: JsonObject): FirstPartyHostRuntimeDecision {
   }
   if (current.activation_state === "stopped") return {kind: "reject", code: "goal_stopped"};
   if (current.activation_state !== "active") return {kind: "reject", code: "goal_authority_unavailable"};
+  if (facts.operation === "require_current") {
+    const planned = facts.planned_goal_entry_sha256;
+    const observed = current.goal_entry_sha256;
+    if (typeof planned !== "string" || !BARE_SHA256_PATTERN.test(planned)
+      || typeof observed !== "string" || !BARE_SHA256_PATTERN.test(observed)) {
+      return {kind: "reject", code: "goal_authority_unavailable"};
+    }
+    return planned === observed ? {kind: "legacy"} : {kind: "reject", code: "stale_goal_authority"};
+  }
   const planned = registryWitness(facts.planned_registry_witness);
   const observed = registryWitness(facts.registry_witness);
   if (!planned || !observed || planned.path !== facts.registry_path) {
@@ -185,8 +194,8 @@ function launchDecisionRejection(facts: JsonObject): FirstPartyHostRuntimeDecisi
 /**
  * Decide whether one first-party Host may select state or accept a result.
  *
- * Non-source state I/O retains its historical behavior; Host launch separately
- * requires a current captured registry witness. The source-session
+ * Non-source state I/O retains its historical behavior. Host launch requires
+ * the captured registry witness, and a running Turn checks its own entry. The source-session
  * profile is exact-only: neither an alias-only plan nor alias-only Host state
  * can be upgraded by inference.
  */
@@ -200,7 +209,8 @@ export function decideFirstPartyHostRuntime(
     );
   }
   if (facts.profile_id !== SOURCE_SESSION_PROFILE_ID) {
-    return facts.operation === "launch" ? legacyLaunch(facts) : { kind: "legacy" };
+    return facts.operation === "launch" || facts.operation === "require_current"
+      ? legacyRuntime(facts) : {kind: "legacy"};
   }
 
   const operation = requiredOperation(facts.operation);

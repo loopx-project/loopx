@@ -14,7 +14,8 @@ import pytest
 
 from loopx.chat_agent import CodexChatAgentSession
 from loopx.cli import main as cli_main
-from loopx.control_plane.goals import activation_service
+from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+from loopx.control_plane.goals import activation_service, first_party_host_admission
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.projects.registry_codec import project_registry_transaction
 from loopx.control_plane.turn_driver import codex_operation_host
@@ -199,6 +200,135 @@ def test_operation_dispatch_releases_goal_lock_before_native_response_wait(
     assert _bindings(runtime) == bindings
     index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("failure", ["stop", "inventory-unavailable", "authority-unavailable"])
+def test_running_operation_stop_waits_for_owned_native_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, failure: str,
+) -> None:
+    runtime, registry, _, turns, arguments = _fixture(tmp_path, monkeypatch, provider)
+    executable = Path(arguments[arguments.index("--codex-bin") + 1])
+    events = tmp_path / "native-control"
+    authority_unavailable = threading.Event()
+    original_effect_runtime_result = first_party_host_admission.effect_runtime_result
+
+    def observe_authority(method, facts, **kwargs):
+        if (authority_unavailable.is_set() and method == "goal.first_party_host_runtime.decide"
+                and facts["operation"] == "require_current"):
+            raise EffectRuntimeStartupError(
+                "fixture authority runtime unavailable", diagnostic_code="fixture_unavailable",
+            )
+        return original_effect_runtime_result(method, facts, **kwargs)
+
+    monkeypatch.setattr(first_party_host_admission, "effect_runtime_result", observe_authority)
+    inventory_available = failure != "inventory-unavailable"
+    server = executable.read_text()
+    server = server.replace(
+        'key = None',
+        f'key = None\ninterrupted = False\nowned_live = True\ncontrol_log = {str(events)!r}\n'
+        f'inventory_available = {inventory_available!r}',
+        1,
+    )
+    after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
+    assert after_start in server
+    server = server.replace(after_start, after_start + "\n        continue", 1)
+    position = '    elif row.get("id") == 50:'
+    assert position in server
+    server = server.replace(position, """    elif method == "thread/turns/list":
+        emit({"id": row["id"], "result": {"data": [
+            {"id": turn, "status": "interrupted" if interrupted else "inProgress"}]}})
+    elif method == "turn/interrupt":
+        assert row["params"] == {"threadId": thread, "turnId": turn}
+        interrupted = True
+        with open(control_log, "a") as log: log.write("interrupt\\n")
+        emit({"id": row["id"], "result": {}})
+    elif method == "thread/items/list":
+        assert interrupted and row["params"]["turnId"] == turn
+        emit({"id": row["id"], "result": {"data": [{"turnId": turn,
+            "item": {"id": "owned-item", "type": "commandExecution"}}]}})
+    elif method == "thread/backgroundTerminals/list":
+        if not inventory_available:
+            emit({"id": row["id"], "error": {"code": -32603, "message": "fixture unavailable"}})
+        else:
+            terminals = [{"itemId": "other-item", "processId": "other-process"}]
+            if owned_live:
+                terminals.append({"itemId": "owned-item", "processId": "owned-process"})
+            else:
+                with open(control_log, "a") as log: log.write("owned-gone\\n")
+            emit({"id": row["id"], "result": {"data": terminals}})
+    elif method == "thread/backgroundTerminals/terminate":
+        assert row["params"] == {"threadId": thread, "processId": "owned-process"}
+        owned_live = False
+        with open(control_log, "a") as log: log.write("terminate-owned\\n")
+        emit({"id": row["id"], "result": {"terminated": True}})
+""" + position, 1)
+    executable.write_text(server)
+    arguments[arguments.index("--timeout-seconds") + 1] = "12"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        host = executor.submit(_cli, [*arguments, "--execute"])
+        deadline = time.monotonic() + 20
+        while not turns.exists() and not host.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert turns.exists(), host.result() if host.done() else "native dispatch was not reached"
+        if failure == "authority-unavailable":
+            authority_unavailable.set()
+        else:
+            stopped = activation_service.set_goal_activation_state(
+                registry_path=registry, goal_id="loopx-turn-fixture", state="stopped",
+                reason="Fixture Stop after native Turn dispatch.", actor_kind="owner", execute=True,
+            )
+            assert stopped["ok"] and stopped["readback"]["verified"], stopped
+        code, payload = host.result(timeout=12)
+
+    assert code == 1, payload
+    expected = {
+        "stop": "goal_stopped",
+        "inventory-unavailable": "codex_operation_host_stop_unconfirmed",
+        "authority-unavailable": "goal_authority_unavailable",
+    }[failure]
+    assert expected in json.dumps(payload), payload
+    expected_events = ["interrupt", "terminate-owned", "owned-gone"] if inventory_available else ["interrupt"]
+    assert events.read_text().splitlines() == expected_events
+    index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_running_operation_survives_unrelated_goal_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    _, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
+    executable = Path(arguments[arguments.index("--codex-bin") + 1])
+    waiting, proceed = tmp_path / "native-waiting", tmp_path / "native-proceed"
+    after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
+    server = executable.read_text()
+    assert after_start in server
+    executable.write_text(server.replace(
+        after_start,
+        after_start + f"\n        pathlib.Path({str(waiting)!r}).touch()"
+        + f"\n        while not pathlib.Path({str(proceed)!r}).exists(): time.sleep(.01)",
+        1,
+    ))
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        host = executor.submit(_cli, [*arguments, "--execute"])
+        try:
+            deadline = time.monotonic() + 20
+            while not waiting.exists() and not host.done() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert waiting.exists(), host.result() if host.done() else "native Turn was not acknowledged"
+            with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
+                registry_payload = transaction.payload_copy()
+                registry_payload["goals"].append({"id": "other-goal", "status": "active"})
+                assert transaction.commit(registry_payload)
+        finally:
+            proceed.touch()
+        code, payload = host.result(timeout=12)
+
+    assert code == 0 and payload["ok"], payload
+    assert payload["result_kind"] == "wait", payload
 
 
 def test_native_process_is_reaped_if_launch_guard_exit_is_interrupted(tmp_path, monkeypatch):

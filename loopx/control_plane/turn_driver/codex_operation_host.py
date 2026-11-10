@@ -11,13 +11,17 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ...chat_agent import CodexChatAgentError, CodexChatAgentSession
 from ...extensions.codex_native_child import native_child_observer
-from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
+from ..goals.first_party_host_admission import (
+    FirstPartyHostGoalAdmission,
+    FirstPartyHostRuntimeRejected,
+)
 from . import managed_operation_host as operations
 from .codex_cli import (
     _checked_prompt_context,
@@ -33,6 +37,7 @@ from .operation_requests import (
 )
 
 TRANSPORT = "app-server-operation-tools-v0"
+_RUNNING_GOAL_CHECK_SECONDS = 1.0
 
 
 def run_codex_operation_host(
@@ -88,8 +93,8 @@ def run_codex_operation_host(
     }
     if request_source is not None:
         profile["operation_request"] = request_source.profile(source_route)
-    launch_scope = FirstPartyHostGoalAdmission.launch_scope_for_plan(
-        admission=goal_admission, registry_path=registry_path,
+    admission = goal_admission or FirstPartyHostGoalAdmission.for_plan(
+        registry_path=registry_path,
         goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
     )
     profile_digest = hashlib.sha256(
@@ -125,6 +130,7 @@ def run_codex_operation_host(
         else None
     )
     session = None
+    native_turn_id = ""
     try:
         session = CodexChatAgentSession.start(
             codex_bin=codex_bin,
@@ -139,7 +145,7 @@ def run_codex_operation_host(
             resume_thread_id=binding["session_id"] if binding else None,
             dynamic_tools=[operations.OPERATION_TOOL],
             host_config=host_config,
-            launch_guard=lambda: launch_scope("codex_operation_process_launch"),
+            launch_guard=lambda: admission.launch_lifetime(operation="codex_operation_process_launch"),
             response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
             hard_timeout_sec=timeout_seconds,
             idle_timeout_sec=180 if timeout_seconds is None else min(timeout_seconds, 180),
@@ -171,15 +177,19 @@ def run_codex_operation_host(
         )
 
         def on_event(kind: str, event: dict[str, Any]) -> None:
+            nonlocal native_turn_id
             if kind != "turn.started":
                 return
             # Only the authenticated native turn/start response reaches here.
+            started_turn = event.get("upstream_turn_id")
+            if isinstance(started_turn, str):
+                native_turn_id = started_turn
             try:
                 operations.record_operation_start(
                     runtime_root=runtime_root, registry_path=registry_path,
                     continuations=continuations, route=route, model=model,
                     reasoning_effort=reasoning_effort,
-                    host_turn_id=event.get("upstream_turn_id"), turn_key=request["turn_key"],
+                    host_turn_id=started_turn, turn_key=request["turn_key"],
                 )
             except (ValueError, KeyError, TypeError, RuntimeError) as exc:
                 raise BuiltInHostError(
@@ -202,6 +212,16 @@ def run_codex_operation_host(
             else:
                 goal_admission.accept_result(record_child)
 
+        next_goal_check = 0.0
+
+        def check_running(*, final: bool = False) -> None:
+            nonlocal next_goal_check
+            now = time.monotonic()
+            if not final and now < next_goal_check:
+                return
+            admission.require_running(operation="codex_operation_turn_continue")
+            next_goal_check = time.monotonic() + _RUNNING_GOAL_CHECK_SECONDS
+
         input_text, result_schema = prepare_codex_cli_input(request)
         result = session.send(
             input_text
@@ -220,10 +240,19 @@ def run_codex_operation_host(
                if continuations else ""),
             output_schema=result_schema,
             on_event=on_event,
-            turn_start_guard=lambda: launch_scope("codex_operation_turn_start"),
+            turn_start_guard=lambda: admission.launch_lifetime(operation="codex_operation_turn_start"),
             on_native_item=observe_child if child_observer is not None else None,
+            check_running=check_running,
         )
+        check_running(final=True)
         return normalize_codex_result(request, result)
+    except FirstPartyHostRuntimeRejected:
+        if session is not None and native_turn_id:
+            try:
+                session.interrupt(native_turn_id)
+            except CodexChatAgentError as exc:
+                raise BuiltInHostError("codex_operation_host_stop_unconfirmed") from exc
+        raise
     except CodexChatAgentError as exc:
         raise BuiltInHostError(
             "codex_operation_host_" + exc.error_code,
