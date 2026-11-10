@@ -24,6 +24,7 @@ from loopx.hosts.research_checkpoint import (
     research_participants, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
+from .codex import explicit_turn_display
 
 
 def normalize_checkpoint_request_path(value: str) -> str:
@@ -230,6 +231,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
+    display = explicit_turn_display(env)
+    if display.complete_turn:
+        command.append("--complete-turn")
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the

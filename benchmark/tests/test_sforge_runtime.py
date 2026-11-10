@@ -740,7 +740,9 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
 
 @pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
 @pytest.mark.parametrize("delivery", ["off", "on"])
-def test_complete_worker_reaches_original_ready_guard_without_a_model(tmp_path, monkeypatch, profile, delivery):
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+def test_complete_worker_reaches_original_ready_guard_without_a_model(
+        tmp_path, monkeypatch, profile, delivery, checkpoint_preflight):
     """Actual adapter → worker → renderer → CLI → typed source; no model/API call."""
     import os
     import shlex
@@ -755,7 +757,8 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(tmp_path, 
     from loopx.control_plane.turn_driver import codex_context
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from tests.control_plane.test_quota_settlement_cli import (
-        _write_fixture, _initialize_fixture_authority, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
+        _write_fixture, _initialize_fixture_authority, _run_cli, _heartbeat_receipt_count,
+        GOAL_ID, AGENT_ID, TODO_ID,
     )
 
     project, runtime, registry = _write_fixture(tmp_path)
@@ -792,10 +795,35 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(tmp_path, 
     body = heartbeat_body(env, turn, native_goal=False)
     block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
     assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
-    result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
-        env=env, capture_output=True, text=True, check=True)
-    packet = json.loads(result.stdout)
-    original, = (wake / "decisions").rglob("decision.json")
+    if checkpoint_preflight:
+        from benchmark.runtime.checkpoint import capture_before_replan
+
+        request = tmp_path / "checkpoint-request.json"
+        request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
+            "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
+            "evaluation_opportunity": True, "controller_handoff": True,
+            "components": [{"id": "workspace", "source_path": str(project)}], "point_metadata": {}}))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
+        receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+        body = capture_before_replan(env, receipt, body)
+        assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
+        assert "Do not repeat the initial guard below" in body
+        original, = wake.glob("checkpoint-start-*/decision-*/decision.json")
+        assert (wake / "checkpoint-start-guard.json").read_bytes() == original.read_bytes()
+        if delivery == "off":
+            packet = json.loads((wake / "checkpoint-start-view.json").read_text())
+            assert str(wake / "checkpoint-start-view.json") in body
+        else:
+            block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+            assert "context-project" in block and "should-run" not in block
+            packet = json.loads(subprocess.run(shlex.split(block), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+            assert "content" in packet
+    else:
+        result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
+            env=env, capture_output=True, text=True, check=True)
+        packet = json.loads(result.stdout)
+        original, = (wake / "decisions").rglob("decision.json")
     saved = original.read_bytes()
     complete = json.loads(saved)
     assert_complete_turn_decision(complete)
@@ -810,15 +838,31 @@ def test_complete_worker_reaches_original_ready_guard_without_a_model(tmp_path, 
     if delivery == "off":
         assert packet == complete
     else:
-        command = packet["recovery"]["command"]
-        while command:
-            page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
-                capture_output=True, text=True, check=True).stdout)
+        page = packet if checkpoint_preflight else json.loads(subprocess.run(
+            shlex.split(packet["recovery"]["command"]), cwd=project, env=env,
+            capture_output=True, text=True, check=True).stdout)
+        while True:
             assert page["ok"]
             codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
                 "tool_use_id": f"page-{page['offset']}", "tool_response": json.dumps(page)})
             command = page.get("next_command")
+            if not command:
+                break
+            page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+        if checkpoint_preflight:
+            # Selected initial facts do not certify a complete delta baseline.
+            # Follow the same published full recovery for this byte oracle.
+            command = packet["navigation"]["recovery"]["command"]
+            while command:
+                page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                    capture_output=True, text=True, check=True).stdout)
+                assert page["ok"]
+                codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
+                    "tool_use_id": f"full-page-{page['offset']}", "tool_response": json.dumps(page)})
+                command = page.get("next_command")
         assert codex_context._state(journal)["candidate"]["basis"] == "native_hook_assumption"
+    assert _heartbeat_receipt_count(runtime, turn) == 1
     assert original.read_bytes() == saved
 
 

@@ -88,6 +88,18 @@ def turn_envelope_receipt(*, explicit: bool, complete: bool = False) -> dict:
         **({"complete_turn": True, "complete_turn_source": "explicit"} if complete else {})}
 
 
+def explicit_turn_display(env: dict[str, str]) -> Execution:
+    """Decode the shared explicit display request through its Execution owner."""
+    selected = {}
+    for variable, field in (("LOOPX_TURN_ENVELOPE", "turn_envelope"),
+                            ("LOOPX_COMPLETE_TURN", "complete_turn")):
+        value = env.get(variable, "0")
+        if value not in {"0", "1"}:
+            raise ValueError(f"{variable} must be 0 or 1")
+        selected[field] = value == "1"
+    return Execution(**selected)
+
+
 def native_child_instructions(limit: int | None) -> str:
     """One explicit task authorization shared by every opted-in study arm."""
     if limit is None:
