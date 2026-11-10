@@ -276,10 +276,11 @@ async function runConversation(browser, uncertain) {
       await page.unroute('**/api/chat/codex-attached?*',delayedSession);
       assert.equal(await panel.getByText('Original result',{exact:true}).count(),0);
       assert.equal(await composer.inputValue(),'第二条会话草稿');
+      let omitAllSessions = false;
       const missingSelection = async route => {
         if (new URL(route.request().url()).searchParams.has('agent_id')) return route.continue();
         const response = await route.fetch(), value = await response.json();
-        await route.fulfill({response,json:{...value,agents:value.agents.filter(row => row.binding_ref !== choices[1])}});
+        await route.fulfill({response,json:{...value,agents:omitAllSessions ? [] : value.agents.filter(row => row.binding_ref !== choices[1])}});
       };
       await page.route('**/api/chat/codex-attached?*',missingSelection);
       await page.reload();
@@ -287,8 +288,17 @@ async function runConversation(browser, uncertain) {
       assert.equal(await sessions.inputValue(),'');
       assert.match(await sessions.locator('option:checked').innerText(),/原会话绑定已变更/);
       assert.equal(await composer.count(),0,'A stale saved choice never falls back to the sole other Session');
+      const missingRetry = panel.getByRole('button',{name:'重新连接',exact:true});
+      await missingRetry.waitFor();
+      omitAllSessions = true;
+      await missingRetry.click();
+      await sessions.waitFor({state:'hidden'});
+      await panel.getByText('正在连接原会话…',{exact:true}).waitFor({state:'hidden'});
+      assert.equal(await missingRetry.count(),1,'Recovery remains available even with no alternative Sessions');
+      assert.equal(await composer.count(),0);
+      assert.equal(new URL(page.url()).searchParams.get('workSession'),choices[1]);
       await page.unroute('**/api/chat/codex-attached?*',missingSelection);
-      await page.reload();
+      await missingRetry.click();
       await panel.getByText('Result: Separate investigation',{exact:true}).waitFor();
       assert.equal(await composer.inputValue(),'第二条会话草稿');
       await sessions.selectOption(choices[0]);
@@ -759,14 +769,104 @@ async function runConversation(browser, uncertain) {
     assert.equal(await inputCount(),inputsBeforeLanguage,'Changing language and reading help cannot submit native input');
     await page.evaluate(() => localStorage.setItem('loopx-pw-locale','zh-CN'));
     await page.reload();
-    await panel.getByRole('textbox',{name:'回复 worker',exact:true}).waitFor();
-    await page.setViewportSize({width:1512,height:982});
-    await page.request.post(new URL('/fixture/rebind',url).href);
-    await panel.getByRole('alert').waitFor();
+    const recoveryDraft = panel.getByRole('textbox',{name:'回复 worker',exact:true});
+    await recoveryDraft.waitFor();
+    await recoveryDraft.fill('Keep this draft with the original Session.');
+    await longDialogue.waitFor();
+    await page.setViewportSize({width:1200,height:900});
+    const transcriptRecords = panel.locator('.attached-conversation-messages article');
+    const attachedPath = '/api/chat/codex-attached';
+    const workerRead = url => {
+      const {pathname,searchParams} = new URL(url);
+      return pathname === attachedPath && searchParams.get('agent_id') === 'worker' && !searchParams.has('operation_id') ? searchParams : null;
+    };
+    const heldPoll = Promise.withResolvers();
+    const heldOlder = Promise.withResolvers();
+    const olderChecked = Promise.withResolvers();
+    // Start a tail poll, then authorize an older page before rebinding. Deliver
+    // the poll's denial first, while the successful older page is still in flight.
+    const race = async route => {
+      const query = workerRead(route.request().url());
+      if (query?.has('revision')) await heldPoll.promise;
+      if (!query?.has('before')) return route.continue();
+      const response = await route.fetch({timeout:4000});
+      olderChecked.resolve(response);
+      await heldOlder.promise;
+      await route.fulfill({response});
+    };
+    const attachedRequests = '**/api/chat/codex-attached?*';
+    await page.route(attachedRequests,race);
+    try {
+      await page.waitForRequest(request => workerRead(request.url())?.has('revision'),{timeout:4000});
+      const olderRequest = page.waitForRequest(request => workerRead(request.url())?.has('before'),{timeout:4000});
+      await scrollHistory(page,panel,-1);
+      await olderRequest;
+      const older = await olderChecked.promise;
+      assert.equal(older.status(),200);
+      assert.ok((await older.json()).messages.length > 0,'The native owner authorized a nonempty page before rebinding');
+      const rejectedRead = page.waitForResponse(response => response.status() === 409 && workerRead(response.url())?.has('revision'),{timeout:4000});
+      assert.ok((await page.request.post(new URL('/fixture/rebind',url).href)).ok());
+      heldPoll.resolve();
+      await rejectedRead;
+      await panel.getByRole('button',{name:'重新连接',exact:true}).waitFor({timeout:2000});
+      assert.equal(await transcriptRecords.count(),0,'The denial withdraws existing history while paging');
+      const latePage = page.waitForResponse(response => response.status() === 200 && workerRead(response.url())?.has('before'),{timeout:4000});
+      heldOlder.resolve();
+      await (await latePage).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await transcriptRecords.count(),0,'A page authorized before rebinding cannot restore rejected history');
+    } finally {
+      heldPoll.resolve();
+      heldOlder.resolve();
+      await page.unroute(attachedRequests,race);
+    }
+    await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-rejected-narrow.png'),animations:'disabled'});
+    assert.equal(await transcriptRecords.count(),0,'An explicitly rejected binding must withdraw the old transcript');
+    assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
+    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).isDisabled(),true);
     await openOriginal.click();
     await panel.getByRole('alert').filter({hasText:'binding is invalid or changed'}).waitFor();
     assert.equal((await (await page.request.get(new URL('/fixture/opened',url).href)).json()).count,1);
-    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).isDisabled(),true);
+    const automaticRead = await page.waitForRequest(request => {
+      const source = new URL(request.url());
+      return request.method() === 'GET' && source.pathname === '/api/chat/codex-attached'
+        && source.searchParams.get('agent_id') === 'worker';
+    }, {timeout: 2100}).catch(error => {
+      if (error.name !== 'TimeoutError') throw error;
+      return null;
+    });
+    assert.equal(automaticRead,null,'A rejected binding does not poll the original owner again');
+    // Rechecking before the owner restores the binding must not remove the
+    // only recovery action when the child reader is unmounted. Keep the exact
+    // selection, withhold its old records and wait for another explicit retry.
+    const originalUrl = page.url();
+    await panel.getByRole('button',{name:'重新连接',exact:true}).click();
+    await recoveryDraft.waitFor({state:'hidden'});
+    await panel.getByText('正在连接原会话…',{exact:true}).waitFor({state:'hidden'});
+    await page.setViewportSize({width:1200,height:900});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-first-retry-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-binding-first-retry-narrow.png'),animations:'disabled'});
+    const retry = panel.getByRole('button',{name:'重新连接',exact:true});
+    assert.equal(await retry.count(),1,'An unsuccessful recheck keeps one retry for the selected original Session');
+    assert.equal(page.url(),originalUrl,'An unavailable selection never substitutes another Session');
+    assert.equal(await transcriptRecords.count(),0);
+    assert.equal(await panel.getByRole('button',{name:'发送到原会话',exact:true}).count(),0);
+    const backgroundRead = await page.waitForRequest(request => request.method() === 'GET'
+      && new URL(request.url()).pathname === attachedPath, {timeout:2100}).catch(error => {
+      if (error.name !== 'TimeoutError') throw error;
+      return null;
+    });
+    assert.equal(backgroundRead,null,'An absent selected binding waits for an explicit retry');
+    await page.request.post(new URL('/fixture/restore-binding',url).href);
+    await retry.focus();
+    await page.keyboard.press('Enter');
+    await longDialogue.waitFor();
+    assert.equal(page.url(),originalUrl,'Recovery reopens the same original Session without reloading');
+    assert.equal(await recoveryDraft.inputValue(),'Keep this draft with the original Session.');
+    assert.equal(await inputCount(),inputsBeforeLanguage,'Rechecking the original binding does not submit the retained draft');
   } finally {
     clearTimeout(timer); lines.close();
     if (context) await context.close();
