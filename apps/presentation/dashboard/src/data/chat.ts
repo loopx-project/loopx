@@ -1278,12 +1278,27 @@ export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
   );
 }
 
+function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSummary) {
+  return sameHistorySource(current, read) && Boolean(current.transcript_revision)
+    && current.transcript_revision === read.transcript_revision
+    && current.updated_at === read.updated_at && current.active_turn_id === read.active_turn_id
+    && current.status === read.status;
+}
+
+function historyTransportUnavailable(error: unknown) {
+  return error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
+    && (error.payload.http_status === undefined || Number(error.payload.http_status) >= 500);
+}
+
 export type ChatHistory = {
   messages: ChatVisibleMessage[];
   sessions: ChatSessionSummary[];
   snapshots: ChatSessionSnapshot[];
   unavailableSessionIds: string[];
   pendingReads?: Map<string, ChatHistoryReadProgress>;
+  // Read and verified, but excluded from all displayed history until its
+  // original binding is checked after the transcript was read.
+  pendingBoundSnapshot?: {bindingId: string; snapshot: ChatSessionSnapshot};
 };
 
 export async function fetchChatHistory(options: {
@@ -1301,16 +1316,21 @@ export async function fetchChatHistory(options: {
   const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
     : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const pending = previous?.pendingBoundSnapshot;
+  const current = listed.sessions[0];
+  // This discovery happened after the retained read. An unchanged exact
+  // source and revision satisfy the pending check without fetching its pages.
+  if (!options.managed && pending && pending.bindingId === options.bound?.bindingId && current
+    && sameHistoryRevision(current, pending.snapshot.session)) {
+    known.set(current.session_id, pending.snapshot);
+  }
   const pendingReads = new Map(previous?.pendingReads);
   for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
     const saved = known.get(session.session_id)?.session;
-    return !saved || (exact && (!sameHistorySource(saved, session) || !session.transcript_revision
-      || session.transcript_revision !== saved.transcript_revision
-      || session.updated_at !== saved.updated_at || session.active_turn_id !== saved.active_turn_id
-      || session.status !== saved.status));
+    return !saved || (exact && !sameHistoryRevision(session, saved));
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
@@ -1326,8 +1346,7 @@ export async function fetchChatHistory(options: {
     } catch (error) {
       // Reuse the hook's existing retry schedule only for a lost transport.
       // Revoked sources, invalid pages and stale cursors must start a fresh read.
-      if (!(error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
-        && (error.payload.http_status === undefined || Number(error.payload.http_status) >= 500))) pendingReads.delete(session.session_id);
+      if (!historyTransportUnavailable(error)) pendingReads.delete(session.session_id);
       throw error;
     }
     pendingReads.delete(session.session_id);
@@ -1342,7 +1361,22 @@ export async function fetchChatHistory(options: {
   // A long page sequence must not publish against a connection/Goal removed
   // while it was in flight. Reuse the original source owner, never a fallback.
   if (missing.length && results.some(result => result.status === "fulfilled")) {
-    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (options.bound) {
+      try {
+        await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+      } catch (error) {
+        const read = results[0];
+        if (options.managed || read?.status !== "fulfilled" || !historyTransportUnavailable(error)) throw error;
+        return {
+          messages: [],
+          sessions: listed.sessions,
+          snapshots: [],
+          unavailableSessionIds: listed.sessions.map(session => session.session_id),
+          pendingReads,
+          pendingBoundSnapshot: {bindingId: options.bound.bindingId, snapshot: read.value},
+        };
+      }
+    }
     if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
   }
   for (const result of results) {
