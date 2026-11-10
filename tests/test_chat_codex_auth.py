@@ -299,7 +299,8 @@ def test_installed_native_resume_preserves_original_provider_across_transport_sw
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     binary = os.environ['LOOPX_TEST_NATIVE_CODEX_BINARY']
     home, work = tmp_path / 'native', tmp_path / 'work'
-    home.mkdir(); work.mkdir()
+    home.mkdir()
+    work.mkdir()
     monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-no-model-request')
     monkeypatch.delenv('LOOPX_CHAT_CODEX_MODEL_PROVIDER', raising=False)
     definition = {'name': 'Synthetic local fixture', 'base_url': 'http://127.0.0.1:19/v1',
@@ -330,11 +331,13 @@ def test_installed_native_resume_preserves_original_provider_across_transport_sw
     try:
         started = native._request('thread/start', {'cwd': str(work), 'modelProvider': provider,
             'approvalPolicy': 'never', 'sandbox': 'read-only', 'persistExtendedHistory': True}, request_id=2)
-        thread = started['thread']; thread_id = thread['id']
+        thread = started['thread']
+        thread_id = thread['id']
         # Native allocates its path before persisting the first input. Supply
         # minimal prior input with the real native-returned ID/path/metadata.
         stamp = datetime.fromtimestamp(thread['createdAt'], timezone.utc).isoformat()
-        path = Path(thread['path']); path.parent.mkdir(parents=True, exist_ok=True)
+        path = Path(thread['path'])
+        path.parent.mkdir(parents=True, exist_ok=True)
         rows = [{'timestamp': stamp, 'type': 'session_meta', 'payload': {
             'id': thread_id, 'timestamp': stamp, 'cwd': str(work), 'originator': thread['originator'],
             'cli_version': thread['cliVersion'], 'source': thread['source'], 'model_provider': provider}},
@@ -363,7 +366,8 @@ def test_installed_native_resume_preserves_original_provider_across_transport_sw
             self.rfile.read(int(self.headers['Content-Length']))
             incoming.put((self.path, self.headers.get('Authorization')))
             self.send_response(200)
-            self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
             self.wfile.write(b'data: {"type":"response.completed","response":{"id":"synthetic-response",'
                 b'"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n')
     server = ThreadingHTTPServer(('127.0.0.1', 0), ResponseFixture)
@@ -396,7 +400,8 @@ def test_installed_native_resume_preserves_original_provider_across_transport_sw
             finally:
                 session.close()
     finally:
-        server.shutdown(); server.server_close()
+        server.shutdown()
+        server.server_close()
 
 
 def test_ephemeral_api_login_failure_redacts_private_rpc_details():
