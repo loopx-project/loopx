@@ -6,3 +6,14 @@ export function parseTodoResumeCondition(rawMessage: string) {
   );
   return match?.groups?.condition ?? null;
 }
+
+// Form intent only. The canonical Todo owner still validates the dependency,
+// independent successor and generation on preview and apply.
+export function todoResumeTransition(condition: string) {
+  const normalized = parseTodoResumeCondition(condition);
+  if (!normalized) return null;
+  const kind = normalized.split(":", 1)[0];
+  return kind === "monitor_changed" || kind === "todo_done"
+    ? {operation: "edit" as const, status: "open" as const, resume_when: normalized}
+    : {operation: "defer" as const, resume_when: normalized};
+}

@@ -40,6 +40,7 @@ def _write_fixture(
     root: Path,
     *,
     dependency: bool = False,
+    provider: str = "file",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -96,6 +97,7 @@ def _write_fixture(
             handoff_mode="soft_claim",
         ),
         state_path=state_file,
+        provider=provider,
     )
     return registry, runtime, state_file
 
