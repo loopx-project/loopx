@@ -1578,9 +1578,10 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
  * with its existing owner. Explicit unknown/null declarations are never v0.
  * This does not make the bounded envelope a complete future work contract.
  */
-export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject): void {
+export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject, allowUnversionedHistory = false): void {
   assertSupportedQuotaPacket(envelope);
-  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION) {
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION &&
+      !(allowUnversionedHistory && !Object.hasOwn(envelope, "schema_version"))) {
     throw new EffectRuntimeRequestError("unsupported TurnEnvelope schema_version; use a compatible consumer");
   }
   const signature = object(envelope.action_signature);
@@ -1804,8 +1805,8 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
 
 /** A current private plan stores its one admitted source and transport header.
  * The old plan codec is read only for recorded journals or explicit old input. */
-export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
-  work: JsonObject; decision: JsonObject | null; scopedIdentity: JsonObject | null | undefined;
+function checkedTurnPlanSource(plan: JsonObject, numberTokens?: unknown): {
+  work: JsonObject; decision: JsonObject | null;
 } {
   if (plan.schema_version === "loopx_turn_plan_v1") {
     if (!Object.hasOwn(plan, "work_contract") || Object.hasOwn(plan, "turn_envelope")
@@ -1817,8 +1818,7 @@ export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
         turn_key: object(plan.transaction).turn_key, source_decision_hash: plan.source_decision_hash,
         ...(Object.hasOwn(plan, "detail_ref") ? {detail_ref: plan.detail_ref} : {})}});
     const work = {goal_id: checked.decision.goal_id ?? null, ...checked.projection};
-    return {work, decision: checked.decision, scopedIdentity: scopedTurnSettlementIdentity(work,
-      object(plan.transaction).turn_instance_id)};
+    return {work, decision: checked.decision};
   }
   if (Object.hasOwn(plan, "schema_version") && plan.schema_version !== "loopx_turn_plan_v0") {
     throw new EffectRuntimeRequestError("unsupported Turn plan version");
@@ -1827,9 +1827,22 @@ export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
   if (Object.hasOwn(plan, "work_contract")) {
     const checked = completeHostSource({payload: plan.work_contract, envelope,
       source_number_tokens: numberTokens});
-    return {work: {...envelope, ...checked.projection}, decision: checked.decision, scopedIdentity: undefined};
+    return {work: {...envelope, ...checked.projection}, decision: checked.decision};
   }
-  return {work: envelope, decision: null, scopedIdentity: undefined};
+  // Older journals can omit the envelope header. A declared version or
+  // signature format must pass the same compatibility check as Host input.
+  assertTurnEnvelopeConsumerVersion(envelope, true);
+  return {work: envelope, decision: null};
+}
+
+export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
+  work: JsonObject; decision: JsonObject | null; scopedIdentity: JsonObject | null | undefined;
+} {
+  const source = checkedTurnPlanSource(plan, numberTokens);
+  const scopedIdentity = plan.schema_version === "loopx_turn_plan_v1"
+    ? scopedTurnSettlementIdentity(source.work, object(plan.transaction).turn_instance_id)
+    : undefined;
+  return {...source, scopedIdentity};
 }
 
 function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
@@ -2403,6 +2416,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "planning_facts") return completePlanningFacts(request);
+  if (operation === "recorded_plan_lineage") {
+    const {work, decision} = checkedTurnPlanSource(
+      requireJsonObject(request.plan, "recorded Turn plan"), request.source_number_tokens);
+    const identity = decision === null ? work : completeSessionLineage(decision);
+    return {goal_id: identity.goal_id ?? null, agent_id: identity.agent_id ?? null};
+  }
   if (operation === "plan_work") {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
