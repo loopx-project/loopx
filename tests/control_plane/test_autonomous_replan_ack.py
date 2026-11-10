@@ -7,6 +7,8 @@ import pytest
 from loopx.control_plane.goals.goal_vision import normalize_goal_vision_packet
 from loopx.control_plane.work_items.autonomous_replan_ack import (
     AUTONOMOUS_REPLAN_ACK_MATERIAL_RUN_WINDOW,
+    AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT,
+    autonomous_replan_ack_candidates_for_obligation,
     compact_autonomous_replan_ack,
     latest_autonomous_replan_ack_for_projection,
 )
@@ -96,6 +98,51 @@ def test_legacy_ack_still_expires_with_the_material_run_window() -> None:
     assert expired is None
     assert visible is not None
     assert visible["semantic_delta"]["obligation_id"] == LONG_CHAIN_OBLIGATION_ID
+
+
+def test_obligation_recovery_candidates_ignore_newer_unrelated_ack_and_are_bounded() -> None:
+    def run(index: int, obligation_id: str, *, goal_id: str = GOAL_ID) -> dict[str, Any]:
+        return {
+            "goal_id": goal_id,
+            "agent_id": AGENT_ID,
+            "turn_instance_id": f"guided-start:{index}",
+            "generated_at": f"2026-08-19T14:{index:02d}:00+08:00",
+            "classification": "bounded_replan_progress",
+            "autonomous_replan_ack": {
+                "schema_version": "autonomous_replan_ack_v0",
+                "recorded": True,
+                "source": "refresh_state_semantic_delta",
+                "semantic_delta": {
+                    "schema_version": "replan_semantic_delta_v0",
+                    "accepted": True,
+                    "outcomes": ["fresh_vision_path_outcome"],
+                    "satisfying_outcomes": ["fresh_vision_path_outcome"],
+                    "obligation_id": obligation_id,
+                },
+            },
+        }
+
+    newest_first = [
+        run(59, "replan-ffffffffffffffff"),
+        run(58, LONG_CHAIN_OBLIGATION_ID, goal_id="other-goal"),
+        *(run(index, LONG_CHAIN_OBLIGATION_ID) for index in range(57, 40, -1)),
+    ]
+
+    candidates = autonomous_replan_ack_candidates_for_obligation(
+        newest_first,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        obligation_id=LONG_CHAIN_OBLIGATION_ID,
+    )
+
+    assert len(candidates) == AUTONOMOUS_REPLAN_ACK_RECOVERY_CANDIDATE_LIMIT
+    assert [candidate["turn_instance_id"] for candidate in candidates] == [
+        f"guided-start:{index}" for index in range(57, 49, -1)
+    ]
+    assert all(
+        candidate["semantic_delta"]["obligation_id"] == LONG_CHAIN_OBLIGATION_ID
+        for candidate in candidates
+    )
 
 
 def test_noop_review_records_do_not_expire_an_applicable_legacy_ack() -> None:

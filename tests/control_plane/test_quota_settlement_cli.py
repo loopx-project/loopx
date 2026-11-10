@@ -8911,3 +8911,78 @@ def test_settled_turn_defers_prior_unsettled_history_to_fresh_turn(
     assert fresh["unsettled_host_turn_recovery"]["binding_id"] == (
         ALTERNATIVE_TODO_ID
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("legacy_turn_ref", [False, True])
+def test_exact_later_ack_executes_original_todo_settlement_commands(
+    tmp_path: Path, provider: str, legacy_turn_ref: bool,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_git_checkout(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    original_turn = "turn-historical-todo-settlement"
+    admitted = _bind_selected_replan_guard(registry, runtime, project, original_turn)
+    original_identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    obligation = admitted["replan_action_packet"]["obligation_id"]
+    recorded = datetime.fromisoformat(admitted["heartbeat_receipt"]["recorded_at"].replace("Z", "+00:00"))
+    if legacy_turn_ref:
+        # Isolated upgrade input: earlier records retain the native Turn only
+        # in run_id. Recover that identity through the same typed readback.
+        path = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+        events = [json.loads(line) for line in path.read_text().splitlines()]
+        original_events = [event for event in events
+            if event.get("event_kind") == "quota_should_run" and event.get("run_id") == original_turn]
+        assert original_events
+        for event in original_events:
+            assert event["details"].pop("turn_instance_id") == original_turn
+        path.write_text("".join(json.dumps(event) + "\n" for event in events))
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    for offset, selected in [(1, obligation), (2, "replan-ffffffffffffffff")]:
+        run = {"goal_id": GOAL_ID, "agent_id": AGENT_ID,
+            "turn_instance_id": f"later-accepted-{offset}",
+            "generated_at": (recorded + timedelta(seconds=offset)).isoformat(),
+            "classification": "bounded_replan_progress",
+            "autonomous_replan_ack": {"schema_version": "autonomous_replan_ack_v0", "recorded": True,
+                "source": "refresh_state", "semantic_delta": {"schema_version": "replan_semantic_delta_v0",
+                    "accepted": True, "obligation_id": selected,
+                    "outcomes": ["fresh_vision_path_outcome"], "satisfying_outcomes": ["fresh_vision_path_outcome"]}}}
+        source = runs_dir / f"later-accepted-{offset}.json"
+        source.write_text(json.dumps(run))
+        markdown = source.with_suffix(".md")
+        markdown.write_text("# Accepted independent historical review\n")
+        with (runs_dir / "index.jsonl").open("a") as stream:
+            stream.write(json.dumps({**run, "json_path": str(source), "markdown_path": str(markdown)}) + "\n")
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", original_turn,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    rc, recovery = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0 and recovery["replan_action_packet"]["decision"] == "historical_ack_recorded", json.dumps({key: recovery.get(key) for key in ["error", "error_code", "decision", "action_selection_qualification", "health"]})
+    rc, automatic = _run_cli(registry, runtime, *guard_args[:-2])
+    assert rc == 0, automatic
+    assert automatic["heartbeat_receipt"]["settlement_identity"] == original_identity
+    actions = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    writeback = next(command for command in actions if "refresh-state" in command)
+    spend = next(command for command in actions if "spend-slot" in command)
+    before = _spend_run_count(runtime)
+    rc, written = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0 and written["ok"] is True and written["appended"] is True, written
+    assert written["settlement_identity"] == original_identity
+    assert _spend_run_count(runtime) == before
+    rc, replay = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    rc, spent = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0 and spent["ok"] is True, spent
+    assert _spend_run_count(runtime) == before + 1
+    rc, spent_again = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0 and spent_again["idempotent_replay"], spent_again
+    assert _spend_run_count(runtime) == before + 1
+    rc, settled = _run_cli(registry, runtime, *guard_args)
+    assert rc == 0 and settled["should_run"] is False, settled
+    assert settled["heartbeat_receipt"]["status"] == "replayed"
+    assert settled["heartbeat_receipt"]["settlement_identity"] == original_identity
+    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    assert rc == 0 and todo["todo"]["status"] == "open", todo

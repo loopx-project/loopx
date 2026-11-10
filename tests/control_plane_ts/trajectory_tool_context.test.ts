@@ -36,6 +36,20 @@ test('Python module argv is recognized; arbitrary prose, scripts and quoted loop
   }
 });
 
+test('guard and staged replan reads retain separate observed costs', () => {
+  const result = summarize([
+    call(1, 'guard', ['/venv/bin/loopx', '--format', 'json', 'quota', 'should-run', '--turn-instance-id', 'fixture-turn']),
+    output(2, 'guard', 80),
+    call(3, 'reader', ['python3', '-m', 'loopx.entrypoint', 'quota', 'replan-view', '--replan-stage', 'review']),
+    output(4, 'reader', 50),
+  ])!;
+  assert.equal(result.status, 'observed');
+  if (result.status === 'observed') assert.deepEqual(result.operations, [
+    {operation: 'quota should-run', calls: 1, bytes: 80},
+    {operation: 'quota replan-view', calls: 1, bytes: 50},
+  ]);
+});
+
 test('lease preparation, proof reads and completion are separate observed costs', () => {
   const ops = ['task-lease acquire', 'task-lease inspect', 'task-lease renew', 'task-lease release', 'task-lease transfer',
     'todo claim', 'todo complete', 'todo list', 'todo update', 'todo add'];

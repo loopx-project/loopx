@@ -20,6 +20,7 @@ from loopx.control_plane.capability_hooks import (
     dispatch_turn_start_hooks,
 )
 from loopx.control_plane.quota.live_decision import (
+    _receipt_bound_guard_fields,
     bind_action_selection_cli_routes,
     build_live_quota_should_run_decision,
 )
@@ -30,6 +31,65 @@ from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from loopx.rollout_event_log import build_rollout_event
 
 GOAL_ID = "effect-interpreter-fixture"
+
+
+@pytest.mark.parametrize("selected", ["replan-1111111111111111", "replan-2222222222222222"])
+def test_receipt_guard_fields_use_the_typed_identity_and_guard(selected: str) -> None:
+    fields = _receipt_bound_guard_fields(SimpleNamespace(
+        semantic_replan_guard={"scope": "turn_guard", "selected_obligation_id": selected},
+        identity=SimpleNamespace(value=SimpleNamespace(turn_instance_id="original-turn")),
+        heartbeat_receipt={"recorded_at": "2026-08-01T00:00:00Z", "run_id": "other-turn",
+            "details": {"semantic_replan_obligation_id": "replan-1111111111111111"}},
+        successor_replan_pending=False), "replan-1111111111111111")
+    assert fields["receipt_bound_replan_guard_scoped"] is (selected == "replan-1111111111111111")
+    assert fields["receipt_bound_guard_turn_instance_id"] == "original-turn"
+    assert fields["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
+
+
+def test_todo_bound_action_selection_keeps_legacy_semantic_replan_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.cli_commands import quota_action_selection
+
+    obligation_id = "replan-1111111111111111"
+    receipt = {
+        "goal_id": GOAL_ID,
+        "agent_id": "agent-a",
+        "run_id": "guided-start:legacy",
+        "details": {
+            "todo_id": "todo_legacy",
+            "semantic_replan_obligation_id": obligation_id,
+            "settlement_effect_id": (
+                f"{GOAL_ID}:agent-a:todo_legacy:guided-start:legacy"
+            ),
+            "settlement_receipt_revision": "identity_upgrade",
+        },
+    }
+    monkeypatch.setattr(
+        quota_action_selection,
+        "find_heartbeat_receipt",
+        lambda *args, **kwargs: receipt,
+    )
+    args = SimpleNamespace(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        todo_id="todo_legacy",
+        turn_instance_id="guided-start:legacy",
+        codex_app=False,
+        trae_app=False,
+        antigravity_app=False,
+        runtime_profile="codex_cli",
+    )
+
+    selection = quota_action_selection.load_requested_quota_action_selection(
+        args,
+        runtime_root=tmp_path,
+        turn_instance_id="guided-start:legacy",
+    )
+
+    assert selection.receipt_bound_todo_id == "todo_legacy"
+    assert selection.receipt_bound_replan_obligation_id == obligation_id
 
 
 def _turn_start_dispatch(
@@ -555,6 +615,8 @@ def test_settled_turn_defers_prior_turn_recovery_to_a_fresh_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.control_plane.effect_program import SettlementIdentity, SettlementResult
+
     runtime_root = tmp_path / "runtime"
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps({"goals": []}), encoding="utf-8")
@@ -563,6 +625,9 @@ def test_settled_turn_defers_prior_turn_recovery_to_a_fresh_turn(
         live_decision,
         "read_heartbeat_settlement",
         lambda *_args, **_kwargs: SimpleNamespace(
+            identity=SettlementResult.pure(SettlementIdentity(
+                GOAL_ID, "codex-fixture", "todo_ordinary_work", "managed-settled-turn",
+            )),
             monitor_phase=None,
             replay_phase=ReceiptBoundReplayPhase.SETTLED,
         ),

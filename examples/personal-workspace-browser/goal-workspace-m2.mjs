@@ -7,7 +7,9 @@ import {deliveryReadFixture, installShowcaseWorkspace, openShowcaseGoal, showcas
 
 // Local rendering qualification: bounded isolated overages of either origin
 // are allowed. This is not attribution, a transport SLO or a historical pass.
-export function loadedLensBudget(samplesMs) {
+export function loadedLensBudget(samplesMs, {medianCeilingMs = 1000} = {}) {
+  assert.ok(Number.isFinite(medianCeilingMs) && medianCeilingMs > 0 && medianCeilingMs < 2000,
+    'The repeated-transition ceiling must remain below the 2s page-usability ceiling');
   assert.equal(samplesMs.length, 5, 'Measure every original loaded transition');
   for (const samples of samplesMs) {
     assert.equal(samples.length, 3, 'Retain three samples per transition');
@@ -16,8 +18,8 @@ export function loadedLensBudget(samplesMs) {
   const mediansMs = samplesMs.map(samples => [...samples].sort((a,b) => a-b)[1]);
   const allMs = samplesMs.flat();
   const maxMs = Math.max(...allMs);
-  return {mediansMs, maxMs, overTargetCount: allMs.filter(ms => ms >= 1000).length,
-    withinBudget: mediansMs.every(ms => ms < 1000) && maxMs < 2000};
+  return {mediansMs, maxMs, medianCeilingMs, overTargetCount: allMs.filter(ms => ms >= 1000).length,
+    withinBudget: mediansMs.every(ms => ms < medianCeilingMs) && maxMs < 2000};
 }
 
 export const goalWorkspaceM2Scenario = {
@@ -169,10 +171,12 @@ export const goalWorkspaceM2Scenario = {
       // Open each still-closed disclosure by keyboard. Owner groups can re-render
       // while this runs, so a positional list could re-toggle an open group shut
       // and skip another; the budget below covers every toggle.
+      // Bind Enter to the current summary: a re-render can retire a node
+      // between a separate focus call and a global keyboard command.
       const closedWork = now.locator('.goal-work-more:not([open]) > summary');
       const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
       for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) {
-        if (await closedWork.count()) {await closedWork.first().focus();await page.keyboard.press('Enter');}
+        if (await closedWork.count()) {await closedWork.first().press('Enter');}
         else await page.waitForTimeout(50);
       }
       assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
@@ -251,7 +255,11 @@ export const goalWorkspaceM2Scenario = {
           },browserStart) : null);
         }
       }
-      const lensBudget = loadedLensBudget(switchSamplesMs);
+      // JavaScript coverage instruments every loaded render. Keep the 1s
+      // product target visible in overTargetCount, while allowing bounded
+      // instrumentation overhead below a separate 1.5s repeated ceiling.
+      const lensBudget = loadedLensBudget(switchSamplesMs,
+        collectCoverage ? {medianCeilingMs:1500} : undefined);
       if (longTaskSupported) await page.evaluate(() => {
         window.__loopxM2LongTasks.observer.disconnect(); delete window.__loopxM2LongTasks;
       });
@@ -259,7 +267,7 @@ export const goalWorkspaceM2Scenario = {
         longTaskSupported,switchLongTasks,nodeCount:200}}));
       assert.equal(writes.length,0,`Rendering created effects: ${writes}`);
       assert.equal(session.errors.length,0,session.errors.join('\n'));
-      assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded repeated 1s target or 2s ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);
+      assert.ok(lensBudget.withinBudget, `Loaded lens switches exceeded the repeated qualification ceiling or 2s page ceiling: ${JSON.stringify({switchSamplesMs,...lensBudget})}`);
       await verifyRemoteSelection(browser, url);
       return {coverageEntries:session.coverageEntries,note:'Responsibility groups, shared task selection/reload, Board/Map switching, no effect requests, desktop/mobile composition. Synthetic status/map; creation is separately qualified against real backend.'};
     } catch(error) {await page.screenshot({path:resolve(outputDir,'goal-workspace-m2-failed.png')});throw error;}
