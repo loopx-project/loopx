@@ -340,9 +340,10 @@ def _prepare_quota_result_context(
         activation = {"progressive_enabled": False, "enabled": False}
     if args.quota_command == "should-run":
         if (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
-                and activation.get("scenario") == "codex_app_heartbeat" and getenv("CODEX_THREAD_ID")
+                and activation.get("scenario") == "codex_app_heartbeat"
+                and (getenv("CODEX_THREAD_ID") or getattr(args, "prepared_capture_reference", False))
                 and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
-                and not getattr(args, "turn_envelope", False) and not getattr(args, "defer_context_presentation", False)
+                and not getattr(args, "turn_envelope", False)
                 and payload.get("ok") is True and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
                 and payload.get("normal_delivery_allowed") is True):
             payload = _project_native_cli_settlement(payload)
