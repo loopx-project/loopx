@@ -700,6 +700,13 @@ their existing 2-second checks. Historical failures are not reclassified by this
 rule; cross-host, installed, live-team, full-cost and unrelated CI qualification
 still require their own evidence.
 
+Remaining-work expansion binds each keyboard activation to the current summary
+locator. A re-render can retire a separately focused node before a later global
+Enter command reaches it. The verifier must still expose all 200 items within
+the existing expansion budget. This qualifies the browser driver's target
+selection; product focus recovery and the causes of earlier partial inventories
+retain their separate evidence requirements.
+
 **Checkpoint 2026-10-11 (M1 proposed at `6c3c0c104` in [#6191](https://github.com/loopx-project/loopx/pull/6191), subsequently merged).**
 Verified subset: V1 reducer fixtures written from Section 5.3, mutation checks
 and the packaged page on synthetic status; V2 strip and Board sharing the work

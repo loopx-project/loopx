@@ -169,10 +169,12 @@ export const goalWorkspaceM2Scenario = {
       // Open each still-closed disclosure by keyboard. Owner groups can re-render
       // while this runs, so a positional list could re-toggle an open group shut
       // and skip another; the budget below covers every toggle.
+      // Bind Enter to the current summary: a re-render can retire a node
+      // between a separate focus call and a global keyboard command.
       const closedWork = now.locator('.goal-work-more:not([open]) > summary');
       const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
       for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) {
-        if (await closedWork.count()) {await closedWork.first().focus();await page.keyboard.press('Enter');}
+        if (await closedWork.count()) {await closedWork.first().press('Enter');}
         else await page.waitForTimeout(50);
       }
       assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
