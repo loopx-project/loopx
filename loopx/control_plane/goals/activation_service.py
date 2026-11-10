@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
 from pathlib import Path
 from typing import Any
 
-from ..projects.registry_codec import project_registry_transaction
+from ..projects.registry_codec import (
+    activation_upgrade_registry_transaction,
+    project_registry_transaction,
+    read_activation_upgrade_registry,
+)
+from ..effect_runtime import effect_runtime_result
+from ...paths import GLOBAL_REGISTRY_FILENAME
 from ...configuration_transaction import configuration_payload_revision
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...global_registry import sync_project_registry_to_global
@@ -226,12 +232,10 @@ def _readback(
     goal_id: str,
     expected_state: GoalActivationState,
 ) -> dict[str, Any]:
-    source_state = goal_activation_state(
-        _goal(load_registry(source_registry), goal_id)
-    )
-    target_state = goal_activation_state(
-        _goal(load_registry(target_registry), goal_id)
-    )
+    source_goal = _goal(load_registry(source_registry), goal_id)
+    target_goal = _goal(load_registry(target_registry), goal_id)
+    source_state = goal_activation_state(source_goal)
+    target_state = goal_activation_state(target_goal)
     verified = source_state is expected_state and target_state is expected_state
     return {
         "schema_version": GOAL_ACTIVATION_READBACK_SCHEMA_VERSION,
@@ -458,7 +462,6 @@ def set_goal_activation_state(
                 )
                 return payload
             if changed:
-                locked_goal.pop("activation_state", None)
                 locked_goal["activation"] = proposed_activation
                 transaction.commit(source_payload)
                 payload["written"] = True
@@ -520,3 +523,82 @@ def render_goal_activation_markdown(payload: dict[str, Any]) -> str:
     if payload.get("error"):
         lines.extend(["", f"Error: {payload.get('error')}"])
     return "\n".join(lines).rstrip() + "\n"
+
+
+# Upgrade-only IO reuses the lifecycle service and codec transactions. The
+# typed migration decoder is not another normal activation decision owner.
+def upgrade_goal_activation_registries(
+    paths: list[Path], *, execute: bool,
+) -> dict[str, Any]:
+    initial_snapshots = {path.resolve(): read_activation_upgrade_registry(path)
+                         for path in paths if path.exists()}
+    paths = sorted(initial_snapshots, key=lambda path: (
+        path.name == GLOBAL_REGISTRY_FILENAME
+        or (initial_snapshots[path].get("registry_role") or initial_snapshots[path].get("role")) == "global-local",
+        str(path),
+    ))
+    with ExitStack() as locks:
+        transactions = {}
+        payloads = {}
+        snapshots = []
+        for path in paths:
+            initial = initial_snapshots[path]
+            if execute:
+                transaction = locks.enter_context(activation_upgrade_registry_transaction(path))
+                transactions[str(path)] = transaction
+                initial = transaction.payload_copy()
+            payloads[str(path)] = initial
+            # Send only migration facts, never complete Goal configuration or
+            # business state. Normalized source paths are transport identity.
+            goals = []
+            for goal in initial.get("goals", []):
+                if not isinstance(goal, dict):
+                    raise ValueError("Registry Goal must be an object")
+                facts = {key: goal[key] for key in (
+                    "id", "goal_instance_id", "status", "activation_state",
+                ) if key in goal}
+                if "activation" in goal:
+                    activation = goal["activation"]
+                    facts["activation"] = ({key: activation[key] for key in ("schema_version", "state")
+                                             if key in activation}
+                                            if isinstance(activation, dict) else activation)
+                if goal.get("source_registry"):
+                    source = Path(goal["source_registry"]).expanduser().resolve()
+                    if source.exists() and source not in initial_snapshots:
+                        raise ValueError("Registered source route changed during activation upgrade; rediscover and retry")
+                    facts["source_registry"] = str(source)
+                goals.append(facts)
+            snapshots.append({"path": str(path), "payload": {"goals": goals,
+                              "profile_id": initial.get("profile_id")}})
+        plan = effect_runtime_result("goal.activation.migrate", {"registries": snapshots})
+        rows = plan["registries"]
+        if {row["path"] for row in rows} != set(payloads) or len(rows) != len(payloads):
+            raise ValueError("Goal activation migration returned different registry routes")
+        results = []
+        # Verify every required backup before committing any registry. A later
+        # commit failure fails the upgrade; completed stopped metadata is safe
+        # to retain, and a retry converges without replaying business effects.
+        for row in rows:
+            changed = bool(row["changes"])
+            payload = payloads[row["path"]]
+            for change in row["changes"]:
+                goal = payload["goals"][change["index"]]
+                if goal.get("id") != change["goal_id"]:
+                    raise ValueError("Goal activation upgrade changed the Goal identity")
+                prior_activation = goal.get("activation")
+                goal["activation"] = {**(prior_activation if isinstance(prior_activation, dict) else {}),
+                                      **change["activation"]}
+                goal.pop("activation_state", None)
+                if "status" in change:
+                    goal["status"] = change["status"]
+            result = {"registry": row["path"], "changed_goal_ids": [change["goal_id"] for change in row["changes"]],
+                      "status": "planned" if changed else "current"}
+            if changed and execute:
+                result["backup"] = str(transactions[row["path"]].backup_preimage())
+            results.append(result)
+        if execute:
+            for row, result in zip(rows, results, strict=True):
+                if result["status"] == "planned":
+                    transactions[row["path"]].commit(payloads[row["path"]])
+                    result["status"] = "upgraded"
+        return {"status": "upgraded" if execute else "planned", "results": results}

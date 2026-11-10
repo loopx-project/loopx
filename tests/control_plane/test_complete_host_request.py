@@ -130,6 +130,52 @@ def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
         complete_host_input(plan)
 
 
+@pytest.mark.parametrize("source_valid", [True, False])
+@pytest.mark.parametrize("with_advice", [False, True])
+def test_status_readback_is_independent_of_executable_host_source(
+    complete_host_request, source_valid, with_advice,
+):
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration, dispatch_turn_context_hooks,
+    )
+
+    _, source = complete_host_request
+    plan = build_loopx_turn_plan(source, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id="optional-status")
+    if not source_valid:
+        plan["work_contract"]["goal_id"] = "another-goal"
+    calls = []
+    observation = {"status": "unavailable"}
+
+    def produce():
+        calls.append("observed")
+        return {"readback": {"fixture_readback": observation},
+                "context_fields": {"fixture_context": "Bound advice."} if with_advice else {},
+                "instructions": [], "result_fields": {}}
+
+    dispatch_turn_context_hooks(plan, (TurnContextHookRegistration(
+        "fixture.status", "fixture", ("fixture_readback",), produce,
+    ),))
+    assert calls == ["observed"]
+    if source_valid or not with_advice:
+        assert plan["fixture_readback"] == observation
+        assert "turn_context_hook_failures" not in plan
+    else:
+        assert "fixture_readback" not in plan
+        assert plan["turn_context_hook_failures"] == [
+            {"hook_id": "fixture.status", "error_code": "context_hook_failed"}]
+    if not with_advice or not source_valid:
+        assert "turn_context_contributions" not in plan
+    if source_valid:
+        request = build_loopx_turn_host_request(plan)
+        assert request["work_contract"] == source
+        assert request.get("fixture_context") == ("Bound advice." if with_advice else None)
+    else:
+        # An observation of provider status cannot authorize a Host or advice.
+        with pytest.raises((ValueError, RuntimeError)):
+            build_loopx_turn_host_request(plan)
+
+
 @pytest.mark.parametrize("change", ["capability", "stop", "turn"])
 def test_complete_host_optional_context_requires_original_turn_source(
     complete_host_request, tmp_path, change,

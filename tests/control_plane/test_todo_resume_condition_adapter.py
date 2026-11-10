@@ -76,6 +76,17 @@ def test_resume_at_python_readback_matches_typed_authoring_precision(fraction: s
     assert resume_condition.require_supported_todo_resume_when(value) == canonical
 
 
+@pytest.mark.parametrize("scope", ["case-a/run-7", "case-a:run-7", "a" * 96])
+def test_scoped_monitor_resume_python_adapter_matches_typed_owner(scope: str) -> None:
+    value = f"monitor_changed:todo_watch001@{scope}"
+    assert resume_condition.normalize_todo_resume_when(value) == value
+    assert resume_condition.normalize_supported_todo_resume_when(value) == value
+    assert resume_condition.require_supported_todo_resume_when(value) == value
+    assert resume_condition.normalize_supported_todo_resume_when(
+        "monitor_changed:todo_watch001@bad scope"
+    ) is None
+
+
 def test_timezone_aware_resume_at_is_stable_across_ticks_and_summary_restarts() -> None:
     authored = "resume_at:2026-09-14T09:30:00+08:00"
     normalized = resume_condition.require_supported_todo_resume_when(authored)

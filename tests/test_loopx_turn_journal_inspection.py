@@ -595,10 +595,7 @@ def test_inspect_journal_cli_branches_before_live_or_write_paths(
     def unexpected_call(*args: object, **kwargs: object) -> None:
         raise AssertionError("inspect-journal reached a live or write path")
 
-    for name in (
-        "build_loopx_turn_plan",
-        "build_turn_envelope",
-    ):
+    for name in ("build_loopx_turn_plan",):
         monkeypatch.setattr(turn_command, name, unexpected_call)
     monkeypatch.setattr(turn_run_once, "execute_turn_run_once", unexpected_call)
     # The shared decision owner now performs the live reads this command used to

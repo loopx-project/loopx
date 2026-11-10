@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -10,6 +11,83 @@ import time
 import pytest
 
 from benchmark.runtime.scheduler import resume_state_file, worker_command
+
+
+@pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
+                    reason="Explicit isolated Docker routing qualification")
+@pytest.mark.parametrize("continued", [False, True])
+def test_scheduler_continuation_clock_reaches_both_host_capture_paths(tmp_path, monkeypatch, continued):
+    """Actual guest scheduler + archive IO; only native sealing is substituted."""
+    import docker
+    from benchmark.edgebench import checkpoint_supervisor as host
+    from benchmark.edgebench.checkpoint_worker import _archive
+    from benchmark.runtime.layout import _PHASE_DEADLINE
+
+    client = docker.from_env()
+    image = os.environ.get("LOOPX_CHECKPOINT_WRITER_IMAGE", "python:3.12-slim")
+    client.images.get(image)  # Dependency is provisioned explicitly, never pulled here.
+    container = client.containers.run(image, ["sleep", "120"], detach=True,
+        network_disabled=True, mem_limit="256m", nano_cpus=500_000_000,
+        volumes={str(Path(__file__).resolve().parents[2]): {"bind": "/source", "mode": "ro"}},
+        working_dir="/source")
+    script = r'''
+import json, os, sys, time
+from pathlib import Path
+from benchmark.runtime import scheduler
+root=Path('/opt/loopx-benchmark/control'); root.mkdir(parents=True)
+continued=CONTINUED
+original=1 if continued else int(time.time())+400
+(root/'phase-deadline').write_text(str(original))
+state=root/'scheduler.json'
+state.write_text(json.dumps({'host_attempt':{'status':'stopped','scope':'a'*64,
+ 'attempt':1,'stop_exit_code':75},'last_wake_rc':75,'last_wake_status':'wake_requested_stop'}))
+state.with_name(state.name+'.host-attempt').write_text('{"pending":false}')
+receipt=root/'wakes/scheduler/receipt.json';receipt.parent.mkdir(parents=True)
+receipt.write_text(json.dumps({'budget_exhausted':True,'host_invoked':False,'mode':'heartbeat','stage':'execute'}))
+if not continued:state.unlink()
+os.environ.update(LOOPX_PHASE_DEADLINE_EPOCH=str(int(time.time())+800 if continued else original),LOOPX_AGENT_ID='agent',
+ LOOPX_WAKE_LOG_DIR=str(root/'wakes'),LOOPX_EXECUTION_MODE='heartbeat',LOOPX_CLI='/bin/true',
+ LOOPX_REGISTRY='/registry.json',LOOPX_RUNTIME_ROOT='/runtime',LOOPX_GOAL_ID='fixture')
+sys.argv=['scheduler','--python',sys.executable,'--source','/source','--state-file',str(state),'--host-timeout','30']
+os.execvpe=lambda *args:None
+scheduler.main()
+mailbox=Path('/logs/agent/checkpoint-controller');mailbox.mkdir(parents=True)
+(mailbox/'ready.json').write_text(json.dumps({'capture_id':'b'*32,'deadline_epoch':time.time()+90,
+ 'components':[{'id':'workspace','source_path':'/task'}]}))
+'''
+    try:
+        result = container.exec_run(["python", "-c", script.replace("CONTINUED", repr(continued))])
+        assert result.exit_code == 0, result.output.decode()
+        original_bytes = _archive(container, _PHASE_DEADLINE, tmp_path / "before").read_bytes()
+        observed = []
+        destination = tmp_path / "points"
+        monkeypatch.setattr(host, "_controller", lambda _: {})
+        supervisor = host.CheckpointSupervisor(tmp_path / "controller.json", destination,
+            retention_enabled=False, terminal_components=[{"id": "workspace", "source_path": "/task"}],
+            terminal_receipt=tmp_path / "terminal.json")
+        destination.mkdir()
+        supervisor.container, supervisor.token = container, "fixture-token"
+
+        def capture(*args, **kwargs):
+            request = json.loads(kwargs["request_file"].read_text())
+            path = _archive(container, request["phase_deadline_path"], tmp_path / f"read-{len(observed)}")
+            observed.append((request["phase_deadline_path"], float(path.read_text()) - time.time()))
+            supervisor.stop.set()
+            return {"research_point_qualified": False}
+
+        monkeypatch.setattr(host, "capture_worker", capture)
+        monkeypatch.setattr("benchmark.edgebench.checkpoint_worker.capture_worker", capture)
+        supervisor._run(container)
+        supervisor.finish_solver({"execution_started": True, "exit_code": 2})
+        expected_path = "/opt/loopx-benchmark/control/active-phase-deadline" if continued else _PHASE_DEADLINE
+        assert [path for path, _ in observed] == [expected_path, expected_path]
+        limit = 800 if continued else 400
+        assert all(limit - 100 < remaining <= limit for _, remaining in observed)
+        original = _archive(container, _PHASE_DEADLINE, tmp_path / "original")
+        assert original.read_bytes() == original_bytes
+    finally:
+        container.remove(force=True)
+        client.close()
 
 
 def _stopped(path):
@@ -37,6 +115,9 @@ def test_budget_phase_retries_keep_the_same_state_and_original_receipts(tmp_path
     end = time.time() + 1000
     new = resume_state_file(str(old), phase_deadline=end, agent_id="agent", wake_log_dir=str(tmp_path / "wakes"))
     assert new != str(old) and Path(new).parent == old.parent
+    clock = tmp_path / "active-phase-deadline"
+    admitted_clock = clock.read_bytes()
+    assert float(admitted_clock) <= end < float(admitted_clock) + 1
     Path(new).write_text('{"host_attempt":{"status":"failed"}}')
     assert resume_state_file(str(old), phase_deadline=end, agent_id="agent", wake_log_dir=str(tmp_path / "wakes")) == new
     state = json.loads(old.read_bytes())
@@ -46,6 +127,7 @@ def test_budget_phase_retries_keep_the_same_state_and_original_receipts(tmp_path
     assert json.loads(before)["host_attempt"] == json.loads(old.read_bytes())["host_attempt"]
     assert old.with_name(old.name + ".host-attempt").read_bytes() == witness
     assert json.loads(Path(new).read_bytes())["host_attempt"]["status"] == "failed"
+    assert clock.read_bytes() == admitted_clock
 
 
 def test_repeated_budget_stops_advance_from_the_actual_predecessor(tmp_path):
@@ -65,6 +147,8 @@ def test_later_phase_cannot_skip_the_latest_host_attempt(tmp_path, change):
     root = tmp_path / "scheduler.json"
     _stopped(root)
     second = _resume(root, time.time() + 1000)
+    clock = tmp_path / "active-phase-deadline"
+    admitted_clock = clock.read_bytes()
     _stopped(second)
     state = json.loads(second.read_text())
     if change == "hard_failure":
@@ -97,6 +181,7 @@ def test_later_phase_cannot_skip_the_latest_host_attempt(tmp_path, change):
     before = second.read_bytes()
     later = _resume(root, time.time() + 2000)
     assert later == second
+    assert clock.read_bytes() == admitted_clock
     assert second.read_bytes() == before
     assert not list(tmp_path.glob("scheduler.phase-*.json"))[1:]
 
@@ -228,4 +313,5 @@ def test_pre_dispatch_continuation_binds_and_replays_its_optional_handoff(tmp_pa
     assert select() == phase
     brief.write_text(json.dumps({'ok': True, 'handoff_text': 'Different material.'}))
     env['LOOPX_RECOVERY_HANDOFF_SHA256'] = hashlib.sha256(brief.read_bytes()).hexdigest()
-    with pytest.raises(ValueError, match='immutable'): select()
+    with pytest.raises(ValueError, match='immutable'):
+        select()

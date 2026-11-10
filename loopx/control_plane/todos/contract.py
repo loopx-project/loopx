@@ -60,6 +60,8 @@ TODO_MONITOR_METADATA_FIELDS = (
     "consecutive_no_change",
     "material_change",
     "material_change_generation",
+    "material_change_scope",
+    "material_change_scope_generations",
     "max_no_change_before_replan",
     "watch_only",
 )
@@ -1225,6 +1227,8 @@ def format_todo_metadata_line(
     consecutive_no_change: str | None = None,
     material_change: str | None = None,
     material_change_generation: int | str | None = None,
+    material_change_scope: str | None = None,
+    material_change_scope_generations: str | None = None,
     max_no_change_before_replan: str | None = None,
     watch_only: str | None = None,
     note: str | None = None,

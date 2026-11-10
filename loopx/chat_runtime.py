@@ -1353,6 +1353,14 @@ class ChatRuntimeController:
                     ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
 
             decision = plan("prepare")
+            if decision["action"] == "unresolved":
+                try:
+                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                        client_ingress_id=ingress_id, message=turn["message"],
+                        _queued_turn_id=queued_turn_id)
+                except Exception:
+                    pass  # Only the original receipt can complete the reservation.
+                decision = plan("settle")
             if decision["action"] == "dispatch":
                 turn = self.store.write_queue_steering(session_id, turn, decision)
                 try:
@@ -1374,9 +1382,19 @@ class ChatRuntimeController:
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
         expected_turn_id: str | None = None, _queued_turn_id: str | None = None,
+        origin: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
         session = self._require_steering_session(session_id)
+        with self.store.steering_delivery_lock(session_id, client_ingress_id):
+            return self._steer_active_turn(session=session, session_id=session_id,
+                client_ingress_id=client_ingress_id, message=message, expected_turn_id=expected_turn_id,
+                _queued_turn_id=_queued_turn_id, origin=origin)
+
+    def _steer_active_turn(
+        self, *, session: Mapping[str, object], session_id: str, client_ingress_id: str,
+        message: str, expected_turn_id: str | None, _queued_turn_id: str | None, origin: str | None,
+    ) -> tuple[dict[str, object], bool]:
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1405,6 +1423,10 @@ class ChatRuntimeController:
                 return turn, False
             if receipt.get("status") == "failed" and receipt.get("error_code") in STEERING_NOT_DELIVERED_CODES:
                 raise RuntimeError(str(receipt["error_code"]))
+            from .capabilities.native_chat.queued_admission import reconcile_steering_delivery
+            recovered = reconcile_steering_delivery(self, session, receipt)
+            if recovered is not None:
+                return recovered, False
             raise RuntimeError("live_steering_delivery_unresolved")
         active_turn_id = str(session.get("active_turn_id") or "")
         if expected_turn_id is not None and active_turn_id != expected_turn_id:
@@ -1455,35 +1477,10 @@ class ChatRuntimeController:
                 error_code="live_steering_turn_not_started",
             )
             raise RuntimeError("live_steering_turn_not_started")
-        try:
-            adapter.steer_turn(message, upstream_turn_id)
-        except Exception:
-            self.store.update_ingress_receipt(
-                session_id,
-                client_ingress_id,
-                status="failed",
-                error_code="live_steering_rejected",
-            )
-            raise
-        if _queued_turn_id is None:
-            self.store.append_message(session_id, role="user", text=message, turn_id=active_turn_id)
-        self.store.append_event(
-            session_id,
-            active_turn_id,
-            kind="turn.steered",
-            payload={"client_ingress_id": client_ingress_id,
-                **({"queued_turn_id": _queued_turn_id} if _queued_turn_id is not None else {})},
-        )
-        self.store.update_ingress_receipt(
-            session_id,
-            client_ingress_id,
-            status="delivered",
-            active_turn_id=active_turn_id,
-            error_code=None,
-        )
-        turn = self.store.load_turn(session_id, active_turn_id)
-        if turn is None:
-            raise RuntimeError("live_steering_turn_missing")
+        from .capabilities.native_chat.queued_admission import send_native_steering
+        turn = send_native_steering(self, adapter, session_id=session_id, active_turn_id=active_turn_id,
+            upstream_turn_id=upstream_turn_id, client_ingress_id=client_ingress_id,
+            message=message, queued_turn_id=_queued_turn_id, origin=origin)
         return turn, True
 
     def enqueue_turn(

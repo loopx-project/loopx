@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from ..quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
 from .model_behavior_qualification import (
     MODEL_BEHAVIOR_ACTOR_RESULT_SCHEMA_VERSION,
     MODEL_BEHAVIOR_SEMANTIC_CONTRACT_FIELDS,
@@ -237,6 +238,13 @@ def _semantic_contract_field_rules(*, arm: str) -> dict[str, str]:
   null when absent. same_agent_continuation is true only when agent_id and
   selected_todo_claimed_by are equal and continuation_policy is exactly
   same_agent_non_delivery."""
+    if arm == "full_packet":
+        rules["peer_route"] = """always include exactly agent_id,
+  selected_todo_claimed_by, continuation_policy, and same_agent_continuation.
+  Read agent_id from packet.agent_identity.agent_id and the other values from
+  packet.selected_todo, using null when absent. same_agent_continuation is true
+  only when agent_id and selected_todo_claimed_by are equal and
+  continuation_policy is exactly same_agent_non_delivery."""
     return rules
 
 
@@ -291,7 +299,12 @@ def _decision_instruction(
     arm: str,
     semantic_contract_required: bool,
     semantic_contract_fields: Sequence[str] | None = None,
+    packet_schema_version: str | None = None,
 ) -> str:
+    if arm not in ("full_packet", "candidate_packet"):
+        raise ValueError("arm must be full_packet or candidate_packet")
+    # Arm labels describe the experiment, not the packet's field layout.
+    source_arm = "full_packet" if packet_schema_version == COMPLETE_TURN_DECISION_VERSION else arm
     fields = (
         tuple(semantic_contract_fields)
         if semantic_contract_fields is not None
@@ -354,18 +367,18 @@ document. Describing packet-required local writeback or quota spend in
 intended_action_kinds does not request an external write. Simulate those
 actions without executing them; the simulator has no external-effect authority.
 """
-    if arm == "candidate_packet":
+    if source_arm == "candidate_packet":
         instruction += """For intended actions, use packet.action and
 packet.writeback. When spend_after_validation=true, end with writeback then
 spend."""
-    elif arm == "full_packet":
+    elif source_arm == "full_packet":
         instruction += """For intended actions, use
 interaction_contract.agent_channel and interaction_contract.cli_channel. When
 spend_after_validation=true, end with writeback then spend."""
     else:
         raise ValueError("arm must be full_packet or candidate_packet")
     if semantic_contract_required:
-        instruction += _semantic_contract_instruction(arm=arm, fields=fields)
+        instruction += _semantic_contract_instruction(arm=source_arm, fields=fields)
     return instruction
 
 
@@ -593,6 +606,7 @@ class DoubaoModelBehaviorActor(ModelBehaviorActor):
                     canonical_request["semantic_contract_required"]
                 ),
                 semantic_contract_fields=semantic_contract_fields,
+                packet_schema_version=str(canonical_request["packet_schema_version"]),
             ),
             provider_input=_provider_input(canonical_request),
         )

@@ -11,7 +11,7 @@ import uuid
 from pathlib import PurePosixPath
 
 from loopx.file_lock import write_json_atomic
-from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _REGISTRY
+from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _PHASE_DEADLINE, _REGISTRY
 
 
 def terminal_components(
@@ -54,7 +54,7 @@ def terminal_components(
     # than silently dropping an explicit external research participant.
     from benchmark.edgebench.checkpoint_worker import _validate_request
     _validate_request({"container_id": "0" * 64, "components": components,
-                       "phase_deadline_path": f"{_CONTROL}/phase-deadline"})
+                       "phase_deadline_path": _PHASE_DEADLINE})
     return components
 
 
@@ -117,7 +117,7 @@ class FailurePreservation:
             self._persist_receipt()
             request = self.supervisor.destination / "terminal-request.json"
             write_json_atomic(request, {"container_id": self.supervisor.container.id,
-                "components": self.components, "phase_deadline_path": f"{_CONTROL}/phase-deadline"},
+                "components": self.components, "phase_deadline_path": supervisor.capture_phase_deadline_path()},
                 mode=0o600, fsync_directory=True)
             point = capture_worker(supervisor.controller_file, token=supervisor.token,
                 capture_id=self.receipt["capture_id"],
@@ -139,25 +139,47 @@ class FailurePreservation:
 
     def stop_source(self, container):
         """Release compute, never remove the only source after an uncertain save."""
-        if container.id != self.receipt["container_id"]:
-            raise ValueError("Failure preservation requires the original worker")
         try:
-            container.reload()
-            if container.attrs["State"].get("Running"):
-                try:
-                    container.stop(timeout=15)
-                except Exception:
-                    container.kill()  # Bounded daemon operation; never kill a guessed host PID.
-            container.reload()
-            state = container.attrs["State"]
-            stopped = (state.get("Running") is False and state.get("Paused") is False
-                       and state.get("Restarting") is False and state.get("Pid") == 0)
-            self.receipt["source_retained"] = True
-            self.receipt["source_stopped"] = stopped
-            if not stopped:
-                raise RuntimeError("Preserved worker is not confirmed stopped")
-        except Exception as error:
-            self.receipt["stop_error_kind"] = type(error).__name__
-            raise
+            _stop_retained_worker(container, self.receipt)
         finally:
             self._persist_receipt()
+
+
+def _stop_retained_worker(container, receipt):
+    if container.id != receipt["container_id"]:
+        raise ValueError("Failure preservation requires the original worker")
+    try:
+        container.reload()
+        if container.attrs["State"].get("Running"):
+            try:
+                container.stop(timeout=15)
+            except Exception:
+                container.kill()  # Bounded daemon operation; never kill a guessed host PID.
+        container.reload()
+        state = container.attrs["State"]
+        stopped = (state.get("Running") is False and state.get("Paused") is False
+                   and state.get("Restarting") is False and state.get("Pid") == 0)
+        receipt.update(source_retained=True, source_stopped=stopped)
+        if not stopped:
+            raise RuntimeError("Preserved worker is not confirmed stopped")
+    except Exception as error:
+        receipt["stop_error_kind"] = type(error).__name__
+        raise
+
+
+def retain_returned_native_worker(container, *, evidence: dict, receipt_path):
+    """Preserve the original Official worker after its confirmed final failure."""
+    receipt = {**evidence, "observed_at_epoch": time.time(),
+               "capture_attempted": False, "capture_succeeded": False,
+               "restore_qualified": False, "source_retained": None, "source_stopped": False}
+    logger = logging.getLogger(__name__)
+    try:
+        _stop_retained_worker(container, receipt)
+    except Exception as error:
+        receipt.setdefault("stop_error_kind", type(error).__name__)
+        logger.warning("Native failed worker stop is unconfirmed (%s); retaining the source.", type(error).__name__)
+    finally:
+        try:
+            write_json_atomic(receipt_path, receipt, mode=0o600, fsync_directory=True)
+        except OSError as error:
+            logger.warning("Native failed worker receipt unavailable (%s); retaining the source.", type(error).__name__)

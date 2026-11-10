@@ -197,6 +197,7 @@ test("event phase preserves material change on the complete run record", async (
       todo_id: "todo_public_monitor",
       result_hash: "approved-42",
       material_change: true,
+      material_change_scope: "case-a/run-1",
     }),
   }));
 
@@ -204,6 +205,10 @@ test("event phase preserves material change on the complete run record", async (
   assert.equal(
     (result.record?.monitor_event as Record<string, unknown>).material_change,
     true,
+  );
+  assert.equal(
+    (result.record?.monitor_event as Record<string, unknown>).material_change_scope,
+    "case-a/run-1",
   );
 });
 
@@ -572,6 +577,63 @@ test("Todo commit rejects a provider receipt from another effect", async (t) => 
     }),
     /monitor_effect_id must match provider plan/,
   );
+});
+
+test("Todo provider receipt preserves the exact scoped material transition", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request({
+    phase: "preflight",
+    runtime_root: runtimeRoot,
+    execute: true,
+    effect_id: "quota-monitor-poll:scoped-transition",
+    turn_instance_id: "scoped-transition",
+    observation: observation({
+      todo_id: "todo_public_monitor",
+      target_key: "public-release:42",
+      result_hash: "case-a-run-1-terminal",
+      material_change: true,
+      material_change_scope: "case-a/run-1",
+    }),
+  });
+  const preflight = await evaluateQuotaMonitorPollCommit(params);
+  assert.equal(preflight.status, "provider_required");
+  assert.equal(preflight.provider_plan?.material_change_scope, "case-a/run-1");
+  const receipt = {
+    schema_version: "monitor_poll_todo_writeback_v0",
+    monitor_effect_id: "quota-monitor-poll:scoped-transition",
+    dry_run: false,
+    goal_id: goalId,
+    todo_id: "todo_public_monitor",
+    target_key: "public-release:42",
+    result_hash: "case-a-run-1-terminal",
+    material_change: true,
+    material_change_scope: "case-a/run-1",
+    material_change_generation: 4,
+    consecutive_no_change: 0,
+    last_checked_at: "2026-08-27T12:00:00+08:00",
+    next_due_at: null,
+    cadence: null,
+    todo_update: {ok: true},
+    next_todos: [],
+    successor_receipts: [],
+  };
+  await assert.rejects(
+    evaluateQuotaMonitorPollCommit({
+      ...params,
+      phase: "commit",
+      provider_receipt: {...receipt, material_change_scope: "case-b/run-1"},
+    }),
+    /material_change_scope must match provider plan/,
+  );
+  const written = await evaluateQuotaMonitorPollCommit({
+    ...params,
+    phase: "commit",
+    provider_receipt: receipt,
+  });
+  assert.equal(written.status, "written");
+  const writeback = (written.record?.monitor_event as Record<string, unknown>)
+    .todo_writeback as Record<string, unknown>;
+  assert.equal(writeback.material_change_scope, "case-a/run-1");
 });
 
 test("Todo commit fences the full material successor receipt", async (t) => {

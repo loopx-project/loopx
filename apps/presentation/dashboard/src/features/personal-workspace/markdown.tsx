@@ -146,7 +146,7 @@ export function MarkdownText({text, headingPrefix, headingLevel = 2}: {
         if (block.type === "list") {
           const items = block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>);
           return block.ordered
-            ? <ol className="personal-md-list" key={key}>{items}</ol>
+            ? <ol className="personal-md-list" start={block.start} key={key}>{items}</ol>
             : <ul className="personal-md-list" key={key}>{items}</ul>;
         }
         return (

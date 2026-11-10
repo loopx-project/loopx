@@ -27,6 +27,7 @@ from ...todos.todo_semantics import (
 from ...todos.resume_condition import (
     build_todo_resume_evaluation_request,
     normalize_todo_generation,
+    todo_resume_dependency_id,
 )
 from ..goal_vision_read_model import (
     VISION_FRONTIER_TODO_DELTA_ACTIONS as VISION_FRONTIER_TODO_DELTA_ACTIONS,
@@ -155,12 +156,9 @@ def select_fallback_source_items(
     selected = set(requested)
     for todo_id in requested:
         for item in by_id.get(todo_id, []):
-            resume = normalize_todo_resume_when(item.get("resume_when"))
-            kind, _, target = (resume or "").partition(":")
-            if kind in {"todo_done", "monitor_changed"}:
-                dependency = normalize_todo_id(target)
-                if dependency:
-                    selected.add(dependency)
+            dependency = todo_resume_dependency_id(item.get("resume_when"))
+            if dependency:
+                selected.add(dependency)
     # Four declarations name at most eight alternatives and eight direct
     # dependencies. Do not follow dependency chains or re-read another revision.
     if any(len(by_id.get(todo_id, [])) > 1 for todo_id in selected):
