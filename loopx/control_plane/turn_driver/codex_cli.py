@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -803,6 +804,31 @@ def _codex_command(
     return command
 
 
+def _run_codex_exec(
+    command: list[str],
+    *,
+    project: Path,
+    input_text: str,
+    timeout_seconds: float | None,
+    on_stdout: Callable[[str], None],
+    on_stderr: Callable[[str], None],
+    launch_guard: Callable[[], AbstractContextManager[None]],
+    check_running: Callable[[], None] | None,
+) -> dict[str, Any]:
+    try:
+        observation = run_host_process(
+            command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
+            drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS, on_stdout=on_stdout, on_stderr=on_stderr,
+            launch_guard=launch_guard, check_running=check_running,
+            interrupt_before_terminate=check_running is not None,
+        )
+    except HostProcessInterruptionUnconfirmed as exc:
+        raise BuiltInHostError("codex_cli_stop_unconfirmed") from exc
+    if check_running is not None:
+        check_running()
+    return observation
+
+
 def run_codex_cli_host(
     request: Mapping[str, Any],
     *,
@@ -979,17 +1005,12 @@ def run_codex_cli_host(
             admission.require_running(operation="codex_cli_host_continue")
 
         with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
-            try:
-                observed = run_host_process(command, project=project, input_text=input_text,
-                    timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
-                    on_stdout=events.feed, on_stderr=diagnostics.feed,
-                    launch_guard=lambda: launch_scope("codex_cli_host_launch"),
-                    check_running=check_running if admission is not None else None,
-                    interrupt_before_terminate=admission is not None)
-            except HostProcessInterruptionUnconfirmed as exc:
-                raise BuiltInHostError("codex_cli_stop_unconfirmed") from exc
-            if admission is not None:
-                check_running()
+            observed = _run_codex_exec(
+                command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
+                on_stdout=events.feed, on_stderr=diagnostics.feed,
+                launch_guard=lambda: launch_scope("codex_cli_host_launch"),
+                check_running=check_running if admission is not None else None,
+            )
             events.finish()
             diagnostics.finish()
         returncode = observed["returncode"]

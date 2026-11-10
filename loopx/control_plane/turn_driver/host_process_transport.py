@@ -425,22 +425,10 @@ def run_host_process(
                 if guarded is not None and (launch_deadline is not None or sys.exc_info()[0] is not None):
                     # A failed handoff still owns the Goal fence. The TS bridge must
                     # report no launch or finish its Host cleanup before it releases.
-                    if interrupt_before_terminate and launch_deadline is None and result is None:
-                        try:
-                            guarded.cancel()
-                        except RuntimeError as exc:
-                            _record_unconfirmed_interrupt(record_path, record)
-                            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed") from exc
-                        if not _host_return_observed(guarded.result):
-                            _record_unconfirmed_interrupt(record_path, record)
-                            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
-                    else:
-                        guarded.cancel()
-                    if record is not None and guarded.not_launched:
-                        assert record_path is not None
-                        record.update(phase=HOST_PROCESS_NOT_LAUNCHED, process_group=None)
-                        record.pop("bridge_pid", None)
-                        _write_host_process_record(record_path, record)
+                    _cancel_guarded_host(
+                        guarded, record_path=record_path, record=record,
+                        require_host_return=interrupt_before_terminate and launch_deadline is None and result is None,
+                    )
                 else:
                     # EOF asks the TS supervisor to clean its Host, also on a
                     # callback failure. Leased cleanup retains its original budget.
@@ -462,20 +450,58 @@ def run_host_process(
                             guarded.close_output()
                         else:
                             proc.stdout.close()
-        if proc.returncode != 0 or result is None:
-            raise RuntimeError("Managed Host process supervision returned no result")
-        unconfirmed = (interrupt_before_terminate and result["outcome"] in {"timeout", "cancelled", "output_limit"}
-                       and not _host_return_observed(result))
-        if record is not None:
-            assert record_path is not None
-            # The supervisor returned only after cleaning its group; the group is still re-read.
-            record["phase"] = "finished"
-            if unconfirmed:
-                record["interrupt_unconfirmed"] = True
-            _write_host_process_record(record_path, record)
+        return _finish_host_observation(
+            result, returncode=proc.returncode, record_path=record_path, record=record,
+            interrupt_before_terminate=interrupt_before_terminate,
+        )
+
+
+def _cancel_guarded_host(
+    guarded: GuardedHostBridge,
+    *,
+    record_path: Path | None,
+    record: dict[str, Any] | None,
+    require_host_return: bool,
+) -> None:
+    try:
+        guarded.cancel()
+    except RuntimeError as exc:
+        if not require_host_return:
+            raise
+        _record_unconfirmed_interrupt(record_path, record)
+        raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed") from exc
+    if require_host_return and not _host_return_observed(guarded.result):
+        _record_unconfirmed_interrupt(record_path, record)
+        raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
+    if record is not None and guarded.not_launched:
+        assert record_path is not None
+        record.update(phase=HOST_PROCESS_NOT_LAUNCHED, process_group=None)
+        record.pop("bridge_pid", None)
+        _write_host_process_record(record_path, record)
+
+
+def _finish_host_observation(
+    result: dict[str, Any] | None,
+    *,
+    returncode: int | None,
+    record_path: Path | None,
+    record: dict[str, Any] | None,
+    interrupt_before_terminate: bool,
+) -> dict[str, Any]:
+    if returncode != 0 or result is None:
+        raise RuntimeError("Managed Host process supervision returned no result")
+    unconfirmed = (interrupt_before_terminate and result["outcome"] in {"timeout", "cancelled", "output_limit"}
+                   and not _host_return_observed(result))
+    if record is not None:
+        assert record_path is not None
+        # The supervisor returned after cleaning its group; drain readback rechecks it.
+        record["phase"] = "finished"
         if unconfirmed:
-            raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
-        return result
+            record["interrupt_unconfirmed"] = True
+        _write_host_process_record(record_path, record)
+    if unconfirmed:
+        raise HostProcessInterruptionUnconfirmed("managed Host interrupt unconfirmed")
+    return result
 
 
 def _host_return_observed(result: dict[str, Any] | None) -> bool:
