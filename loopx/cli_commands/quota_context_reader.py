@@ -515,8 +515,9 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
             instruction = ("If the initial selection names a Vision authoring step, select the complete vision_authoring object "
                 "at that step before composing a Vision. " + instruction)
         elif any(pointer.endswith("/vision_authoring/rule") for pointer in (initial_read_pointers or ())):
-            instruction = ("Before composing a Vision, select the complete vision_authoring object "
-                "at the displayed step in this capture. " + instruction)
+            instruction = ("Before composing a Vision, read this step's full vision_authoring from this capture, "
+                "or reuse it if the exact field is in previously_delivered_fields and its full text is available. "
+                + instruction)
         first_read = ("Read the top-level content and follow next_command if eof is false. "
             "Use first_read_command only to recover missing initial context from this capture"
             if page_attached else

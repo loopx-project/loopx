@@ -6,6 +6,7 @@ import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_d
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {isUnqualifiedBlockedReplanWriteback} from "../quota/settlement_phase.ts";
+import {todoResumeDependencyId} from "../todos/resume_condition.ts";
 
 const RECEIPT_SCHEMA = "checkpoint_read_context_v1";
 // Exact presentation fields only. Unknown future fields remain part of the basis.
@@ -24,10 +25,8 @@ function dependencies(todo: JsonObject): string[] {
   const result = ids(todo.depends_on_todo_ids, "depends_on_todo_ids");
   if (todo.depends_on_todo_id != null) result.push(requireNonEmptyString(todo.depends_on_todo_id, "depends_on_todo_id"));
   // These are typed resume tokens, never a search through task prose.
-  if (typeof todo.resume_when === "string") {
-    const match = /^(?:todo_done|monitor_changed):([^:]+)$/.exec(todo.resume_when);
-    if (match) result.push(match[1]);
-  }
+  const target = todoResumeDependencyId(todo.resume_when);
+  if (target !== null) result.push(target);
   return [...new Set(result)].sort();
 }
 

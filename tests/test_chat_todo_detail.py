@@ -16,6 +16,63 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_http_open_wait_preserves_scoped_monitor_and_successor(tmp_path, monkeypatch, provider):
+    from http.client import HTTPConnection
+    from loopx.chat_actions import ChatActionService
+    from loopx.chat_action_store import ChatActionStore
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_todo_external_wait import (
+        AGENT_ID, GOAL_ID, WAITING_ID, MONITOR_ID, FALLBACK_ID, _write_fixture,
+    )
+    from loopx.todos import update_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, _ = _write_fixture(tmp_path, provider=provider)
+    update_goal_todo(registry_path=registry, goal_id=GOAL_ID, todo_id=WAITING_ID,
+                     successor_todo_ids=[FALLBACK_ID], agent_id=AGENT_ID)
+    original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.verbose = registry, str(runtime), False
+    server.action_service = ChatActionService(store=ChatActionStore(runtime / "chat/actions"),
+        registry_path=registry, runtime_root_override=str(runtime))
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = HTTPConnection(*server.server_address, timeout=30)
+
+    def post(path, body):
+        connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read())
+
+    scope = f"monitor_changed:{MONITOR_ID}@suite:case-b/run-2"
+    parameters = {"goal_id": GOAL_ID, "todo_id": WAITING_ID, "agent_id": AGENT_ID,
+                  "operation": "edit", "status": "open", "resume_when": scope}
+    request = {"action_kind": "todo.update", "summary": "Wait for the selected Monitor scope",
+               "normalized_parameters": parameters, "context": {}, "idempotency_key": "scoped-open-wait"}
+    try:
+        code, preview = post("/api/actions/preview", request)
+        assert code == 201, preview
+        proposal_id = preview["proposal"]["proposal_id"]
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == original
+        code, result = post(f"/api/actions/{proposal_id}/apply", {})
+        assert code == 200 and result["proposal"]["status"] == "applied", result
+        saved = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        waiting = next(item for item in saved["todos"] if item["todo_id"] == WAITING_ID)
+        assert waiting["status"] == "open" and waiting["resume_when"] == scope
+        assert waiting["successor_todo_ids"] == [FALLBACK_ID]
+        assert post(f"/api/actions/{proposal_id}/apply", {}) == (code, result)
+        rejected, _ = post("/api/actions/preview", {**request, "idempotency_key": "invalid-deferred-wait",
+            "normalized_parameters": {**parameters, "operation": "defer"}})
+        assert rejected == 400
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == saved
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        worker.join()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("global_directory", [False, True])
 def test_task_detail_follows_goal_source_instead_of_chat_storage(tmp_path, monkeypatch, provider, global_directory):
     monkeypatch.syspath_prepend(str(Path(__file__).parent / "control_plane"))

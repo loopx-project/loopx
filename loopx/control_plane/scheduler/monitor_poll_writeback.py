@@ -79,6 +79,7 @@ def write_monitor_poll_todo_state(
     target_key: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
+    material_change_scope: str | None = None,
     cadence: str | None = None,
     next_due_at: str | None = None,
     reason_summary: str | None = None,
@@ -113,6 +114,8 @@ def write_monitor_poll_todo_state(
         "result_hash": result_hash, "material_change": material_change,
         "generated_at": generated_at, "cadence": cadence,
         "next_due_at": next_due_at, "reason_summary": reason_summary}
+    if material_change_scope is not None:
+        observation["material_change_scope"] = material_change_scope
     intent = {"next_agent_todo": next_agent_todo, "next_action_kind": next_action_kind,
         "next_task_repository": next_task_repository,
         "next_required_capabilities": next_required_capabilities or [],

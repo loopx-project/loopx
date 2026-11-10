@@ -654,6 +654,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "loopx quota monitor-poll --goal-id <goal-id> "
             "--todo-id <monitor-todo-id> --agent-id <registered-agent> "
             "--result-hash <public-safe-hash> --material-change "
+            "--material-change-scope <case-id>/<run-id> "
             '--next-agent-todo "<bounded public-safe work>" '
             "--next-action-kind <action-kind> "
             "--next-task-repository <git-repository> "
@@ -669,13 +670,14 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "loopx todo update --goal-id <goal-id> "
             "--todo-id <waiting-advancement-todo-id> "
             "--agent-id <registered-agent> --status open "
-            "--resume-when monitor_changed:<monitor-todo-id> "
+            "--resume-when monitor_changed:<monitor-todo-id>@<case-id>/<run-id> "
             "--successor-todo-id <independent-runnable-successor-id> "
             '--reason "<public-safe external-wait rationale>" --format json'
         ),
         "external_wait_result": (
             "Keep the waiting advancement Todo visible but non-runnable until the "
-            "monitor generation advances. Do not mark it blocked, and do not use "
+            "matching case/run scope generation advances. Unrelated cohort "
+            "transitions do not wake it. Do not mark it blocked, and do not use "
             "the monitor itself as executable delivery work."
         ),
         "unchanged_policy": (

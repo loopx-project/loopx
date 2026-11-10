@@ -229,7 +229,50 @@ def prepare_turn_decision_capture(
         decision=decision, existing_journal=existing_journal).publish()
 
 
-def validate_handoff_socket(value: str) -> Path:
+_HANDOFF_CAPTURE_ROOT_LIMIT = 4096
+
+
+def _handoff_capture_root_file(endpoint: Path) -> Path:
+    return endpoint.with_name(endpoint.name + ".capture-root")
+
+
+def bind_handoff_capture_root(socket_path: str, capture_root: Path) -> None:
+    """Publish the current Host's transport destination beside its private socket."""
+    endpoint = validate_handoff_socket(socket_path)
+    raw = os.fsencode(capture_root)
+    if capture_root.resolve() != capture_root or len(raw) > _HANDOFF_CAPTURE_ROOT_LIMIT:
+        raise ValueError("decision handoff requires a physical absolute capture root")
+    binding = _handoff_capture_root_file(endpoint)
+    with os.fdopen(os.open(binding, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+        stream.write(raw)
+
+
+def _validate_handoff_capture_root(endpoint: Path, requested_root: Path) -> None:
+    try:
+        with os.fdopen(open_regular_capture(_handoff_capture_root_file(endpoint)), "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+                raise ValueError("capture root binding must be private to the Host user")
+            bound_root = stream.read(_HANDOFF_CAPTURE_ROOT_LIMIT + 1)
+            if not bound_root or len(bound_root) > _HANDOFF_CAPTURE_ROOT_LIMIT:
+                raise ValueError("invalid capture root binding size")
+    except FileNotFoundError:
+        return  # Earlier Hosts still validate the capture when accepting it.
+    except (OSError, ValueError) as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff binding; no guard was run: {exc}") from exc
+    try:
+        if requested_root.resolve(strict=True) != requested_root:
+            raise ValueError("capture root must remain a physical absolute directory")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise QuotaCommandValidationError(f"invalid decision handoff root; no guard was run: {exc}") from exc
+    if bound_root != os.fsencode(requested_root):
+        raise QuotaCommandValidationError(
+            "decision handoff capture root differs from the current Host wake; no guard was run. "
+            "Use the --decision-output-root named by the current wake."
+        )
+
+
+def validate_handoff_socket(value: str, *, capture_root: Path | None = None) -> Path:
     """A caller-owned local transport, not an authority or admission endpoint."""
     path = Path(value)
     try:
@@ -250,6 +293,8 @@ def validate_handoff_socket(value: str) -> Path:
         ) from exc
     except OSError as exc:
         raise QuotaCommandValidationError(f"invalid decision handoff socket: {exc}") from exc
+    if capture_root is not None:
+        _validate_handoff_capture_root(path, capture_root)
     return path
 
 
