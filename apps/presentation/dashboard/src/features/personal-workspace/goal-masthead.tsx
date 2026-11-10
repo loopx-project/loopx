@@ -69,7 +69,7 @@ export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: {
         <span className="personal-sr-only" aria-current="page">{goal.title}</span>
 
       </nav>
-      <div className="goal-masthead-title"><h1>{goal.title}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
+      <div className="goal-masthead-title" data-title-reader={onOpenDetails ? "true" : undefined}><h1>{goal.title}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
       {context.length ? <p className="goal-masthead-context" title={agents.join(", ")}>{context.join(" · ")}</p> : null}
     </>
   );

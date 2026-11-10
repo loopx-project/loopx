@@ -89,13 +89,12 @@
 .personal-channel-title .goal-masthead-context { white-space: normal; overflow-wrap: anywhere; }
 
 .goal-masthead-title { min-width: 0; }
-.goal-masthead-title > button { display: none; }
+.goal-masthead-title[data-title-reader="true"] { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 8px; align-items: start; }
+.personal-channel-header[data-goal-selected="true"] .personal-channel-title .goal-masthead-title[data-title-reader="true"] h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-wrap: wrap; }
+.goal-masthead-title > button { display: grid; place-items: center; min-height: 32px; width: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pw-muted); cursor: pointer; }
+.goal-masthead-title > button:hover { background: var(--pw-hover); color: var(--pw-text); }
+.goal-masthead-title > button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 @media (max-width: 720px) {
-  .goal-masthead-title { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 8px; align-items: start; }
-  .personal-channel-header[data-goal-selected="true"] .personal-channel-title .goal-masthead-title h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-wrap: wrap; }
-  .goal-masthead-title > button { display: grid; place-items: center; min-height: 32px; width: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pw-muted); cursor: pointer; }
-  .goal-masthead-title > button:hover { background: var(--pw-hover); color: var(--pw-text); }
-  .goal-masthead-title > button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
   .personal-channel-title .goal-masthead-context { white-space: nowrap; }
 }
 

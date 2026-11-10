@@ -9,6 +9,32 @@ import { openWorkspacePage } from '../../../../examples/personal-workspace-brows
 import { installShowcaseWorkspace, openShowcaseGoal, showcaseGoalId, showcaseGoalTitle } from '../../../../examples/personal-workspace-browser/showcase-workspace.mjs';
 
 const longTitle = `${showcaseGoalTitle}: preserve all consumer requirements, reconcile historical exports, qualify replay safety and prove recovery across two independent workers before retiring the old export service`;
+async function readCompleteGoal(page, heading, closeWithEscape) {
+  const measured = await heading.evaluate(element => ({ height: element.clientHeight, line: parseFloat(getComputedStyle(element).lineHeight), overflow: element.scrollWidth - element.clientWidth, clipping: getComputedStyle(element).overflow }));
+  assert.ok(measured.height <= measured.line * 2 + 1 && measured.overflow <= 1 && measured.clipping === 'hidden', 'The packaged masthead bounds a long title without page overflow');
+  const trigger = page.getByRole('button', { name: '查看完整 Goal', exact: true });
+  await trigger.focus();
+  const scroll = page.locator('.personal-channel-scroll');
+  const position = await scroll.evaluate(element => element.scrollTop);
+  const url = page.url();
+  const writes = [];
+  const onRequest = request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.method()); };
+  page.on('request', onRequest);
+  try {
+    await page.keyboard.press('Enter');
+    const drawer = page.locator('.personal-context-drawer');
+    await drawer.waitFor({ state: 'visible' });
+    assert.equal(await drawer.locator('.personal-goal-detail-summary h3').textContent(), longTitle, 'One activation reads the exact complete Goal');
+    if (closeWithEscape) await page.keyboard.press('Escape');
+    else await drawer.getByRole('button', { name: /关闭|Close/ }).first().click();
+    await drawer.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.activeElement?.closest('.goal-masthead-title'));
+    assert.ok(await trigger.evaluate(element => element === document.activeElement), 'Close and Escape restore the original reader control');
+    assert.equal(page.url(), url, 'Reading the complete Goal preserves the selected route and view');
+    assert.ok(Math.abs(await scroll.evaluate(element => element.scrollTop) - position) <= 2, 'Reading the complete Goal preserves the reading position');
+    assert.deepEqual(writes, [], 'Reading the complete Goal does not write state or start work');
+  } finally { page.off('request', onRequest); }
+}
 const nodes = Array.from({ length: 8 }, (_, index) => ({
   node_id: `craft-${index}`, kind: 'deliverable', state: 'open', depth: index % 4,
   title: ['Inventory every downstream export consumer and preserve the complete original requirements', 'Verify replay safety with repeated writes and independent acceptance evidence', 'Reconcile archived totals and investigate every missing or inconsistent record', 'Qualify reconnect, interrupted delivery and result adoption by the original requester'][index % 4],
@@ -108,6 +134,7 @@ try {
     await page.getByRole("region", {name:"当前工作",exact:true}).getByRole("button",{name:"关系图",exact:true}).click();
     const heading = page.locator('.personal-channel-title h1');
     assert.equal(await heading.innerText(), longTitle, 'The original Goal title remains complete');
+    await readCompleteGoal(page, heading, true);
     assert.doesNotMatch(await page.locator('.goal-masthead-breadcrumb').evaluate(element => [...element.children].filter(child => child.getBoundingClientRect().width > 2).map(child => child.textContent).join(' ')), /preserve all consumer/, 'Visible breadcrumb does not repeat the long request');
     assert.equal(await page.locator('.goal-masthead-breadcrumb [aria-current]').textContent(), longTitle, 'Assistive readers retain the complete current-page identity');
     assert.doesNotMatch(await page.getByTestId('overview-composer-pill').innerText(), /ledger|consumer/, 'The input invitation stays concise');
@@ -151,18 +178,13 @@ try {
     await page.keyboard.press('Escape');
     assert.equal(await railDialog.isVisible(), false, 'Escape closes the inventory drawer');
     assert.ok(await openAllWork.evaluate(element => element === document.activeElement), 'Closing the inventory restores focus to the original control');
-    const measured = await heading.evaluate(element => ({ height: element.clientHeight, line: parseFloat(getComputedStyle(element).lineHeight), overflow: element.scrollWidth - element.clientWidth }));
-    assert.ok(measured.height > measured.line && measured.overflow <= 1, 'A long title wraps without clipping or page overflow');
+    await readCompleteGoal(page, heading, false);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible').count(), 1, 'Phone reflow retains one owner decision');
     assert.ok(await page.locator('.goal-overview-attention .goal-attention-text').first().evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), 'Phone reflow does not shrink the requested reading text');
     const headerHeight = await page.locator('.personal-channel-header').evaluate(element => element.getBoundingClientRect().height);
     assert.ok(headerHeight <= 220, 'A long Goal title cannot consume the phone viewport');
-    assert.equal(await heading.evaluate(element => getComputedStyle(element).overflow), 'hidden', 'Phone title clipping must survive the packaged CSS cascade, not just constrain the box height');
-    await page.getByRole('button', { name: '查看完整 Goal' }).click();
-    await page.locator('.personal-context-drawer').waitFor({ state: 'visible' });
-    assert.match(await page.locator('.personal-context-drawer').innerText(), /prove recovery across two independent workers/, 'The compact title opens the original Goal in its existing details');
-    await page.locator('.personal-context-drawer').getByRole('button', { name: /关闭|Close/ }).first().click();
+    await readCompleteGoal(page, heading, true);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await map.locator('.work-map-list').waitFor({ state: 'visible' });
     assert.equal(await map.locator('.work-map-canvas').isVisible(), false, 'Phone uses a readable task list');
