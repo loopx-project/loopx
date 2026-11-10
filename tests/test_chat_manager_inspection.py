@@ -771,11 +771,14 @@ def test_stopped_goals_are_opt_in_but_stale_active_remains_visible(tmp_path):
     assert [r['goal_id'] for r in index['goals']] == ['alpha', 'unknown']
     assert index['stopped_goals_excluded'] == 1
     tool.registry_path.write_text(json.dumps({"goals": [
-        {"id": row["goal_id"], "activation_state": row["activation_state"]}
+        {"id": row["goal_id"], "activation": {"state": row["activation_state"]}}
         for row in tool.context["goals"]
     ]}))
     current = tool.read(TOOL_NAME, {'view': 'portfolio'})
+    assert current['ok'], current
     assert current['matched'] == 2
+    assert [row['goal_id'] for row in current['rows']] == ['alpha', 'unknown']
+    assert current['rows'][1]['activation_state'] == 'unknown'
     history = tool.read(TOOL_NAME, {'view': 'portfolio', 'include_stopped': True})
     assert history['matched'] == 3
     explicit = tool.read(TOOL_NAME, {'view': 'portfolio', 'goal_id': 'old'})
