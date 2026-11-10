@@ -190,7 +190,7 @@ touch, mention it in the PR instead of fixing it there.
 | --- | --- | --- | --- |
 | `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
-| `ci-maintenance.yml` | closed or updated PR (`pull_request_target`, trusted base code only) | no | cancels obsolete Python qualification runs after rechecking the PR and source branch |
+| `ci-maintenance.yml` | opened, reopened, edited, updated or closed PR (`pull_request_target`, trusted base code only) | no | inspects potential stale PR comparisons without mutating the head or target; cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
@@ -379,6 +379,41 @@ message, mock or passing suite alone does not complete a promised user journey.
 Maintainers may request consolidation when a useful outcome was unnecessarily
 split, or a smaller PR when unrelated concerns were mixed. Review evaluates the
 verified goal delta and evidence, not minimum size, model identity or PR count.
+
+### Verify the published diff
+
+After opening or updating a PR, fetch its actual target branch and source head,
+then compare GitHub's changed-file inventory and line totals with
+`git diff --stat TARGET...HEAD` and `git diff --name-status TARGET...HEAD` at those
+exact revisions. Use the actual PR target, including a non-main target; a
+two-dot comparison with an advancing target also includes target-only changes.
+
+GitHub's [PR and compare views can use different merge bases](https://docs.github.com/en/pull-requests/reference/pull-requests#differences-between-commits-on-compare-and-pull-request-pages).
+The PR can retain an older base snapshot after the source branch incorporates
+target commits, inflating both files and line totals. CI Maintenance reports the pinned base and current target on PR lifecycle
+events, using trusted read-only inline code without checking out the contributor's
+branch. This is an advisory to compare inventories, not proof of an incorrect diff.
+It never updates the base: GitHub's REST base update has no conditional target
+write, so another GET cannot prevent overwriting a concurrent retarget.
+It does not repair unrelated code that is genuinely present in the Git diff.
+
+If published totals still disagree, inspect the PR's exact repository, head and
+base, and compare the pinned base with the current target. A maintainer can
+refresh the same base with the native API only while coordinating exclusive
+ownership of target edits for that operation:
+
+```bash
+gh api --method PATCH repos/OWNER/REPO/pulls/NUMBER -f base=VERIFIED_BASE_BRANCH
+```
+
+Do not use this unconditional PATCH in unattended automation. If target-edit
+ownership cannot be coordinated, leave the comparison unchanged and report the
+verified discrepancy. Read back the unchanged head, unchanged target branch and corrected file/line
+inventory before declaring the repair complete. Recheck moved revisions rather
+than reusing stale evidence. A refresh needs no empty commit, history rewrite,
+temporary retarget or close/reopen cycle. Ordinary target advancement alone is
+not evidence of an incorrect diff. If the Git diff itself contains unrelated
+work, isolate the intended changes on the verified target before publishing.
 
 ### Validation disclosure
 

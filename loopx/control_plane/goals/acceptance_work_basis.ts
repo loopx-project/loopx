@@ -11,7 +11,8 @@ export const NON_WORK_FIELDS = new Set([
   "completion_result", "completion_receipt_id",
   "decision_scope_outcomes", "note", "evidence", "reason", "handoff_note", "resume_ready",
   "resume_monitor_generation", "last_checked_at", "result_hash", "consecutive_no_change",
-  "material_change", "material_change_generation", "monitor_effect_id",
+  "material_change", "material_change_generation", "material_change_scope",
+  "material_change_scope_generations", "monitor_effect_id",
 ]);
 export function goalAcceptanceTodoDigest(todo: JsonObject): string {
   return canonicalAuthoritySha256(Object.fromEntries(Object.entries(todo).filter(([key]) => !NON_WORK_FIELDS.has(key))));

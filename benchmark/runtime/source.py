@@ -71,3 +71,25 @@ def source_pins(source: Path, runner: Path, expected: str | None,
         raise ValueError("Separate product and runner sources require both revision pins")
     head = checked_revision(source, expected)
     return head, head if source == runner else checked_revision(runner, expected_runner)
+
+
+def require_candidate_content(source: Path, revision: str, *, work_finding: bool = False) -> None:
+    """Qualify the product APIs used by the selected evidence producers."""
+    import ast
+
+    required = [("loopx/capabilities/explore/candidate_content.py",
+                 {"candidate_snapshot", "candidate_manifest_sha256"}, "candidate_content")]
+    if work_finding:
+        required.extend([
+            ("loopx/capabilities/explore/result_writeback.py",
+             {"record_work_finding", "_work_finding_commit_guard"}, "work finding commit guard"),
+            ("loopx/cli_commands/explore.py", {"_record_work_finding"}, "work finding CLI"),
+        ])
+    for module, functions, label in required:
+        result = subprocess.run(["git", "-C", str(source), "show", f"{revision}:{module}"],
+                                capture_output=True, text=True, check=False)
+        names = ({node.name for node in ast.parse(result.stdout).body if isinstance(node, ast.FunctionDef)}
+                 if result.returncode == 0 else set())
+        if not functions <= names:
+            raise ValueError(f"Evidence capture requires a product pin containing Explore {label}; "
+                             "update the product revision explicitly")

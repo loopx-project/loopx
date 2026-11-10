@@ -120,6 +120,12 @@ by `turn run-once`. When the failed Host recorded `resume_session`, inspection
 performs the current read-only Session Binding check; without an explicit retry
 request, the decision reports `failed_retry_not_requested`.
 
+When continuation would invoke Host again, inspection also uses the executor's
+read-only original decision capture check. A missing, altered, or invalid capture
+exits non-zero without effects; restore the original capture before retrying the
+same Turn. Recovery of an already saved Host result and effect-free terminal
+replay do not require that capture, including historical v0 journals.
+
 It resolves only the canonical journal location. There is no arbitrary
 `--journal-path` input. The command validates selectors, takes the existing
 journal lock, schema-checks the stored JSON, and returns the versioned

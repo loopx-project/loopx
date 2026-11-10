@@ -5,7 +5,7 @@
 - **Delivery maturity:** M1 source implementation; budgeted planning proposed; M2/M3 unqualified
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-11-05
-- **Last normative revision:** 2026-11-09
+- **Last normative revision:** 2026-11-10
 - **Implementation baseline:** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
 - **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
@@ -20,6 +20,11 @@ Keep both language versions semantically synchronized. Later execution evidence
 belongs in the existing RFC ledger convention, with explicit normative revisions
 when a decision changes. Section 11 records the bounded M1 implementation boundary;
 no long-horizon effectiveness gain or default promotion is established.
+
+For the objective, theoretical assumptions, worked feedback loop and rationale
+behind these choices, read [Budgeted research planning](../../research/budgeted-research-planning.md).
+It connects the design to the first EdgeBench experiment without adding another
+policy owner or treating the explanatory Bellman model as an implemented solver.
 
 ## 1. Decision summary
 
@@ -122,12 +127,18 @@ The source explicitly leaves proxy fidelity unqualified. It does not implement
 a calibrated transition model, automatic rank-correlation qualification, a global
 proxy blacklist or a budget-optimal planner. Section 11 retains the M1 boundary.
 
-Related work on [cited measurements (#8382)](https://github.com/loopx-project/loopx/pull/8382),
-[Stride feedback projection (#8385)](https://github.com/loopx-project/loopx/pull/8385)
-and [Controller/Worker composition (#8378)](https://github.com/loopx-project/loopx/pull/8378)
-must be checked and revision-pinned before a trial; a PR proposal is not shipped
-behavior or proof of benefit. The budgeted-policy pilot can use existing detail
-reads and the single-agent path without waiting for those changes. The
+Source follow-up at
+[`bd2af5e`](https://github.com/loopx-project/loopx/tree/bd2af5e0ec5acc9eafb0b0eb6b3d4661206a2eef)
+(2026-11-10): [cited measurements (#8382)](https://github.com/loopx-project/loopx/pull/8382)
+and [Stride feedback projection (#8385)](https://github.com/loopx-project/loopx/pull/8385)
+are merged. The latter carries bounded measurement comparisons and work-yardstick
+cues from the existing Explore view into Stride's basis, retaining omitted-source
+read paths. These source changes establish evidence availability, not model
+adoption, numerical fidelity or planning benefit. The
+[Controller/Worker proposal (#8378)](https://github.com/loopx-project/loopx/pull/8378)
+remains separate and is not required by the single-agent pilot. Pin the actual
+source and projection before a trial; this dated follow-up does not rewrite the
+original implementation-baseline audit. The
 [integration guide](../long-running-execution-exploration-and-correction.md)
 separates source delivery, actual use and outcome benefit.
 
@@ -416,6 +427,9 @@ owner. The near-term caller is the EdgeBench policy experiment in
 [Research program §8.7](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning).
 A plan is a revisable continuation through useful evidence boundaries, not a
 promise to execute every step or a new mandatory record per tool call.
+The [design rationale](../../research/budgeted-research-planning.md#planning-model)
+explains why candidate creation, information acquisition and yardstick investment
+belong in one budgeted comparison, and why immediate gain/cost is only a heuristic.
 
 #### Objective and remaining resources
 
@@ -551,6 +565,17 @@ needed for the first caller. Before any later schema change, demonstrate the
 missing producer/consumer fact, extend the existing versioned owner, and qualify
 readback/recovery/off behavior. Controller–Worker composition can later consume
 the same decision; it neither grants additional authority nor proves benefit.
+
+Native measurement adapters record service-owned result/receipt/conditions
+independently of local execution. An accepted archive digest is its stable
+subject even without retained upload bytes; optional file-content proof keeps
+its narrower coverage and does not relabel a prior measurement. Each outcome
+or proxy profile preserves its actual workload revision and evaluator. The
+existing typed comparison owner pairs only applicable declared subjects; producer
+location and equal path/byte content do not establish execution equivalence.
+Ordinary current-work evidence also keeps its original commit chronology and
+canonical-prefix boundary; a late old delivery cannot become a newer decision's
+uncited evidence. Explicitly cited verified history remains available.
 
 ## 6. Alternatives and design choices
 
@@ -728,6 +753,40 @@ immutable attribution of execution to that Todo. Recording the first decision
 remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
+The initial measurement cue and an established pair's comparison reuse the same
+local choice guidance at meaningful evidence or probe boundaries: expected
+accepted-outcome gain within accepted constraints, remaining horizon and complete
+implementation, search and confirmation cost, including model/control overhead.
+Unknowns remain unknown. A supported route may continue; without material change,
+continue the authorized slice. A local gain alone does not select the best next
+investment. This guidance adds no required comparison, evaluator call, decision
+attachment or review, and does not infer a profile from metric names or recent
+presentation order. The shared measurement-facts owner also projects this guidance
+in an enabled same-work finding receipt. A larger measurement index remains on
+demand rather than enlarging every opening read. Actual model adoption and outcome
+benefit remain unqualified.
+
+During an open Turn, an explicit Explore finding can use the ordinary result
+attachment and the same canonical Todo question as refresh-state. Its write
+receipt includes the changed measurement groups and an advisory comparison
+when the confirmed evidence covers the same two candidates on both declared
+profiles. The native adapter verifies the submission and supplies measurement
+facts. Explore and Yardstick own the association, comparison and readback.
+
+A new work-bound finding has no earlier primary commit to authorize its graph
+effect. In the local File/SQLite, legacy source-registry profile, its graph
+append holds the existing canonical writer guard together with source-registry
+and machine-policy locks. The typed admission owner rechecks the original
+claim/lease generation, open Todo, registered actor, Goal Stop and enabled
+evidence policy under those guards. A release or transfer cannot cross that
+commit. Lease admission uses a fresh runtime clock after the log-lock wait and
+graph CAS, so expiry while queued is rejected. Completing that one admitted
+append does not renew execution authority. A later association failure can still be retried without rewriting the
+committed finding. Source-session incarnations and remote-provider fences are
+not qualified for this entrypoint and are refused before append. A local mutex
+does not establish a distributed PostgreSQL fence. Recovery of an attachment
+whose ordinary primary already committed retains its existing delivery contract.
+
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

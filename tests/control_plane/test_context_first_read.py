@@ -1363,8 +1363,11 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     assert facts(recovered)[prefix + "/0"] == outcomes[0]
 
 
-@pytest.mark.parametrize("transition", ["unchanged", "corrected", "different_source", "incomplete"])
-def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition):
+@pytest.mark.parametrize(("transition", "distinct_tool_workdir"), [
+    ("unchanged", False), ("corrected", False), ("different_source", False), ("incomplete", False),
+    pytest.param("unchanged", True, id="unchanged-other-tool-workdir"),
+])
+def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition, distinct_tool_workdir):
     from test_codex_context_lifecycle import deliver, setup
 
     event = setup(tmp_path, monkeypatch)
@@ -1413,8 +1416,19 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     first = capture("first", goal_source("goal.md", narrative, "old generated todo\n"))
     pages, facts, _ = read(first["first_read_command"])
     assert facts[body_pointer] == narrative and "previously_delivered_fields" not in pages[0]
-    deliver(tmp_path, event, pages)
-    assert body_pointer in codex_context._state(tmp_path)["consumed_pointers"]
+    read_event = event
+    if distinct_tool_workdir:
+        tool_workdir = tmp_path / "tool-worktree"
+        tool_workdir.mkdir()
+        read_event = {**event, "cwd": str(tool_workdir)}
+        before = codex_context._state(tmp_path)
+        deliver(tmp_path, {**read_event, "session_id": "foreign-native-session"}, pages)
+        deliver(tmp_path, read_event, [{**pages[0], "content": pages[0]["content"][:-1]}])
+        assert codex_context._state(tmp_path) == before
+    deliver(tmp_path, read_event, pages)
+    observed = codex_context._state(tmp_path)
+    assert body_pointer in observed["consumed_pointers"]
+    assert observed["cwd"] == event["cwd"] and "candidate" not in observed
 
     text = narrative + "Use the revised owner decision.\n" if transition == "corrected" else narrative
     current = goal_source("alternate.md" if transition == "different_source" else "goal.md",
@@ -1447,6 +1461,178 @@ def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision,
     assert fallback_bytes - warm_bytes > 3000
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["none", "partial", "different_todo", "changed_rule", "compact", "rebound"])
+def test_native_first_read_identifies_already_observed_vision_authoring(tmp_path, monkeypatch, provider, change):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact.", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "verify-source-artifact")
+    todo = added["todo_id"]
+    decision = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--turn-instance-id", "fixture-original-authoring", "--todo-id", todo)
+    assert decision["effective_action"] == "normal_run"
+    assert decision["heartbeat_receipt"]["closeout_required"] is True
+    interaction = decision["interaction_contract"]["cli_channel"]
+    steps = interaction["settlement_plan"]["ordered_steps"]
+    index, = (i for i, step in enumerate(steps) if step["kind"] == "durable_writeback")
+    prefix = "/interaction_contract/cli_channel/settlement_plan"
+    address = f"{prefix}/ordered_steps/{index}/vision_authoring"
+    original = steps[index]["vision_authoring"]
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = setup(native, monkeypatch)
+
+    def navigation(name, payload):
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(payload, directory=str(native),
+            capture_directory=directory, goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id=name)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(native), initial_read_plan=prepared.initial_read_plan))
+
+    first = navigation("original", decision)
+    page, _ = read_selection(first["first_read_command"])
+    assert "previously_delivered_fields" not in page
+    if change == "partial":
+        page = read_context_capture(Namespace(reference_file=first["recovery"]["reference_file"], offset=0,
+            page_bytes=900, format="json", select=[address]))
+        assert page["ok"] and not page["eof"]
+    else:
+        page, facts = read_selection(first["recovery"]["command"] + " --select " + address)
+        assert facts[address] == original
+    deliver(native, event, [page])
+
+    current = json.loads(json.dumps(decision).replace("fixture-original-authoring", "fixture-current-authoring"))
+    current_plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
+    if change == "different_todo":
+        current["selected_todo"]["todo_id"] = current_plan["identity"]["todo_id"] = "todo_distinct"
+        current["heartbeat_receipt"]["settlement_identity"]["todo_id"] = "todo_distinct"
+    if change == "changed_rule":
+        current_plan["ordered_steps"][index]["vision_authoring"]["authoring_hint"] += " New applicable rule."
+    if change == "rebound":
+        current["registry"] = str(tmp_path / "alternate-registry.json")
+    second = navigation("current", current)
+    page, facts = read_selection(second["first_read_command"])
+    seen = change in {"none", "compact"}
+    assert (address in page.get("previously_delivered_fields", [])) is seen
+    for key, value in current_plan["identity"].items():
+        assert facts[prefix + "/identity/" + key] == value
+    command_path = f"{prefix}/ordered_steps/{index}/semantic_closeout_command_template"
+    assert facts[command_path] == current_plan["ordered_steps"][index]["semantic_closeout_command_template"]
+    assert "fixture-current-authoring" in facts[command_path]
+    if change == "compact":
+        codex_context.codex_context_hook(str(native), {**event, "hook_event_name": "PostCompact"})
+        fallback, _ = read_selection(second["first_read_command"])
+        assert "previously_delivered_fields" not in fallback
+    if change == "none":
+        deliver(native, event, [page])
+        next_page, _ = read_selection(navigation("later", current)["first_read_command"])
+        assert address in next_page.get("previously_delivered_fields", [])
+    _, full = read_selection(second["recovery"]["command"] + " --select " + address)
+    assert full[address] == current_plan["ordered_steps"][index]["vision_authoring"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_vision_authoring_reuse_after_same_turn_todo_selection(tmp_path, monkeypatch, provider):
+    from test_codex_context_lifecycle import deliver, setup
+    from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact.", "--task-class", "advancement_task",
+        "--priority", "P0", "--action-kind", "validate", "--target-key", "verify-source-artifact",
+        "--continuation-policy", "same_agent_non_delivery", "--required-capability", "filesystem_read")
+    todo = added["todo_id"]
+    call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Verify a separate synthetic artifact.", "--task-class", "advancement_task",
+        "--priority", "P2", "--action-kind", "validate", "--target-key", "verify-other-artifact",
+        "--continuation-policy", "same_agent_non_delivery", "--required-capability", "filesystem_read")
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    event = setup(native, monkeypatch)
+    cli = "/interaction_contract/cli_channel"
+    selection = cli + "/selection_command"
+    settlement = cli + "/settlement_plan"
+    receipt_path = "/heartbeat_receipt"
+
+    def read(navigation, *pointers):
+        return read_selection(navigation["recovery"]["command"] +
+            "".join(" --select " + shlex.quote(pointer) for pointer in pointers))
+
+    def bind(turn):
+        unbound = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--turn-instance-id", turn, "--context-delivery", "on", "--codex-context-dir", str(native),
+            "--decision-output-root", str(captures))
+        unbound_page, facts = read(unbound, receipt_path, selection)
+        assert facts[receipt_path]["turn_instance_id"] == turn
+        assert facts[receipt_path]["settlement_binding_owed"] is True
+        assert "settlement_identity" not in facts[receipt_path]
+        deliver(native, event, [unbound_page])
+        args = shlex.split(facts[selection]["command_args_template"].replace("{todo_id}", todo))
+        bound = call(*args)
+        _, facts = read(bound, receipt_path, settlement)
+        receipt, plan = facts[receipt_path], facts[settlement]
+        assert receipt["status"] == "upgraded" and receipt["closeout_required"] is True
+        assert receipt["delivery_workspace_causality"]["requirement"] == "not_required"
+        assert receipt["settlement_identity"] == plan["identity"]
+        assert plan["identity"]["turn_instance_id"] == turn and plan["identity"]["todo_id"] == todo
+        return bound, args, receipt, plan
+
+    first, _, _, first_plan = bind("fixture-selection-original")
+    index, = (i for i, step in enumerate(first_plan["ordered_steps"]) if step["kind"] == "durable_writeback")
+    step = f"{settlement}/ordered_steps/{index}"
+    authoring = step + "/vision_authoring"
+    original_page, original = read(first, authoring)
+    assert original[authoring] == first_plan["ordered_steps"][index]["vision_authoring"]
+    deliver(native, event, [original_page])
+    # Settle the original admitted Turn so that the next guard exercises
+    # ordinary selection rather than correctly entering unfinished recovery.
+    evidence_id = "evidence:synthetic-source-artifact"
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The first source artifact was checked. Continue the verification."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
+            "prior_assumption": "A local source artifact was available.",
+            "observed_reality": "The artifact was checked; the remaining source still needs verification.",
+            "retained": ["The same Todo remains open."], "evidence_refs": [evidence_id]},
+    }))
+    replacements = {"<validated_progress>": "synthetic_source_verified", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<file>": str(vision)}
+    args = shlex.split(first_plan["ordered_steps"][index]["semantic_closeout_command_template"])
+    result = call(*(replacements.get(word, word) for word in args[args.index("refresh-state"):]),
+        "--progress-result-class", "advanced", "--progress-evidence-id", evidence_id,
+        "--no-global-sync", "--suppress-external-sinks")
+    if result["settlement_progress"]["state"] == "spend_required":
+        spend, = (step["command_template"] for step in first_plan["ordered_steps"] if step["kind"] == "quota_spend")
+        args = shlex.split(spend)
+        result = call(*args[args.index("quota"):])
+    assert result["settlement_progress"]["state"] == "settled"
+
+    current, args, receipt, plan = bind("fixture-selection-current")
+    command = step + "/semantic_closeout_command_template"
+    current_page, facts = read_selection(current["first_read_command"])
+    assert authoring in current_page.get("previously_delivered_fields", [])
+    assert "previously_delivered_fields" in current["instruction"]
+    assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
+    assert "fixture-selection-current" in facts[command]
+    assert facts[settlement + "/identity/turn_instance_id"] == plan["identity"]["turn_instance_id"]
+    deliver(native, event, [current_page])
+
+    replay = call(*args)
+    _, replay_facts = read(replay, receipt_path)
+    assert replay_facts[receipt_path]["status"] == "replayed"
+    assert replay_facts[receipt_path]["event_id"] == receipt["event_id"]
+    replay_page, facts = read_selection(replay["first_read_command"])
+    assert authoring in replay_page.get("previously_delivered_fields", [])
+    assert facts[command] == plan["ordered_steps"][index]["semantic_closeout_command_template"]
+    _, explicit = read(replay, authoring)
+    assert explicit == original
 @pytest.mark.parametrize("version", ["quota_settlement_plan_v1", "quota_settlement_plan_v2"])
 @pytest.mark.parametrize("transition", ["same", "changed", "wrong_binding", "unknown_version", "rebound"])
 def test_native_first_read_reuses_only_observed_writeback_precondition(
@@ -1660,7 +1846,11 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("revision", ["unrelated", "selected_evidence"])
+@pytest.mark.parametrize("observation", ["complete", "partial"])
+def test_native_first_read_reuses_only_the_observed_selected_todo_note(
+    tmp_path, monkeypatch, provider, revision, observation,
+):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
         AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count,
@@ -1749,10 +1939,27 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     cold, cold_facts, _ = read(first["first_read_command"])
     pointer = next(p for p in cold_facts if p.endswith("/content/todo/note"))
     assert cold_facts[pointer] == note.rstrip()
-    deliver(journal, event, cold)
-    assert pointer in codex_context._state(journal)["consumed_pointers"]
+    updated_at_pointer = pointer.removesuffix("/note") + "/updated_at"
+    cold_updated_at = read(first["recovery"]["command"] + " --select " + updated_at_pointer)[1][updated_at_pointer]
+    complete = observation == "complete"
+    assert len(cold) > 1 and len(note.encode()) > len(cold[0]["content"].encode())
+    deliver(journal, event, cold if complete else cold[:1])
+    assert (pointer in codex_context._state(journal).get("consumed_pointers", {})) == complete
     settle("note-cold")
-    update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+    if revision == "unrelated":
+        update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
+    else:
+        # Canonical timestamps use seconds. Exercise a distinct current-Todo
+        # revision while leaving the note itself byte-for-byte unchanged.
+        import time
+
+        time.sleep(1.05)
+        lease = cli("task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)["lease"]
+        cli("todo", "update", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, "--agent-id", AGENT_ID,
+            "--evidence", "result:independent-verification", "--task-lease-idempotency-key", f"lease-{TODO_ID}",
+            "--task-lease-expected-version", str(lease["version"]), "--update-operation-id", "revise-evidence")
+        # The later task switch retains the same independent acceptance path.
+        update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
 
     second = capture("note-warm")
     _, original = read_context_read_reference(second["recovery"]["reference_file"])
@@ -1768,6 +1975,10 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     assert current_authority["provider_revision"] != cold_authority["provider_revision"]
     warm, facts, warm_bytes = read(second["first_read_command"])
     assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    if revision == "selected_evidence":
+        current_todo = current_source[source_pointer]["todo"]
+        assert current_todo["evidence"] == "result:independent-verification"
+        assert current_todo["updated_at"] != cold_updated_at
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     recovered, restored, fallback_bytes = read(second["first_read_command"])
     assert pointer not in recovered[0].get("previously_delivered_fields", [])
@@ -1788,15 +1999,20 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(tmp_path,
     assert pointer not in alternate[0].get("previously_delivered_fields", [])
     assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
 
-    print(json.dumps({"provider": provider, "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
+    print(json.dumps({"provider": provider, "revision": revision, "observation": observation,
+                      "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
                       "warm_pages": len(warm), "recovery_pages": len(recovered)}))
-    assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
     assert facts[source_pointer + "/authority_read"] == current_authority
-    restored_note = {key: value for key, value in restored.items() if key != pointer}
-    observed = warm[0].get("previously_delivered_fields", [])
-    assert restored_note == {
-        **facts,
-        **{key: value for key, value in restored_note.items()
-           if any(key == address or key.startswith(address + "/") for address in observed)},
-    }
-    assert fallback_bytes - warm_bytes > 10_000
+    if complete:
+        assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
+        restored_note = {key: value for key, value in restored.items() if key != pointer}
+        observed = warm[0].get("previously_delivered_fields", [])
+        assert restored_note == {
+            **facts,
+            **{key: value for key, value in restored_note.items()
+               if any(key == address or key.startswith(address + "/") for address in observed)},
+        }
+        assert fallback_bytes - warm_bytes > 10_000
+    else:
+        assert pointer not in warm[0].get("previously_delivered_fields", [])
+        assert facts[pointer] == restored[pointer] == note.rstrip()

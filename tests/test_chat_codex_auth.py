@@ -1,5 +1,8 @@
 import io
 import json
+import os
+import sqlite3
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -8,6 +11,18 @@ import pytest
 from loopx import chat_agent
 from loopx.capabilities.native_chat import codex_auth
 from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+
+
+def provider_fixture(home, provider, thread_id="original-thread"):
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "sessions" / "synthetic.jsonl"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": thread_id, "model_provider": provider}}) + "\n")
+    with sqlite3.connect(home / "state_5.sqlite") as db:
+        db.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, archived INTEGER)")
+        db.execute("INSERT INTO threads VALUES (?, ?, 0)", (thread_id, str(path)))
+    return path
 
 
 def write_auth(home, access="synthetic-access", account="synthetic-account"):
@@ -193,3 +208,218 @@ def test_isolated_start_and_resume_supply_auth_only_over_private_rpc(tmp_path, m
         assert json.loads(process.stdin.getvalue().splitlines()[-1])["error"]["message"] == "Trusted-host model authentication unavailable."
     finally:
         session.close()
+
+
+@pytest.mark.parametrize('provider', sorted(codex_auth.TRANSPORT_PROVIDERS))
+@pytest.mark.parametrize('api', [False, True])
+def test_transport_switch_keeps_process_and_resume_on_original_provider(tmp_path, monkeypatch, provider, api):
+    from tests.test_chat_agent import _FakeAppServerProcess, _stub_app_server_process
+    home = tmp_path / 'native'
+    original = provider_fixture(home, provider).read_bytes()
+    transport = codex_auth.CodexApiTransport('http://127.0.0.1:19/v1', 'synthetic-scoped-key') if api else None
+    monkeypatch.setattr(codex_auth, 'native_api_transport', lambda *a, **kw: transport)
+    process = _FakeAppServerProcess(model_provider=provider, thread_id='original-thread',
+        config_response={'config': {}, 'layers': [{'name': {'type': 'sessionFlags'},
+            'config': {'model_providers': {provider: {}}}}]})
+    if api and provider == 'openai':
+        first, rest = process.stdout.getvalue().split('\n', 1)
+        process.stdout = io.StringIO(first + '\n' + json.dumps({'id': 4, 'result': {'type': 'apiKey'}}) + '\n' + rest)
+    _stub_app_server_process(monkeypatch, process)
+    command = []
+    expected = 'OPENAI_API_KEY' if provider == 'openai' else 'LOOPX_MODEL_RELAY_TOKEN'
+    popen = chat_agent.subprocess.Popen
+    def launch(args, **kw):
+        command.extend(args)
+        assert 'model_provider=' + json.dumps(provider) in args
+        assert 'synthetic-scoped-key' not in str(args)
+        if api:
+            if provider == 'openai':
+                assert 'synthetic-scoped-key' not in str(kw['env'])
+                assert 'cli_auth_credentials_store="ephemeral"' in args
+            else:
+                assert kw['env'][expected] == 'synthetic-scoped-key'
+        return popen(args, **kw)
+    monkeypatch.setattr(chat_agent.subprocess, 'Popen', launch)
+    class StrictResumeInput(io.StringIO):
+        def write(self, text):
+            request = json.loads(text)
+            if request.get('method') == 'thread/resume':
+                assert request['params']['modelProvider'] == provider
+                assert request['params']['config']['model_provider'] == provider
+            return super().write(text)
+    process.stdin = StrictResumeInput()
+    session = chat_agent.CodexChatAgentSession.start(codex_bin='codex', work_dir=tmp_path,
+        codex_home=home, goal_id=None, objective='synthetic', resume_thread_id='original-thread',
+        account_runtime_root=tmp_path / 'runtime')
+    try:
+        assert session.thread_id == 'original-thread' and session.native_model_provider == provider
+        requests = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        assert [r['method'] for r in requests] == ['initialize', 'initialized', *(
+            ['account/login/start'] if api and provider == 'openai' else []), 'config/read', 'thread/resume']
+        config = requests[-1]['params']['config']
+        assert 'synthetic-scoped-key' not in str([r for r in requests if r.get('method') != 'account/login/start'])
+        if api:
+            assert expected in config['shell_environment_policy']['exclude']
+            if provider == 'openai':
+                assert 'model_providers' not in config and config['openai_base_url'] == transport.endpoint
+        assert (home / 'sessions/synthetic.jsonl').read_bytes() == original
+        assert not (home / 'auth.json').exists()
+    finally:
+        session.close()
+
+
+def test_recorded_provider_does_not_follow_another_store_or_corrupt_identity(tmp_path):
+    path = provider_fixture(tmp_path / 'bound', 'openai')
+    assert codex_auth.recorded_provider(tmp_path / 'other', 'original-thread') is None
+    path.write_text(json.dumps({'type': 'session_meta', 'payload': {
+        'id': 'different-thread', 'model_provider': 'openai'}}) + '\n')
+    with pytest.raises(codex_auth.CodexHostAuthUnavailable):
+        codex_auth.recorded_provider(tmp_path / 'bound', 'original-thread')
+
+
+@pytest.mark.parametrize('layer', ['user', 'project', 'enterpriseManaged'])
+def test_process_overlay_does_not_hide_lower_provider_collision(layer):
+    result = {'config': {'model_providers': {'loopx_account_api': {}}}, 'layers': [
+        {'name': {'type': 'sessionFlags'}, 'config': {'model_providers': {'loopx_account_api': {}}}},
+        {'name': {'type': layer}, 'config': {'model_providers': {
+            'loopx_account_api': {'http_headers': {'Authorization': 'synthetic-private'}}}}}]}
+    transport = codex_auth.CodexApiTransport('http://127.0.0.1:19/v1', 'synthetic-scoped-key')
+    with pytest.raises(codex_auth.CodexHostAuthUnavailable):
+        transport.configuration({}, codex_auth.lower_transport_configuration(result))
+
+
+@pytest.mark.skipif(not os.environ.get('LOOPX_TEST_NATIVE_CODEX_BINARY'), reason='explicit installed native SDK test')
+@pytest.mark.parametrize('provider', sorted(codex_auth.TRANSPORT_PROVIDERS))
+@pytest.mark.parametrize('consumer', ['worker', 'steward'])
+def test_installed_native_resume_preserves_original_provider_across_transport_switches(tmp_path, monkeypatch, provider, consumer):
+    """Real SDK outcomes; only the prior synthetic input is a fixture, never resume."""
+    import queue
+    import threading
+    from datetime import datetime, timezone
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    binary = os.environ['LOOPX_TEST_NATIVE_CODEX_BINARY']
+    home, work = tmp_path / 'native', tmp_path / 'work'
+    home.mkdir(); work.mkdir()
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-no-model-request')
+    monkeypatch.delenv('LOOPX_CHAT_CODEX_MODEL_PROVIDER', raising=False)
+    definition = {'name': 'Synthetic local fixture', 'base_url': 'http://127.0.0.1:19/v1',
+        'env_key': 'OPENAI_API_KEY', 'wire_api': 'responses', 'requires_openai_auth': False,
+        'supports_websockets': False}
+    config = {'model_provider': provider}
+    if provider != 'openai':
+        config['model_providers'] = {provider: definition}
+    def start_fixture():
+        process = subprocess.Popen([binary, 'app-server', *codex_auth.transport_arguments(config), '--listen', 'stdio://'],
+            cwd=work, env={**os.environ, 'CODEX_HOME': str(home)}, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        messages = queue.Queue()
+        native = chat_agent.CodexChatAgentSession(process=process, messages=messages,
+            thread_id='', work_dir=work, response_timeout_sec=15)
+        threading.Thread(target=chat_agent._reader, args=(process.stdout, messages), daemon=True).start()
+        native._request('initialize', {'clientInfo': {'name': 'loopx_protocol_fixture', 'version': '1.0.0'},
+            'capabilities': {'experimentalApi': True}}, request_id=1)
+        native._notify('initialized', {})
+        return native
+    def stop_fixture(native):
+        native.process.stdin.close()
+        try:
+            native.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            native.close()
+    native = start_fixture()
+    try:
+        started = native._request('thread/start', {'cwd': str(work), 'modelProvider': provider,
+            'approvalPolicy': 'never', 'sandbox': 'read-only', 'persistExtendedHistory': True}, request_id=2)
+        thread = started['thread']; thread_id = thread['id']
+        # Native allocates its path before persisting the first input. Supply
+        # minimal prior input with the real native-returned ID/path/metadata.
+        stamp = datetime.fromtimestamp(thread['createdAt'], timezone.utc).isoformat()
+        path = Path(thread['path']); path.parent.mkdir(parents=True, exist_ok=True)
+        rows = [{'timestamp': stamp, 'type': 'session_meta', 'payload': {
+            'id': thread_id, 'timestamp': stamp, 'cwd': str(work), 'originator': thread['originator'],
+            'cli_version': thread['cliVersion'], 'source': thread['source'], 'model_provider': provider}},
+            {'timestamp': stamp, 'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                'content': [{'type': 'input_text', 'text': 'Synthetic previous input; no business or model execution.'}]}}]
+        original = ''.join(json.dumps(row) + '\n' for row in rows).encode()
+        path.write_bytes(original)
+    finally:
+        stop_fixture(native)
+    # Let the native owner load/index this synthetic persisted prestate once;
+    # thread/start alone allocates no persisted input or indexed conversation.
+    native = start_fixture()
+    try:
+        baseline = native._request('thread/resume', {'threadId': thread_id, 'excludeTurns': True,
+            'cwd': str(work), 'modelProvider': provider, 'approvalPolicy': 'never', 'sandbox': 'read-only'}, request_id=2)
+        assert baseline['thread']['id'] == thread_id
+    finally:
+        stop_fixture(native)
+    # Confirm our metadata read uses native's actual index, not a monkeypatched
+    # identity. Each resume must retain that exact thread and original input.
+    assert codex_auth.recorded_provider(home, thread_id) == provider
+    incoming = queue.Queue()
+    class ResponseFixture(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            incoming.put((self.path, self.headers.get('Authorization')))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            self.wfile.write(b'data: {"type":"response.completed","response":{"id":"synthetic-response",'
+                b'"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n')
+    server = ThreadingHTTPServer(('127.0.0.1', 0), ResponseFixture)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    endpoint = f'http://127.0.0.1:{server.server_port}' + ('/steward/v1' if consumer == 'steward' else '/v1')
+    token = 'synthetic-scoped-' + consumer
+    write_auth(home)  # A native subscription credential must not override the scoped API token.
+    native_auth = (home / 'auth.json').read_bytes()
+    try:
+        for attempt, api in enumerate((True, False, True)):
+            transport = codex_auth.CodexApiTransport(endpoint, token) if api else None
+            def prepare(*a, **kw):
+                assert kw['consumer'] == consumer
+                return transport
+            monkeypatch.setattr(codex_auth, 'native_api_transport', prepare)
+            session = chat_agent.CodexChatAgentSession.start(codex_bin=binary, codex_home=home, work_dir=work,
+                goal_id=None, objective='synthetic', resume_thread_id=thread_id, account_runtime_root=tmp_path / 'accounts',
+                account_consumer=consumer, response_timeout_sec=15)
+            try:
+                assert session.thread_id == thread_id and session.native_model_provider == provider
+                assert path.read_bytes().startswith(original)
+                assert token.encode() not in path.read_bytes()
+                assert (home / 'auth.json').read_bytes() == native_auth
+                if attempt == 0:
+                    session._request('turn/start', {'threadId': thread_id, 'input': [
+                        {'type': 'text', 'text': 'Synthetic local HTTP transport probe.'}]})
+                    observed_path, authorization = incoming.get(timeout=10)
+                    assert observed_path == ('/steward/v1/responses' if consumer == 'steward' else '/v1/responses')
+                    assert authorization == 'Bearer ' + token
+            finally:
+                session.close()
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_ephemeral_api_login_failure_redacts_private_rpc_details():
+    import queue
+    from tests.test_chat_agent import _FakeAppServerProcess
+    session = chat_agent.CodexChatAgentSession(process=_FakeAppServerProcess(), messages=queue.Queue(),
+        thread_id='', work_dir=Path('/synthetic-workspace'))
+    def failed(*args, **kwargs):
+        raise ValueError('synthetic-scoped-private-token')
+    session._request = failed
+    with pytest.raises(chat_agent.CodexChatAgentError) as error:
+        codex_auth.authenticate_api_transport(session,
+            codex_auth.CodexApiTransport('http://127.0.0.1:19/v1', 'synthetic-scoped-private-token').for_provider('openai'))
+    assert 'synthetic-scoped' not in str(error.value) and error.value.__suppress_context__
+
+
+def test_explicit_native_provider_keeps_its_existing_authentication(tmp_path, monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail('Explicit native configuration must not select an account transport or read history')
+    monkeypatch.setattr(codex_auth, 'recorded_provider', unexpected)
+    monkeypatch.setattr(codex_auth, 'native_api_transport', unexpected)
+    current = {'model_provider': 'operator-native'}
+    config, provider, api, retain = codex_auth.prepare_conversation_transport(tmp_path, tmp_path,
+        tmp_path, 'original', current=current, provider='', eligible=True,
+        consumer='worker', model=None, environment={})
+    assert config == current and provider == '' and api is None and not retain

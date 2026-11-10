@@ -71,6 +71,8 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     body = packet["task_body"]
     assert "Equal peer `worker-a` (peer_v1)" in body
     assert f"scope: {scope}" in body
+    assert "DONT_NOTIFY: no chat text" in body
+    assert "required host quiet result in full" in body
     assert "quota claim/lease and workspace contract plus repository rules" in body
     assert "Follow todo continuation policy" in body
     assert "Task-scoped coordination grants no authority over other agents" in body
