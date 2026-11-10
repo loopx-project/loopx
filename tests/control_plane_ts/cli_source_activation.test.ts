@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {qualifyCliSourceActivation as decide} from "../../loopx/control_plane/runtime/cli_source_activation.ts";
+import {qualifyCliSourceActivation as decide} from "../../loopx/control_plane/capabilities/benchmark_cli_source_activation.ts";
 
 const scope = {activation_id: "a".repeat(32), container_id: "b".repeat(64), started_at: "original-start",
   goal_id: "fixture-goal", agent_id: "fixture-agent", todo_id: "todo_fixture0001", turn_instance_id: "original-turn",

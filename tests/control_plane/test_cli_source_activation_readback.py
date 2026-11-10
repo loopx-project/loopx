@@ -34,7 +34,7 @@ def test_activation_reads_the_original_real_settlement_without_writing_or_replay
             fields={"agent_id": AGENT_ID, "todo_id": TODO_ID, "turn_instance_id": TURN_ID,
                     "replan_obligation_id": None, "infer_turn_instance_id": False, "allow_unbound_binding": False},
             registry_path=registry, goal_ref=None)
-        return effect_runtime_result("runtime.cli_source_activation", {"operation": "qualify", "scope": scope,
+        return effect_runtime_result("benchmark.cli_source_activation", {"operation": "qualify", "scope": scope,
             "observation": {"container_id": scope["container_id"], "started_at": scope["started_at"],
                 "running": True, "paused": True, "owned_barrier": True, "control": "continue",
                 "source_control": "stop" if goal_is_stopped(goal) else "continue",

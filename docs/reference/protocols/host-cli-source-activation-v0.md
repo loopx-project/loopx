@@ -13,7 +13,7 @@ execute and exact-intent reconcile. The controller supplies its current ordinary
 Stop, phase and resource observations; none of these methods grants a run slot,
 work admission, account authority or additional allowance.
 
-The registered TypeScript handler `runtime.cli_source_activation` qualifies the
+The registered TypeScript handler `benchmark.cli_source_activation` qualifies the
 boundary and chooses permitted readback/repair effects. Python adapts Docker
 pause/archive and persists transport acknowledgements. Its journal phases remain
 local to this adapter, separate from Goal, Todo, quota and native-session state.

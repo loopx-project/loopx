@@ -196,7 +196,7 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
             initial = preflight(box, plan)
             initial.update(container_id=box.id, started_at=state["StartedAt"], running=True,
                            paused=False, control=control(), source_control=_goal_control(box, plan))
-            initial_decision = effect_runtime_result("runtime.cli_source_activation", {
+            initial_decision = effect_runtime_result("benchmark.cli_source_activation", {
                 "operation": "preflight", "scope": plan, "observation": initial})
             if not initial_decision.get("pause_allowed", False):
                 return {"applied": False, "reason": initial_decision["reason"],
@@ -235,7 +235,7 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
                          paused=True, owned_barrier=True, control=control(),
                          source_control=_goal_control(box, plan),
                          **_link_record(box, plan["launcher"]))
-            decision = effect_runtime_result("runtime.cli_source_activation", {
+            decision = effect_runtime_result("benchmark.cli_source_activation", {
                 "operation": "qualify", "scope": plan, "observation": facts})
             value.update(phase="qualified" if decision["qualified"] else "deferred", qualification=decision,
                          source_witness=facts["source_witness_after"],
@@ -255,7 +255,7 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
                     write_json_atomic(receipt, value, mode=0o600, fsync_directory=True)
         if repair is not None:
             state = _held_state(box, plan)
-            repair_decision = effect_runtime_result("runtime.cli_source_activation", {
+            repair_decision = effect_runtime_result("benchmark.cli_source_activation", {
                 "operation": "repair", "scope": plan, "observation": {
                     "container_id": box.id, "started_at": state["StartedAt"],
                     "running": True, "paused": True, "owned_barrier": True, "control": control(),
@@ -276,7 +276,7 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
         if control() != "continue":
             raise SourceActivationHeld("Current control does not permit source release")
         state = _held_state(box, plan)
-        decision = effect_runtime_result("runtime.cli_source_activation", {
+        decision = effect_runtime_result("benchmark.cli_source_activation", {
             "operation": "readback", "scope": plan, "observation": {
                 "container_id": box.id, "started_at": state["StartedAt"],
                 "running": True, "paused": True, "owned_barrier": True, "control": control(),
