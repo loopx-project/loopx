@@ -1103,12 +1103,16 @@ Turn-start context, inbox synchronization and recall. It does not mint a new
 TurnEnvelope for recovery. The existing actor/Goal-lifetime checks, typed
 journal/session recovery decision, provider revalidation and post-writeback
 recovery still apply; `--retry-failed-turn` retains its existing bounded policy.
-A new invocation without a resume key continues through fresh admission.
+If the reply containing the key was lost, `--resume-turn-instance-id ID` resolves
+the unique journal for the original Goal, Agent and instance before entering
+that same path. Missing, unreadable or ambiguous history stops recovery before
+Host invocation. Use a fresh instance ID for a new admission.
 
 中文：显式 resume 先读原计划，不为恢复另建一次选任务、TurnEnvelope 或 Turn-start
 上下文、inbox 同步和 recall。原身份／Goal 生命周期、journal／Session 恢复、provider
-当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。无 resume key 的新轮次
-继续走完整 fresh 准入。
+当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。若包含 key 的回包丢失，可用
+`--resume-turn-instance-id ID` 按原 Goal、Agent 和轮次定位唯一 journal，再进入相同
+恢复流程。历史缺失、不可读或不唯一时停在 Host 调用前。新准入使用新轮次 ID。
 
 ## Adapter Requirements
 

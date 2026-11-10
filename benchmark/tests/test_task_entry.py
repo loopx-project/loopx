@@ -981,12 +981,19 @@ def test_shared_harbor_rejects_retired_planning_limit(tmp_path, legacy_limit):
     BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", planning_timeout_sec=None)
 
 
-@pytest.mark.parametrize("planning_elapsed", [400, 850])
-def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, monkeypatch, planning_elapsed):
+@pytest.mark.parametrize("mode,planning_elapsed,host_timeout", [
+    ("heartbeat", 400, 500), ("heartbeat", 850, 150), ("heartbeat", 1000, None),
+    ("turn", 400, 440), ("turn", 840, None), ("turn", 850, None),
+])
+def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(
+    tmp_path, monkeypatch, mode, planning_elapsed, host_timeout,
+):
     pytest.importorskip("harbor")
     from benchmark.runtime import harbor
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 execution_mode=mode,
+                                 validation_command=["trusted-validator"] if mode == "turn" else (),
                                  turn_timeout_sec=500, scheduler_timeout_sec=1000)
     clock = [0.0]
     planning = []
@@ -1014,7 +1021,9 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_populate_context", lambda *args: None)
     invocation = agent.run("Synthetic task", SimpleNamespace(exec=result, is_mounted=True), SimpleNamespace())
-    if planning_elapsed == 850:
+    # Heartbeat retains the whole solver window; Turn reserves 160 seconds.
+    # These expected budgets are independent of the helper under test.
+    if host_timeout is None:
         with pytest.raises(TimeoutError, match="before execution handoff"):
             asyncio.run(invocation)
         assert len(planning) == 1 and not execution
@@ -1026,8 +1035,8 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     assert "LOOPX_PLANNING_TIMEOUT_SEC" not in env
     assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
     assert options["timeout_sec"] >= 1000
-    assert "--kill-after=30 600s" in execution[0][0]
-    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 500
+    assert f"--kill-after=30 {1000 - planning_elapsed}s" in execution[0][0]
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == host_timeout
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):

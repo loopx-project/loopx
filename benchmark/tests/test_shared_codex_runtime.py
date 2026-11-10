@@ -198,6 +198,7 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
          f"import sys; sys.path.insert(0, {str(staged)!r}); "
          "import loopx.capabilities.benchmark_toolkit.native_codex_goal as goal; "
          "import loopx.capabilities.benchmark_toolkit.native_codex_process as process; "
+         "from loopx.extensions.process_runtime import _darwin_owned_group_has_exited; "
          "import benchmark.runtime.codex_readiness; "
          "print(goal.__name__, process.__name__)"],
         cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,
@@ -590,6 +591,23 @@ sys.exit(1 if first else 0)
     assert not run_once(env)["ok"]
     pending = tmp_path / "runtime/benchmark-pending-turn.json"
     assert pending.exists()
+    original = pending.read_bytes()
+    from loopx.file_lock import try_exclusive_file_lock
+
+    with try_exclusive_file_lock(pending) as lock:
+        assert lock is not None
+        with pytest.raises(RuntimeError, match="Another benchmark wake"):
+            run_once(env)
+    assert pending.read_bytes() == original
+    # Old unbound markers cannot establish which validator checked the work.
+    unbound = json.loads(original)
+    del unbound["validation_argv_sha256"]
+    pending.write_text(json.dumps(unbound))
+    with pytest.raises(ValueError, match="original validation command"):
+        run_once(env)
+    assert json.loads(pending.read_text()) == unbound
+    assert len((tmp_path / "calls.jsonl").read_text().splitlines()) == 1
+    pending.write_bytes(original)
     assert run_once(env)["ok"]
     assert not pending.exists()
     assert run_once(env)["ok"]

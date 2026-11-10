@@ -656,7 +656,7 @@ def test_planned_sforge_entry_rejects_unsupported_profiles(profile, monkeypatch)
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
-    with pytest.raises(ValueError, match="heartbeat profile"):
+    with pytest.raises(ValueError, match="loopx-planned"):
         SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
                      profile=profile, cwd="/task", task_entry="loopx-planned")
 
@@ -736,7 +736,7 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker
-    with pytest.raises(ValueError, match='heartbeat worker'):
+    with pytest.raises(ValueError, match='turn_envelope'):
         SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
                      profile=profile, cwd='/task', turn_envelope=True)
 
