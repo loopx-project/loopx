@@ -1944,6 +1944,47 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
     ]
 
 
+def test_guided_start_uses_one_registry_version_for_goal_selection(tmp_path: Path, monkeypatch) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    single_goal = registry_path.read_bytes()
+    initial = json.loads(single_goal)
+    second_goal_id = "guided-projection-second-goal"
+    initial["goals"].append({**initial["goals"][0], "id": second_goal_id})
+    registry_path.write_text(json.dumps(initial), encoding="utf-8")
+    replacement = registry_path.with_name("registry.next")
+    replacement.write_bytes(single_goal)
+    load_registry = command_pack_module.load_registry
+
+    def replace_after_first_read(path, **kwargs):
+        document = load_registry(path, **kwargs)
+        if path == registry_path and replacement.exists():
+            replacement.replace(registry_path)
+        return document
+
+    monkeypatch.setattr(command_pack_module, "load_registry", replace_after_first_read)
+
+    def preview():
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            assert cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(tmp_path / "runtime"),
+                "--format", "json", "start-goal", "--guided", "--project", str(project),
+                "--host-surface", "codex-app", "--thread-id", "snapshot-thread", "--goal-text", GOAL_TEXT,
+            ]) == 0
+        return json.loads(stdout.getvalue())
+
+    first = preview()
+    assert first["guided_transaction"]["blocked_by"] == "goal_selection"
+    assert [choice["goal_id"] for choice in first["goal_selection_gate"]["choices"]] == [GOAL_ID, second_goal_id]
+    assert first["agent_id"] is None
+    assert registry_path.read_bytes() == single_goal
+
+    next_preview = preview()
+    assert next_preview["goal_id"] == GOAL_ID
+    assert "goal_selection_gate" not in next_preview["guided_transaction"]
+
+
 def test_start_goal_keeps_the_requested_linked_worktree(
     tmp_path: Path,
     monkeypatch,
