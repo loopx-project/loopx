@@ -740,7 +740,17 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch captured reads and native lifecycle IO before quota authority access."""
     if getattr(args, "scheduler_observation", False):
-        return None  # Validate the observation before the live decision, not as a capture reader.
+        from .quota_request import validate_scheduler_observation_request
+
+        try:
+            # Validate the compact observation as a closed request shape before
+            # context-profile defaults or any quota authority can mutate/add
+            # reader, Turn, receipt or capture options.
+            validate_scheduler_observation_request(args)
+        except QuotaCommandValidationError as exc:
+            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
+            return 1
+        return None
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
         print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or JSON context-project"},
                       args.format, str)

@@ -13,6 +13,7 @@ import pytest
 
 from loopx.capabilities.explore.result_log import build_explore_node_event, explore_history_rows
 from loopx.control_plane.status.goal_source import GoalSource, GoalSourceReader, SourceScopeError
+from loopx.registry import inspect_registry
 
 
 def manifest(*, connection=None, environment=None, scope=None):
@@ -181,3 +182,81 @@ def test_real_native_host_lists_goals_and_reads_canonical_history(tmp_path):
     with pytest.raises((SourceScopeError, subprocess.SubprocessError)):
         reader.status("unregistered")
     assert reader.status("first")["run_history"]["goals"][0]["id"] == "first"
+
+
+def test_registry_inspection_rechecks_retargeted_source_paths(tmp_path):
+    first, second = tmp_path / "first", tmp_path / "second"
+    for project in (first, second):
+        project.mkdir()
+        (project / "active.md").write_text("# Research\n")
+    alias = tmp_path / "original"
+    try:
+        alias.symlink_to(first, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Directory symlinks are not available")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [
+        {"id": goal_id, "domain": "source-read", "status": "active",
+         "repo": str(repo), "state_file": "active.md", "adapter": {"kind": "test_v0"}}
+        for goal_id, repo in (("first", first), ("second", alias))
+    ]}))
+    shared = inspect_registry(registry)
+    assert shared["ok"] is False
+    assert any(row["code"] == "registry_state_file_shared" for row in shared["problem_diagnostics"])
+    assert [row["repo_goal_ids"] for row in shared["goals"]] == [["first", "second"]] * 2
+    assert [row["state_file_abs"] for row in shared["goals"]] == [str(first.resolve() / "active.md")] * 2
+
+    alias.unlink()
+    alias.symlink_to(second, target_is_directory=True)
+    separated = inspect_registry(registry)
+    assert separated["ok"] is True
+    assert [row["repo_goal_ids"] for row in separated["goals"]] == [["first"], ["second"]]
+    assert [row["state_file_abs"] for row in separated["goals"]] == [
+        str(first.resolve() / "active.md"), str(second.resolve() / "active.md"),
+    ]
+
+
+@pytest.mark.parametrize("first_exists", [False, True])
+def test_registry_cli_keeps_state_path_and_existence_on_one_target(tmp_path, first_exists):
+    first, second = tmp_path / "first.md", tmp_path / "second.md"
+    (first if first_exists else second).write_text("# State\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    alias = project / "state.md"
+    try:
+        alias.symlink_to(first)
+    except (OSError, NotImplementedError):
+        pytest.skip("File symlinks are not available")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [{
+        "id": "original", "repo": str(project), "domain": "source-read", "status": "active",
+        "state_file": "state.md", "adapter": {"kind": "test_v0"},
+    }]}))
+    script = '''import json,sys
+from pathlib import Path
+import loopx.registry as registry
+from loopx.cli import main
+alias, second = Path(sys.argv[2]), Path(sys.argv[3])
+original = registry.stable_path_key
+changed = False
+def observe(path):
+    global changed
+    result = original(path)
+    if path == alias and not changed:
+        alias.unlink()
+        alias.symlink_to(second)
+        changed = True
+    return result
+registry.stable_path_key = observe
+raise SystemExit(main(['--format','json','--registry',sys.argv[1],'registry']))
+'''
+    response = subprocess.run([sys.executable, "-c", script, str(registry), str(alias), str(second)],
+        capture_output=True, text=True, timeout=20)
+    assert response.returncode == 0, response.stderr
+    row = json.loads(response.stdout)["goals"][0]
+    assert row["state_file_abs"] == str(first.resolve())
+    assert row["state_file_exists"] == first_exists
+    # No process-wide cache: a subsequent public inspection uses the new alias.
+    latest = inspect_registry(registry)["goals"][0]
+    assert latest["state_file_abs"] == str(second.resolve())
+    assert latest["state_file_exists"] == (not first_exists)

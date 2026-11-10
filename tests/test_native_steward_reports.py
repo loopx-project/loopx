@@ -1610,6 +1610,177 @@ def test_report_http_preview_apply_is_original_source_bound_and_failure_is_revie
         thread.join(5)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("local_session", [False, True])
+@pytest.mark.parametrize("native_status", ["failed", "inProgress"])
+def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
+        steward, tmp_path, monkeypatch, provider, local_session, native_status):
+    from datetime import timezone
+    from loopx.capabilities.native_chat import steward_reports as report_host
+    from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path
+    from loopx.capabilities.periodic_report.private_generation import freeze_private_report
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.file_lock import exclusive_file_lock
+
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=5)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    store, runtime, bot, transport, binding, capture, _ = steward
+    if local_session:
+        session, reports, _, _ = configured_local_report(steward, tmp_path, monkeypatch, provider)
+        sid = owner = session["session_id"]
+        actor = reports.selected(sid)["actor"]
+    else:
+        sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+        owner = binding["binding_id"]
+    install_model(steward, tmp_path, sid)
+    # An actual stdio peer acknowledges the report Turn, then either sends a
+    # typed terminal failure or loses its connection while still running.
+    # Its persisted inventory is served by the later read-only control peer.
+    fake = Path(runtime.codex_bin)
+    source = fake.read_text()
+    fail_once = tmp_path / "fail-next-report"
+    fail_once.touch()
+    probe = f"""
+    if method == "turn/start" and __import__("pathlib").Path({str(fail_once)!r}).exists():
+        print(json.dumps({{"id": request["id"], "result": {{"turn": {{"id": "report-failed-after-launch", "status": "running"}}}}}}), flush=True)
+        if {native_status!r} == "failed":
+            print(json.dumps({{"method": "turn/completed", "params": {{"threadId": "durable-thread", "turn": {{"id": "report-failed-after-launch", "status": "failed", "error": {{"codexErrorInfo": "other", "message": "Synthetic terminal failure"}}}}}}}}), flush=True)
+            continue
+        sys.exit(0)
+    if method == "thread/turns/list":
+        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"id": "report-failed-after-launch", "status": {native_status!r}, "error": {{"codexErrorInfo": "other"}}}}]}}}}), flush=True)
+        continue
+    if method == "thread/items/list":
+        print(json.dumps({{"id": request["id"], "result": {{"data": [{{"turnId": "report-failed-after-launch", "item": {{"id": "original-user", "type": "userMessage"}}}}]}}}}), flush=True)
+        continue
+"""
+    fake.write_text(source.replace('    method = request.get("method")', '    method = request.get("method")' + probe, 1))
+    original = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = original["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["receipt"]["failed_phase"] == "host_execute"
+    assert reports.health(owner)["execution_failed"]
+    _, old = reports.current_window(owner)
+    old_folder = attempt_directory(reports.root, old)
+    cadence = cadence_journal_path(reports.root, actor["goal_id"])
+    previous = json.loads(cadence.read_text())
+    native_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
+    old_artifacts = (store._turn_path(sid, original["turn_id"]), native_path,
+        old_folder / "source.json", old_folder / "editorial-request.json")
+    original_bytes = [path.read_bytes() for path in old_artifacts]
+    sent = list(bot.writes)
+    calls_before = capture.read_bytes()
+    fail_once.unlink()
+    Path(store.load_session(sid)["codex_home"]).mkdir(parents=True, exist_ok=True)
+    runtime.adapters.pop(sid).close_session()
+
+    def wake():
+        runtime._steward_monitor_next_check.clear()
+        return pump_steward_monitors(runtime)
+
+    assert wake() == []
+    point += timedelta(days=1)
+    assert wake() == []  # Keep the normal recovery opportunity at the next boundary.
+    point += timedelta(days=2)
+    uncertain = old_folder / "private-delivery.json"
+    try:
+        uncertain.symlink_to("unreadable-delivery-target")
+    except OSError:  # Windows test environments may not grant symlink creation.
+        uncertain.write_text("unreadable delivery record")
+    assert wake() == []  # A malformed or dangling delivery record is still present.
+    uncertain.unlink()
+    original_native = native_path.rename(native_path.with_suffix(".held"))
+    try:
+        assert wake() == []  # The outer failure cannot replace its native receipt.
+    finally:
+        original_native.rename(native_path)
+    with exclusive_file_lock(old_folder / "generation.lock", operation="in-flight-report"):
+        assert wake() == []
+    assert json.loads(cadence.read_text()) == previous
+    assert bot.writes == sent
+    def starts():
+        return [row for row in map(json.loads, capture.read_text().splitlines()) if row.get("method") == "turn/start"]
+    original_starts = [row for row in map(json.loads, calls_before.splitlines()) if row.get("method") == "turn/start"]
+    assert starts() == original_starts
+
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    native_proof = StewardTurnHost(runtime).report_failure_observation(original)
+    assert bool(native_proof) is (native_status == "failed"), native_proof
+    assert reports._failed_without_generation(actor, old) is (native_status == "failed")
+    pending = wake()
+    if native_status != "failed":
+        assert pending == [] and starts() == original_starts
+        assert json.loads(cadence.read_text()) == previous
+        assert [path.read_bytes() for path in old_artifacts] == original_bytes
+        observed = [row["method"] for row in map(json.loads, capture.read_text().splitlines())]
+        assert "thread/turns/list" in observed
+        return
+    assert len(pending) == 1, "the retained failure must not suppress every later deadline"
+    done = finish(runtime, pending[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    _, latest = reports.current_window(owner)
+    assert latest["due_at"] == point.replace(minute=0).isoformat().replace("+00:00", "Z")
+    assert latest["subscription_revision"] == old["subscription_revision"]
+    assert done["loopx_request"]["actor"] == original["loopx_request"]["actor"]
+    assert done["loopx_request"]["todo_id"] != original["loopx_request"]["todo_id"]
+    assert done["loopx_request"]["report_window_id"] == latest["window_id"]
+    assert "report_quota_recovery" not in done["loopx_request"]
+    assert json.loads((cadence.parent / "superseded-cadence" / (old["window_id"] + ".json")).read_text()) == previous
+    assert [path.read_bytes() for path in old_artifacts] == original_bytes
+    assert reports.delivery_current(owner, old) is False
+    with pytest.raises(ValueError, match="no longer the active window"):
+        freeze_private_report(root=reports.root, window=old, response={}, require_current_window=True)
+    assert not (old_folder / "editorial-response.json").exists()
+
+    folder = attempt_directory(reports.root, latest)
+    body = (folder / "report.md").read_text()
+    first = old["due_at"][:16].replace("T", " ") + "+00:00"
+    last = latest["start_at"][:16].replace("T", " ") + "+00:00"
+    assert "缺报区间" in body and first in body and last in body
+    bundle = json.loads((folder / "generation-bundle.json").read_text())
+    html = next(item["content"] for item in bundle["artifacts"] if item["renderer_kind"] == "html")
+    assert "缺报区间" in html and first in html and last in html
+    if local_session:
+        assert any(message["text"] == body and message["turn_id"] == done["turn_id"] for message in store.messages(sid))
+    else:
+        assert transport.steward_reports.reconcile() == 1
+        assert all(bot.messages[f"om_out_{i}"]["chat_id"] == "oc_steward_app"
+            for i in range(len(sent), len(bot.writes)))
+        assert any("缺报区间" in text for _, text in bot.writes[len(sent):])
+    assert read_periodic_report_publication_cursor(runtime_root=reports.root,
+        goal_id=actor["goal_id"], agent_id=actor["agent_id"])["covered_until"] == latest["due_at"]
+    assert wake() == [] and len(starts()) == len(original_starts) + 1
+    assert transport.steward_reports.reconcile() == 0
+
+
+def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path):
+    from datetime import timezone
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, missed_cadence_bounds
+
+    schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "daily-report",
+        "timezone": "Asia/Shanghai", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}
+    subscription = {"enabled": True, "profile_preset": "portfolio-progress",
+        "schedule": schedule, "effective_revision": "sha256:" + "1" * 64}
+
+    def admit(day):
+        return admit_cadence_window(runtime_root=tmp_path, goal_id="example", agent_id="reporter",
+            subscription=subscription, now=datetime(2026, 1, day, 3, tzinfo=timezone.utc),
+            can_replace_failed_window=lambda _: True)["window"]
+
+    first = admit(1)
+    attempt_directory(tmp_path, first).mkdir(parents=True)
+    middle = admit(3)
+    attempt_directory(tmp_path, middle).mkdir(parents=True)
+    latest = admit(5)
+    assert missed_cadence_bounds(runtime_root=tmp_path, window=latest) == {
+        "first_due_at": "2026-01-01T01:00:00Z", "last_due_at": "2026-01-04T01:00:00Z"}
+
+
 def test_distinct_due_daily_windows_keep_normal_native_replan_and_quota_rules(steward, tmp_path, monkeypatch):
     from datetime import timezone
     from loopx.capabilities.native_chat import steward_reports as module

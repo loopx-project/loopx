@@ -243,6 +243,7 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     from argparse import Namespace
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
 
     monkeypatch.syspath_prepend(str(REPO / "scripts"))
     import external_scheduler_worker as worker
@@ -281,9 +282,15 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
         sleeps.append(seconds)
         assert len(sleeps) <= 4, "explicit stop must end the actual worker"
         if len(sleeps) == 4:
-            stopped = json.loads(registry.read_text())
-            stopped["goals"][0]["activation_state"] = "stopped"
-            registry.write_text(json.dumps(stopped))
+            stopped = set_goal_activation_state(
+                registry_path=registry,
+                goal_id=GOAL,
+                state="stopped",
+                reason="The Host explicitly stopped the scheduled wait.",
+                actor_kind="owner",
+                execute=True,
+            )
+            assert stopped["readback"]["verified"] is True, stopped
 
     monkeypatch.setattr(worker, "run_quota_should_run", real_probe)
     monkeypatch.setattr(worker, "_run_wake", lambda *a, **kw: pytest.fail("a pending wait cannot wake the model"))

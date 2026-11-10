@@ -212,10 +212,15 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
         "context_delivery", "delta_delivery", "turn_envelope", "include_details",
         "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
         "defer_context_presentation",
+        "capture_file", "decision_file", "outcome_ref", "source_hash",
+        "initial_read", "select", "list_fields", "list_depth", "reference_file",
+        "capture_sha256", "selection_sha256", "offset", "page_bytes",
     ):
         if getattr(args, name, None):
             option = {
-                "available_capabilities": "available-capability", "include_details": "include-detail",
+                "available_capabilities": "available-capability",
+                "include_details": "include-detail",
+                "list_fields": "list",
             }.get(name, name.replace("_", "-"))
             raise QuotaCommandValidationError(
                 f"--scheduler-observation cannot be combined with --{option}"

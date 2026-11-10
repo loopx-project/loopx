@@ -69,6 +69,20 @@ def test_scheduler_observation_preserves_native_wake_context(
         failure = json.loads(rejected.stdout)
         assert failure["ok"] is False
         assert "--scheduler-observation" in failure["reason"]
+    for extra in (
+        ("--capture-file", str(tmp_path / "capture.json")),
+        ("--initial-read",),
+        ("--list",),
+        ("--list", "--list-depth", "2"),
+        ("--select", "/interaction_contract"),
+        ("--reference-file", str(tmp_path / "reader.json")),
+    ):
+        rejected = subprocess.run([*command, *extra], cwd=project,
+            capture_output=True, text=True, timeout=30, check=False)
+        assert rejected.returncode != 0
+        failure = json.loads(rejected.stdout)
+        assert failure["ok"] is False
+        assert "selected_todo" not in failure
     assert _heartbeat_receipt_count(runtime, "observer-must-not-admit") == 0
     assert not list(tmp_path.glob("decision-*"))
 
