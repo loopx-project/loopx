@@ -1,13 +1,14 @@
 """Codex capture IO: project text lengths and simple shell argv, never execute.
 
 The TS trajectory owner classifies commands and reduces observations. Compound
-shell, Python/JS orchestration and tool continuations stay unassigned. This is an
-inventory of appended input text, not the context replayed at every inference.
+shell, general Python/JS orchestration and tool continuations stay unassigned.
+This inventories appended input text, not the context replayed at every inference.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import shlex
 
@@ -80,28 +81,56 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
     return words
 
 
+def _json_scalar(value: object) -> bool:
+    return isinstance(value, (str, int, float, bool, type(None))) and (
+        not isinstance(value, float) or math.isfinite(value))
+
+
 def _literal_exec_argv(script: object) -> list[str] | None:
     """Recognize one complete literal exec wrapper, never arbitrary JavaScript.
 
     Accept the stored-result and directly returned forms of one exec_command.
-    Accept only JSON-valued object properties and one return; calls, spreads,
-    interpolation, multiple commands and computed properties remain unknown.
+    A JSON execution pragma, one static store of the result, and its exit-code
+    presentation do not add commands. Other calls, spreads, interpolation,
+    multiple commands and computed properties remain unknown.
     """
     if not isinstance(script, str):
         return None
+    script = script.strip()
+    if script.startswith('//'):
+        directive, separator, script = script.partition('\n')
+        pragma = re.fullmatch(r'//\s*@exec:\s*(\{.*\})\s*', directive)
+        if not separator or pragma is None:
+            return None
+        try:
+            options = json.loads(pragma[1])
+        except ValueError:
+            return None
+        if not isinstance(options, dict) or not all(_json_scalar(value) for value in options.values()):
+            return None
+        script = script.strip()
     invocation = r"await\s+tools\.exec_command\(\s*\{(?P<options>.*)\}\s*\)"
+    result = r'(?P=result)'
+    presentation = (result + r'(?:\.output)?|' + result + r'\.exit_code\s*===\s*0\s*\?\s*'
+                    + result + r'\.output\s*:\s*' + result)
+    store = r'(?:store\(\s*(?P<store_key>"(?:\\.|[^"\\])*")\s*,\s*' + result + r'\s*\)\s*;\s*)?'
     wrappers = (
         r"const\s+(?P<result>[A-Za-z_]\w*)\s*=\s*" + invocation
-        + r"\s*;\s*text\(\s*(?P=result)(?:\.output)?\s*\)",
+        + r'\s*;\s*' + store + r'text\(\s*(?:' + presentation + r')\s*\)',
         r"text\(\s*" + invocation + r"\s*\)",
         r"text\(\s*\(\s*" + invocation + r"\s*\)\.output\s*\)",
     )
     for wrapper in wrappers:
-        match = re.fullmatch(wrapper + r"\s*;?", script.strip(), re.S)
+        match = re.fullmatch(wrapper + r"\s*;?", script, re.S)
         if match is not None:
             break
     else:
         return None
+    if match.groupdict().get('store_key') is not None:
+        try:
+            json.loads(match['store_key'])
+        except ValueError:
+            return None
     rest, values = match["options"].strip(), {}
     decoder = json.JSONDecoder()
     while rest:
@@ -115,7 +144,7 @@ def _literal_exec_argv(script: object) -> list[str] | None:
             value, end = decoder.raw_decode(rest[key.end():])
         except ValueError:
             return None
-        if not isinstance(value, (str, int, float, bool, type(None))):
+        if not _json_scalar(value):
             return None
         values[name] = value
         rest = rest[key.end() + end:].strip()

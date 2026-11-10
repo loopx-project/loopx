@@ -111,6 +111,9 @@ def test_invalid_optional_observation_cannot_erase_native_counters_or_escape_roo
     'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);',
     'text(await tools.exec_command({cmd: "loopx quota context-read"}))',
     'text((await tools.exec_command({cmd: "loopx quota context-read"})).output)',
+    'const r=await tools.exec_command({cmd:"loopx quota context-read"});text(r.exit_code===0?r.output:r);',
+    '// @exec: {"max_output_tokens":1000}\nconst r=await tools.exec_command({cmd:"loopx quota context-read"});'
+        'store("read",r);text(r.exit_code===0?r.output:r);',
 ])
 def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path, wrapper):
     _, rows = native_trace(tmp_path)
@@ -135,7 +138,9 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert path.read_bytes() == raw
 
 
-@pytest.mark.parametrize("call_kind", ["absent", "direct", "compound", "bound_guard", "expanded_guard", "replan_view"])
+@pytest.mark.parametrize("call_kind", [
+    "absent", "direct", "stored_result", "compound", "bound_guard", "expanded_guard", "replan_view",
+])
 def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, call_kind):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
@@ -144,6 +149,10 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
         call = {"type": "custom_tool_call", "call_id": "tool", "name": "exec",
                 "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
         reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
+        if call_kind == "stored_result":
+            call["input"] = ('// @exec: {"max_output_tokens":1000}\n'
+                'const r=await tools.exec_command({cmd:"loopx status"});'
+                'store("read",r);text(r.exit_code===0?r.output:r);')
         items = [{"type": "response_item", "payload": item} for item in (call, reply)]
         native_command = []
         if call_kind in {"bound_guard", "expanded_guard", "replan_view"}:
@@ -189,8 +198,11 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
     inventory = view["solver_usage"]["projection"]["tool_context"]
     footprint = view["solver_usage"]["projection"]["loopx_requests"]
     assert footprint["status"] == "observed"
-    if call_kind in {"direct", "bound_guard", "replan_view"}:
-        operation = {"direct": "status", "bound_guard": "quota should-run", "replan_view": "quota replan-view"}[call_kind]
+    if call_kind in {"direct", "stored_result", "bound_guard", "replan_view"}:
+        operation = {
+            "direct": "status", "stored_result": "status",
+            "bound_guard": "quota should-run", "replan_view": "quota replan-view",
+        }[call_kind]
         assert inventory["operations"] == [{"operation": operation, "calls": 1, "bytes": 5}]
         assert inventory["loopx_tool_output_fraction"] == 1.0
         assert footprint["recognized_requests"] == 1
@@ -207,3 +219,7 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
         assert footprint["recognized_requests"] == 0 and footprint["input_fraction"] == 0
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)
+    readback = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "benchmark", "trajectory-packs",
+        "--goal-id", "research"], capture_output=True, text=True, check=True)
+    assert json.loads(readback.stdout)["packs"][0]["solver_usage"] == view["solver_usage"]
