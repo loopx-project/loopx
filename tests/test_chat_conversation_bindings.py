@@ -613,7 +613,7 @@ def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordina
     def unreadable(*_, **__):
         raise PermissionError("private journal path")
     with monkeypatch.context() as patch:
-        patch.setattr(store, "messages", unreadable)
+        patch.setattr(store, "_paged_history_messages", unreadable)
         code, unavailable = request(path + "?message_limit=200")
     assert code == 503 and "private journal path" not in json.dumps(unavailable)
 

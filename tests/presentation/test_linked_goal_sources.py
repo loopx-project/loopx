@@ -9,7 +9,9 @@ import json
 import os
 from pathlib import Path
 import sys
+from threading import Event
 import time
+from hashlib import sha256
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,6 +25,51 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.control_plane.status.goal_source import GoalSource
+
+
+def test_original_document_alias_binding_and_recovery(workspace):
+    raw, request, protected = native_source(workspace)
+    registry = Path(raw['registry'])
+    registered = json.loads(registry.read_text())
+    declared = '/source/retained/primary-task.md'
+    registered['goals'][0]['authority_sources'] = [
+        {'kind': 'goal_doc', 'role': 'primary_goal_document', 'path': declared}]
+    registry.write_text(json.dumps(registered))
+    protected[registry] = registry.read_bytes()
+    document = registry.parent / 'captured-task.md'
+    original = b'# Original objective\r\n\nKeep the full original task and its constraints.\n'
+    document.write_bytes(original)
+    raw['goal_document_snapshot'] = {'declared_path': declared, 'path': str(document),
+        'sha256': sha256(original).hexdigest()}
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    path = '/api/chat/goal-source-document?' + urlencode({'goal_id': 'case-alias', 'source_namespace': namespace})
+    result = request(path)
+    assert result['goal_id'] == 'solver-goal'
+    assert result['source']['namespace'] == namespace
+    assert result['document'] == {'text': original.decode(), 'sha256': sha256(original).hexdigest(), 'captured': True}
+    assert 'path' not in result['document']
+    document.write_bytes(b'changed after capture')
+    with pytest.raises(HTTPError) as failed:
+        request(path)
+    assert failed.value.code == 503
+    document.write_bytes(original)
+    assert request(path)['document']['text'] == original.decode()
+    with pytest.raises(HTTPError) as wrong_scope:
+        request(path.replace(namespace, '0' * 64))
+    assert wrong_scope.value.code == 409
+    # Updating the attachment keeps physical identity but replaces the cached
+    # reader, so the original binding cannot silently survive a new capture.
+    replacement = b'# Another captured original\n'
+    document.write_bytes(replacement)
+    raw['goal_document_snapshot']['sha256'] = sha256(replacement).hexdigest()
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+        'workspace_goal_id': 'case-alias'})
+    assert GoalSource.parse(raw).namespace == namespace
+    assert request(path)['document']['text'] == replacement.decode()
+    for file, content in protected.items():
+        assert file.read_bytes() == content
 
 
 def native_source(w, name='original', task_text='Check the original question against its evidence', done=False,
@@ -81,6 +128,134 @@ def native_source(w, name='original', task_text='Check the original question aga
             return json.load(response)
 
     return raw, request, {path: path.read_bytes() for path in (registry, state, log)}
+
+
+def strategy_runs(raw):
+    """Independent native index fixture: old strategies survive the status window."""
+    from datetime import datetime, timedelta, timezone
+
+    runs = Path(raw['runtime_root']) / 'goals' / 'solver-goal' / 'runs'
+    runs.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index in range(23):
+        vision = {'schema_version': 'goal_vision_replan_contract_v0', 'agent_id': 'source-worker',
+            'vision_patch': {'vision_summary': f'Original objective version {index}',
+                             'acceptance_summary': 'Compare independently checked outcomes.'},
+            'path_delta': {'observed_reality': f'Observation {index}',
+                           'stopped': ['Rejected candidate: negative result retained.'],
+                           'unresolved_questions': ['Actual subsequent adoption remains unknown.']}}
+        rows.append({'goal_id': 'solver-goal', 'agent_id': 'source-worker',
+            'generated_at': (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=41 * index)).isoformat(),
+            'classification': 'state_recorded', 'json_path': str(runs / f'record-{index}.json'),
+            'agent_vision': vision})
+    # Accounting records are not fabricated strategy versions.
+    rows.append({'goal_id': 'solver-goal', 'agent_id': 'source-worker',
+                 'generated_at': '2026-01-02T00:00:00Z', 'classification': 'accounting',
+                 'json_path': str(runs / 'accounting.json')})
+    index_file = runs / 'index.jsonl'
+    index_file.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    return index_file, rows
+
+
+def test_strategy_history_reads_every_original_version_without_writing(workspace):
+    raw, request, before = native_source(workspace)
+    index_file, rows = strategy_runs(raw)
+    before[index_file] = index_file.read_bytes()
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    query = {'goal_id': 'solver-goal', 'source_namespace': namespace}
+    endpoint = '/api/chat/goal-source-strategies?'
+    value = request(endpoint + urlencode(query))
+    assert value['total'] == 23 and value['native_run_count'] == 24
+    assert value['goal_id'] == 'solver-goal' and value['source']['namespace'] == namespace
+    assert [item['agent_vision'] for item in value['items']] == [row['agent_vision'] for row in rows[-2::-1]]
+    assert value['items'] == request(endpoint + urlencode(query))['items']
+    for changed, status in (({'goal_id': 'other-owner'}, 404), ({'source_namespace': 'f' * 64}, 409),
+                            ({'cursor': 'invented'}, 400), ({'goal_id': ''}, 404)):
+        with pytest.raises(HTTPError) as error:
+            request(endpoint + urlencode({**query, **changed}))
+        assert error.value.code == status
+    with pytest.raises(HTTPError) as error:
+        request(endpoint + urlencode(query), origin='https://untrusted.invalid')
+    assert error.value.code == 403
+    assert {path: path.read_bytes() for path in before} == before
+    assert not list(Path(raw['runtime_root']).rglob('research-analysis'))
+
+
+def test_strategy_history_rechecks_source_after_unlink_without_blocking_status(workspace, monkeypatch):
+    from threading import Event
+
+    raw, request, _ = native_source(workspace)
+    strategy_runs(raw)
+    namespace = GoalSource.parse(raw).namespace
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    started, release = Event(), Event()
+    original = GoalSource.read_run_history
+
+    def delayed(source, goal_id):
+        started.set()
+        assert release.wait(15)
+        return original(source, goal_id)
+
+    monkeypatch.setattr(GoalSource, 'read_run_history', delayed)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        pending = executor.submit(request, '/api/chat/goal-source-strategies?' + urlencode({
+            'goal_id': 'solver-goal', 'source_namespace': namespace}))
+        try:
+            assert started.wait(15)
+            status = executor.submit(request, '/status.json?goal_id=solver-goal')
+            assert status.result(timeout=10)['ok']
+            request('/api/chat/goal-sources', {'goal_id': 'solver-goal',
+                'source_namespace': namespace, 'parent_goal_id': 'research-owner'})
+        finally:
+            release.set()
+        with pytest.raises(HTTPError) as error:
+            pending.result(timeout=20)
+        assert error.value.code == 409
+
+
+def test_strategy_history_failure_is_explicit_and_recovers(workspace, monkeypatch):
+    raw, request, _ = native_source(workspace)
+    strategy_runs(raw)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    url = '/api/chat/goal-source-strategies?' + urlencode({
+        'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace})
+    original = GoalSource.read_run_history
+    monkeypatch.setattr(GoalSource, 'read_run_history', lambda *_: (_ for _ in ()).throw(OSError('private transport detail')))
+    with pytest.raises(HTTPError) as error:
+        request(url)
+    assert error.value.code == 503
+    assert b'private transport detail' not in error.value.read()
+    monkeypatch.setattr(GoalSource, 'read_run_history', original)
+    assert request(url)['total'] == 23
+
+
+def test_prepared_workspace_and_cli_read_the_same_native_strategies(workspace):
+    import subprocess
+    from test_runtime_workspace import serving, get
+    from loopx.control_plane.status.goal_source import read_endpoint
+
+    raw, _, _ = native_source(workspace)
+    index_file, _ = strategy_runs(raw)
+    before = index_file.read_bytes()
+    source = GoalSource.parse(raw)
+    with serving(source, workspace['tmp_path']) as server:
+        code, status = get(server, '/status.json?goal_id=solver-goal')
+        assert code == 200
+        goal = status['run_history']['goals'][0]
+        assert goal['id'] == 'solver-goal' and 'source_access' not in goal
+        path = '/api/chat/goal-source-strategies?' + urlencode({
+            'goal_id': 'solver-goal', 'source_namespace': source.namespace})
+        code, browser = get(server, path, timeout=30)
+        assert code == 200 and browser['total'] == 23
+        client = read_endpoint(server.status_url, 'strategies', goal_id='solver-goal')
+        assert browser == client
+        cli = subprocess.run([sys.executable, '-m', 'loopx.control_plane.status.goal_source',
+            'strategies', '--endpoint', server.status_url, '--goal-id', 'solver-goal'],
+            capture_output=True, text=True, check=True, timeout=30)
+        assert json.loads(cli.stdout) == browser
+        assert get(server, path + '&cursor=unrelated')[0] == 409
+    assert index_file.read_bytes() == before
 
 
 @pytest.mark.parametrize('done', [False, True])
@@ -185,6 +360,64 @@ def test_app_parent_directory_reads_original_tasks_history_and_explicit_analysis
     assert request(endpoint + '?' + query)['pack']['job']['status'] == 'succeeded'
     assert len(w['count'].read_text().splitlines()) == 1
     assert all(path.read_bytes() == data for path, data in before.items())
+
+
+@pytest.mark.parametrize(("view", "source_fails"), [
+    ("history", False), ("findings", False), ("history", True),
+])
+def test_linked_analysis_does_not_wait_for_history_page_io(workspace, monkeypatch, view, source_fails):
+    raw, request, before = native_source(workspace)
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw})
+    namespace = GoalSource.parse(raw).namespace
+    analysis_runtime = workspace['tmp_path'] / 'runtime' / 'goal-sources' / namespace
+    pack = register_pack(runtime_root=analysis_runtime, owner_goal_id='solver-goal',
+        input_path=workspace['tmp_path'] / 'input.json', source_root=workspace['sources'],
+        title='Original source evidence')
+    query = {'goal_id': 'solver-goal', 'source_namespace': namespace}
+    catalog = '/api/chat/research-analysis?' + urlencode(query)
+    history = '/api/chat/explore-results?' + urlencode({**query, 'view': view})
+    fresh = '/api/chat/explore-results?' + urlencode({**query, 'view': 'history-timing'})
+    entered, resume = Event(), Event()
+    read_events = GoalSource.read_events
+
+    def slow_events(self, goal_id):
+        if self.namespace == namespace:
+            entered.set()
+            assert resume.wait(25)
+        return read_events(self, goal_id)
+
+    monkeypatch.setattr(GoalSource, 'read_events', slow_events)
+    source_registry = Path(raw['registry'])
+    try:
+        with ThreadPoolExecutor(max_workers=2) as clients:
+            pending_page = clients.submit(request, history)
+            try:
+                assert entered.wait(12)
+                if source_fails:
+                    source_registry.unlink()
+                    with pytest.raises(HTTPError) as unavailable:
+                        clients.submit(request, fresh).result(timeout=7)
+                    assert unavailable.value.code == 503
+                else:
+                    analysis = clients.submit(request, catalog).result(timeout=7)
+                    assert analysis['pack']['pack_id'] == pack['pack_id']
+                assert not pending_page.done()
+            finally:
+                resume.set()
+            if source_fails:
+                with pytest.raises(HTTPError) as invalidated:
+                    pending_page.result(timeout=12)
+                assert invalidated.value.code == 409
+            else:
+                page = pending_page.result(timeout=12)
+                assert page['source']['namespace'] == namespace
+                assert page['total'] == (3 if view == 'history' else 0)
+    finally:
+        if source_fails:
+            source_registry.write_bytes(before[source_registry])
+    assert request(catalog)['pack']['pack_id'] == pack['pack_id']
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert not workspace['count'].exists()
 
 
 @pytest.mark.parametrize('retry', [False, True])

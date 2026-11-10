@@ -1,6 +1,7 @@
 """One delegation automatically returns a conclusion without a second question."""
 
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -94,13 +95,13 @@ def private_snapshot(frozen_private_reply, tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    def read(**query):
+    def read(*, expected_status=200, **query):
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
             connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
             response = connection.getresponse()
             payload = json.loads(response.read())
-            assert response.status == 200, payload
+            assert response.status == expected_status, payload
             return payload
         finally:
             connection.close()
@@ -129,6 +130,82 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert message["reply_context"]["parent"]["complete"] is True
     assert [row["content"] for row in message["reply_context"]["thread"]["messages"]] == ["Earlier topic introduction"]
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
+
+
+def test_history_pages_reuse_unchanged_journal_but_reread_provider_receipts(
+        frozen_private_reply, private_snapshot, monkeypatch):
+    store, session, turn, request, *_ = frozen_private_reply
+    sid = session["session_id"]
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    journal = store.sessions_root / sid / "messages.jsonl"
+    original_row = journal.read_bytes().split(b"\n", 1)[0]
+    decoded_original_rows = []
+    loads = json.loads
+
+    def observe(value, *args, **kwargs):
+        if value == original_row:
+            decoded_original_rows.append(value)
+        return loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", observe)
+    first = private_snapshot(message_limit=1)
+    assert "reply_context" in first["messages"][0]
+    cursor = first["message_page"]["next_cursor"]
+    assert private_snapshot(message_limit=1, message_cursor=cursor)["messages"] == [answer]
+    # Cached parsing must not keep a deleted provider receipt visible.
+    (store.root / "lark-private-deliveries" / f"{request}.json").unlink()
+    fresh = private_snapshot(message_limit=1)
+    assert "reply_context" not in fresh["messages"][0]
+    assert fresh["message_page"] == first["message_page"]
+    assert len(decoded_original_rows) == 1
+
+    open_path = Path.open
+
+    def unavailable(path, *args, **kwargs):
+        if path == journal:
+            raise PermissionError("journal no longer readable")
+        return open_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unavailable)
+    rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=503)
+    assert "history is temporarily unavailable" in rejected["error"]
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_warm_history_keeps_frozen_prefix_and_rejects_same_stamp_rewrite(
+        frozen_private_reply, private_snapshot, monkeypatch, replace):
+    store, session, turn, *_ = frozen_private_reply
+    sid = session["session_id"]
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=turn["turn_id"])
+    first = private_snapshot(message_limit=1)
+    cursor = first["message_page"]["next_cursor"]
+    extra = store.append_message(sid, role="agent", text="Later result")
+    second = private_snapshot(message_limit=1, message_cursor=cursor)
+    assert second["messages"] == [answer] and second["message_page"]["next_cursor"] is None
+    assert private_snapshot(message_limit=3)["messages"][-1] == extra
+
+    path = store.sessions_root / sid / "messages.jsonl"
+    stat = path.stat()
+    original = path.read_bytes()
+    rewritten = original.replace(b"Original answer", b"Modified answer", 1)
+    assert len(rewritten) == len(original) and rewritten != original
+    target = path.with_suffix(".replacement") if replace else path
+    target.write_bytes(rewritten)
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    if replace:
+        target.replace(path)
+    # A filesystem can expose the same metadata for different journal bytes.
+    stat_path = Path.stat
+    with monkeypatch.context() as observation:
+        observation.setattr(Path, "stat", lambda item, *a, **kw: stat if item == path else stat_path(item, *a, **kw))
+        rejected = private_snapshot(message_limit=1, message_cursor=cursor, expected_status=400)
+        assert "history cursor source changed" in rejected["error"]
+    assert private_snapshot(message_limit=3)["messages"][1]["text"] == "Modified answer"
+    path.write_bytes(rewritten + b"{invalid record}\n")
+    rejected = private_snapshot(message_limit=3, expected_status=400)
+    assert "invalid Chat journal record" in rejected["error"]
+    path.write_bytes(rewritten)
+    assert private_snapshot(message_limit=3)["messages"][-1] == extra
 
 
 def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path, private_snapshot):
@@ -208,14 +285,15 @@ def flow(tmp_path):
     )
     store = ChatSessionStore(tmp_path)
 
-    def create(external=False, project=False, brief=None, source_store=None):
+    def create(external=False, project=False, brief=None, source_store=None, native=False):
         actual_store = source_store or store
         session = actual_store.create_session(
             goal_id="research" if project else "loopx-manager",
             agent_id="codex",
             adapter_kind="codex_app_server",
             upstream_thread_id="test",
-            channel_id="goal.research" if project else "manager.external.test" if external else "manager",
+            channel_id=("goal.research" if project else "manager.external.native.fixture.owner" if native
+                        else "manager.external.test" if external else "manager"),
         )
         turn, _ = actual_store.create_turn(
             session["session_id"],
@@ -692,6 +770,64 @@ def test_later_completion_returns_to_original_conversation_once(flow, external):
         assert len({m[-1] for m in sent}) == 3
 
 
+@pytest.mark.parametrize("outcome", ["delivered", "retry_pending", "explicit_unverified"])
+def test_return_commit_refreshes_session_hint_without_rewriting_original_messages(flow, monkeypatch, outcome):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    sid, rid = session["session_id"], receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Accepted")
+    report(root, "research", "worker", rid, "conclusion", "The receiver returned the original result.")
+    queued = {}
+
+    def sender(*_):
+        # The App can read the appended reply before its provider receipt settles.
+        queued["session"] = store.public_session(store.load_session(sid))
+        queued["messages"] = store.messages(sid)
+        queued["journal"] = (store.sessions_root / sid / "messages.jsonl").read_bytes()
+        view = project_chat_return_deliveries(root, sid, queued["messages"], source_store=store)
+        assert view[-1]["return_delivery"]["status"] == "queued"
+        stamp = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+        monkeypatch.setattr("loopx.chat_store.utc_now", lambda: stamp)
+        return {"ok": outcome == "delivered", "reply_verified": outcome == "delivered",
+                "external_write_performed": outcome == "explicit_unverified"}
+
+    drain(root, registry, store, sender)
+    current = store.public_session(store.load_session(sid))
+    assert reply_status(root, receipt)[0]["status"] == outcome
+    assert current["updated_at"] != queued["session"]["updated_at"], (
+        "A committed delivery change must invalidate a cached bound conversation")
+    assert current["transcript_revision"] == queued["session"]["transcript_revision"]
+    assert store.messages(sid) == queued["messages"]
+    assert (store.sessions_root / sid / "messages.jsonl").read_bytes() == queued["journal"]
+    assert current["active_turn_id"] is None and current["status"] == "ready"
+    assert {path.stem for path in (store.sessions_root / sid / "turns").glob("*.json")} == {turn["turn_id"]}
+    assert all(current[key] == queued["session"][key]
+               for key in current if key != "updated_at")
+
+
+def test_return_read_hint_failure_does_not_resend_committed_reply(flow, monkeypatch, caplog):
+    root, registry, store, create = flow
+    _, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Accepted")
+    report(root, "research", "worker", rid, "conclusion", "The original result is ready.")
+    sent = []
+
+    def unavailable(*args, **kwargs):
+        raise OSError("Synthetic session metadata failure")
+
+    def sender(*args):
+        sent.append(args)
+        monkeypatch.setattr(store, "update_session", unavailable)
+        return {"ok": True, "reply_verified": True}
+
+    assert drain(root, registry, store, sender) == 1
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert "Manager return session read hint unavailable" in caplog.text
+    assert drain(root, registry, store, sender) == 0
+    assert len(sent) == 1
+
+
 def test_result_update_does_not_overtake_unknown_external_delivery(flow):
     root, registry, store, create = flow
     session, _, receipt = create(True)
@@ -742,7 +878,11 @@ def test_external_failure_retries_same_reply_after_restart_without_duplicate_tra
     assert len(calls) == 1
 
     def online(*args):
-        assert args == calls[0]
+        assert args[0] == calls[0][0] and args[2:] == calls[0][2:]
+        assert {key: value for key, value in args[1].items() if key != "updated_at"} == {
+            key: value for key, value in calls[0][1].items() if key != "updated_at"
+        }
+        assert args[1]["updated_at"] != calls[0][1]["updated_at"]
         return {"ok": True, "reply_verified": True}
 
     drain(
@@ -1084,6 +1224,134 @@ def returned_history(flow):
     report(root, "research", "worker", receipt["request_id"], "conclusion", "Completed the original request.")
     assert drain(root, registry, store, None) == 1
     return root, registry, store, session, turn, receipt
+
+
+@pytest.fixture
+def returned_file_history(flow):
+    import os
+
+    if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"):
+        pytest.skip("result snapshots require no-follow directory opens")
+    root, registry, store, create = flow
+    session, turn, receipt = create(external=True, native=True)
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Return the requested artifacts")
+    sources = {"结果.json": b'\xef\xbb\xbf{"result":"verified"}\r\n', "source.bin": b"\x00\xffbinary source\x00",
+               "copy.bin": b"\x00\xffbinary source\x00"}
+    for name, raw in sources.items():
+        (root / name).write_bytes(raw)
+    report(root, "research", "worker", receipt["request_id"], "conclusion",
+        "The result and original artifacts are saved.\n\n" + "Complete original answer. " * 40,
+        registry=registry, attachment_refs=list(sources))
+
+    class Sender:
+        supports_result_files = True
+        calls = 0
+
+        def __call__(self, *_):
+            self.calls += 1
+            return {"ok": True, "reply_verified": True}
+
+    sender = Sender()
+    assert drain(root, registry, store, sender) == 1
+    message = next(row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup")
+    assert not message.get("attachments"), "Reproduce an existing delivered answer whose transcript lost its files"
+    return root, registry, store, session, turn, receipt, message, sources, sender
+
+
+def test_existing_return_files_project_without_resending_or_rewriting(returned_file_history):
+    from loopx.capabilities.manager_context.roundtrip import read_chat_return_file
+
+    root, registry, store, session, _, _, message, sources, sender = returned_file_history
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    messages = store.messages(session["session_id"])
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
+    visible = next(row for row in snapshot["messages"] if row["message_id"] == message["message_id"])
+    assert visible["text"] == message["text"]
+    assert [row["name"] for row in visible["attachments"]] == list(sources)
+    assert all(row["mime_type"] == "application/octet-stream" and row["data_url"].startswith("/api/chat/sessions/")
+               for row in visible["attachments"])
+    for file in visible["attachments"]:
+        attachment, raw = read_chat_return_file(root, store, session["session_id"], message["message_id"],
+            file["id"].removeprefix("result-file."), registry=registry)
+        assert attachment["name"] == file["name"] and raw == sources[file["name"]]
+    assert sender.calls == 1
+    assert store.messages(session["session_id"]) == messages
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+
+
+@pytest.fixture
+def returned_file_http(returned_file_history):
+    import http.client
+    from types import SimpleNamespace
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    root, registry, store, session, *_ = returned_file_history
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.verbose = store, False
+    server.registry_path, server.runtime_root = registry, root
+    server.runtime_controller = SimpleNamespace(coordination_runtime_root=root, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def get(path, headers=None):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", path, headers=headers or {})
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            connection.close()
+
+    try:
+        yield get
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_returned_file_http_preserves_bytes_and_filename(returned_file_history, returned_file_http):
+    from urllib.parse import unquote
+
+    root, registry, store, session, _, _, message, sources, _ = returned_file_history
+    visible = project_chat_return_deliveries(root, session["session_id"], [message], source_store=store, registry=registry)[0]
+    for file in visible["attachments"]:
+        status, headers, raw = returned_file_http(file["data_url"])
+        assert status == 200 and raw == sources[file["name"]]
+        assert headers["Content-Type"] == "application/octet-stream"
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert unquote(headers["Content-Disposition"].split("''")[1]) == file["name"]
+
+
+@pytest.mark.parametrize("drift", ["session", "message", "channel", "turn", "snapshot", "origin"])
+def test_returned_file_http_rechecks_original_source_and_snapshot(returned_file_history, returned_file_http, drift):
+    root, registry, store, session, _, receipt, message, _, _ = returned_file_history
+    visible = project_chat_return_deliveries(root, session["session_id"], [message], source_store=store, registry=registry)[0]
+    file = visible["attachments"][0]
+    url = file["data_url"]
+    if drift == "session":
+        url = url.replace(session["session_id"], "another-session")
+    elif drift == "message":
+        url = url.replace(message["message_id"], "handoff." + "0" * 64)
+    elif drift in {"channel", "turn"}:
+        path = _root(root) / "roundtrips" / (receipt["request_id"] + ".json")
+        route = json.loads(path.read_text())
+        route["channel_id" if drift == "channel" else "client_turn_id"] = "another-source"
+        _write(path, route)
+    elif drift == "snapshot":
+        (_root(root) / "result-files" / file["id"].removeprefix("result-file.").split(".")[0]).write_bytes(b"changed snapshot")
+    status, _, raw = returned_file_http(url, {"Origin": "https://unrelated.example"} if drift == "origin" else None)
+    assert status == (503 if drift == "snapshot" else 403 if drift == "origin" else 404)
+    assert json.loads(raw)["ok"] is False
+
+
+def test_download_attachment_does_not_expand_chat_input_admission(returned_file_history):
+    from loopx.chat_attachments import normalize_chat_attachments
+
+    root, registry, store, session, _, _, message, _, _ = returned_file_history
+    visible = project_chat_return_deliveries(root, session["session_id"], [message], source_store=store, registry=registry)[0]
+    with pytest.raises(ValueError):
+        normalize_chat_attachments(visible["attachments"])
 
 
 @pytest.mark.parametrize("plural", [False, True])

@@ -965,6 +965,13 @@ and time for confirmation, not just the next action's immediate score gain.
 owns the decision semantics; §5.9 owns the subsequent calibration/learning path.
 This is a proposed experiment, not a completed run or established benefit.
 
+The [goal and theory companion](../../research/budgeted-research-planning.md)
+explains the budgeted objective, dependent progress, measurement value and
+causal comparison. Its [worked loop](../../research/budgeted-research-planning.md#worked-loop)
+connects decision-time evidence to adopted work and a terminal outcome. Use that
+rationale to interpret this protocol; a coherent local decision is not itself
+evidence of full-budget benefit.
+
 #### First implementation slice
 
 Use the existing single-agent Stride/Yardstick/Explore path. A revision-pinned
@@ -1027,6 +1034,14 @@ conditional effect from that checkpoint over three hours. It does not establish
 the effect of running the policy from scratch for eighteen hours.
 
 #### Full-budget benefit and later refinement
+
+Keep candidate and controller generalization separate. Native feedback may be
+used during a run exactly as the frozen treatment permits; freezing a policy
+freezes its feedback-response rule, not its ability to adapt. Tasks/outcomes used
+to tune or select that rule are development evidence, not an independent test of
+transfer. Reserve new-task confirmation for the frozen controller, and preserve
+the distinction between independent candidate checks and held-out controller
+tasks. Repeated seeds on one task do not substitute for task coverage.
 
 After a useful pilot, compare **strong Official continuation, current LoopX, and
 the selected planning treatment from the start**, with matched task/model/seed

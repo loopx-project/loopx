@@ -336,6 +336,14 @@ Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
 long captions, restart, missing/unknown receipts, byte mismatch, revocation and
 provider replacement. Installed provider readback remains a separate gate.
 
+The bound App history also displays a read-only notice for an original Lark
+file, audio or video that Core recorded as unsupported. It verifies the exact
+Session, current local owner binding and both original receipts before showing
+the notice. Its source time participates in history pagination; late rows
+invalidate any affected prefix, and a changed notice refreshes the App's
+transcript even when no Turn runs. The notice carries no resource bytes or
+credentials, creates no Turn, and does not resend the original reply.
+
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
 
@@ -1386,10 +1394,14 @@ snapshot, then rechecks an exact connection/Goal source. Interrupted, repeated,
 mis-scoped or inconsistent cursors remain unreadable and retry through the
 existing recovery path, without model replay. Unpaged v1 callers remain
 compatible. This is a stateless read hint, not a new store, consumer, execution
-state or grant. Response row count is bounded; server-side journal reads and
-prefix hashing still scale with full history and no latency improvement is
-claimed. HTTP/store and source/packaged browser checks qualify this bounded
-history path; installed native input, reply threading and live App/Lark media
+state or grant. Response row count is bounded. File Chat may reuse one bounded
+strict parse after reading the journal again and confirming the same raw-byte
+digest. Changed or oversized data uses the strict parser; unreadable data
+still fails the request. Each page verifies its frozen prefix and reads its
+provider overlays afresh. Journal reads and prefix hashing still scale with
+full history. HTTP/store and source/packaged
+browser checks qualify this bounded history path; installed native input,
+reply threading and live App/Lark media
 remain separate acceptance. Earlier baseline and `--pagination-only` runs did
 not qualify the default return scenario's background wait. That historical
 timeout is retained; the default return journey now reads background revisions

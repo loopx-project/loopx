@@ -1399,6 +1399,20 @@ and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
 
+### Preserve an interrupted Official control
+
+For `--worker official --feedback native --eval-interval 0`, the explicit
+`--preserve-failed-worker` option keeps the original Docker worker after a
+confirmed final solver failure. Native auto-resume, scoring, and final archive
+collection keep their ordinary behavior. The retained worker is stopped and
+verified by exact identity; a failed stop observation or receipt write never
+falls through to deletion. Without the option, ordinary cleanup still applies.
+
+The private terminal receipt records source retention only. It does not
+export an authentication file, create a joint checkpoint, or authorize
+a resume. Recover the original evaluator, session, and finite remaining
+budget separately before treating later work as part of this control.
+
 ### Continue an interrupted Host in its retained filesystem
 
 The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
@@ -1540,6 +1554,16 @@ Goal/Stop/session/work admission. Repeating the request selects that same phase,
 including any later failure; it cannot clear the failure or extend its deadline.
 A later explicit repair must bind that new failure separately. Existing operator
 and account authority remain required; a digest is provenance, not permission.
+
+After in-place continuation is admitted, the scheduler atomically publishes
+`active-phase-deadline` beside its state, rounded down from that phase's existing
+deadline. Replaying the same request republishes the same deadline; a refused
+continuation does not replace it. Both held and terminal captures automatically
+select this physical clock, including when the container is paused or stopped.
+They preserve the original `phase-deadline` file as a recovery witness. Fresh
+workers without a continuation clock keep the standard path. An explicitly
+configured supervisor `phase_deadline_path` still takes precedence; unreadable or
+invalid clocks fail capture instead of silently falling back or granting time.
 
 The explicit failed-phase path additionally uses the installed optional native
 Codex provider's existing availability policy (`loopx-codex-provider-routing`).

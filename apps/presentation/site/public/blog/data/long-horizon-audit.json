@@ -1,0 +1,159 @@
+{
+  "source_revision": "9ff3b5a7628da7f7c6776bb4e1eeb011aa47eca0",
+  "source_url": "https://github.com/loopx-project/loopx/blob/9ff3b5a7628da7f7c6776bb4e1eeb011aa47eca0/apps/presentation/site/public/blog/context-delivery/index.html",
+  "basis": "Recalculation of the published per-task cells, not a new experiment or a per-wake raw-data audit.",
+  "context": {
+    "tasks": [
+      {
+        "task": "Grid Robot",
+        "wakes": 29,
+        "baseline_wakes": 15,
+        "delta_wakes": 14,
+        "full_bytes": 4405651,
+        "progressive_bytes": 1166467,
+        "delta_bytes": 474016,
+        "first_body_bytes": 41878,
+        "first_cli_bytes": 76650,
+        "delta_share_reported": 20.7,
+        "first_body_share_reported": 1.8
+      },
+      {
+        "task": "VLIW Scheduling",
+        "wakes": 14,
+        "baseline_wakes": 5,
+        "delta_wakes": 9,
+        "full_bytes": 1297500,
+        "progressive_bytes": 505826,
+        "delta_bytes": 382664,
+        "first_body_bytes": 30860,
+        "first_cli_bytes": 50152,
+        "delta_share_reported": 45.2,
+        "first_body_share_reported": 3.6
+      },
+      {
+        "task": "FFmpeg Encoding",
+        "wakes": 26,
+        "baseline_wakes": 12,
+        "delta_wakes": 14,
+        "full_bytes": 2924522,
+        "progressive_bytes": 874104,
+        "delta_bytes": 759787,
+        "first_body_bytes": 43807,
+        "first_cli_bytes": 75305,
+        "delta_share_reported": 47.1,
+        "first_body_share_reported": 2.7
+      },
+      {
+        "task": "OpenTTD Transport",
+        "wakes": 31,
+        "baseline_wakes": 19,
+        "delta_wakes": 12,
+        "full_bytes": 3288042,
+        "progressive_bytes": 1050623,
+        "delta_bytes": 436053,
+        "first_body_bytes": 36753,
+        "first_cli_bytes": 64619,
+        "delta_share_reported": 30.8,
+        "first_body_share_reported": 2.6
+      },
+      {
+        "task": "Ad Placement",
+        "wakes": 29,
+        "baseline_wakes": 12,
+        "delta_wakes": 17,
+        "full_bytes": 3115820,
+        "progressive_bytes": 1019704,
+        "delta_bytes": 708828,
+        "first_body_bytes": 64174,
+        "first_cli_bytes": 102437,
+        "delta_share_reported": 39.4,
+        "first_body_share_reported": 3.6
+      },
+      {
+        "task": "Borden Inversion",
+        "wakes": 28,
+        "baseline_wakes": 11,
+        "delta_wakes": 17,
+        "full_bytes": 2855664,
+        "progressive_bytes": 1001254,
+        "delta_bytes": 625709,
+        "first_body_bytes": 50602,
+        "first_cli_bytes": 90024,
+        "delta_share_reported": 34.4,
+        "first_body_share_reported": 2.8
+      },
+      {
+        "task": "Rust Workspace",
+        "wakes": 15,
+        "baseline_wakes": 4,
+        "delta_wakes": 11,
+        "full_bytes": 1173832,
+        "progressive_bytes": 439814,
+        "delta_bytes": 363310,
+        "first_body_bytes": 40956,
+        "first_cli_bytes": 64251,
+        "delta_share_reported": 42.1,
+        "first_body_share_reported": 4.7
+      },
+      {
+        "task": "ANN Vector Search",
+        "wakes": 41,
+        "baseline_wakes": 23,
+        "delta_wakes": 18,
+        "full_bytes": 3347659,
+        "progressive_bytes": 1228159,
+        "delta_bytes": 737968,
+        "first_body_bytes": 65419,
+        "first_cli_bytes": 107112,
+        "delta_share_reported": 38.6,
+        "first_body_share_reported": 3.4
+      }
+    ],
+    "delta_full_bytes_reported_approx": 12530000,
+    "denominator_note": "Delta and first-screen shares use only 112 in-cycle wakes. Their Full denominator was published rounded as 12.53 decimal MB; exact per-wake denominators are unavailable in this source."
+  },
+  "stride": {
+    "v1_choices": {
+      "reviews": 37,
+      "grow": 4,
+      "hold": 0,
+      "shrink": 33
+    },
+    "v2_records": 372,
+    "transitions": [
+      {
+        "action": "grow",
+        "total": 34,
+        "improved": 27,
+        "flat": 6,
+        "regressed": 0,
+        "unreconciled": 1
+      },
+      {
+        "action": "verify",
+        "total": 165,
+        "improved": 66,
+        "flat": 97,
+        "regressed": 1,
+        "unreconciled": 1
+      },
+      {
+        "action": "switch",
+        "total": 50,
+        "improved": 8,
+        "flat": 37,
+        "regressed": 0,
+        "unreconciled": 5
+      }
+    ],
+    "latest": {
+      "reviews": 25,
+      "scored_transitions": 17,
+      "improved": 12,
+      "flat": 5,
+      "regressed": 0
+    },
+    "source_url": "https://github.com/loopx-project/loopx/blob/9ff3b5a7628da7f7c6776bb4e1eeb011aa47eca0/apps/presentation/site/public/blog/edgebench-feedback-and-memory/index.html",
+    "uncertainty": "Published text and labels do not independently classify 1 grow, 1 verify and 5 switch outcomes. They remain unreconciled; no residual is assumed to be a regression or a flat result."
+  }
+}

@@ -31,13 +31,17 @@ const EXPLORE_BEFORE_WORK = {
   optionalCapture: "Capture is optional, not a settlement obligation.",
   negativeEvidence: "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
   rawEvidence: "Keep raw logs local.",
-  measurementConditions: "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; separate local proxies from native results.",
+  measurementConditions: "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; keep distinct workloads or evaluation conditions in their own profiles.",
   measurementProvenance: "input_revision identifies the evaluated task/data revision; evaluation_ref identifies the evaluator/scoring protocol version. Keep both stable across candidates only when those conditions are verified unchanged. Put candidate code/artifact revisions in candidate_ref and individual evaluation/submission receipts in evidence_ref, not in the comparison keys. The measurement input revision and evidence reference must match this finding. If comparability is unknown, keep results separate and explain the uncertainty; never invent a shared version to obtain a delta.",
   feedbackBeforeWork: "Use null for an unmeasured value. Read measurement_feedback before repeating a measured route: compare the latest recorded candidate with its same-scope best, investigate regressions and retain useful alternatives; a score does not itself close or authorize work.",
+  inTurnFeedback: "For an open claimed Todo, a result can inform the next action in this Turn: record this same attachment with `loopx explore finding --result-json FILE` and its current Goal, Agent, Todo and Turn. The receipt returns scoped feedback without settling or spending.",
   executionEvidence: "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
 };
 export function exploreBeforeWorkGuidance(): string {
   return Object.values(EXPLORE_BEFORE_WORK).join(" ");
+}
+export function exploreInTurnFeedbackGuidance(): string {
+  return EXPLORE_BEFORE_WORK.inTurnFeedback;
 }
 /** Shared point-of-use guidance; optional metadata never changes settlement. */
 export function exploreResultWritebackAffordance(): JsonObject {
@@ -103,6 +107,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
       EXPLORE_BEFORE_WORK.measurementProvenance,
       "To reuse explicitly verified conditions, optional measurement_context supplies comparison_scope, input_revision and evaluation_ref for observations that omit those fields; conflicting fields reject. CLI finding accepts the same context via --measurement-context-json. This copies declared conditions, not proof of comparability.",
       EXPLORE_BEFORE_WORK.feedbackBeforeWork,
+      EXPLORE_BEFORE_WORK.inTurnFeedback,
       EXPLORE_BEFORE_WORK.executionEvidence,
       `Use optional_execution_observation_example when the execution used this finding's tested input. Omit the nested input_revision and set its evidence_refs to "${FINDING_EVIDENCE_SELECTION}" only if all finding refs describe this execution, or list the exact opaque subset. Supply the actual candidate and execution facts. A released result still needs its result_ref and matching result_candidate_sha256.`,
       `Questions allow ${QUESTION_LIMIT} characters, applicability ${APPLICABILITY_LIMIT}, observations 320, and interpretations 1200. The complete scoped summary is preserved within 2000 characters.`,
@@ -197,12 +202,13 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("Explore result attachment contains unknown fields");
   }
   requireStringLiteral(row.schema_version, [EXPLORE_RESULT_ATTACHMENT_SCHEMA], "attachment schema");
-  const question = text(row.question, "question", QUESTION_LIMIT);
-  const applicability = text(row.applicability, "applicability", APPLICABILITY_LIMIT);
+  const resolved = {...row, ...questionScope(row, linkedScope)};
+  const question = text(resolved.question, "question", QUESTION_LIMIT);
+  const applicability = text(resolved.applicability, "applicability", APPLICABILITY_LIMIT);
   // Identity is mechanical, never inferred evidence. Exact scoped text, not
   // revision/status/observation, binds successive results to the same question.
-  const node = Object.hasOwn(row, "node_id")
-    ? explicitNodeId(row.node_id)
+  const node = Object.hasOwn(resolved, "node_id")
+    ? explicitNodeId(resolved.node_id)
     : "question_" + createHash("sha256").update(JSON.stringify([question, applicability])).digest("hex");
   if (!Array.isArray(row.evidence_refs) || !row.evidence_refs.length || row.evidence_refs.length > 8) {
     throw new EffectRuntimeRequestError("evidence_refs requires one to eight opaque evidence identifiers");
@@ -270,7 +276,7 @@ function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedS
   return normalizeAttachment({...row, ...questionScope(row, linkedScope), schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
     observation: delta.observed_reality, interpretation: decision, evidence_refs: refs});
 }
-/** Only an explicit reference to the claimed Todo's stored question can reuse scope. */
+/** Reuse only an unambiguous question linked by the claimed Todo. */
 function questionScope(row: JsonObject, value: unknown): JsonObject {
   const question = Object.hasOwn(row, "question"), applicability = Object.hasOwn(row, "applicability");
   if (question && applicability) return {};
@@ -278,14 +284,15 @@ function questionScope(row: JsonObject, value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("Supply both question and applicability, or omit both for a linked question");
   }
   const scope = requireJsonObject(value, "Explore capture requires a canonical linked question scope");
-  const nodeId = explicitNodeId(row.node_id);
+  const nodeId = Object.hasOwn(row, "node_id") ? explicitNodeId(row.node_id) : null;
   const refs = requireStringArray(scope.requested_node_refs, "linked question refs");
   const nodes = Array.isArray(scope.nodes) ? scope.nodes.map(node => requireJsonObject(node, "linked question")) : [];
-  const matches = nodes.filter(node => node.node_id === nodeId && node.node_kind === "question");
-  if (!refs.includes(nodeId) || matches.length !== 1) {
-    throw new EffectRuntimeRequestError("Explore capture requires an existing question linked to this Todo");
+  const matches = nodes.filter(node => typeof node.node_id === "string" && refs.includes(node.node_id)
+    && node.node_kind === "question" && (nodeId === null || node.node_id === nodeId));
+  if (matches.length !== 1) {
+    throw new EffectRuntimeRequestError("Explore capture requires one existing question linked to this Todo; use its node_id when ambiguous");
   }
-  return {question: text(matches[0].title, "question", QUESTION_LIMIT),
+  return {node_id: explicitNodeId(matches[0].node_id), question: text(matches[0].title, "question", QUESTION_LIMIT),
     applicability: text(matches[0].summary, "applicability", APPLICABILITY_LIMIT)};
 }
 export function normalizeExploreResultAttachment(params: JsonObject): JsonObject {
