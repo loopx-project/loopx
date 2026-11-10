@@ -55,6 +55,9 @@ def test_mcp_legacy_content_and_string_result_schema_remain_compatible(monkeypat
             assert len(result.content) == 1
             assert result.structuredContent == {"result": result.content[0].text}
             received = json.loads(result.content[0].text)
+            # Existing Python adapter aliases remain a string API and keep the
+            # same historical host projection as the actual MCP tool.
+            assert json.loads(getattr(control, name)()) == received
             if "schema_version" in source:
                 assert received == source
             else:

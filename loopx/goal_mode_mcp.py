@@ -175,12 +175,17 @@ class GoalModeMCPControlPlane:
             ],
         )
 
-    def should_run(self) -> str:
+    def _read_guard(self) -> str:
+        """Read the CLI source once, before its host transport projection."""
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
         args, legacy_args = self.should_run_args(goal_id, self.bound_agent_id())
         return self.run_cli(args, legacy_args=legacy_args)
+
+    def should_run(self) -> str:
+        result = project_host_interaction(self._read_guard())
+        return result.source if isinstance(result, McpGuardContent) else result
 
     def list_todos(self) -> str:
         return self.should_run()
@@ -354,11 +359,11 @@ def create_fastmcp_server(
 
     def should_run() -> Any:
         """Read the bound decision; MCP guidance is separate in complete-v1, inline in legacy results."""
-        return guard_content(control.should_run())
+        return guard_content(control._read_guard())
 
     def list_todos() -> Any:
         """Read visible Todo decisions; MCP guidance is separate in complete-v1, inline in legacy results."""
-        return guard_content(control.list_todos())
+        return guard_content(control._read_guard())
 
     # The SDK is optional and imported inside this factory. Supply its evaluated
     # native-result annotation before registration; postponed annotations cannot
