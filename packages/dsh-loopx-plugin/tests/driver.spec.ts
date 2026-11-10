@@ -466,6 +466,122 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
   })
 }
 
+describe('driver diagnostic records', () => {
+  it('records the maintenance signal independently of the Driver controller', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      resolveCommand: async () => {
+        maintenance.abort()
+        throw new LoopXCliError('missing', 'PRIVATE output', false)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings[0]).toContain('stage=resolve-command kind=missing')
+      expect(warnings[0]).toContain('signal_aborted=true')
+    } finally { await driver.dispose() }
+  })
+
+  it.each([
+    ['resolve-command', '--version'], ['resolve-binding', 'resolve-agent-thread'],
+    ['quota', 'should-run'], ['heartbeat', 'heartbeat-prompt'],
+  ])('identifies %s failures without publishing command output', async (stage, arg) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: async (file, args, options) => {
+        if (args.includes(arg)) throw new LoopXCliError('missing', 'PRIVATE command output', false, undefined, { osCode: 'ENOENT' })
+        return fixture.runner(file, args, options)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(`admission_failed stage=${stage} kind=missing`)
+      expect(warnings[0]).toMatch(/code=ENOENT .*candidate=(path-loopx|python-module) cwd_exists=(true|false).* elapsed_ms=\d+$/u)
+      expect(warnings.join('')).not.toContain('PRIVATE')
+      expect(host.nextTurn).toHaveLength(0)
+    } finally { await driver.dispose() }
+  })
+
+  it('distinguishes a typed maintenance-slot failure', async () => {
+    const host = fakeAgent()
+    const warnings: string[] = []
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(() => { throw new LoopXCliError('transport', 'PRIVATE', true) })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, warn: message => warnings.push(message) })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings[0]).toContain('stage=maintenance-slot kind=transport')
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+
+  it.each(['before', 'downstream'])('records only competing source kinds in the %s batch', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner: fixture.runner, retryDelaysMs: [0, 0],
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      const other = userMessage('PRIVATE message text')
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      expect(await driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
+        new AbortController().signal, async () => ({ kind: 'enter', messages: [submitted, other] }),
+      )).toEqual({ kind: 'reject' })
+      expect(warnings[0]).toContain(`reason=${phase === 'before' ? 'competing-messages' : 'downstream-batch'} other_kinds=user`)
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+})
+
+describe('pre-step authority diagnostics', () => {
+  it('records a failed recheck before rejecting its continuation', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    let failRecheck = false
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: (file, args, options) => {
+        if (failRecheck) throw new LoopXCliError('missing', 'PRIVATE path', false, undefined, { osCode: 'ENOENT' })
+        return fixture.runner(file, args, options)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      failRecheck = true
+      expect(await driver.onPreStep(host.agent, [submitted], new AbortController().signal,
+        async () => ({ kind: 'enter', messages: [submitted] }),
+      )).toEqual({ kind: 'reject' })
+      expect(warnings[0]).toContain('admission_failed stage=pre-step-recheck kind=missing')
+      expect(warnings[1]).toContain('reason=authority-before-next other_kinds=none')
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+})
+
 describe('same-session LoopX driver', () => {
   it('does not report a cancelled maintenance probe as a missing CLI', async () => {
     const host = fakeAgent()

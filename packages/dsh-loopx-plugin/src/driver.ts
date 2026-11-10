@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   LoopXCliError,
+  cliErrorFields,
   resolveLoopXCommand,
   runJsonCommand,
   supportedLoopXVersion,
@@ -112,6 +113,18 @@ interface WaitPlan {
 }
 
 type EvaluationPlan = QueuePlan | WaitPlan
+type AdmissionStage = 'resolve-command' | 'resolve-binding' | 'quota' | 'heartbeat'
+  | 'pre-step-recheck' | 'maintenance-slot'
+
+function preStepRejection(
+  reason: string, messages: UserMessage[], submitted: UserMessage, startedAt: number,
+): string {
+  const kinds = [...new Set(messages.filter(message => message.id !== submitted.id).map(message => {
+    const kind = message.source?.kind
+    return typeof kind === 'string' && /^[a-z][a-z0-9-]{0,47}$/u.test(kind) ? kind : 'unknown'
+  }))].sort().slice(0, 16)
+  return `pre_step_rejected stage=pre-step-recheck reason=${reason} other_kinds=${kinds.join(',') || 'none'} elapsed_ms=${Math.round(performance.now() - startedAt)}`
+}
 
 export interface LoopXDriverOptions {
   readonly isLiveAgent: (agent: Agent) => boolean
@@ -807,8 +820,10 @@ export class LoopXContinuationDriver {
       : messages.find(message => message.id === reservation.messageId)
         ?? messages.find(message => isDriverMessage(message))
     if (submitted === undefined) return next()
+    const startedAt = performance.now()
     if (reservation === undefined || !sameReservation(submitted, reservation)
       || reservation.phase !== 'claimed') {
+      this.warn(`dsh-loopx-driver: ${preStepRejection(reservation === undefined ? 'missing-reservation' : !sameReservation(submitted, reservation) ? 'reservation-mismatch' : 'reservation-not-claimed', messages, submitted, startedAt)}`)
       if (reservation !== undefined && submitted.id === reservation.messageId) {
         this.retireReservation(state)
       }
@@ -816,12 +831,14 @@ export class LoopXContinuationDriver {
       return { kind: 'reject' }
     }
     if (messages.some(message => message.id !== submitted.id && !isHostContextMessage(message))) {
+      this.warn(`dsh-loopx-driver: ${preStepRejection('competing-messages', messages, submitted, startedAt)}`)
       this.retireReservation(state)
       this.restoreOtherMessages(agent, messages, submitted)
       return { kind: 'reject' }
     }
 
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
+      this.warn(`dsh-loopx-driver: ${preStepRejection('authority-before-next', messages, submitted, startedAt)}`)
       this.retireReservation(state)
       this.restoreOtherMessages(agent, messages, submitted)
       this.requestEvaluation(state)
@@ -842,6 +859,7 @@ export class LoopXContinuationDriver {
       return decision
     }
     if (decision.kind === 'reject') {
+      this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-reject', messages, submitted, startedAt)}`)
       state.pauseAfterTurnError = true
       this.retireReservation(state)
       return decision
@@ -850,11 +868,13 @@ export class LoopXContinuationDriver {
     if (decision.messages.filter(message => !isHostContextMessage(message)).length !== 1
       || admitted === undefined
       || !sameReservation(admitted, reservation)) {
+      this.warn(`dsh-loopx-driver: ${preStepRejection('downstream-batch', decision.messages, submitted, startedAt)}`)
       this.retireReservation(state)
       this.restoreOtherMessages(agent, decision.messages, submitted)
       return { kind: 'reject' }
     }
     if (!(await this.authorityStillAllows(state, reservation, signal))) {
+      this.warn(`dsh-loopx-driver: ${preStepRejection('authority-after-next', decision.messages, submitted, startedAt)}`)
       this.retireReservation(state)
       this.restoreOtherMessages(agent, decision.messages, submitted)
       return { kind: 'reject' }
@@ -982,6 +1002,9 @@ export class LoopXContinuationDriver {
 
   private async evaluate(state: DriverState): Promise<boolean> {
     if (!this.ready(state)) return false
+    const startedAt = performance.now()
+    let stage: AdmissionStage = 'maintenance-slot'
+    let admissionSignal: AbortSignal | undefined
     const controller = new AbortController()
     state.controller = controller
     let evaluationStarted = false
@@ -991,7 +1014,8 @@ export class LoopXContinuationDriver {
       plan = await state.agent.runMaintenance(async maintenanceSignal => {
         evaluationStarted = true
         const signal = AbortSignal.any([controller.signal, maintenanceSignal])
-        return this.buildPlan(state, signal)
+        admissionSignal = signal
+        return this.buildPlan(state, signal, value => { stage = value })
       })
     } catch (error: unknown) {
       if (!evaluationStarted && !controller.signal.aborted
@@ -1016,7 +1040,7 @@ export class LoopXContinuationDriver {
         this.command = undefined
       }
       if (!controller.signal.aborted && !cancelled) {
-        this.warn(`dsh-loopx-driver: LoopX admission failed: ${renderThrown(error)}`)
+        this.warn(`dsh-loopx-driver: admission_failed stage=${stage} ${cliErrorFields(error)} signal_aborted=${admissionSignal?.aborted ?? controller.signal.aborted} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
       }
       return evaluationStarted
     } finally {
@@ -1067,11 +1091,14 @@ export class LoopXContinuationDriver {
   private async buildPlan(
     state: DriverState,
     signal: AbortSignal,
+    setStage: (stage: AdmissionStage) => void,
   ): Promise<EvaluationPlan> {
     const session = state.agent.session
     this.ensureReady(state, signal, session)
+    setStage('resolve-command')
     const command = await this.loopXCommand(signal)
     this.ensureReady(state, signal, session)
+    setStage('resolve-binding')
     const bindingPayload = await this.resolveBinding(command, state.agent, signal)
     this.ensureReady(state, signal, session)
     if (bindingPayload.ok !== true) {
@@ -1087,6 +1114,7 @@ export class LoopXContinuationDriver {
     }
 
     const turnInstanceId = this.makeTurnInstanceId()
+    setStage('quota')
     const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
@@ -1107,6 +1135,7 @@ export class LoopXContinuationDriver {
     if (quota.should_run !== true) {
       return schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
     }
+    setStage('heartbeat')
     const heartbeat = await this.readHeartbeat(
       command,
       state.agent,
@@ -1145,6 +1174,7 @@ export class LoopXContinuationDriver {
     signal: AbortSignal,
   ): Promise<boolean> {
     if (!this.reservationIsCurrent(state, reservation, signal)) return false
+    const startedAt = performance.now()
     try {
       const command = await this.loopXCommand(signal)
       const bindingPayload = await this.resolveBinding(command, state.agent, signal)
@@ -1170,7 +1200,7 @@ export class LoopXContinuationDriver {
         this.command = undefined
       }
       if (!(error instanceof LoopXCliError && error.kind === 'aborted')) {
-        this.warn(`dsh-loopx-driver: pre-step authority check failed: ${renderThrown(error)}`)
+        this.warn(`dsh-loopx-driver: admission_failed stage=pre-step-recheck ${cliErrorFields(error)} elapsed_ms=${Math.round(performance.now() - startedAt)}`)
       }
       return false
     }
