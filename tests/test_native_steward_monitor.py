@@ -34,6 +34,15 @@ def local_watch_row(runtime, actor, todo_id):
         todo_id=todo_id, role="agent")["todo"]
 
 
+def stop_watch_goal(runtime, actor):
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+    stopped = set_goal_activation_state(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        state="stopped", reason="Original owner stopped this synthetic Goal.",
+        runtime_root_override=str(runtime.coordination_runtime_root), actor_kind="owner", execute=True)
+    assert stopped["ok"] and stopped["written"] and stopped["readback"]["verified"], stopped
+    return stopped
+
+
 def edit_local_watch(runtime, actor, todo_id, *changes):
     from loopx.capabilities.native_chat.steward_commands import native_command
     monitor = StewardMonitor(runtime)
@@ -210,22 +219,22 @@ def test_local_native_watch_denials_keep_original_deadline_and_invoke_no_model(s
             "wrong_session": ["--target-key", "managed-session-watch." + "0"*32],
             "not_watch": ["--action-kind", "different_source"]}[fault]
         edit_local_watch(runtime, actor, todo_id, *changes)
-    elif fault in {"revoked", "stopped", "lifetime"}:
+    elif fault in {"revoked", "lifetime"}:
         data = json.loads(runtime.registry_path.read_text())
         goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
         if fault == "revoked":
             goal["coordination"]["registered_agents"] = ["peer"]
-        elif fault == "stopped":
-            goal["status"] = "stopped"
         else:
             goal["goal_instance_id"] = "replacement"
         runtime.registry_path.write_text(json.dumps(data))
     elif fault == "busy":
         store.update_session(session["session_id"], active_turn_id="original-busy")
-    else:
+    elif fault == "queued":
         store.create_queued_turn(session["session_id"], client_turn_id="user-first", message="Keep this first", origin="web")
     before, watch = capture.read_bytes(), local_watch_row(runtime, actor, todo_id)
     history = store.messages(session["session_id"])
+    if fault == "stopped":
+        stop_watch_goal(runtime, actor)
     assert not pump_steward_monitors(runtime)
     assert capture.read_bytes() == before and local_watch_row(runtime, actor, todo_id) == watch
     assert store.messages(session["session_id"]) == history
@@ -239,19 +248,20 @@ def test_local_watch_rechecks_native_authority_after_collection_before_poll(stew
     store, runtime, *_ = steward
     before, watch = capture.read_bytes(), local_watch_row(runtime, actor, todo_id)
     original_commit = StewardMonitor._commit_poll
+    stop_receipt = None
     def changed(monitor, host, request, turn, context, argv):
+        nonlocal stop_receipt
         if fault == "pause":
             native_command(runtime, ["todo", "update", "--goal-id", actor["goal_id"],
                 "--todo-id", todo_id, "--agent-id", actor["agent_id"], "--update-operation-id", "pause-original-watch",
                 "--role", "agent", "--reason", "Owner paused the original native watch.",
                 "--status", "blocked", "--clear-resume-when", "--execute"])
+        elif fault == "stop":
+            stop_receipt = stop_watch_goal(runtime, actor)
         else:
             data = json.loads(runtime.registry_path.read_text())
             goal = next(g for g in data["goals"] if g["id"] == actor["goal_id"])
-            if fault == "revoke":
-                goal["coordination"]["registered_agents"] = ["peer"]
-            else:
-                goal["status"] = "stopped"
+            goal["coordination"]["registered_agents"] = ["peer"]
             runtime.registry_path.write_text(json.dumps(data))
         return original_commit(monitor, host, request, turn, context, argv)
     monkeypatch.setattr(StewardMonitor, "_commit_poll", changed)
@@ -259,6 +269,8 @@ def test_local_watch_rechecks_native_authority_after_collection_before_poll(stew
     assert len(turns) == 1
     result = finish(runtime, turns[0])
     assert result["status"] == "failed", result
+    if fault == "stop":
+        assert stop_receipt is not None, result
     after = local_watch_row(runtime, actor, todo_id)
     for key in ["result_hash", "last_checked_at", "next_due_at", "material_change_generation"]:
         assert after.get(key) == watch.get(key)
@@ -1019,14 +1031,10 @@ def test_restarted_host_reads_paused_state_then_runs_one_fresh_native_generation
 
 
 def test_native_goal_stop_blocks_observation_and_owner_can_still_pause_the_monitor(steward, tmp_path, monkeypatch):
-    from loopx.control_plane.goals.activation_service import set_goal_activation_state
     _, runtime, _, transport, binding, capture, _ = steward
     _, actor, monitor = prepared(steward, tmp_path, monkeypatch)
     before, calls = monitor.current(actor), capture.read_bytes()
-    stopped = set_goal_activation_state(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
-        state="stopped", reason="Original owner stopped this synthetic Goal.",
-        runtime_root_override=str(runtime.coordination_runtime_root), actor_kind="owner", execute=True)
-    assert stopped["ok"]
+    stop_watch_goal(runtime, actor)
     assert not pump_steward_monitors(runtime)
     assert monitor.current(actor) == before and capture.read_bytes() == calls
     health = transport.managed_steward.health(binding["binding_id"])
