@@ -275,12 +275,21 @@ def dispatch_turn_context_hooks(
                 and result.get("instructions") == []
                 and result.get("result_fields") == {}
             )
+            binding: dict[str, Any] = (
+                {"readback_only": True} if readback_only else {"source": source}
+            )
+            if not readback_only and isinstance(source.get("heartbeat_receipt"), Mapping):
+                from .quota.turn_envelope import pack_turn_source
+
+                transport = pack_turn_source(source)
+                if transport is not None:
+                    binding = {"source_transport": transport}
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    **({"readback_only": True} if readback_only else {"source": source}),
+                    **binding,
                 },
             )
             readback = contribution.pop("readback")

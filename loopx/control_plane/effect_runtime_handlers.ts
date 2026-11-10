@@ -806,6 +806,8 @@ export function createEffectRuntimeHandlers(
     ["work_item.yardstick.presentation", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectWorkYardstickPresentations}) => projectWorkYardstickPresentations)],
     ["work_item.yardstick.sources", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({projectWorkYardstickSourceRequests}) => projectWorkYardstickSourceRequests)],
     ["work_item.yardstick.continuation", lazyHandler(() => import("./work_items/yardstick_source.ts"), ({validateWorkYardstickContinuation}) => validateWorkYardstickContinuation)],
+    ["explore.finding.admit", lazyHandler(() => import("./capabilities/explore_work_finding.ts"), ({admitExploreWorkFinding}) => admitExploreWorkFinding)],
+    ["explore.finding.receipt", lazyHandler(() => import("./work_items/yardstick_decision.ts"), ({projectExploreFindingReceipt}) => projectExploreFindingReceipt)],
     ["explore.configuration.resolve", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreConfiguration}) => resolveExploreConfiguration)],
     ["explore.configuration.goal", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({resolveExploreGoalConfiguration}) => resolveExploreGoalConfiguration)],
     ["explore.configuration.plan", lazyHandler(() => import("./capabilities/explore_configuration.ts"), ({planExploreConfiguration}) => planExploreConfiguration)],

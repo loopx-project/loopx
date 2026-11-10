@@ -154,6 +154,82 @@ def test_each_worker_receives_and_records_selected_prompt(tmp_path, monkeypatch,
     assert len(uploads) == 1  # Resume does not replace a live task context.
 
 
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize(("feedback", "compare"), [
+    ("native", False), ("native", True), ("blind", False), ("best-only", False),
+])
+def test_worker_delivers_exact_file_set_guidance_only_with_native_probe(
+        tmp_path, monkeypatch, profile, feedback, compare):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.edgebench.prompts import research_artifact_instructions
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    agents = workspace / "AGENTS.md"
+    agents.write_text("Preserve the original task contract.\n")
+    query = "Improve the supplied solution under its original acceptance rules."
+    instructions = None
+    if feedback == "native":
+        instructions = native_task_instructions(["solver.py", "result.json"],
+            submission_cooldown=3600, eval_interval=0, internet=False,
+            selection="score_first", score_direction="maximize")
+        instructions += research_artifact_instructions(
+            checkpoint=False, native_probe=True, native_result_comparison=compare)
+        prompt = instructions + "---\n\n" + query + "\n"
+    else:
+        render = blind_task_prompt if feedback == "blind" else best_only_task_prompt
+        prompt = render(query, ["solver.py", "result.json"], eval_interval=600)
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd=str(workspace), feedback=feedback, feedback_prompt=prompt,
+        workspace_instructions=instructions, task_objective=query if instructions else None,
+        execution_observation="local_probe")
+    worker.backend = SimpleNamespace(start_feedback=lambda handle: None)
+    worker.handle, worker.log_dir = "synthetic-worker", tmp_path
+    remote = tmp_path / "worker-prompt.md"
+    remote.write_text("previous wrapper")
+    delivered = []
+
+    class Environment:
+        async def upload_file(self, source, target):
+            Path(target).write_bytes(Path(source).read_bytes())
+
+        async def exec(self, command):
+            result = subprocess.run(["/bin/bash", "-c", command], capture_output=True, text=True)
+            return SimpleNamespace(return_code=result.returncode, stdout=result.stdout)
+
+    async def receive(environment, text, **kwargs):
+        delivered.append(text)
+
+    async def configure(*args, **kwargs):
+        return {"ok": True}
+
+    worker.environment = Environment()
+    worker.runtime = SimpleNamespace(goal_id="fixture-goal", execution=SimpleNamespace(uses_loopx=True),
+        _prepare_phase=receive, _write_task_document=receive, _loopx=configure,
+        _worker_env=lambda **kwargs: {})
+    monkeypatch.setattr("benchmark.runtime.sforge.worker_command", lambda *args, **kwargs: ["worker"])
+    worker.format_run_cmd(str(remote), internet=False)
+    assert delivered == [prompt]
+    assert remote.read_text() == (tmp_path / "agent_prompt.md").read_text() == prompt
+    if feedback == "native":
+        assert agents.read_text().endswith(instructions)
+        for text in [prompt, agents.read_text(), delivered[0]]:
+            assert "does not require a local probe or a new submission" in text
+            assert "content refs do not cover modes" in text
+            assert "each producer's actual workload and evaluator" in text
+            assert "limits pairing, not retention of either result" in text
+            assert "Preserve earlier refs" in text
+            assert "Use its verified candidate_ref for both measurements" not in text
+    else:
+        assert agents.read_text() == "Preserve the original task contract.\n"
+        assert "loopx-bind-native-candidate" not in prompt
+        assert "submitted_file_set_ref" not in prompt
+
+
 @pytest.mark.parametrize("query", [
     "Original task: maximize A subject to B. Keep native acceptance and ranking.",
     "Use an early diagnostic submission before implementing the remaining targets.",
