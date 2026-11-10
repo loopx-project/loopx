@@ -664,12 +664,25 @@ carrier 增长余量。相同版本增长、变化／缺失控制继续受约束
 [预算 owner 的决定](../../../reference/contracts/interface-budget-contract.md#complete-quota-carrier-differential-qualification)。
 该控制子集不证明完整来源等价、模型采用或效率净收益，不关闭父 C1 验收。
 
-上述版本化 carrier 资格不退役现有普通 Markdown `--turn-envelope` reader。
-省略 context delivery 或设为 `auto`，且没有活动原生交付或 managed handoff 时，
-它保留与完整 capture 同一次 TypeScript 组合产生的有界视图。显式 `off` 保留原
-展示，JSON、原生及 handoff 路径各自遵守原交付合同。这是展示适配器，不是第二个
-writer 或决策 owner；只有具名消费者迁移、替换与恢复资格完成后才能退役，
-carrier 余量通过本身不够。
+候选现在迁移普通 Markdown `--turn-envelope` 调用者：省略 delivery 或设为 `auto`
+时使用现有完整 v1 Markdown reader，与普通 JSON 及未带该标志的 Markdown 一致。
+格式不再选择有界 v0 视图。`compose_quota_cli_source` 调用同一 typed composition
+owner，只捕获一次结果，并原样交给现有 renderer；没有新增 writer、decoder 或结算规则。
+普通 Markdown 结算检查在隔离 File 和 SQLite 上执行实际输出的命令：提前扣额及
+不成立的进展被拒绝，先持久写回再扣额，重放仍只有一次扣额。原生 Codex profile
+继续要求 JSON 和捕获目的地；这次普通 reader 迁移不把原生 Markdown 变成可执行传输。
+
+| Reader 边界 | 候选行为与退役条件 |
+| --- | --- |
+| 普通 Markdown，省略 delivery／`auto` | 完整 v1 块，保留每个捕获字段及原绑定。File／SQLite CLI 检查将其完整解码内容与不可变 capture 对比，再恢复同一来源，不重新准入或扣额。 |
+| 显式 `off` 加 `--turn-envelope` | 保留同一次组合产生的有界兼容展示。这个显式调用者仍使用 v0 展示适配器；普通 reader 迁移不删除它。 |
+| Native 与 managed handoff | 保持经校验的完整来源展示和原恢复合同；Markdown 格式不降级 handoff。 |
+| 已记录的 v0 capture、plan 与 request | 保留原版本完整性／恢复 reader，直到未结准入工作及受支持恢复窗口核清。无效新来源不能选择该回退。 |
+
+这改变候选的默认 Markdown 格式合同。完整正文可能显著大于旧动作摘要；现有同源
+progressive reader 仍承担有界材料交付。不能把 reader 退役说成 stdout 或模型成本
+节省。安装态 Host 采用、独立 exact-head review，以及原 quota 单会话成果／完整成本
+对照仍待完成。显式 off 与历史恢复是各自受支持的边界，不代表活跃的第二个决策 owner。
 
 模型行为评测沿既有版本／完整性 owner 读取显式提供的完整来源，实验臂标签不再决定
 是否使用 v0 字段指令。两臂的 schema 和保密边界均在任一 actor 调用前检查完毕。

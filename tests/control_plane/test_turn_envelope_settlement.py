@@ -28,8 +28,9 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", [None, "auto", "off"])
-def test_ordinary_markdown_keeps_bounded_view_and_complete_capture(
-    tmp_path, monkeypatch, record_property, provider, delivery,
+@pytest.mark.parametrize("envelope", [False, True])
+def test_markdown_reads_complete_source_except_explicit_off_compatibility(
+    tmp_path, monkeypatch, record_property, provider, delivery, envelope,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
@@ -43,7 +44,8 @@ def test_ordinary_markdown_keeps_bounded_view_and_complete_capture(
         [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
          "--runtime-root", str(runtime), "--format", "markdown", "quota", "should-run",
          "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
-         "--turn-instance-id", TURN_ID, "--turn-envelope", "--decision-output-dir", str(capture),
+         "--turn-instance-id", TURN_ID, "--decision-output-dir", str(capture),
+         *(["--turn-envelope"] if envelope else []),
          *(["--context-delivery", delivery] if delivery else [])],
         cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
         capture_output=True, text=True, check=False,
@@ -52,15 +54,24 @@ def test_ordinary_markdown_keeps_bounded_view_and_complete_capture(
     record_property("markdown_chars", len(result.stdout))
     record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
     assert result.stdout.startswith("# LoopX Turn Envelope\n")
-    assert "- should_run: `True`" in result.stdout
-    assert "- effective_action: `normal_run`" in result.stdout
     assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
-    assert '"schema_version": "loopx_turn_envelope_v1"' not in result.stdout
-    assert len(result.stdout) <= 4800
-    # The display is not another writer or a loss of the original decision.
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
     assert source["schema_version"] == "loopx_turn_envelope_v1"
+    if delivery == "off" and envelope:
+        assert "- should_run: `True`" in result.stdout
+        assert "- effective_action: `normal_run`" in result.stdout
+        assert '"schema_version": "loopx_turn_envelope_v1"' not in result.stdout
+        assert len(result.stdout) <= 4800
+    else:
+        # The public Markdown entrypoint delivers every captured field, not
+        # just an action summary. It uses the already supported complete reader.
+        body = result.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        shown = json.loads(body)
+        assert shown["should_run"] is True
+        assert shown["effective_action"] == "normal_run"
+        assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
+    # Both readers recover the identical admitted source without a second guard.
     assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
     assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID
     from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
@@ -162,25 +173,42 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
     assert envelope["writeback"]["spend_after_validation"] is False
 
 
-@pytest.mark.parametrize("profile_args", [
-    ("--codex-app",),
-    ("--runtime-profile", "generic_cli"),
-    ("--runtime-profile", "codex_app_ssh_goal"),
+@pytest.mark.parametrize("profile_args, output_format, provider", [
+    (("--codex-app",), "json", "file"),
+    (("--runtime-profile", "generic_cli"), "json", "file"),
+    (("--runtime-profile", "codex_app_ssh_goal"), "json", "file"),
+    (("--runtime-profile", "generic_cli"), "markdown", "file"),
+    (("--runtime-profile", "generic_cli"), "markdown", "sqlite"),
 ])
-def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_args):
+def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, profile_args, output_format, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     project, runtime, registry = _write_fixture(tmp_path / "quoted inputs")
     _configure_read_only_todo(project)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", TURN_ID, )
-    rc, full = _run_cli(registry, runtime, *args)
-    assert rc == 0, full
-    rc, envelope = _run_cli(registry, runtime, *args, "--context-delivery", "off", "--turn-envelope")
-    assert rc == 0, envelope
+    if output_format == "markdown":
+        root = Path(loopx.__file__).resolve().parent.parent
+        delivered = subprocess.run(
+            [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+             "--runtime-root", str(runtime), "--format", "markdown", *args, "--turn-envelope"],
+            cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
+            capture_output=True, text=True, check=False,
+        )
+        assert delivered.returncode == 0, delivered.stderr or delivered.stdout
+        full = json.loads(delivered.stdout.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
+    else:
+        rc, full = _run_cli(registry, runtime, *args)
+        assert rc == 0, full
+        rc, envelope = _run_cli(registry, runtime, *args, "--context-delivery", "off", "--turn-envelope")
+        assert rc == 0, envelope
+        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
+        plan = envelope["writeback"]["settlement_plan"]
     assert full["schema_version"] == "loopx_turn_envelope_v1"
-    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
-    plan = envelope["writeback"]["settlement_plan"]
     assert plan == full["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == full["heartbeat_receipt"]["settlement_identity"]
     assert [step["kind"] for step in plan["ordered_steps"]] == [

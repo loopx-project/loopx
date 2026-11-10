@@ -922,14 +922,33 @@ unchanged. See the [owned budget decision](../../../reference/contracts/interfac
 This control subset is not complete-source parity, model adoption or a net
 efficiency result, and does not close the parent C1 acceptance.
 
-That versioned carrier qualification does not retire the existing ordinary
-Markdown `--turn-envelope` reader. With context delivery omitted or `auto`,
-and no active native delivery or managed handoff, it keeps the bounded view
-from the same TypeScript composition that supplies the complete capture.
-Explicit `off` keeps its existing display; JSON and native/handoff routes
-retain their own delivery contracts. This is a display adapter, not a second
-writer or decision owner. Retire it only with a named consumer migration and
-qualified replacement/recovery; a passing carrier allowance is insufficient.
+The candidate now migrates the ordinary Markdown `--turn-envelope` caller:
+omitted delivery and `auto` use the existing complete-v1 Markdown reader,
+matching ordinary JSON and Markdown without that flag. The format no longer
+selects the bounded v0 view. `compose_quota_cli_source` calls the same typed
+composition owner, captures its result once and passes it unchanged to the
+existing renderer; no new writer, decoder or settlement rule is added.
+The ordinary Markdown settlement check executes the delivered commands on
+isolated File and SQLite: premature spend and unsupported progress are refused,
+durable writeback precedes spend, and replay leaves one debit. The native Codex
+profile still requires JSON and its capture destination; this ordinary-reader
+migration does not make native Markdown an executable transport.
+
+| Reader boundary | Candidate behavior and retirement condition |
+| --- | --- |
+| Ordinary Markdown, omitted delivery / `auto` | Complete-v1 block, with every captured field and the original binding. File/SQLite CLI checks compare its complete decoded content with its immutable capture and recover that same source without admission or spend. |
+| Explicit `off` plus `--turn-envelope` | Retains the bounded compatibility display from the same composition. This explicit caller still owns the v0 display adapter; it is not removed by the ordinary-reader migration. |
+| Native and managed handoff | Keep their checked complete-source presentation and original recovery contracts; a Markdown format does not downgrade a handoff. |
+| Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
+
+This changes the candidate's default Markdown format contract. A complete body
+can be materially larger than the previous action summary; the existing
+same-capture progressive reader remains the bounded material-delivery path.
+Do not call reader retirement a stdout or model-cost saving. Installed host
+adoption, independent exact-head review and the original-quota single-session
+outcome/full-cost comparison remain open. Explicit off and historical recovery
+are separate supported boundaries, rather than evidence of an active second
+decision owner.
 
 Model-behavior qualification reads an explicitly supplied complete source with
 its existing version/integrity owner; an experimental arm label does not select
