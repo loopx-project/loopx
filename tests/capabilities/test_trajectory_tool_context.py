@@ -38,6 +38,16 @@ def test_direct_result_wrappers_preserve_one_literal_invocation(script):
     assert _literal_exec_argv(script) == ['loopx', '--format', 'json', 'quota', 'context-read']
 
 
+@pytest.mark.parametrize('prefix', ['', '// @exec: {"max_output_tokens": 1000}\n'])
+@pytest.mark.parametrize('store', ['', 'store("read", result);'])
+@pytest.mark.parametrize('render', ['result', 'result.output',
+    'result.exit_code === 0 ? result.output : result'])
+def test_literal_result_presentation_does_not_hide_the_only_command(prefix, store, render):
+    script = (prefix + 'const result = await tools.exec_command({cmd: "loopx status", tty: false});'
+              + store + f'text({render});')
+    assert _literal_exec_argv(script) == ['loopx', 'status']
+
+
 @pytest.mark.parametrize('script', [
     'text(await tools.exec_command({cmd: "loopx status"})); text(await tools.exec_command({cmd: "pytest"}));',
     'text((await tools.exec_command({cmd: "loopx status"})).output + extra)',
@@ -46,6 +56,27 @@ def test_direct_result_wrappers_preserve_one_literal_invocation(script):
     'text(await tools.exec_command({cmd: `loopx ${command}`}))',
 ])
 def test_direct_wrapper_rejects_mixed_or_dynamic_work(script):
+    assert _literal_exec_argv(script) is None
+
+
+@pytest.mark.parametrize('script', [
+    'const r=await tools.exec_command({cmd:"loopx status"});text(r.exit_code===0?r.output:other);',
+    'const r=await tools.exec_command({cmd:"loopx status"});text(r.exit_code===1?r.output:r);',
+    'const r=await tools.exec_command({cmd:"loopx status"});store("read",other);text(r);',
+    'const r=await tools.exec_command({cmd:"loopx status"});store(makeKey(),r);text(r);',
+    'const r=await tools.exec_command({cmd:"loopx status"});store("read",r.output);text(r);',
+    'const r=await tools.exec_command({cmd:"loopx status"});text(transform(r));',
+    'const r=await tools.exec_command({cmd:prefix+"loopx status"});text(r.exit_code===0?r.output:r);',
+    'const r=await tools.exec_command({cmd:"loopx status"});'
+        'const s=await tools.exec_command({cmd:"pwd"});text(r.exit_code===0?r.output:r);',
+    '// @exec: {"max_output_tokens": getLimit()}\ntext(await tools.exec_command({cmd:"loopx status"}));',
+    '// @exec: [1000]\ntext(await tools.exec_command({cmd:"loopx status"}));',
+    '// @exec: {"max_output_tokens": NaN}\ntext(await tools.exec_command({cmd:"loopx status"}));',
+    'text(await tools.exec_command({cmd:"loopx status",max_output_tokens:Infinity}));',
+    'text(await tools.exec_command({cmd:"loopx status",max_output_tokens:1e999}));',
+    '// a comment mentioning loopx status\ntext(await tools.exec_command({cmd:"loopx status"}));',
+])
+def test_result_wrappers_still_require_static_single_command_and_matching_result(script):
     assert _literal_exec_argv(script) is None
 
 
