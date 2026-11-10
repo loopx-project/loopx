@@ -2182,7 +2182,7 @@ def test_bare_sensitive_filename_does_not_match_unrelated_path_basename() -> Non
                 "for settings in 'MODE=fast' 'MODE=slow TRIAL=2'; do "
                 "env $settings pytest -q; done"
             ),
-            False,
+            True,
         ),
         (
             "cmd",
@@ -2191,7 +2191,7 @@ def test_bare_sensitive_filename_does_not_match_unrelated_path_basename() -> Non
                 "settings=${spec#*:}; env APPROACH=trial $settings pytest -q; "
                 "done"
             ),
-            False,
+            True,
         ),
         (
             "cmd",
@@ -2363,71 +2363,77 @@ def test_env_wrapper_classification_matches_isolated_process(
 
 
 @pytest.mark.parametrize(
-    ("command", "expected_probe"),
+    ("command", "reads_environment", "expected_probe"),
     [
-        ('env MODE=fast printf %s "$API_KEY"', True),
-        ('env MODE=fast printf %s "$(printenv API_KEY)"', True),
+        pytest.param("for settings in 'MODE=fast'; do printf -vsettings printenv; env $settings API_KEY; done",
+                     True, True, id="attached_printf"),
+        pytest.param("shopt -s expand_aliases\nalias rewrite='settings=printenv'\n"
+                     "for settings in 'MODE=fast'; do rewrite; env $settings API_KEY; done",
+                     True, True, id="alias_expansion"),
+        ('env MODE=fast printf %s "$API_KEY"', True, True),
+        ('env MODE=fast printf %s "$(printenv API_KEY)"', True, True),
         (
             "for settings in 'MODE=fast'; do trap 'settings=printenv' DEBUG; "
             "settings='MODE=fast'; env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for settings in 'MODE=fast'; do settings+=' printenv'; "
             "env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do spec[0]='probe:printenv'; "
             "settings=${spec#*:}; env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do command export spec='probe:printenv'; "
             "settings=${spec#*:}; env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for spec in {fast:MODE=fast,printenv}; do settings=${spec#*:}; "
             "env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "env $settings API_KEY; for settings in 'MODE=fast'; do true; done",
-            True,
+            True, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do spec='probe:printenv'; "
             "settings=${spec#*:}; env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do settings=${spec#*:}; "
             "spec='probe:printenv'; settings=${spec#*:}; env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for settings in 'MODE=fast'; do env $settings printenv API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do false && settings=${spec#*:}; "
             "env $settings API_KEY; done",
-            True,
+            True, True,
         ),
         (
             "for settings in 'MODE=fast'; do env $settings printf ordinary-output; done",
-            False,
+            False, True,
         ),
         (
             "for spec in 'fast:MODE=fast'; do settings=${spec#*:}; "
             "env $settings printf ordinary-output; done",
-            False,
+            False, True,
         ),
     ],
 )
-def test_env_assignment_proof_matches_shell_and_source_cli(
+def test_env_dynamic_wrappers_remain_conservative_in_shell_and_cli(
     command: str,
+    reads_environment: bool,
     expected_probe: bool,
     tmp_path: Path,
 ) -> None:
@@ -2444,7 +2450,7 @@ def test_env_assignment_proof_matches_shell_and_source_cli(
         check=True,
         timeout=10,
     )
-    assert result.stdout.strip() == (marker if expected_probe else "ordinary-output")
+    assert result.stdout.strip() == (marker if reads_environment else "ordinary-output")
     trajectory_path = tmp_path / "trajectory.json"
     attestation_path = tmp_path / "attestation.json"
     trajectory_path.write_text(

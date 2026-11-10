@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 _SENSITIVE_ENV_NAME_PATTERN = re.compile(
@@ -542,170 +542,6 @@ def _xargs_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
     return ()
 
 
-def _assignment_words(value: str) -> bool:
-    """Return whether a literal shell word list contains only assignments."""
-
-    if any(character in value for character in "$`*?["):
-        return False
-    try:
-        words = shlex.split(value)
-    except ValueError:
-        return False
-    return all(
-        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word, flags=re.DOTALL) is not None
-        for word in words
-    )
-
-
-def _unwrapped_shell_command(tokens: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
-    executable, arguments = _shell_executable(tokens)
-    while executable in {"command", "builtin"} and arguments:
-        if executable == "command":
-            wrapped = _shell_wrapper_command(executable, arguments)
-        else:
-            wrapped = arguments[1:] if arguments[0] == "--" else arguments
-        executable, arguments = _shell_executable(wrapped)
-    return executable, arguments
-
-
-def _shell_segments_with_assignment_proofs(
-    segments: tuple[tuple[str, ...], ...],
-) -> Iterator[tuple[tuple[str, ...], frozenset[str]]]:
-    """Expose proofs only after assignment inside one simple literal loop.
-
-    This is deliberately not a shell interpreter. Branches, nested loops,
-    pipelines, background work and evaluation with side effects get no proof.
-    A loop's binding is established anew on every iteration; proofs cannot
-    enter from its prefix or escape past ``done``. Mutation invalidates both
-    source and derived facts before a subsequent use can rely on them.
-    """
-
-    loop_starts = [i for i, part in enumerate(segments) if part[0] == "for"]
-    body_starts = [i for i, part in enumerate(segments) if part[0] == "do"]
-    body_ends = [i for i, part in enumerate(segments) if part[0] == "done"]
-    # ``do command`` executes the first body command in the same segment.
-    commands = tuple(
-        part[1:] if part[0] in {"do", "done"} else part for part in segments
-    )
-    unsupported = any(
-        part[0]
-        in {
-            ".",
-            "eval",
-            "source",
-            "if",
-            "then",
-            "else",
-            "elif",
-            "fi",
-            "while",
-            "until",
-            "case",
-            "esac",
-            "select",
-            "function",
-            "{",
-            "}",
-        }
-        or part[0].startswith("(")
-        or any(token in {"()", "((", "))", "!"} for token in part)
-        or any("$(" in token or "`" in token for token in part)
-        or any(re.search(r"\$\{[^}]*=", token) for token in part)
-        or (part[0] and part[0][0] in ";&|\n" and any(c not in ";\n" for c in part[0]))
-        # Aliases and asynchronous traps can change an otherwise proven name.
-        or _unwrapped_shell_command(part)[0] in {"trap", "declare", "typeset", "local"}
-        for part in commands
-        if part
-    )
-    body_start = body_end = -1
-    loop_variable = ""
-    values: list[str] = []
-    if not unsupported and len(loop_starts) == len(body_starts) == len(body_ends) == 1:
-        loop_start, body_start, body_end = (
-            loop_starts[0],
-            body_starts[0],
-            body_ends[0],
-        )
-        header = segments[loop_start]
-        if (
-            loop_start < body_start < body_end
-            and len(header) >= 3
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", header[1])
-            and header[2] == "in"
-        ):
-            loop_variable = header[1]
-            values = list(header[3:])
-            for part in segments[loop_start + 1 : body_start]:
-                if not all(c in ";\n" for c in part[0]):
-                    values.extend(part)
-            if any(c in value for value in values for c in "$`*?[{}~()<>"):
-                values = []
-                loop_variable = ""
-
-    assignments: set[str] = set()
-    suffixes: set[str] = set()
-    for index, part in enumerate(segments):
-        if index == body_start and loop_variable and values:
-            if all(_assignment_words(value) for value in values):
-                assignments.add(loop_variable)
-            if all(
-                ":" in value and _assignment_words(value.split(":", 1)[1])
-                for value in values
-            ):
-                suffixes.add(loop_variable)
-        if index == body_end:
-            assignments.clear()
-            suffixes.clear()
-        tokens = commands[index]
-        yield tokens, frozenset(assignments)
-        if not (loop_variable and body_start <= index < body_end):
-            continue
-        executable, arguments = _unwrapped_shell_command(tokens)
-        if executable in {
-            ".",
-            "eval",
-            "source",
-            "declare",
-            "export",
-            "local",
-            "read",
-            "readonly",
-            "typeset",
-            "unset",
-            "getopts",
-            "mapfile",
-            "readarray",
-            "let",
-        } or (executable == "printf" and "-v" in arguments):
-            assignments.clear()
-            suffixes.clear()
-        for token in tokens:
-            assignment = re.fullmatch(
-                r"([A-Za-z_][A-Za-z0-9_]*)(\[[^]]*\])?(\+)?=(.*)",
-                token,
-                flags=re.DOTALL,
-            )
-            if assignment is None:
-                break
-            variable, subscript, append, value = assignment.groups()
-            if subscript or append:
-                assignments.clear()
-                suffixes.clear()
-                continue
-            suffix = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)#\*:\}", value)
-            proven_value = _assignment_words(value) or (
-                suffix is not None and suffix.group(1) in suffixes
-            )
-            assignments.discard(variable)
-            if variable in suffixes:
-                assignments.clear()
-                suffixes.discard(variable)
-            # Prefix assignments on a utility invocation do not persist, and
-            # argv expansion sees the old binding rather than this new value.
-            if not executable and proven_value:
-                assignments.add(variable)
-
-
 def _shell_value_has_credential_read(value: str) -> bool:
     if "$(" in value or "`" in value or "${!" in value:
         return True
@@ -725,7 +561,6 @@ def _env_command_has_credential_probe(
     arguments: tuple[str, ...],
     *,
     depth: int,
-    assignment_expansions: frozenset[str],
 ) -> bool:
     """Separate environment listing from a bounded literal command wrapper."""
 
@@ -764,15 +599,6 @@ def _env_command_has_credential_probe(
         if assignment:
             index += 1
             continue
-        expansion = re.fullmatch(
-            r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})",
-            argument,
-        )
-        if expansion:
-            name = expansion.group(1) or expansion.group(2)
-            if name in assignment_expansions:
-                index += 1
-                continue
         break
 
     if index == len(arguments):
@@ -783,7 +609,6 @@ def _env_command_has_credential_probe(
     return _shell_segment_has_credential_probe(
         arguments[index:],
         depth=depth + 1,
-        assignment_expansions=assignment_expansions,
     )
 
 
@@ -791,7 +616,6 @@ def _shell_segment_has_credential_probe(
     tokens: tuple[str, ...],
     *,
     depth: int = 0,
-    assignment_expansions: frozenset[str] = frozenset(),
 ) -> bool:
     if depth >= 8:
         return True
@@ -802,7 +626,6 @@ def _shell_segment_has_credential_probe(
         return _env_command_has_credential_probe(
             arguments,
             depth=depth,
-            assignment_expansions=assignment_expansions,
         )
     if executable == "printenv":
         return True
@@ -811,14 +634,12 @@ def _shell_segment_has_credential_probe(
         return bool(wrapped) and _shell_segment_has_credential_probe(
             wrapped,
             depth=depth + 1,
-            assignment_expansions=assignment_expansions,
         )
     if executable == "xargs":
         wrapped = _xargs_command(arguments)
         return bool(wrapped) and _shell_segment_has_credential_probe(
             wrapped,
             depth=depth + 1,
-            assignment_expansions=assignment_expansions,
         )
     if any(_PROC_ENVIRON_PATTERN.search(argument) for argument in arguments):
         return True
@@ -840,13 +661,11 @@ def _shell_segment_has_credential_probe(
 
 
 def _shell_command_has_credential_probe(command: str) -> bool:
+    # Only literal argv can establish an env wrapper. Dynamic expansions remain
+    # suspicious: static shell mutation tracking cannot prove their executable.
     return any(
-        _shell_segment_has_credential_probe(
-            segment, assignment_expansions=assignment_expansions
-        )
-        for segment, assignment_expansions in _shell_segments_with_assignment_proofs(
-            _shell_segments(command)
-        )
+        _shell_segment_has_credential_probe(segment[1:] if segment[0] == "do" else segment)
+        for segment in _shell_segments(command)
     )
 
 
