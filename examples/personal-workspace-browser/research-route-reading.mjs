@@ -70,6 +70,11 @@ export const researchRouteReadingScenario = {
       const fixture = resolve(temporary, "capture.json");
       writeRouteReadingFixture(fixture);
       const capture = JSON.parse(await readFile(fixture));
+      const findingEventId = resultId => {
+        const finding = capture.events.find(event => event.result_id === resultId && event.event_kind === "finding");
+        assert(finding?.event_id, `The fixture retains finding event identity for ${resultId}`);
+        return finding.event_id;
+      };
       owner = await startHistoryOwner(fixture);
       page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true, timezoneId: "Asia/Shanghai"});
       if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
@@ -157,7 +162,7 @@ export const researchRouteReadingScenario = {
             await page.keyboard.press("Escape");
           }
           if (endpoint) {
-            await reader.locator("select").selectOption("finding-route-0-end");
+            await reader.locator("select").selectOption(findingEventId("finding-route-0-end"));
             const body = reader.getByText("完整观测：局部质量下降，延迟改善；完整成本和独立验证仍未知。", {exact: true}).first();
             const box = await body.boundingBox();
             const reading = await history.evaluate(element => {const bounds = element.closest(".personal-channel-scroll")?.getBoundingClientRect(); return {top: Math.max(0, bounds?.top ?? 0), bottom: Math.min(innerHeight, bounds?.bottom ?? innerHeight)};});
@@ -273,7 +278,7 @@ export const researchRouteReadingScenario = {
         const findings = reader.getByRole("combobox", {name: zh ? "选择问题结论" : "Choose a question finding"});
         const next = reader.getByRole("button", {name: zh ? "下一个问题" : "Next question", exact: true});
         await questions.selectOption("group-question-4");
-        await findings.selectOption("group-finding-4-0");
+        await findings.selectOption(findingEventId("group-finding-4-0"));
         await reader.getByRole("button", {name: zh ? "完整研究问题" : "Full research question", exact: true}).focus();
         const questionHelp = page.locator(".context-help-popover:popover-open");
         await questionHelp.waitFor();
@@ -285,12 +290,12 @@ export const researchRouteReadingScenario = {
         await page.reload();
         await questions.waitFor();
         assert.equal(await questions.inputValue(), "group-question-4");
-        assert.equal(await findings.inputValue(), "group-finding-4-0", "Reload retains the precise finding, not just the question");
+        assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"), "Reload retains the precise finding, not just the question");
         await next.click();
         assert.equal(await questions.inputValue(), "group-question-5");
         await page.goBack();
         assert.equal(await questions.inputValue(), "group-question-4");
-        assert.equal(await findings.inputValue(), "group-finding-4-0");
+        assert.equal(await findings.inputValue(), findingEventId("group-finding-4-0"));
         await page.goForward();
         assert.equal(await questions.inputValue(), "group-question-5");
         await reader.locator(".research-reader-back").click();
@@ -301,7 +306,7 @@ export const researchRouteReadingScenario = {
         await questions.selectOption("group-question-23");
         assert(await next.isDisabled());
         await questions.selectOption("group-question-4");
-        await findings.selectOption("group-finding-4-0");
+        await findings.selectOption(findingEventId("group-finding-4-0"));
         await page.reload(); await questions.waitFor();
         assert.equal(await reader.locator(".research-reader-back").innerText(), zh ? "返回问题列表" : "Back to questions");
         const content = reader.locator(".research-recorded-finding > p");
