@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..effect_runtime import effect_runtime_result
@@ -264,6 +265,20 @@ def autonomous_replan_ack_candidates_for_obligation(
         if len(candidates) >= limit:
             break
     return candidates
+
+
+def load_receipt_replan_ack_candidates(
+    runtime_root: Path, *, goal_id: str, agent_id: str, obligation_id: str,
+) -> list[dict[str, Any]]:
+    """Read exact recovery candidates without widening ordinary status history."""
+    from ...history import load_index
+    from ..runtime.time import chronology_key
+
+    runs, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
+    newest_first = [run for _, run in sorted(enumerate(runs),
+        key=lambda item: (*chronology_key(item[1].get("generated_at")), item[0]), reverse=True)]
+    return autonomous_replan_ack_candidates_for_obligation(newest_first,
+        goal_id=goal_id, agent_id=agent_id, obligation_id=obligation_id)
 
 
 def latest_blocked_successor_frontier_identity(

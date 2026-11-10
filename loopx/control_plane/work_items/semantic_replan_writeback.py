@@ -300,15 +300,9 @@ def qualify_replan_writeback(
             ]
         }
     }
-    if guard_scoped and guard_semantic_replan_obligation_id:
-        status_payload["receipt_bound_replan_ack_candidates"] = (
-            autonomous_replan_ack_candidates_for_obligation(
-                newest_first_runs,
-                goal_id=goal_id,
-                agent_id=safe_agent_id,
-                obligation_id=guard_semantic_replan_obligation_id,
-            )
-        )
+    status_payload["receipt_bound_replan_ack_candidates"] = autonomous_replan_ack_candidates_for_obligation(
+        newest_first_runs, goal_id=goal_id, agent_id=safe_agent_id,
+        obligation_id=guard_semantic_replan_obligation_id if guard_scoped else None)
     if capability_evidence is not None:
         status_payload["bounded_research_frontier"] = capability_evidence.frontier
     context = build_goal_frontier_projection_context_from_status(

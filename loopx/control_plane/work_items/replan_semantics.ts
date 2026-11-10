@@ -117,6 +117,7 @@ function historicalAckDelta(
     generated !== null && generated > admitted &&
     delta.schema_version === "replan_semantic_delta_v0" && delta.accepted === true &&
     delta.obligation_id === selected && outcomes.length > 0 && satisfying.length > 0 &&
+    outcomes.every(outcome => KNOWN_OUTCOMES.has(outcome)) &&
     satisfying.every(outcome => outcomes.includes(outcome)) ? delta : null;
 }
 

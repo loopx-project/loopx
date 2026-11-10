@@ -652,6 +652,8 @@ test("a later durable exact ACK settles only its original receipt-bound Turn", (
     {historical_ack: {...historicalAck, semantic_delta: {...delta, accepted: false}}},
     {historical_ack: {...historicalAck, semantic_delta: {...delta, obligation_id: "replan-2222222222222222"}}},
     {historical_ack: {...historicalAck, semantic_delta: {...delta, satisfying_outcomes: []}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, outcomes: ["unregistered"], satisfying_outcomes: ["unregistered"]}}},
+    {historical_ack: {...historicalAck, semantic_delta: {...delta, satisfying_outcomes: ["new_surface"]}}},
   ];
   for (const badCandidate of invalid) {
     const changed = {...request, transition_candidates: [badCandidate]};
