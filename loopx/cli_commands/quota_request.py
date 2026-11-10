@@ -200,9 +200,36 @@ def validate_quota_command_request(args: argparse.Namespace) -> None:
         )
 
 
+def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
+    if args.quota_command != "should-run" or args.format != "json" or not args.agent_id:
+        raise QuotaCommandValidationError(
+            "--scheduler-observation requires quota should-run with JSON and --agent-id"
+        )
+    for name in (
+        "begin_turn", "turn_instance_id", "todo_id", "execute", "record_host_poll",
+        "available_capabilities", "decision_output_dir", "decision_output_root",
+        "decision_handoff_socket", "codex_context_dir", "codex_context_root",
+        "context_delivery", "delta_delivery", "turn_envelope", "include_details",
+        "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
+        "defer_context_presentation",
+        "capture_file", "decision_file", "outcome_ref", "source_hash",
+        "initial_read", "select", "list_fields", "list_depth", "reference_file",
+        "capture_sha256", "selection_sha256", "offset", "page_bytes",
+    ):
+        if getattr(args, name, None):
+            option = {
+                "available_capabilities": "available-capability",
+                "include_details": "include-detail",
+                "list_fields": "list",
+            }.get(name, name.replace("_", "-"))
+            raise QuotaCommandValidationError(
+                f"--scheduler-observation cannot be combined with --{option}"
+            )
+
+
 def quota_detail_sections_from_args(args: argparse.Namespace) -> frozenset[str]:
     sections = set(getattr(args, "include_details", None) or ())
-    if bool(getattr(args, "include_scheduler_detail", False)):
+    if getattr(args, "include_scheduler_detail", False) or getattr(args, "scheduler_observation", False):
         sections.add("scheduler")
     if "all" in sections:
         sections.update(

@@ -476,6 +476,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "scheduler_observation", False):
+        from .quota_request import validate_scheduler_observation_request
+
+        validate_scheduler_observation_request(args)
+        if directory is not None:
+            raise QuotaCommandValidationError("--scheduler-observation does not prepare a capture")
+        return None
     if getattr(args, "prepared_capture_reference", False) and (
         args.quota_command != "should-run" or args.format != "json"
         or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
@@ -720,7 +727,19 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
-    """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    """Dispatch captured reads and native lifecycle IO before quota authority access."""
+    if getattr(args, "scheduler_observation", False):
+        from .quota_request import validate_scheduler_observation_request
+
+        try:
+            # Validate the compact observation as a closed request shape before
+            # context-profile defaults or any quota authority can mutate/add
+            # reader, Turn, receipt or capture options.
+            validate_scheduler_observation_request(args)
+        except QuotaCommandValidationError as exc:
+            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
+            return 1
+        return None
     if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
         print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or JSON context-project"},
                       args.format, str)
@@ -934,6 +953,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         payload = read_context_capture(args, reader_argv=current_loopx_cli_argv())
         print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
+    if args.quota_command == "replan-view":
+        return handle_replan_view(args, print_payload)
     return None
 
 
