@@ -430,7 +430,11 @@ def test_quota_fallback_keeps_original_session_and_only_routes_unstarted_input(m
         held = store.load_session(sid)
         assert held["agent_id"] == "antigravity" and held["upstream_thread_id"] == original["upstream_thread_id"]
         assert not held.get("upstream_context_history")
-        assert store.load_turn(sid, turn["turn_id"]) == before
+        recorded = store.load_turn(sid, turn["turn_id"])
+        preparation = recorded.pop("native_context_preparation")
+        assert recorded == before
+        assert preparation["source_thread_id"] == original["upstream_thread_id"]
+        assert preparation["planned_method"] == "thread/start" and preparation["executor_reallocated"] is True
         return
     runtime._ensure_adapter(queued, work_dir=root, objective="manager")
     current = store.load_session(sid)
@@ -445,7 +449,14 @@ def test_quota_fallback_keeps_original_session_and_only_routes_unstarted_input(m
         assert starts[-1][0]["history"] == [{"role": "user", "content": "Keep the original audience and outstanding work."}]
     else:
         assert observed == [] and len(starts) == 1 and current["agent_id"] == "antigravity"
-    assert store.load_turn(sid, turn["turn_id"]) == before
+    recorded = store.load_turn(sid, turn["turn_id"])
+    preparation = recorded.pop("native_context_preparation", None)
+    assert recorded == before
+    if status == "queued" and client == "new-input":
+        assert preparation["source_thread_id"] == original["upstream_thread_id"]
+        assert preparation["planned_method"] == "thread/start" and preparation["history_message_count"] == 1
+    else:
+        assert preparation is None
 
     if status == "queued" and client == "new-input":
         store.update_turn(sid, turn["turn_id"], status="completed")
@@ -529,4 +540,10 @@ def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation,
         assert len(starts) == 2
     else:
         assert len(starts) == 1 and not observed
-    assert store.load_turn(sid, turn["turn_id"]) == before
+    recorded = store.load_turn(sid, turn["turn_id"])
+    preparation = recorded.pop("native_context_preparation", None)
+    assert recorded == before
+    if status == "queued":
+        assert preparation["planned_method"] == "thread/resume" and preparation["history_message_count"] == 0
+    else:
+        assert preparation is None

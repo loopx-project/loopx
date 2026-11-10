@@ -692,6 +692,11 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
             restarted.admit("steward-app", later)
             next_row = restarted.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
             next_turn = runtime.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=15)
+            preparation = next_turn["native_context_preparation"]
+            assert preparation["source_thread_id"] == "working-thread", "observe the inherited working thread, not the isolated review"
+            assert preparation["planned_method"] == ("thread/resume" if fault == "checkpoint-empty" else "thread/fork")
+            assert preparation["history_message_count"] == (0 if fault == "checkpoint-empty" else 1)
+            assert preparation["native_checkpoint_requested"] and preparation["working_checkpoint_available"]
             packets = [json.loads(line) for line in capture.read_text().splitlines()][len(calls):]
             methods = [packet["method"] for packet in packets]
             assert "thread/start" not in methods and "thread/compact/start" not in methods

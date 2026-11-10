@@ -974,6 +974,38 @@ class ChatRuntimeController:
                     working_provider=working_provider, cold_working=cold_working,
                     answer_review=answer_fallback, read_only_review=bool(recovery.get("read_only_review")))
             working_continuation = history_restore.working_continuation
+            native_resume = (None if working_continuation or legacy_provider_context
+                or legacy_manager_context or legacy_project_context else str(session["upstream_thread_id"]))
+            # Isolated answer review receives verified results at dispatch;
+            # importing unrelated conversation history needlessly compacts it.
+            native_history = (None if answer_fallback or working_continuation else history
+                if legacy_provider_context or legacy_manager_context or legacy_project_context
+                or session.get("agent_id") in {"anthropic-api", "openai-api", MANAGED_TURN_HOST} else None)
+            if (selected_agent == "codex" and accepted_turn_id is not None
+                    and not (self.store.load_turn(session_id, accepted_turn_id) or {}).get("native_context_preparation")):
+                # Save the actual routing inputs before native IO. This is an
+                # observation of the existing choice, never execution evidence.
+                method = ("thread/fork" if working_continuation and working_continuation.suffix
+                    else "thread/resume" if working_continuation or native_resume else "thread/start")
+                self.store.update_turn(session_id, accepted_turn_id, expected_statuses={"queued"},
+                    native_context_preparation={
+                        "schema_version": "codex_native_context_preparation_v0",
+                        "planned_method": method,
+                        "source_thread_id": working_continuation.thread_id if working_continuation
+                            else session["upstream_thread_id"],
+                        "history_message_count": len(working_continuation.suffix) if working_continuation
+                            else len(native_history or []),
+                        "native_checkpoint_requested": method != "thread/start",
+                        "working_checkpoint_available": bool(checkpoint_available),
+                        "manager_context_version": session.get("manager_context_version"),
+                        "required_manager_context_version": MANAGER_CONTEXT_VERSION,
+                        "manager_context_migration": legacy_manager_context,
+                        "provider_context_migration": legacy_provider_context,
+                        "project_context_migration": legacy_project_context,
+                        "manager_profile_changed": manager_profile_changed, "settings_changed": settings_changed,
+                        "executor_reallocated": model_allocation is not None,
+                        "isolated_answer_review": answer_fallback,
+                    })
             adapter = self._start_adapter(
                 agent_id=str(selected_agent),
                 work_dir=work_dir,
@@ -983,22 +1015,8 @@ class ChatRuntimeController:
                     else session["goal_id"]
                 ),
                 objective=objective,
-                resume_thread_id=(
-                    None
-                    if working_continuation or legacy_provider_context or legacy_manager_context or legacy_project_context
-                    else str(session["upstream_thread_id"])
-                ),
-                history=(
-                    # This isolated review receives the complete original
-                    # request and verified results at dispatch. Importing the
-                    # whole conversation here needlessly compacts unrelated
-                    # history before an unanswered question can be reviewed.
-                    None if answer_fallback or working_continuation else history
-                    if legacy_provider_context or legacy_manager_context or legacy_project_context
-                    or session.get("agent_id")
-                    in {"anthropic-api", "openai-api", MANAGED_TURN_HOST}
-                    else None
-                ),
+                resume_thread_id=native_resume,
+                history=native_history,
                 execution_mode=str(session.get("channel_id") or "").startswith("task."),
                 project_coordination=conversation_scope(session)["kind"] == "owner_goal",
                 loopx_tools=session.get("loopx_tools") is True,
