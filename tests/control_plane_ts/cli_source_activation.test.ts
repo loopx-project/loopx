@@ -88,3 +88,14 @@ test("malformed or nonversioned scopes are rejected, not interpreted as permissi
     assert.throws(() => decide({operation: "qualify", scope: {...scope, ...changed}, observation: fixture()}));
   }
 });
+
+test("activation scope identifiers retain their lowercase hex widths", () => {
+  for (const key of ["activation_id", "container_id", "target_revision"] as const) {
+    const valid = scope[key];
+    for (const invalid of [valid.slice(1), valid + "a", valid.toUpperCase(), "g" + valid.slice(1)]) {
+      assert.throws(() => decide({
+        operation: "qualify", scope: {...scope, [key]: invalid}, observation: fixture(),
+      }), {message: `invalid ${key}`});
+    }
+  }
+});
