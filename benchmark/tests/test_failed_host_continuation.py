@@ -112,6 +112,7 @@ def test_explicit_scheduler_requires_complete_same_phase_evidence(tmp_path, orig
 @pytest.mark.parametrize('kind,attempt,explicit,allowed', [
     ('quota_exhausted', 1, False, False), ('quota_exhausted', 1, True, True),
     ('quota_exhausted', 7, True, True), ('output_budget_exhausted', 1, True, False),
+    ('unknown', 2, False, False), ('unknown', 2, True, True),
     ('provider_capacity', 2, True, True), ('provider_capacity', 3, True, False),
 ])
 def test_explicit_retry_uses_shared_turn_rule_without_automatic_quota_retry(kind, attempt, explicit, allowed):
@@ -124,7 +125,7 @@ def test_explicit_retry_uses_shared_turn_rule_without_automatic_quota_retry(kind
 
 
 @pytest.mark.parametrize('fault', [None, 'in_progress', 'pending_effect', 'wrong_session',
-    'wrong_workspace', 'wrong_error', 'prose_only', 'changed_history', 'outside_window', 'empty'])
+    'wrong_workspace', 'wrong_error', 'prose_only', 'changed_history', 'outside_window', 'empty', 'pending_prefix'])
 def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_gate(tmp_path, monkeypatch, fault):
     turns = [dict(id='first', status='completed', items=[]), dict(id='last', status='failed',
         startedAt=110, completedAt=120, error={'codexErrorInfo': 'usageLimitExceeded'},
@@ -133,6 +134,8 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
         turns[-1]['status'] = 'inProgress'
     elif fault == 'pending_effect':
         turns[-1]['items'][0]['status'] = 'inProgress'
+    elif fault == 'pending_prefix':
+        turns[0]['items'] = [{'type': 'commandExecution', 'status': 'pending'}]
     elif fault == 'wrong_error':
         turns[-1]['error']['codexErrorInfo'] = 'unknownFutureCode'
     elif fault == 'prose_only':
@@ -160,7 +163,7 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
     def read():
         return native.native_failed_turn({'LOOPX_PROJECT': str(tmp_path)}, 'original',
             failure_kind='quota_exhausted', process_started_at=100, process_stopped_at=125)
-    if fault:
+    if fault not in {None, 'pending_prefix'}:
         with pytest.raises(ValueError):
             read()
     else:
@@ -172,9 +175,89 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
     assert not set(calls) - {'thread/read', 'thread/turns/list'}
 
 
+@pytest.mark.parametrize('fault', [None, 'no_witness', 'missing_error', 'wrong_error', 'new_error_field',
+    'structured_conflict', 'running', 'pending_prefix', 'outside_window', 'changed_history', 'changed_source'])
+def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(tmp_path, monkeypatch, fault):
+    home = tmp_path / 'native'
+    home.mkdir()
+    (home / 'config.toml').write_text('')
+    database = home / 'state_5.sqlite'
+    database.write_bytes(b'original retained native store')
+    original = database.read_bytes()
+    # Diagnostic-looking words never reclassify this retained typed unknown.
+    cli_error = {'message': 'Synthetic failure mentioning quota and idle'}
+    native_error = {**cli_error, 'codexErrorInfo': 'other', 'additionalDetails': None, 'misalignment': None}
+    turns = [dict(id='prefix', status='completed', items=[]),
+             dict(id='original-failed-turn', status='failed', startedAt=110, completedAt=120,
+                  error=copy.deepcopy(native_error), items=[])]
+    if fault == 'missing_error':
+        turns[-1].pop('error')
+    elif fault == 'wrong_error':
+        turns[-1]['error']['message'] = 'A different failure'
+    elif fault == 'new_error_field':
+        turns[-1]['error']['futureField'] = 'additional cause'
+    elif fault == 'structured_conflict':
+        turns[-1]['error']['codexErrorInfo'] = 'usageLimitExceeded'
+    elif fault == 'running':
+        turns[-1]['status'] = 'inProgress'
+    elif fault == 'pending_prefix':
+        turns[0]['items'] = [{'type': 'commandExecution', 'status': 'pending'}]
+    elif fault == 'outside_window':
+        turns[-1]['startedAt'] = 99
+    calls = []
+    class Transport:
+        def request(self, method, params):
+            calls.append(method)
+            if method == 'thread/read':
+                return {'thread': {'id': 'original', 'cwd': str(tmp_path)}}
+            assert method == 'thread/turns/list'
+            rows = copy.deepcopy(turns)
+            if fault == 'changed_history' and calls.count(method) > 1:
+                rows[0]['items'] = [{'type': 'agentMessage', 'text': 'later work'}]
+            return {'data': rows, 'nextCursor': None}
+    @contextmanager
+    def reader(env, **kwargs):
+        observer = Path(env['CODEX_HOME'])
+        assert observer != home and (observer / database.name).read_bytes() == original
+        # Native app-server may write its own index, never the retained source.
+        (observer / database.name).write_bytes(b'observer index update')
+        if fault == 'changed_source':
+            database.write_bytes(b'concurrent original writer')
+        yield Transport()
+    monkeypatch.setattr(native, 'native_checkpoint_reader', reader)
+    returned_digest = hashlib.sha256(json.dumps(cli_error, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    kwargs = {} if fault == 'no_witness' else {'returned_error_sha256': returned_digest}
+    def read():
+        return native.native_failed_turn({'LOOPX_PROJECT': str(tmp_path), 'CODEX_HOME': str(home)},
+            'original', failure_kind='unknown', process_started_at=100, process_stopped_at=125, **kwargs)
+    if fault:
+        with pytest.raises(ValueError):
+            read()
+    else:
+        result = read()
+        assert result['failure_kind'] == 'unknown' and result['status'] == 'failed'
+        assert result['turn_id'] == 'original-failed-turn' and result['turn_count'] == 2
+        assert result['returned_error_sha256'] == returned_digest
+        assert result['error_sha256'] == hashlib.sha256(json.dumps(native_error, sort_keys=True,
+            separators=(',', ':')).encode()).hexdigest()
+        with pytest.raises(ValueError, match='completed final cursor'):
+            native._complete_history(Transport().request, 'original')
+    if fault != 'changed_source':
+        assert database.read_bytes() == original
+    assert not set(calls) - {'thread/read', 'thread/turns/list'}
+
+
 @pytest.mark.skipif(os.name != 'posix', reason='Original process group readback requires POSIX')
-@pytest.mark.parametrize('fault', [None, 'stop', 'profile', 'session', 'source_digest', 'exhausted', 'unknown_allowance', 'stop_after_prepare'])
-def test_real_sqlite_failed_host_can_explicitly_resume_original_session(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize('kind,prior_attempt,fault', [
+    ('quota_exhausted', 0, fault) for fault in
+    (None, 'stop', 'profile', 'session', 'source_digest', 'exhausted', 'unknown_allowance', 'stop_after_prepare')
+] + [
+    ('unknown', 1, fault) for fault in
+    (None, 'stop', 'profile', 'session', 'source_digest', 'exhausted', 'unknown_allowance',
+     'stop_after_prepare', 'no_return', 'missing_error', 'native_error', 'pending_native',
+     'stdout_session', 'stdout_truncated')
+])
+def test_real_sqlite_failed_host_can_explicitly_resume_original_session(tmp_path, monkeypatch, kind, prior_attempt, fault):
     from benchmark.runtime import worker
     from benchmark.tests.test_worker_phase_budget import _phase_worker
     from tests import test_external_scheduler_worker as scheduler_fixture
@@ -182,6 +265,13 @@ def test_real_sqlite_failed_host_can_explicitly_resume_original_session(tmp_path
     env, project, runtime, _source, goal_state, _clock = _phase_worker(tmp_path, monkeypatch)
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / 'packages/loopx-codex-provider-routing/src'))
     monkeypatch.setattr(worker, 'time', time)
+    failure_error = ({'codexErrorInfo': 'usageLimitExceeded'} if kind == 'quota_exhausted'
+                     else {'message': 'Synthetic native task failed'})
+    (project / 'failure-error.json').write_text(json.dumps(failure_error))
+    native_home = Path(env['LOOPX_CODEX_HOME'])
+    native_home.mkdir(parents=True, exist_ok=True)
+    (native_home / 'state_5.sqlite').write_bytes(b'retained native fixture')
+    retained_store = (native_home / 'state_5.sqlite').read_bytes()
     Path(env['CODEX_BIN']).write_text(f'#!{sys.executable}\n' + '''
 import json,os,pathlib,sys,time
 history=pathlib.Path('native-history.json')
@@ -201,6 +291,7 @@ if 'app-server' in sys.argv:
     sys.exit(0)
 with pathlib.Path('native-argv').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
 print(json.dumps({'type':'thread.started','thread_id':'original-native'}),flush=True)
+print(json.dumps({'type':'turn.started'}),flush=True)
 payload=sys.stdin.read()
 with pathlib.Path('native-inputs').open('a') as f: f.write(json.dumps(payload)+'\\n')
 if pathlib.Path('allowance-repaired').exists():
@@ -208,10 +299,14 @@ if pathlib.Path('allowance-repaired').exists():
     print(json.dumps({'type':'turn.completed'}),flush=True)
     sys.exit(0)
 now=int(time.time())
-history.write_text(json.dumps({'id':'quota-failed-work','status':'failed',
-    'error':{'codexErrorInfo':'usageLimitExceeded'},'startedAt':now,'completedAt':now,
+error=json.loads(pathlib.Path('failure-error.json').read_text())
+native_error={**error,'additionalDetails':None}
+if 'codexErrorInfo' not in native_error:
+    native_error.update(codexErrorInfo='other',misalignment=None)
+history.write_text(json.dumps({'id':'failed-work','status':'failed',
+    'error':native_error,'startedAt':now,'completedAt':now,
     'items':[{'type':'commandExecution','status':'completed'}]}))
-print(json.dumps({'type':'turn.failed','error':{'codexErrorInfo':'usageLimitExceeded'}}),flush=True)
+print(json.dumps({'type':'turn.failed','error':error}),flush=True)
 sys.exit(1)
 ''')
     for key, value in env.items():
@@ -224,13 +319,17 @@ sys.exit(1)
     args.goal_id, args.agent_id = env['LOOPX_GOAL_ID'], env['LOOPX_AGENT_ID']
     args.wake_cmd = shlex.join([sys.executable, '-m', 'benchmark.runtime.worker'])
     args.wake_stop_exit_code, args.wake_timeout_seconds = 75, 90
+    if prior_attempt:
+        Path(args.state_file).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.state_file).write_text(json.dumps({'recovered_attempt_count': prior_attempt}))
     monkeypatch.setattr(scheduler_fixture.worker, 'run_quota_should_run',
         lambda *a, **kw: scheduler_fixture._hint_payload(should_run=True))
     assert scheduler_fixture.worker.run_worker(args) == 1
     original = Path(args.state_file)
     original_bytes = original.read_bytes()
     old = json.loads(original_bytes)
-    assert old['host_attempt']['host_failure']['kind'] == 'quota_exhausted'
+    assert old['host_attempt']['host_failure']['kind'] == kind
+    assert old['host_attempt']['attempt'] == prior_attempt + 1
     assert old['host_attempt']['status'] == 'failed'
     assert scheduler_fixture.worker.run_worker(args) == 2  # Still no automatic retry.
     assert len((project / 'native-argv').read_text().splitlines()) == 1
@@ -238,6 +337,7 @@ sys.exit(1)
     assert len(receipts) == 1
     receipt = json.loads(receipts[0].read_bytes())
     assert receipt['native_process']['after_cleanup']['return_code'] == 1
+    assert receipt['host_failure']['attempt'] == 1
     digest = hashlib.sha256(original_bytes).hexdigest()
     if fault == 'stop':
         from loopx.control_plane.goals.activation_service import set_goal_activation_state
@@ -253,6 +353,23 @@ sys.exit(1)
     elif fault in ('exhausted', 'unknown_allowance'):
         (project / 'observed-allowance.json').write_text(json.dumps({'rateLimits': {}} if fault == 'unknown_allowance' else
             {'rateLimits': {'primary': {'usedPercent': 100, 'resetsAt': int(time.time()) + 1000}, 'credits': {'hasCredits': False}}}))
+    elif fault == 'no_return':
+        receipt['native_process']['before_cleanup']['return_code'] = None
+        receipts[0].write_text(json.dumps(receipt))
+    elif fault in ('missing_error', 'native_error', 'pending_native'):
+        history = json.loads((project / 'native-history.json').read_text())
+        if fault == 'missing_error':
+            history.pop('error')
+        elif fault == 'native_error':
+            history['error']['message'] = 'A different failed native task'
+        else:
+            history['items'][0]['status'] = 'inProgress'
+        (project / 'native-history.json').write_text(json.dumps(history))
+    elif fault in ('stdout_session', 'stdout_truncated'):
+        output = receipts[0].parent / 'stdout.jsonl'
+        raw_output = output.read_text()
+        output.write_text(raw_output.replace('original-native', 'another-native')
+                          if fault == 'stdout_session' else raw_output[:-5])
     def resume(**kwargs):
         return resume_state_file(str(original), phase_deadline=deadline, agent_id=args.agent_id,
             wake_log_dir=env['LOOPX_WAKE_LOG_DIR'], env=dict(os.environ),
@@ -268,9 +385,26 @@ sys.exit(1)
     assert phase != original
     phase_initial = json.loads(phase.read_bytes())
     assert phase_initial['recovered_session_id'] == 'original-native'
-    assert phase_initial['recovered_attempt_count'] == 1
+    assert phase_initial['recovered_attempt_count'] == prior_attempt + 1
     assert phase_initial['failed_host_recovery']['native']['status'] == 'failed'
     assert phase_initial['failed_host_recovery']['phase_deadline_epoch'] == deadline
+    assert phase_initial['failed_host_recovery']['host_failure']['kind'] == kind
+    assert (native_home / 'state_5.sqlite').read_bytes() == retained_store
+    if kind == 'unknown':
+        proof = phase_initial['failed_host_recovery']['returned_failure']
+        error_digest = hashlib.sha256(json.dumps(failure_error, sort_keys=True,
+            separators=(',', ':')).encode()).hexdigest()
+        expected_native_error = {**failure_error, 'codexErrorInfo': 'other', 'additionalDetails': None,
+                                 'misalignment': None}
+        native_error_digest = hashlib.sha256(json.dumps(expected_native_error, sort_keys=True,
+            separators=(',', ':')).encode()).hexdigest()
+        assert proof['error_sha256'] == error_digest
+        assert proof['error_projection_sha256'] == error_digest
+        assert proof['stdout_sha256'] == hashlib.sha256(
+            (receipts[0].parent / 'stdout.jsonl').read_bytes()).hexdigest()
+        assert phase_initial['failed_host_recovery']['native']['turn_id'] == 'failed-work'
+        assert phase_initial['failed_host_recovery']['native']['error_sha256'] == native_error_digest
+        assert phase_initial['failed_host_recovery']['native']['returned_error_sha256'] == error_digest
     assert resume() == str(phase)
     if fault is None:
         from benchmark.runtime import codex_readiness
@@ -292,7 +426,15 @@ sys.exit(1)
         with pytest.raises(ValueError, match="wake receipt changed"):
             resume()
         receipt_path.write_bytes(returned_bytes)
-        for field in ("allowance", "native", "receipt_sha256", "session_profile_digest"):
+        if kind == 'unknown':
+            output = receipt_path.parent / 'stdout.jsonl'
+            returned_output = output.read_bytes()
+            output.write_bytes(returned_output + b'\n')
+            with pytest.raises(ValueError, match='returned failure'):
+                resume()
+            output.write_bytes(returned_output)
+        for field in ("allowance", "native", "receipt_sha256", "session_profile_digest",
+                      *(("returned_failure",) if kind == 'unknown' else ())):
             incomplete = copy.deepcopy(phase_initial)
             del incomplete["failed_host_recovery"][field]
             phase.write_text(json.dumps(incomplete))
@@ -314,7 +456,7 @@ sys.exit(1)
     args.state_file = str(phase)
     assert scheduler_fixture.worker.run_worker(args) == 1
     failed_again = phase.read_bytes()
-    assert json.loads(failed_again)['host_attempt']['attempt'] == 2
+    assert json.loads(failed_again)['host_attempt']['attempt'] == prior_attempt + 2
     assert resume() == str(phase) and phase.read_bytes() == failed_again
     assert scheduler_fixture.worker.run_worker(args) == 2
     # A later explicit repair names the new failure, rather than erasing it.
