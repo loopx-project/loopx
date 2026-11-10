@@ -409,6 +409,8 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
 
 
 def test_detached_result_reconnects_without_duplicate_execution(service):
+    from loopx.control_plane.goals.activation_service import set_goal_activation_state
+
     root, original = service
     (root / "hold").touch()
     async def disconnect_requester():
@@ -490,14 +492,20 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     original_brief = brief()
     with pytest.raises(Exception, match="no delegation grant"):
         ungranted.start("analysis", "other", original_brief)
-    registry = json.loads(original.registry.read_text())
-    registry["goals"][0]["status"] = "stopped"
-    original.registry.write_text(json.dumps(registry))
+    stopped = set_goal_activation_state(
+        registry_path=original.registry, goal_id=original.goal_id, state="stopped",
+        runtime_root_override=str(original.root), actor_kind="owner", execute=True,
+    )
+    assert stopped["ok"] and stopped["readback"]["verified"], stopped
     assert reconnected.read("analysis-1")["status"] == "accepted"
     with pytest.raises(ValueError, match="stopped"):
         reconnected.start("analysis", "new-operation", original_brief)
-    registry["goals"][0]["status"] = "active"
-    original.registry.write_text(json.dumps(registry))
+    assert not reconnected.path("new-operation").exists()
+    resumed = set_goal_activation_state(
+        registry_path=original.registry, goal_id=original.goal_id, state="active",
+        runtime_root_override=str(original.root), actor_kind="owner", execute=True,
+    )
+    assert resumed["ok"] and resumed["readback"]["verified"], resumed
     output = root / "analyst" / "initial" / "output.json"
     output.write_text("{}")
     with pytest.raises(ValueError, match="acceptance rejected"):
