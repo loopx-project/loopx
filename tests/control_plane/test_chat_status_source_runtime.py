@@ -28,8 +28,8 @@ def status_api(routed, tmp_path, monkeypatch):
     server.limit = 80
     server.verbose = False
     server.goal_subagent_configuration_enabled = False
-    monkeypatch.setattr("loopx.chat_status_api.attach_host_thread_activity", lambda *a, **k: None)
-    monkeypatch.setattr("loopx.chat_status_api.attach_host_delivery_windows", lambda *a, **k: None)
+    monkeypatch.setattr("loopx.chat.status_api.attach_host_thread_activity", lambda *a, **k: None)
+    monkeypatch.setattr("loopx.chat.status_api.attach_host_delivery_windows", lambda *a, **k: None)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

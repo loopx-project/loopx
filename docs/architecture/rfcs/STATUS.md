@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (48)
+## Accepted (49)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -47,6 +47,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Goal Workspace Surface v0](goal-workspace-surface-v0.md) | Accepted | none | — |
 | [DSH / Pi: L1 Observation and Managed Runtime Selection](harness-selection-dsh-pi-v0.md) | Accepted | none | — |
 | [RFC: Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | Accepted | none | — |
+| [RFC: Recoverable History Working Sets and Bounded Context-Policy Extensions, Informed by billion-context (v0)](history-working-set-context-policy-v0.md) | Accepted | none | — |
 | [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Accepted | none | — |
 | [RFC: Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | Accepted | none | — |
 | [RFC: Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | Accepted | none | — |

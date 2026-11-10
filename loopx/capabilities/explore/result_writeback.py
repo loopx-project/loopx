@@ -100,6 +100,7 @@ def _evolution_plan(attachment, projection, *, agent_id):
 
 def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None,
             todo_id=None, turn_instance_id=None,
+            source_snapshot=None,
             _check_execution_measurements=True):
     previous = existing_node or {}
     update = attachment.get("question_update") or {}
@@ -140,7 +141,8 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         work_yardstick=({"decision": attachment["work_yardstick_decision"], "binding": {
             "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
             "turn_instance_id": turn_instance_id,
-        }} if "work_yardstick_decision" in attachment else None),
+        }, **({"source_snapshot": source_snapshot} if source_snapshot is not None else {})}
+            if "work_yardstick_decision" in attachment else None),
         _check_execution_measurements=_check_execution_measurements,
         recorded_at=recorded_at,
     )
@@ -200,6 +202,8 @@ def prepare_result_attachment(
     turn_instance_id,
     _replay_committed_at=None,
     _current_events=None,
+    _prepared_source=None,
+    _committed_source_snapshot=...,
 ):
     """Validate before primary commit; this path never appends graph evidence."""
     result = normalize_result_attachment(attachment)
@@ -237,7 +241,7 @@ def prepare_result_attachment(
         **({"finding_limit": len(current_events)} if "work_yardstick_decision" in result else {}))
     if "work_yardstick_decision" in result:
         from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
-        effect_runtime_result("work_item.yardstick.continuation", {
+        checked = effect_runtime_result("work_item.yardstick.continuation", {
             # Only replay of the original committed attachment may finish after
             # disable; it cannot grant a new capture or change its contents.
             "enabled": _replay_committed_at is not None or work_yardstick_enabled(goal, runtime_root),
@@ -245,7 +249,13 @@ def prepare_result_attachment(
             "decision": result["work_yardstick_decision"], "evidence_refs": result["evidence_refs"],
             "binding": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id},
             "findings": existing["findings"],
+            "source_events": [{"goal_id": row["goal_id"], "event_id": row["event_id"]}
+                              for row in current_events],
+            **({"source_snapshot": _committed_source_snapshot}
+               if _committed_source_snapshot is not ... else {}),
         })
+        if _prepared_source is not None and "source_snapshot" in checked:
+            _prepared_source["source_snapshot"] = checked["source_snapshot"]
     if _evolves_question(result):
         _evolution_plan(result, existing, agent_id=agent_id)
     for node in existing.get("nodes", []):
@@ -345,6 +355,7 @@ def deliver_result_attachment(
             source_id=intent["idempotency_key"],
             recorded_at=committed_at,
             todo_id=todo_id, turn_instance_id=turn_instance_id,
+            source_snapshot=payload.get("explore_result_source_snapshot"),
             # A durable terminal intent can describe an old writer's event.
             # Structural reconstruction is only for exact canonical readback;
             # a missing event still goes through strict preparation below.
@@ -395,6 +406,7 @@ def deliver_result_attachment(
                 turn_instance_id=turn_instance_id,
                 _replay_committed_at=(committed_at if payload.get("idempotent_replay") is True else None),
                 _current_events=current_events,
+                _committed_source_snapshot=payload.get("explore_result_source_snapshot"),
             )
             evolves = _evolves_question(attachment)
             plan = (_evolution_plan(attachment,
@@ -406,6 +418,7 @@ def deliver_result_attachment(
                 source_id=intent["idempotency_key"], recorded_at=committed_at,
                 existing_node=plan.get("existing_node"),
                 todo_id=todo_id, turn_instance_id=turn_instance_id,
+                source_snapshot=payload.get("explore_result_source_snapshot"),
             )
             result["graph"] = append_explore_result_events(
                 explore_result_log_path(runtime_root, goal_id), events,

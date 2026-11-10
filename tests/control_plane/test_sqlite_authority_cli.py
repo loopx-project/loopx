@@ -204,7 +204,8 @@ def test_new_default_goal_settles_once_and_returns_current_writes_to_file(
                         "--owner", agent, "--idempotency-key", "trial-work")
         proof = ["--task-lease-idempotency-key", "trial-work",
                  "--task-lease-expected-version", str(lease["lease"]["version"])]
-        guard_args = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+        guard_args = ["quota", "should-run", "--context-delivery", "off",
+                      "--goal-id", goal, "--agent-id", agent,
                       "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
                       ]
         guard = command(*guard_args)
@@ -351,7 +352,7 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
     accepted = command(*claim)
     assert accepted["execution_managed"] is True
     proof = ["--claim-operation-id", accepted["claim_operation_id"]]
-    guard = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+    guard = ["quota", "should-run", "--context-delivery", "off", "--goal-id", goal, "--agent-id", agent,
              "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
              "--available-capability", "filesystem_read", ]
     assert command(*guard)["normal_delivery_allowed"] is True

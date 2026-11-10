@@ -6,7 +6,7 @@ import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_runtime import ChatRuntimeController
-from loopx.chat_status_api import ChatStatusRequestMixin
+from loopx.chat.status_api import ChatStatusRequestMixin
 from loopx.chat_store import ChatSessionStore
 
 
@@ -28,8 +28,8 @@ def test_status_reads_registered_work_while_chat_keeps_its_own_store(tmp_path, m
     store.append_message(session["session_id"], role="agent", text="Keep the original private history.")
     before = {path: path.read_bytes() for path in store.root.rglob("*.json")}
     # External host activity is an optional observer, not the status authority.
-    monkeypatch.setattr("loopx.chat_status_api.attach_host_thread_activity", lambda *a, **k: None)
-    monkeypatch.setattr("loopx.chat_status_api.attach_host_delivery_windows", lambda *a, **k: None)
+    monkeypatch.setattr("loopx.chat.status_api.attach_host_thread_activity", lambda *a, **k: None)
+    monkeypatch.setattr("loopx.chat.status_api.attach_host_delivery_windows", lambda *a, **k: None)
 
     class Reader(ChatStatusRequestMixin):
         server = SimpleNamespace(registry_path=registry, runtime_root=store.root.parent,

@@ -297,7 +297,9 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
 
     # A capture is an immutable observation. Reading its detail cannot admit
     # changed work, remove a wait or silently rebind the owner's checks.
-    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
+    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery",
+                        "--decision-output-dir", str(tmp_path / "current-decision"),
+                        "--context-delivery", "on", "--delta-delivery", "auto")
     assert code == (0 if change == "checks_removed" else 1), current
     if code == 0:
         current = read_cli_policy_payload(json.dumps(current), returncode=0)

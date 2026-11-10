@@ -22,6 +22,8 @@ def failed(kind,error,tb):
     sys.__excepthook__(kind,error,tb)
 sys.excepthook=failed
 def cli(*args):
+    if args[:2] == ("quota", "should-run"):
+        args = (*args, "--context-delivery", "off")
     result=subprocess.run([sys.executable,"-m","loopx.cli","--registry",request["registry"],
         "--runtime-root",request["runtime"],"--format","json",*args],capture_output=True,text=True,timeout=60)
     payload=json.loads(result.stdout)
