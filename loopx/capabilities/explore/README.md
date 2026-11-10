@@ -21,6 +21,43 @@ standalone observations keep the complete observation form. [Execution evidence 
 An ordinary result attachment can include `measurements`, saved on its existing
 node-linked finding. The graph and research-history detail retain the values;
 `explore turn-context` supplies bounded `measurement_feedback` to the next turn.
+To use a new result during the current Turn, save the same ordinary attachment
+as `result.json` and record it with the open claimed Todo:
+
+```sh
+loopx --format json explore finding --goal-id GOAL --agent-id AGENT \
+  --todo-id TODO --turn-instance-id TURN --result-json result.json
+```
+
+Supply the question and applicability for a new scoped question. For one
+existing linked question, omit both; when there are several, name its
+`node_id`. The same attachment works with `refresh-state --explore-result-json`.
+The receipt returns `measurement_feedback` for confirmed measurements in this
+write, including the earlier best, latest value and improvement under the
+same profile. For an enabled Yardstick with declared outcome and proxy
+profiles, it also returns `search_comparison` when this write contributes a
+qualified comparison. A reversal requires two distinct candidates measured on
+both profiles with different preferences. This uses the current Todo's
+recorded evidence and doesn't settle the Turn. Exact retries within the same
+Turn return the comparison at the original write.
+
+With Yardstick enabled, a quantitative or decision attachment on ordinary
+`refresh-state` returns the same feedback in `explore_result_delivery` after
+the graph and Todo association commit. A successful replay reads the original
+committed prefix, including after later results arrive. Partial delivery still
+retries through the existing owner; feedback creates no claim, spend or evaluation.
+Disabled Yardstick and unmeasured refresh attachments retain their earlier wire.
+
+When no outcome/proxy decision has been selected, a quantitative receipt can
+also return bounded `work_measurements` from this Todo's committed evidence.
+These are the same scoped facts available in ordinary task context. The receipt
+does not duplicate its current feedback: it supplements it with at most two
+other groups, prioritizing this question and recent evidence, with a source-bound
+`details_command` and an explicit omitted count for the remaining groups.
+No metric is assigned an outcome or proxy role. The Agent can use the facts
+without another declaration or probe; if its method changes, the existing
+optional decision field fits the same normal result attachment.
+
 Manual capture uses `explore finding --node <id> --evidence-ref result:a
 --measurements-json measurements.json`. The file contains one to eight items:
 
@@ -90,6 +127,15 @@ Changed or unknown evaluation conditions must stay separate. Do not invent a
 shared revision merely to obtain a comparison. A growing local corpus does not
 change the input revision for an unchanged evaluated subset; changed samples do.
 
+File-based producers may use `candidate_content.candidate_snapshot` and
+`candidate_manifest_sha256` from this capability's host I/O neighborhood to
+capture selected relative paths and byte digests. This preserves one content
+encoding for execution probes and artifact adapters. It does not cover modes,
+packaging, transitive inputs or execution conditions, certify an execution, or
+require every measurement subject to use a content hash. Keep each producer's
+actual subject, workload and evaluator; extra content evidence does not rewrite
+earlier records or count as another evaluation.
+
 A paired comparison may instead record both candidates in **one finding** under
 the same verified comparison conditions. Keep both `candidate_ref` and
 `evidence_ref` values, and list both results in the finding's `evidence_refs`.
@@ -101,8 +147,11 @@ finding cannot claim two separate receipts as one execution observation's result
 
 Comparisons require the same node, metric, unit, direction, comparison scope,
 input revision and evaluator. Producers must change the scope when task,
-model/resource budget or evaluation conditions change, and separate native
-evaluation from local proxies. Explore validates the declared comparison keys,
+model/resource budget or evaluation conditions change, and keep distinct workloads
+or evaluation conditions in their own profiles.
+A producer's location does not decide whether its measurement is an outcome or a
+proxy; that role remains an explicit decision declaration. Explore validates the
+declared comparison keys,
 not their truth. It computes the latest recorded measurement, historical best
 candidate/source and direction-adjusted improvement against the prior best,
 before applying the context's display limit. Latest follows source-log append
@@ -138,6 +187,11 @@ separate comparison cue. The detail read retains the complete work decision.
 The comparison uses findings from the current work, target, and acceptance
 reference. A different target or acceptance reference needs its own eligible
 pair, even when the measured metric, evaluator and inputs stay the same.
+Uncited ordinary observations enter the current work window only when their
+original server commit is provably later than that decision and their canonical
+log position follows its original prefix. A delayed old delivery, tied time or
+unknown time does not become new work evidence. Original results and explicitly
+cited, verified prefix history remain available.
 The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use

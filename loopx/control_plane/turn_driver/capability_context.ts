@@ -2,7 +2,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
-import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
+import {decodeTurnSource, quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
@@ -86,13 +86,14 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
     // A status-only result is returned to the guard and is never a reusable
     // context contribution. Keep its registration, slot and budget checks.
-    if (Object.hasOwn(input, "source") || Object.keys(context).length ||
+    if (Object.hasOwn(input, "source") || Object.hasOwn(input, "source_transport") || Object.keys(context).length ||
         instructions.length || Object.keys(resultFields).length) {
       throw new Error("readback-only context validation cannot carry a source or a contribution");
     }
     return normalized;
   }
-  return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(input.source), ...normalized})};
+  const source = Object.hasOwn(input, "source_transport") ? decodeTurnSource(input, "source") : input.source;
+  return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(source), ...normalized})};
 }
 
 export function projectTurnContextContribution(input: JsonObject): JsonObject {
@@ -126,4 +127,34 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
     throw new Error("context source or contribution changed after registration");
   }
   return normalized;
+}
+
+/** Project one Host's optional contributions against its one governing source. */
+export function projectTurnContext(input: JsonObject): JsonObject {
+  if (!Array.isArray(input.contributions)) throw new Error("context contributions must be an array");
+  const readback = requireJsonObject(input.readback, "current context readback");
+  const context: JsonObject = {}, resultFields: JsonObject = {};
+  const instructions: string[] = [];
+  for (const value of input.contributions) {
+    try {
+      const contribution = requireJsonObject(value, "context contribution");
+      const slots = requireStringArray(contribution.readback_slots, "context readback slots");
+      const projected = projectTurnContextContribution({contribution, source: input.source,
+        readback: Object.fromEntries(slots.map(key => [key, readback[key] ?? null]))});
+      const fields = requireJsonObject(projected.context_fields, "context fields");
+      const results = requireJsonObject(projected.result_fields, "capability result fields");
+      const advice = requireStringArray(projected.instructions, "context instructions");
+      if (Object.keys(fields).some(key => Object.hasOwn(context, key)) ||
+          Object.keys(results).some(key => Object.hasOwn(resultFields, key))) continue;
+      Object.assign(context, fields);
+      instructions.push(...advice);
+      Object.assign(resultFields, results);
+    } catch {
+      // A stale, malformed or conflicting contribution cannot suppress another
+      // provider's valid advice, or be repaired from cached/private context.
+    }
+  }
+  if (!Object.keys(context).length && !instructions.length && !Object.keys(resultFields).length) return {};
+  return {...context, capability_context_fields: Object.keys(context),
+    capability_instructions: instructions, capability_result_fields: resultFields};
 }

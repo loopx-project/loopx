@@ -23,9 +23,7 @@ _SHELL_EXECUTABLES = frozenset({"bash", "dash", "fish", "ksh", "sh", "zsh"})
 _PYTHON_EXECUTABLE_PATTERN = re.compile(r"(?i)^(?:python(?:[0-9.]+)?|pypy[0-9.]*)$")
 _JAVASCRIPT_EXECUTABLES = frozenset({"node", "nodejs"})
 BENCHMARK_TASK_ENVIRONMENT_READ_TOOL = "benchmark_task_environment_read"
-BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION = (
-    "benchmark_task_environment_read_v0"
-)
+BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION = "benchmark_task_environment_read_v0"
 BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION = (
     "benchmark_task_environment_read_result_v0"
 )
@@ -261,6 +259,7 @@ def _shell_segments(command: str) -> tuple[tuple[str, ...], ...]:
             if current:
                 segments.append(tuple(current))
                 current = []
+            segments.append((token,))
         else:
             current.append(token)
     if current:
@@ -543,6 +542,76 @@ def _xargs_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
     return ()
 
 
+def _shell_value_has_credential_read(value: str) -> bool:
+    if "$(" in value or "`" in value or "${!" in value:
+        return True
+    variable_names = re.findall(
+        r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*))",
+        value,
+    )
+    return any(
+        _SENSITIVE_ENV_NAME_PATTERN.search(name) is not None
+        for pair in variable_names
+        for name in pair
+        if name
+    )
+
+
+def _env_command_has_credential_probe(
+    arguments: tuple[str, ...],
+    *,
+    depth: int,
+) -> bool:
+    """Separate environment listing from a bounded literal command wrapper."""
+
+    # The shell evaluates options, assignments and child argv before env runs.
+    # Skipping a wrapper operand must never discard its environment-read evidence.
+    if any(_shell_value_has_credential_read(argument) for argument in arguments):
+        return True
+    index = 0
+    while index < len(arguments):
+        option = arguments[index]
+        if option == "--":
+            index += 1
+            break
+        if option in {"-", "-i", "--ignore-environment"}:
+            index += 1
+            continue
+        if option in {"-u", "--unset", "-C", "--chdir"}:
+            if index + 1 >= len(arguments):
+                return True
+            index += 2
+            continue
+        if option.startswith(("--unset=", "--chdir=")) or (
+            option.startswith(("-u", "-C")) and len(option) > 2
+        ):
+            index += 1
+            continue
+        if option.startswith("-"):
+            return True
+        break
+
+    while index < len(arguments):
+        argument = arguments[index]
+        assignment = re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=(.*)", argument, flags=re.DOTALL
+        )
+        if assignment:
+            index += 1
+            continue
+        break
+
+    if index == len(arguments):
+        return True
+    executable = arguments[index]
+    if "$" in executable or "`" in executable or executable.startswith("-"):
+        return True
+    return _shell_segment_has_credential_probe(
+        arguments[index:],
+        depth=depth + 1,
+    )
+
+
 def _shell_segment_has_credential_probe(
     tokens: tuple[str, ...],
     *,
@@ -553,17 +622,24 @@ def _shell_segment_has_credential_probe(
     executable, arguments = _shell_executable(tokens)
     if not executable:
         return False
-    if executable in {"env", "printenv"}:
+    if executable == "env":
+        return _env_command_has_credential_probe(
+            arguments,
+            depth=depth,
+        )
+    if executable == "printenv":
         return True
     if executable in {"command", "exec"}:
         wrapped = _shell_wrapper_command(executable, arguments)
         return bool(wrapped) and _shell_segment_has_credential_probe(
-            wrapped, depth=depth + 1
+            wrapped,
+            depth=depth + 1,
         )
     if executable == "xargs":
         wrapped = _xargs_command(arguments)
         return bool(wrapped) and _shell_segment_has_credential_probe(
-            wrapped, depth=depth + 1
+            wrapped,
+            depth=depth + 1,
         )
     if any(_PROC_ENVIRON_PATTERN.search(argument) for argument in arguments):
         return True
@@ -585,8 +661,10 @@ def _shell_segment_has_credential_probe(
 
 
 def _shell_command_has_credential_probe(command: str) -> bool:
+    # Only literal argv can establish an env wrapper. Dynamic expansions remain
+    # suspicious: static shell mutation tracking cannot prove their executable.
     return any(
-        _shell_segment_has_credential_probe(segment)
+        _shell_segment_has_credential_probe(segment[1:] if segment[0] == "do" else segment)
         for segment in _shell_segments(command)
     )
 

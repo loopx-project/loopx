@@ -437,6 +437,50 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
+An operator may explicitly hand off an unchanged stopped legacy heartbeat Host
+whose failed attempt produced no stdout/stderr and returned a phase timeout,
+while the native session remained idle. This is disabled by default. First run
+`benchmark.edgebench.stopped_recovery` with `--idle-host-handoff` and, when
+needed, `--install` to place its inert proof in that same stopped worker. The
+producer requires the exact failed scheduler, pending witness, latest unique
+wake, original workspace, registry, runtime and native stores, including committed
+SQLite WALs. It preserves the unknown failure and does not infer a quota failure
+from diagnostic text. The proof grants no execution or evaluator authority.
+The empty-output witness uses the worker's `stdout.jsonl` and `stderr.log` files;
+the producer and receiver share that writer-owned layout.
+
+After the owner restores compatible native evaluator authority separately,
+restart only the original inert container and retain its original environment.
+Set `LOOPX_INTERRUPTED_SOURCE` to the installed proof and provide an explicitly
+authorized finite `LOOPX_PHASE_DEADLINE_EPOCH`. Invoke
+`python -m benchmark.runtime.scheduler` with its ordinary arguments plus
+`--idle-host-state-sha256 ORIGINAL_SCHEDULER_SHA256`. The consumer verifies the
+same namespace and complete unchanged source, current Goal/session/profile and
+fresh native account allowance. The native history owner must return a stable
+complete history whose last completed cursor precedes the failed attempt, with
+no pending effects. Its observer uses a disposable copy of the native store and
+committed WALs because native read APIs can update their own history index; it
+copies no authentication file. Every copied native base participant must match
+the producer's sealed set; an extra archived-session/index store or database
+version is unsupported and rejected before native observation. The original
+source remains byte-stable. Empty
+output or a session-identity error alone is insufficient.
+The final source comparison runs under current Goal admission. Only its exact
+held cross-runtime lock and holder records may differ, verified through the
+existing lock owner's process/token witnesses; registry contents, SQLite/WALs,
+work files and unrelated lock files remain protected.
+
+An accepted handoff creates a new finite transport phase linked to the original
+failed record. It retains the session, Goal, Todos, work and failure evidence;
+it does not settle an old Turn, refill native opportunities/cooldown, or create
+another task budget. Repeating the exact phase retains its clock and any later
+failure; a changed deadline cannot replay the original handoff. The owner still
+enforces its audited remaining solver allowance and external cutoff, including
+setup and cleanup. Omit both new opt-ins to keep the ordinary refusal path.
+Retain the proof and phase records when disabling future handoffs. Genuine Stop,
+unavailable allowance, changed source or native work during the failed window
+continues to hold execution.
+
 ### Optional native execution evidence
 
 A benchmark host can expose finalized and live solver intervals through the

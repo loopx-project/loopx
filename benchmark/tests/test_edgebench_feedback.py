@@ -361,8 +361,9 @@ def test_cli_native_context_default_and_explicit_controls_reach_registration(tmp
     constructed = {}
     def backend(**kwargs):
         constructed.update(kwargs)
-        return SimpleNamespace(image_exists=lambda image: True,
-            registration_options=lambda runner: {"host_registration_callback": kwargs["feedback"].bind})
+        return SimpleNamespace(observe_local_images=lambda **keys: {},
+            registration_options=lambda runner: {"host_registration_callback": kwargs["feedback"].bind}
+            if kwargs["feedback"] is not None else {})
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     def handoff(**kwargs):
         selected = mode or "native"

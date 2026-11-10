@@ -43,7 +43,8 @@ function compactResumeCondition(resumeCondition: unknown): JsonObject {
   const keys = ["schema_version", "resume_when", "satisfied", "kind", "target", "target_todo_id", "target_status",
     "target_archive_state", "target_source_section", "target_task_class", "target_claimed_by", "target_next_due_at",
     "capability", "provider", "scheduled_for", "evaluated_at", "clock_provider", "material_change",
-    "material_change_generation", "baseline_generation", "invalid_state", "target_expires_at"];
+    "material_change_generation", "monitor_change_scope", "scoped_material_change_generation",
+    "baseline_generation", "invalid_state", "target_expires_at"];
   const compact: JsonObject = Object.fromEntries(keys.filter(key => key in condition).map(key => [key, condition[key]]));
   if (condition.kind === "resume_at") compact.resume_receipt = condition.resume_receipt ?? null;
   compact.satisfied = false;

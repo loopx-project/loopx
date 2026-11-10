@@ -175,6 +175,29 @@ if (database && installed) {
     const forged = structuredClone(requests);
     ((forged[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [{path: ["items", 0, "note"], value: "Forged source fact"}];
     await assert.rejects(readCanonicalQuotaProjection({requests: forged}, dependencies), /canonical Todo facts/);
+    const agentField = fields.agent_todos as JsonObject;
+    const sourceItem = (agentField.items as JsonObject[])[0]!;
+    for (const changes of [
+      [{path: ["items", 0, "required_write_scopes", 0], value: "different.json"}],
+      [{path: ["open_count"], value: Number(agentField.open_count) + 1}],
+      [{path: ["items"], delete: true}],
+    ]) {
+      const changed = structuredClone(requests);
+      ((changed[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = changes;
+      await assert.rejects(readCanonicalQuotaProjection({requests: changed}, dependencies), /canonical Todo facts/);
+    }
+    // Source protection compares the final complete value. Temporary changes
+    // that are restored, including a parent replacement and deletion, retain
+    // the same read result and never mutate provider data.
+    const restored = structuredClone(requests);
+    const originalChanges = ((requests[1]!.summary_request as JsonObject).source_reference as JsonObject).changes as JsonObject[];
+    ((restored[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [
+      {path: ["items"], value: structuredClone(agentField.items)},
+      {path: ["items", 0, "note"], delete: true},
+      {path: ["items", 0, "note"], value: sourceItem.note},
+      ...structuredClone(originalChanges),
+    ];
+    assert.deepEqual(await readCanonicalQuotaProjection({requests: restored}, dependencies), result);
     const untouched = await store.loadAuthority();
     assert.equal(untouched.status, "loaded");
     if (untouched.status !== "loaded") throw new Error("synthetic provider disappeared");

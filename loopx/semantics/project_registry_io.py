@@ -33,6 +33,7 @@ APPROVED_READ_APIS = frozenset(
         "decode_registry_snapshot",
         "load_project_registry",
         "load_registry",
+        "read_activation_upgrade_registry",
     }
 )
 APPROVED_WRITE_APIS = frozenset({"mutate_project_registry"})
@@ -40,6 +41,7 @@ APPROVED_TRANSACTION_APIS = frozenset(
     {
         "project_registry_transaction",
         "source_session_registry_transaction",
+        "activation_upgrade_registry_transaction",
     }
 )
 DIRECT_READ_APIS = frozenset(

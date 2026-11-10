@@ -191,7 +191,8 @@ def test_installed_cli_keeps_full_source_deadline_after_compaction(tmp_path, mon
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     child = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
         "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
-        "--runtime-profile", "ark_managed_agent_goal", "--include-detail", "scheduler"],
+        "--runtime-profile", "ark_managed_agent_goal", "--include-detail", "scheduler",
+        "--context-delivery", "off"],
         capture_output=True, text=True, timeout=60)
     assert child.returncode == 0, child.stdout or child.stderr
     packet = json.loads(child.stdout)

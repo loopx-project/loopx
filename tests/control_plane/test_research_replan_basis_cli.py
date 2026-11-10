@@ -32,6 +32,11 @@ def test_formal_task_instruction_change_rearms_the_actual_worker(
         "index": index + 1, "source_section": "Agent Todo", "archive_state": "active", "claimed_by": AGENT,
         "updated_at": "2026-09-01T00:00:00Z"} for index in range(15)]
     call, runtime, history = _fixture(tmp_path, monkeypatch, provider, future_monitor=False, initial_todos=todos)
+    # This fixture isolates instruction changes from independent Stride review.
+    registry_path = tmp_path / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["execution_profile"] = {"stride_strategy": "off"}
+    registry_path.write_text(json.dumps(registry))
     history.write_text("")
     calls = tmp_path / "review-calls"
     args = _args(fake_cli=Path(sys.executable).parent / "loopx", state_file=tmp_path / "scheduler.json",
@@ -170,11 +175,11 @@ def test_settled_owner_hold_stays_acknowledged_after_display_edits(acceptance_go
     original = _configure(cli, document_path)["goal_acceptance_contract"]
     goal, agent, turn = "goal-acceptance", "agent-a", "turn-original-owner-hold"
     code, guard = run("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
-                      "--turn-instance-id", turn)
+                      "--turn-instance-id", turn, "--context-delivery", "off")
     assert code == 0 and guard["effective_action"] == "autonomous_replan_required", guard
     obligation = guard["autonomous_replan_obligation"]
     code, reentered = current_run("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
-        "--turn-instance-id", turn)
+        "--turn-instance-id", turn, "--context-delivery", "off")
     assert code == 0, reentered
     assert reentered["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
     assert reentered["autonomous_replan_obligation"]["replan_context"]["obligation_id"] == obligation["obligation_id"]
@@ -219,7 +224,7 @@ def test_settled_owner_hold_stays_acknowledged_after_display_edits(acceptance_go
     run = current_run
 
     def fresh_quota():
-        code, packet = run("quota", "should-run", "--goal-id", goal, "--agent-id", agent)
+        code, packet = run("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
         assert code == 0, packet
         assert packet.get("autonomous_replan_obligation") is None, {
             key: packet.get(key) for key in ("should_run", "effective_action", "autonomous_replan_obligation")}
@@ -251,6 +256,6 @@ def test_settled_owner_hold_stays_acknowledged_after_display_edits(acceptance_go
         document["objective"] = "Produce the export and retain its checksum under new owner criteria."
         document_path.write_text(json.dumps(document))
         _configure(cli, document_path)
-        code, changed = run("quota", "should-run", "--goal-id", goal, "--agent-id", agent)
+        code, changed = run("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
         assert code == 0 and changed["should_run"] is True, changed
         assert changed["autonomous_replan_obligation"]["obligation_id"] != obligation["obligation_id"]
