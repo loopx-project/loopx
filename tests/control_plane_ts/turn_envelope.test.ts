@@ -464,6 +464,14 @@ test("task text commitment has one selected-Todo carrier without changing legacy
   }
 });
 
+test("complete composition preserves a saved source and rejects a different Host binding", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: "--goal-id goal"};
+  const complete = evaluateTurnEnvelope(request);
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete}), complete);
+  assert.throws(() => evaluateTurnEnvelope({...request, payload: complete,
+    scheduler_execution_args: "--goal-id other"}), /cannot change its host binding/);
+});
+
 function payload(): Record<string, unknown> {
   return {
     ok: true,

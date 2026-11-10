@@ -45,7 +45,8 @@ _RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
 
 
 def profile_execution(profile, *, task_entry=None, context_delivery=None,
-                      turn_envelope=False, complete_turn=False, validation_command=None, native_child_limit=None):
+                      turn_envelope=False, complete_turn=False,
+                      validation_command=None, native_child_limit=None):
     """Resolve the native experiment arm through the shared runtime contract."""
     if profile not in PROFILE_MODES:
         raise ValueError("Unknown benchmark worker profile")
@@ -133,11 +134,11 @@ class SForgeWorker(CodexAgent):
         super().__init__(config)
         self.execution = profile_execution(
             profile, task_entry=task_entry,
-            context_delivery=context_delivery, turn_envelope=turn_envelope, complete_turn=complete_turn,
-            validation_command=validation_command, native_child_limit=native_child_limit,
+            context_delivery=context_delivery, turn_envelope=turn_envelope,
+            complete_turn=complete_turn, validation_command=validation_command,
+            native_child_limit=native_child_limit,
         )
         self.turn_envelope = self.execution.turn_envelope
-        self.complete_turn = self.execution.complete_turn
         self.context_delivery = self.execution.context_delivery
         self.task_entry = self.execution.task_entry
         self.native_child_limit = self.execution.native_child_limit
@@ -421,7 +422,7 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
-                **({"complete_turn": True} if self.complete_turn else {}),
+                **({"complete_turn": True} if self.execution.complete_turn else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}
                    if self.execution_observation is not None else {}),

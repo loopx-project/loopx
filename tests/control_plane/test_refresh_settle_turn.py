@@ -508,7 +508,7 @@ def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, comman
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_explicit_complete_soft_claim_preserves_the_original_manual_plan(tmp_path, provider):
+def test_explicit_complete_soft_claim_reuses_the_original_turn_receipt(tmp_path, provider):
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     project, runtime, registry = _write_fixture(tmp_path)

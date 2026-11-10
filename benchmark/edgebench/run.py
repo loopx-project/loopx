@@ -213,8 +213,9 @@ def main(argv=None):
     try:
         execution = profile_execution(
             args.worker, task_entry=args.task_entry,
-            context_delivery=args.context_delivery, turn_envelope=args.turn_envelope, complete_turn=args.complete_turn,
-            validation_command=args.validation_command_json, native_child_limit=args.native_child_limit,
+            context_delivery=args.context_delivery, turn_envelope=args.turn_envelope,
+            complete_turn=args.complete_turn, validation_command=args.validation_command_json,
+            native_child_limit=args.native_child_limit,
         )
     except ValueError as error:
         parser.error(str(error))

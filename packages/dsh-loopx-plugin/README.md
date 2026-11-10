@@ -542,9 +542,9 @@ pre-step revalidation order remains authoritative.
 
 ## Driver retry boundary
 
-DSH's LLM retry plugin owns provider-request retries. This Driver retries only
-safe fixed-argv LoopX reads and an idempotent `quota should-run` receipt, at
-most twice beyond the first attempt. Every retry uses the same
+DSH's LLM retry plugin owns provider-request retries. For CLI calls, this Driver
+retries only safe fixed-argv LoopX reads and an idempotent `quota should-run`
+receipt, at most twice beyond the first attempt. Every retry uses the same
 `--turn-instance-id`. Typed authority denials, incompatible schemas,
 cancellation, and human input are never retried. There is no cumulative
 eight-failure breaker or plugin-owned durable activation state. The small
@@ -553,6 +553,12 @@ reconstructed only from its typed event history. Exhausting the three attempts
 stops that evaluation; it does not create a periodic error-retry loop. Only a
 typed LoopX local-scheduler plan can schedule another wakeup, and its limit on
 unchanged polls is enforced.
+
+If DSH refuses the maintenance slot before admission starts, the Driver waits
+for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
+wait uses no polling timer and is cancelled by Pause, human input, Session
+replacement, or disposal. Failures after the admission callback starts do not
+enter this maintenance-slot retry.
 
 For an admitted automatic continuation, that exact turn id is also carried in
 the LoopX-owned canonical heartbeat body and the typed DSH continuation source.
