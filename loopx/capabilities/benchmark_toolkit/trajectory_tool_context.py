@@ -39,6 +39,11 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
         words = list(lexer)
     except ValueError:
         return None
+    # Keep quoting/escaping until expansion syntax is ruled out. shlex's argv
+    # alone cannot distinguish an unquoted glob from a literal quoted filename.
+    unquoted = re.sub(r"'(?:[^']*)'|\"(?:\\.|[^\"\\])*\"|\\.", "", command)
+    if re.search(r"[\*?\[\]{}~]", unquoted):
+        return None
     if not words or any(word and set(word) <= set(";&|()<>") for word in words):
         return None
     if bound_turn is not None:
@@ -48,6 +53,22 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
         if words[index:index + 1] != [_TURN_PLACEHOLDER]:
             return None
         words[index] = bound_turn
+        from ...cli_runtime import GLOBAL_OPTIONS_WITH_VALUE
+
+        args = words[1:]
+        executable = words[0].rsplit("/", 1)[-1]
+        if executable != "loopx":
+            if (not re.fullmatch(r"python(?:3(?:\.\d+)?)?", executable)
+                    or args[:1] != ["-m"] or args[1:2] not in (["loopx"], ["loopx.cli"], ["loopx.entrypoint"])):
+                return None
+            args = args[2:]
+        while args and args[0] in GLOBAL_OPTIONS_WITH_VALUE:
+            if len(args) < 2:
+                return None
+            args = args[2:]
+        if args[:2] != ["quota", "should-run"]:
+            return None
+
     # Expansion could select another executable or hide shell work. Quoted
     # expansions are conservatively unassigned too; no string is evaluated.
     if any("$" in word or "`" in word for word in words):

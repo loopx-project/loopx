@@ -116,3 +116,36 @@ def test_unsupported_tool_arguments_remain_unassigned(arguments):
     rows = [{'type': 'response_item', 'payload': {'type': 'function_call',
              'name': 'exec_command', 'call_id': 'call', 'arguments': arguments}}]
     assert project_tool_context(rows)[0]['argv'] is None
+
+
+@pytest.mark.parametrize("command", [
+    '*/loopx --format json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry ~/registry.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/{first,second}.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/?.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/[ab].json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+])
+def test_bound_turn_guard_never_guesses_expanded_shell_arguments(command):
+    assert _argv('LOOPX_TURN=2026-01-01T00:00:00Z\n' + command) is None
+
+
+def test_bound_turn_guard_preserves_quoted_literal_glob_names():
+    command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+        '"/data/*/loopx" --registry "/data/{first,second}.json" quota should-run '
+        '--turn-instance-id "${LOOPX_TURN:?}"')
+    assert _argv(command) == ['/data/*/loopx', '--registry', '/data/{first,second}.json',
+        'quota', 'should-run', '--turn-instance-id', '2026-01-01T00:00:00Z']
+
+
+@pytest.mark.parametrize("operation", ["todo list", "status", "quota spend-slot"])
+def test_turn_assignment_exception_is_only_the_published_guard(operation):
+    assert _argv('LOOPX_TURN=2026-01-01T00:00:00Z\nloopx ' + operation
+        + ' --turn-instance-id "${LOOPX_TURN:?}"') is None
+
+
+def test_source_checkout_guard_keeps_its_literal_python_entrypoint():
+    command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+        '/venv/bin/python3 -m loopx.entrypoint --format json quota should-run '
+        '--turn-instance-id "${LOOPX_TURN:?}"')
+    assert _argv(command) == ['/venv/bin/python3', '-m', 'loopx.entrypoint', '--format', 'json',
+        'quota', 'should-run', '--turn-instance-id', '2026-01-01T00:00:00Z']
