@@ -214,3 +214,49 @@ def test_registry_inspection_rechecks_retargeted_source_paths(tmp_path):
     assert [row["state_file_abs"] for row in separated["goals"]] == [
         str(first.resolve() / "active.md"), str(second.resolve() / "active.md"),
     ]
+
+
+@pytest.mark.parametrize("first_exists", [False, True])
+def test_registry_cli_keeps_state_path_and_existence_on_one_target(tmp_path, first_exists):
+    first, second = tmp_path / "first.md", tmp_path / "second.md"
+    (first if first_exists else second).write_text("# State\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    alias = project / "state.md"
+    try:
+        alias.symlink_to(first)
+    except (OSError, NotImplementedError):
+        pytest.skip("File symlinks are not available")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"schema_version": 1, "goals": [{
+        "id": "original", "repo": str(project), "domain": "source-read", "status": "active",
+        "state_file": "state.md", "adapter": {"kind": "test_v0"},
+    }]}))
+    script = '''import json,sys
+from pathlib import Path
+import loopx.registry as registry
+from loopx.cli import main
+alias, second = Path(sys.argv[2]), Path(sys.argv[3])
+original = registry.stable_path_key
+changed = False
+def observe(path):
+    global changed
+    result = original(path)
+    if path == alias and not changed:
+        alias.unlink()
+        alias.symlink_to(second)
+        changed = True
+    return result
+registry.stable_path_key = observe
+raise SystemExit(main(['--format','json','--registry',sys.argv[1],'registry']))
+'''
+    response = subprocess.run([sys.executable, "-c", script, str(registry), str(alias), str(second)],
+        capture_output=True, text=True, timeout=20)
+    assert response.returncode == 0, response.stderr
+    row = json.loads(response.stdout)["goals"][0]
+    assert row["state_file_abs"] == str(first.resolve())
+    assert row["state_file_exists"] == first_exists
+    # No process-wide cache: a subsequent public inspection uses the new alias.
+    latest = inspect_registry(registry)["goals"][0]
+    assert latest["state_file_abs"] == str(second.resolve())
+    assert latest["state_file_exists"] == (not first_exists)
