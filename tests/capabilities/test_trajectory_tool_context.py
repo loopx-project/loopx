@@ -49,6 +49,34 @@ def test_direct_wrapper_rejects_mixed_or_dynamic_work(script):
     assert _literal_exec_argv(script) is None
 
 
+def test_managed_heartbeat_guard_binding_is_observed_as_one_literal_invocation():
+    turn = "2026-01-02T03:04:05.006Z"
+    assignment = f"LOOPX_TURN={turn}"
+    guard = ('/venv/bin/loopx --registry /synthetic/registry.json --format json quota should-run '
+             '--goal-id fixture-goal --agent-id fixture-agent --codex-app --turn-instance-id "${LOOPX_TURN:?}"')
+    command = f"{assignment}\n{guard}"
+    expected = [
+        "/venv/bin/loopx", "--registry", "/synthetic/registry.json", "--format", "json", "quota", "should-run",
+        "--goal-id", "fixture-goal", "--agent-id", "fixture-agent", "--codex-app", "--turn-instance-id", turn,
+    ]
+    calls = [
+        {"type": "function_call", "name": "exec_command", "call_id": "shell",
+         "arguments": json.dumps({"cmd": command})},
+        {"type": "custom_tool_call", "name": "exec", "call_id": "literal-wrapper",
+         "input": f"text(await tools.exec_command({{cmd: {json.dumps(command)}}}));"},
+    ]
+    assert [row["argv"] for row in project_tool_context([
+        {"type": "response_item", "payload": call} for call in calls
+    ])] == [expected, expected]
+    for invalid in (
+        f"LOOPX_TURN=$(date -u)\n{guard}", f"{assignment}\n{guard} && pytest",
+        f"{assignment}\n{guard}\npytest", f"{assignment}\n{guard} --agent-id $OTHER",
+        f"{assignment}\n{guard} --turn-instance-id {turn}", f"{assignment}\n{guard} foo#bar; pytest",
+        command.replace('"${LOOPX_TURN:?}"', "'${LOOPX_TURN:?}'"), command.replace("LOOPX_TURN:?", "OTHER:?"),
+    ):
+        assert _argv(invalid) is None
+
+
 def test_projection_uses_native_response_items_not_mirrors_or_model_prose():
     def item(payload):
         return {'type': 'response_item', 'payload': payload}
@@ -88,3 +116,36 @@ def test_unsupported_tool_arguments_remain_unassigned(arguments):
     rows = [{'type': 'response_item', 'payload': {'type': 'function_call',
              'name': 'exec_command', 'call_id': 'call', 'arguments': arguments}}]
     assert project_tool_context(rows)[0]['argv'] is None
+
+
+@pytest.mark.parametrize("command", [
+    '*/loopx --format json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry ~/registry.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/{first,second}.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/?.json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+    'loopx --registry /data/[ab].json quota should-run --turn-instance-id "${LOOPX_TURN:?}"',
+])
+def test_bound_turn_guard_never_guesses_expanded_shell_arguments(command):
+    assert _argv('LOOPX_TURN=2026-01-01T00:00:00Z\n' + command) is None
+
+
+def test_bound_turn_guard_preserves_quoted_literal_glob_names():
+    command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+        '"/data/*/loopx" --registry "/data/{first,second}.json" quota should-run '
+        '--turn-instance-id "${LOOPX_TURN:?}"')
+    assert _argv(command) == ['/data/*/loopx', '--registry', '/data/{first,second}.json',
+        'quota', 'should-run', '--turn-instance-id', '2026-01-01T00:00:00Z']
+
+
+@pytest.mark.parametrize("operation", ["todo list", "status", "quota spend-slot"])
+def test_turn_assignment_exception_is_only_the_published_guard(operation):
+    assert _argv('LOOPX_TURN=2026-01-01T00:00:00Z\nloopx ' + operation
+        + ' --turn-instance-id "${LOOPX_TURN:?}"') is None
+
+
+def test_source_checkout_guard_keeps_its_literal_python_entrypoint():
+    command = ('LOOPX_TURN=2026-01-01T00:00:00Z\n'
+        '/venv/bin/python3 -m loopx.entrypoint --format json quota should-run '
+        '--turn-instance-id "${LOOPX_TURN:?}"')
+    assert _argv(command) == ['/venv/bin/python3', '-m', 'loopx.entrypoint', '--format', 'json',
+        'quota', 'should-run', '--turn-instance-id', '2026-01-01T00:00:00Z']
