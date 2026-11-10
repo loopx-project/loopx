@@ -5075,6 +5075,146 @@ def test_disconnect_failure_returns_original_retry_evidence_without_manual_statu
         runtime.close()
 
 
+def test_bound_app_history_keeps_original_unsupported_media_without_a_turn(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    try:
+        assert transport.admit(profile, provider.event(profile, "original-text", "Original text."))["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        transport.reconcile()
+        def snapshot(query=""):
+            return ordinary[3](f"/api/chat/sessions/{sid}{query}")
+
+        status, first = snapshot("?message_limit=1")
+        assert status == 200
+        old_cursor = first["message_page"]["next_cursor"]
+        assert old_cursor
+        original_messages = store.messages(sid)
+        model_requests = ordinary[-3].read_bytes()
+        complete = snapshot("?message_limit=200")[1]
+        original_basis = f"{complete['message_page']['total']}:{complete['message_page']['visible_page_sha256']}"
+
+        event = provider.event(profile, "late-unsupported-audio", "private-resource-token", kind="audio")
+        event["create_time"] = "1700000000123"
+        provider.messages[event["message_id"]]["create_time"] = event["create_time"]
+        assert transport.admit(profile, event)["status"] == "command_recorded"
+        assert transport.reconcile() == 1
+        sent = list(provider.writes)
+        assert "未提交执行" in sent[-1][1]
+        assert transport.admit(profile, {**event, "event_id": "duplicate-audio"})["status"] == "command_recorded"
+        transport.reconcile()
+        assert provider.writes == sent
+        original_notice = next(row for row in transport.core.pending() if row.get("command") == "unsupported")
+        assert original_notice["session_id"] == sid and original_notice["turn_id"] is None
+
+        binding_id = original_notice["binding_id"]
+        listed_status, listed = ordinary[3](f"/api/chat/sessions?conversation_binding_id={binding_id}")
+        assert listed_status == 200
+        listed_revision = listed["sessions"][0]["transcript_revision"]
+        assert listed_revision != first["session"]["transcript_revision"]
+        provider_calls = list(provider.calls)
+        status, page = snapshot("?message_limit=1")
+        assert status == 200 and page["session"]["transcript_revision"] == listed_revision
+        notice, = page["messages"]
+        assert notice["role"] == "error" and notice["origin"] == "lark" and notice["turn_id"] is None
+        assert notice["created_at"] == "2023-11-14T22:13:20.123000+00:00"
+        assert "飞书音频" in notice["text"] and "未提交执行" in notice["text"]
+        assert "private-resource-token" not in json.dumps(page)
+        assert snapshot("?message_limit=1&message_cursor=" + old_cursor)[0] == 400
+        status, tail = snapshot("?message_limit=10&message_cursor=" + page["message_page"]["next_cursor"])
+        assert status == 200 and [r["message_id"] for r in tail["messages"]] == [r["message_id"] for r in original_messages]
+        status, turn = snapshot(f"?message_limit=10&turn_id={tid}")
+        assert status == 200 and all(row["message_id"] != notice["message_id"] for row in turn["messages"])
+        assert provider.calls == provider_calls and store.messages(sid) == original_messages
+        assert ordinary[-3].read_bytes() == model_requests
+
+        # Provider-only notices belong to the same visible prefix proof as
+        # canonical rows. Inserting one invalidates an older complete prefix;
+        # once read, it can be retained during quiet and append-only refreshes.
+        status, stale = snapshot("?message_limit=200&known_history=" + original_basis)
+        assert status == 200 and stale["status"] == "restart"
+        status, complete = snapshot("?message_limit=200")
+        assert status == 200
+        basis = f"{complete['message_page']['total']}:{complete['message_page']['visible_page_sha256']}"
+        status, quiet = snapshot("?message_limit=200&known_history=" + basis)
+        assert status == 200 and quiet["messages"] == [] and quiet["history_resume"]["next"] == basis
+        added = store.append_message(sid, role="agent", text="A later original result after the media notice.")
+        status, suffix = snapshot("?message_limit=200&known_history=" + basis)
+        assert status == 200 and suffix["messages"] == [added]
+        assert provider.calls == provider_calls and ordinary[-3].read_bytes() == model_requests
+
+        # The same transport source cannot be surfaced under another native
+        # correlation, nor after the original grant is disconnected.
+        native_path = transport.core.root / f"{original_notice['request_ref']}.json"
+        native_path.write_text(json.dumps({**original_notice, "session_id": "other-session"}))
+        assert notice["message_id"] not in {row["message_id"] for row in snapshot()[1]["messages"]}
+        native_path.write_text(json.dumps(original_notice))
+        assert notice["message_id"] in {row["message_id"] for row in snapshot()[1]["messages"]}
+        current = transport.bindings.read()
+        binding = next(row for row in current["bindings"] if row["transport_ref"] == profile)
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=current["revision"])
+        assert notice["message_id"] not in {row["message_id"] for row in snapshot()[1]["messages"]}
+    finally:
+        runtime.close()
+
+
+def test_bound_app_history_isolates_unreadable_media_receipts_and_recovers(ordinary):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    request = ordinary[3]
+    histories = {}
+    try:
+        for profile, kind in (("steward-app", "audio"), ("notes-app", "file")):
+            event = provider.event(profile, f"{profile}-message", f"Original {profile} text")
+            assert transport.admit(profile, event)["status"] == "durably_accepted"
+            original = next(row for row in transport.core.pending() if row.get("message") == event["content"])
+            sid = original["session_id"]
+            runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+            media = provider.event(profile, f"{profile}-unsupported", "", kind=kind)
+            assert transport.admit(profile, media)["status"] == "command_recorded"
+            record = next(row for row in transport.core.pending()
+                          if row.get("session_id") == sid and row.get("command") == "unsupported")
+            histories[profile] = (sid, record["binding_id"], record["request_ref"])
+
+        def view(profile):
+            sid, binding, _ = histories[profile]
+            snapshot_status, snapshot = request(f"/api/chat/sessions/{sid}?message_limit=10")
+            index_status, index = request(f"/api/chat/sessions?conversation_binding_id={binding}")
+            assert (snapshot_status, index_status) == (200, 200)
+            assert snapshot["session"]["transcript_revision"] == index["sessions"][0]["transcript_revision"]
+            return snapshot["messages"], snapshot["session"]["transcript_revision"]
+
+        good = view("steward-app")
+        foreign = view("notes-app")
+        assert sum("飞书音频" in row["text"] for row in good[0]) == 1
+        assert sum("飞书文件" in row["text"] for row in foreign[0]) == 1
+        assert not any("飞书文件" in row["text"] for row in good[0])
+        bad_path = transport.root / f"{histories['notes-app'][2]}.json"
+        original_bytes = bad_path.read_bytes()
+        temporary = bad_path.with_suffix(".corrupt")
+        temporary.write_bytes(bytes([0xff, 0xfe]))
+        temporary.replace(bad_path)
+
+        # A broken optional row must neither poison another binding nor erase
+        # the affected binding's canonical text. Its own notice stays absent.
+        assert view("steward-app") == good
+        damaged, damaged_revision = view("notes-app")
+        assert damaged == store.messages(histories["notes-app"][0])
+        assert damaged_revision != foreign[1]
+        assert bad_path.read_bytes() == bytes([0xff, 0xfe])
+
+        # Recover even without a directory generation change after the bad
+        # read. An incomplete scan cannot be retained as complete.
+        bad_path.write_bytes(original_bytes)
+        assert view("notes-app") == foreign
+        assert view("steward-app") == good
+        assert not provider.writes
+        assert sum(json.loads(line)["method"] == "turn/start" for line in ordinary[-3].read_text().splitlines()) == 2
+    finally:
+        runtime.close()
+
+
 def test_source_rejection_unsupported_file_notice_and_ambiguous_reply_readback(ordinary):  # noqa: F811
     _, runtime, provider, transport = connect(ordinary)
     try:

@@ -102,7 +102,20 @@ class SyntheticPrivateSource:
             from loopx.extensions.lark.conversation_identity import identity_ref
             from loopx.chat_store import _atomic_write_json
             event = self.reply_event()
-            parent = "原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts."
+            parent = "\n\n".join([
+                "原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts.",
+                "1. Inspect the evidence",
+                "Keep the original records available.",
+                "2. Compare the sources",
+                "Read the relevant sections before deciding.",
+                "3. Report the result",
+                "An independent list can start later:",
+                "7. A retained step\n42. The following step",
+                "A zero-based list:",
+                "0. Initial state",
+                "- Preserve uncertainty.\n- Preserve failed attempts.",
+                "```text\n9. This is literal code, not another list.\n```",
+            ])
             body = "请比较这次修改，并保留原话题中的限制。Compare this change against the original constraints."
             request = identity_ref(self.observe()["provider_ref"], event["message_id"])
             record = {"event": event, "profile": self.transport_ref, "request_ref": request}

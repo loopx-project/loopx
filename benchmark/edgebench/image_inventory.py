@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from itertools import chain
 import json
+import os
 from pathlib import Path
 import re
 
@@ -25,7 +27,13 @@ def inventory(log_dirs, *, task=None):
         root = log_dir.resolve(strict=True)
         if not root.is_dir():
             raise ValueError(f"Expected an EdgeBench log directory: {root}")
-        for path in root.glob("runs/*/*/runtime-receipt.json"):
+        # Preserve literal matching, adding links omitted by older pathlib.
+        literal_paths = root.glob("runs/*/*/runtime-receipt.json")
+        linked_paths = (
+            path for path in root.glob("runs/*/*/*")
+            if path.name == "runtime-receipt.json" and os.path.islink(path)
+        )
+        for path in chain(literal_paths, linked_paths):
             case_id = path.parent.name
             if task is not None and case_id != task:
                 continue

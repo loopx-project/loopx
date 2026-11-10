@@ -344,14 +344,12 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
 
 def project_chat_session_snapshot(root, store, session_id, *, registry,
                                   message_limit=None, message_cursor=None, turn_id=None,
-                                  resume_from=None):
+                                  resume_from=None, project_history_messages=None):
     """Project return delivery state into one existing Chat snapshot."""
 
     strict = message_limit is not None or resume_from is not None
     snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
                 else store.session_snapshot(session_id))
-    if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
-        return None  # Only a small suffix can use the existing complete snapshot as a base.
     if turn_id is not None:
         if message_limit is None:
             raise ValueError("a selected original Turn requires paged history")
@@ -361,6 +359,12 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         # OriginalRequest already displays only this Turn. Select it before
         # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
+    elif project_history_messages is not None:
+        # Extension-owned, presentation-only rows must join the frozen page
+        # prefix. A selected Turn only reads its canonical messages.
+        snapshot["messages"] = project_history_messages(snapshot["messages"])
+    if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
+        return None  # Bound the complete visible stream, including provider-only notices.
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
@@ -417,11 +421,13 @@ def _visible_history_page_digest(session_id, offset, messages):
     return sha256(body).hexdigest()
 
 
-def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider):
+def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider,
+                                project_history_messages=None):
     """Compose the same provider projections for page reads and suffix proof."""
     basis = selection["known_history"]
     if basis is None:
         snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
+            project_history_messages=project_history_messages,
             **{key: value for key, value in selection.items() if key != "known_history"})
         snapshot["messages"] = project_provider(snapshot["messages"])
         if selection["message_limit"] == 200 and selection["turn_id"] is None:
@@ -434,7 +440,8 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
     basis, count, proof = basis
     resume = {"schema_version": "loopx_chat_history_resume_v1"}
     restart = {"ok": True, **resume, "status": "restart"}
-    snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count)
+    snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count,
+        project_history_messages=project_history_messages)
     if snapshot is None or len(snapshot["messages"]) > 5000:
         return restart
     messages = project_provider(snapshot["messages"])

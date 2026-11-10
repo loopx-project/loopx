@@ -24,7 +24,9 @@ def normalize_work_yardstick_capture(capture: Any, *, goal_id: str, agent_id: st
     return cast(dict[str, Any], normalized)
 
 
-def project_work_yardstick_presentations(rows, *, goal_id=None):
+def project_work_yardstick_presentations(
+    rows: list[dict[str, Any]], *, goal_id: str | None = None,
+) -> list[dict[str, Any]]:
     """One typed projection call for the captures in an entire read snapshot."""
     requests = [{"capture": row["work_yardstick"], "goal_id": goal_id or row["goal_id"],
         "agent_id": row.get("agent_id", ""), "evidence_refs": row.get("evidence_refs", [])}

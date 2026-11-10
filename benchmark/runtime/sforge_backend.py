@@ -20,14 +20,21 @@ from .provider_failure import observe_terminal_provider_failure
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
                  blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None,
-                 docker_host_bridge: bool = False, research_sidecar: bool = False):
+                 docker_host_bridge: bool = False, research_sidecar: bool = False,
+                 retain_failed_native_worker: bool = False):
         if not isinstance(docker_host_bridge, bool):
             raise ValueError("docker_host_bridge must be an explicit boolean")
         if type(research_sidecar) is not bool:
             raise ValueError("research_sidecar requires an explicit boolean")
         if feedback is not None and getattr(checkpoint, "preservation", None) is not None:
             raise ValueError("Failure preservation requires native feedback without an online sampler")
+        if type(retain_failed_native_worker) is not bool or (
+            retain_failed_native_worker and (checkpoint is not None or feedback is not None or blind_api_endpoint is not None)
+        ):
+            raise ValueError("Native failure retention requires an explicit native-only worker")
         self.research_sidecar = research_sidecar
+        self.retain_failed_native_worker = retain_failed_native_worker
+        self.native_failure_evidence = None
         super().__init__(client)
         self.docker_host_bridge = docker_host_bridge
         self.log_dir, self.logger = log_dir, logger
@@ -109,6 +116,9 @@ class RecordingDockerBackend(DockerBackend):
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
         is_solver = cmd == ["/bin/bash", "-c", getattr(self, "execution_command", None)]
         preservation = getattr(self.checkpoint, "preservation", None)
+        retain_native = is_solver and getattr(self, "retain_failed_native_worker", False)
+        if retain_native:
+            self.native_failure_evidence = None  # A new dispatch supersedes the previous return.
         if is_solver and self.checkpoint is not None and preservation is None:
             self.checkpoint.start(handle.raw)
         try:
@@ -124,6 +134,18 @@ class RecordingDockerBackend(DockerBackend):
                 self.execution_receipt = dict(exit_code=result.exit_code,
                     execution_started=execution_started,
                     timed_out=result.timed_out, elapsed_seconds=result.elapsed_seconds)
+                if retain_native and execution_started:
+                    native_code = getattr(result, "native_exit_code", None)
+                    stop = kwargs.get("shutdown_event")
+                    if (getattr(result, "terminal_observed", None) is True
+                            and type(native_code) is int and native_code > 0
+                            and result.exit_code == native_code and result.timed_out is False
+                            and (stop is None or not stop.is_set())):
+                        self.native_failure_evidence = {
+                            "container_id": handle.id,
+                            "execution": {**self.execution_receipt,
+                                          "native_exit_code": native_code, "terminal_observed": True},
+                        }
                 target = self.log_dir.parent / "execution-receipt.json"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 pending = target.with_suffix(".tmp")
@@ -170,7 +192,15 @@ class RecordingDockerBackend(DockerBackend):
         self.feedback.start(self, handle)
 
     def cleanup_container(self, handle, logger=None):
+        native_failure = getattr(self, "native_failure_evidence", None) if handle is not None else None
         try:
+            if native_failure is not None:
+                from benchmark.edgebench.terminal_capture import retain_returned_native_worker
+
+                # Native cleanup runs once after auto-resumes and grading drain.
+                # Do not stop or preserve on any intermediate segment return.
+                retain_returned_native_worker(handle.raw, evidence=native_failure,
+                    receipt_path=self.log_dir.parent / "terminal-preservation.json")
             preservation = getattr(self.checkpoint, "preservation", None)
             if preservation is not None and preservation.retain_source:
                 preservation.stop_source(handle.raw)
@@ -237,7 +267,7 @@ class RecordingDockerBackend(DockerBackend):
                 preservation = getattr(self.checkpoint, "preservation", None)
                 if preservation is not None and preservation.retain_source:
                     preservation.stop_source(handle.raw)
-                else:
+                elif native_failure is None:
                     super().cleanup_container(handle, logger)
             finally:
                 if self.feedback is not None:
