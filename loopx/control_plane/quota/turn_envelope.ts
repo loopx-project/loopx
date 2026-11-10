@@ -1,10 +1,12 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
-import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan} from "./progressive_context.ts";
+import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
+  progressiveContextPlan, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -989,6 +991,10 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
     action_portfolio: payload.action_portfolio ?? null,
     ...(context.explore_basis ? {capabilities: {explore: retain({
       availability: explore.availability, revision: explore.revision,
+      ...(Array.isArray(explore.measurement_feedback) && explore.measurement_feedback.length
+        ? {measurement_count: explore.measurement_feedback.length} : {}),
+      ...(Array.isArray(explore.work_yardsticks) && explore.work_yardsticks.length
+        ? {yardstick_count: explore.work_yardsticks.length} : {}),
       read_action: reads?.explore ?? null,
     }, explore, ["availability", "revision"])}} : {}),
     evidence: (Array.isArray(context.evidence) ? context.evidence : []).map(value => {
@@ -2296,6 +2302,29 @@ function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = cano
     replan_action_packet: replanActionPacket(payload, reads)};
 }
 
+/** Only the exact list can carry forward. Current boundary controls stay inline. */
+function readyWriteScope(context: JsonObject): ReusableExactBody | undefined {
+  const interaction = jsonObject(context.interaction_contract);
+  const channel = jsonObject(interaction?.agent_channel);
+  const preparation = jsonObject(jsonObject(interaction?.cli_channel)?.execution_preparation);
+  const boundary = jsonObject(context.goal_boundary);
+  const identityAgent = jsonObject(context.agent_identity)?.agent_id;
+  const agent = context.agent_id ?? identityAgent;
+  const todo = jsonObject(context.selected_todo)?.todo_id;
+  const route = [context.registry, context.runtime_root, context.goal_id, agent, todo];
+  if (context.ok !== true || context.should_run !== true || context.effective_action !== EffectiveAction.NORMAL_RUN ||
+      context.normal_delivery_allowed !== true || channel?.delivery_allowed !== true ||
+      jsonObject(channel.work_context)?.complete !== true || jsonObject(interaction?.user_channel)?.action_required !== false ||
+      (identityAgent !== undefined && identityAgent !== agent) ||
+      preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION || preparation.state !== "ready" ||
+      preparation.delivery_allowed !== true || preparation.agent_id !== agent || preparation.todo_id !== todo ||
+      boundary?.rule !== "stay_in_scope_or_stop" || Object.hasOwn(boundary, "write_scope_pointer") ||
+      !Array.isArray(boundary.write_scope) || boundary.write_scope.some(scope => typeof scope !== "string" || !scope) ||
+      !route.every(part => typeof part === "string" && !!part)) return undefined;
+  return {path: ["goal_boundary", "write_scope"],
+    sourceIdentity: JSON.stringify([route, context.goal_ref ?? null, boundary.handoff_mode ?? null])};
+}
+
 /** Present the long scope list on demand only while an ordinary Turn prepares work. */
 function progressivePreparationScope(payload: JsonObject):
   {path: string[]; marker_path: string[]; instruction: string} | undefined {
@@ -2350,6 +2379,30 @@ function contextPresentationPlan(request: JsonObject): JsonObject {
   return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
 }
 
+export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source"): JsonObject {
+  const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
+  const {encoding, data} = transport;
+  const maxSourceBytes = 1024 * 1024;
+  if (Object.hasOwn(request, inlineField) || encoding !== "deflate-base64-json-v0" ||
+      typeof data !== "string" || data.length > maxSourceBytes ||
+      data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+    throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+  }
+  let source: unknown;
+  try {
+    const compressed = Buffer.from(data, "base64");
+    // Inflate may stop at the first stream and silently leave input unread.
+    // The synchronous info result reports consumed bytes on supported Node versions.
+    const {buffer, engine} = inflateSync(compressed,
+      {info: true, maxOutputLength: maxSourceBytes}) as unknown as {buffer: Buffer; engine: {bytesWritten: number}};
+    if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
+    source = JSON.parse(new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(buffer));
+  } catch {
+    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
+  }
+  return requireJsonObject(source, "complete Turn decision source");
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2357,6 +2410,22 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "plan_work") {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
+  }
+  if (operation === "capability_automation_source") {
+    // Optional provider participation needs checked identity and capability
+    // gates, not the signed action document or its work context.
+    const host = Object.hasOwn(request, "complete_host_request") || Object.hasOwn(request, "envelope");
+    if (host && Object.hasOwn(request, "source_transport")) {
+      throw new EffectRuntimeRequestError("invalid Turn composition source transport");
+    }
+    const checked = host ? completeHostSource(request) : null;
+    const payload = checked?.decision ?? (Object.hasOwn(request, "source_transport")
+      ? decodeTurnSource(request, "payload") : requireJsonObject(request.payload, "quota payload"));
+    const projection = checked?.projection ?? turnActionProjection(payload,
+      replanReadPrecision(payload, request.source_number_tokens));
+    assertSupportedQuotaPacket(projection);
+    return {goal_id: payload.goal_id ?? null, agent_id: projection.agent_id ?? null,
+      boundary: {capabilities: object(projection.boundary).capabilities ?? null}};
   }
   if (operation === "host_context_binding") {
     const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
@@ -2501,14 +2570,15 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "context_read_sections") {
     const selected = capturedContextSelection({...request, list_fields: false});
     return {sections: contextReadSectionDigests(request,
-      (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
+      (selected.selections as {path: (string | number)[]}[]).map(row => row.path),
+      readyWriteScope(requireJsonObject(request.context, "read section source")))};
   }
   if (operation === "progressive_context_delivery")
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
     : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request));
+      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
