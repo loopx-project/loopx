@@ -405,6 +405,14 @@ Paired diffs do not certify translation accuracy.
   - **Current boundary:** Service-profile identity, component readiness, supervised
     composition, and recoverable migration are proposed for #3930. A unified
     `loopxd` service has not shipped.
+- [Preserve the Selected Runtime During Rollback v0](self-update-explicit-runtime-route-v0.md)
+  ([中文版](self-update-explicit-runtime-route-v0.zh-CN.md))
+  - **Delivery on `main`:** Bounded rollback route repair implemented in
+    [#8470](https://github.com/loopx-project/loopx/pull/8470); installed
+    acceptance remains separate.
+  - **Current boundary:** Explicit registry/runtime routes stay bound across
+    `update --rollback` planning and child checks, and failed rollback checks
+    surface bounded CLI output without mutating state or adding a provider.
 - [Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md)
   - **Delivery on `main`:** Implemented, opt-in.
   - **Current boundary:** The provider-neutral turn-start read contract and
