@@ -234,22 +234,27 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
 
 def _reap_child_process(process, *, process_observation=None):
     """Reap the process group created by child_process, including descendants."""
-    try:
+    def signal_group(number):
         if process_observation is not None:
-            process_observation.signal_requested(signal.SIGINT)
-        os.killpg(process.pid, signal.SIGINT)
-    except ProcessLookupError:
-        pass
+            process_observation.signal_requested(number)
+        try:
+            os.killpg(process.pid, number)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            from loopx.extensions.process_runtime import _darwin_owned_group_has_exited
+
+            # Darwin may refuse a signal to a reaped group. The shared
+            # observer checks descendants before accepting that as cleanup.
+            if not _darwin_owned_group_has_exited(process):
+                raise
+
+    signal_group(signal.SIGINT)
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         pass
-    try:
-        if process_observation is not None:
-            process_observation.signal_requested(signal.SIGKILL)
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    signal_group(signal.SIGKILL)
     process.wait(timeout=10)
 
 
