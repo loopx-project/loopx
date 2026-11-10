@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from time import time_ns
+from typing import Any, NotRequired, TypedDict
 
 from ...control_plane.work_items.operator_inbox import (
     CAPTURE_SCOPES,
@@ -595,6 +597,152 @@ def lark_event_mentions_bot(
             re.IGNORECASE,
         )
     )
+
+
+
+class LarkTopicInput(TypedDict):
+    order: int
+    provider_ref: str
+    route_ref: str
+    lane: tuple[str, ...]
+    event: dict[str, object]
+    mention_capture: dict[str, object] | None
+    live_turn_capture: NotRequired[dict[str, object]]
+    started: bool
+
+
+class LarkTopicInboxIntake:
+    """Private live input in the same Topic Inbox, before reply dispatch.
+
+    This keeps the exact provider envelope separate from the compact context
+    projection. The existing App listener lease owns capture, and its existing
+    source lane owns dispatch. An ambiguous attempt stays retained for readback.
+    """
+
+    def __init__(self, *, project: Path, config_path: Path, provider_ref: str) -> None:
+        config = load_lark_event_inbox_config(project=project, config_path=config_path)
+        if not config["enabled"]:
+            raise ValueError("Lark Topic intake requires an enabled Inbox")
+        self._inbox: Path = config["inbox_path"]
+        self._provider_ref = provider_ref
+        reply = config["reply"]
+        configured_provider = str(reply["bot_app_id"] or reply["sender_profile"])
+        configured_ref = hashlib.sha256(configured_provider.encode("utf-8")).hexdigest()[:32]
+        self._source_matches = configured_ref == provider_ref
+        self._directory = self._inbox / ".state" / "topic-intake"
+        self._last_order = 0
+        if self._source_matches:
+            self._last_order = max(
+                (packet["order"] for _, packet in self._inputs()), default=0
+            )
+
+    @property
+    def has_retained_input(self) -> bool:
+        return self._last_order > 0
+
+    @staticmethod
+    def _read(path: Path) -> LarkTopicInput | None:
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        if not isinstance(row, dict):
+            raise ValueError("invalid Lark Topic intake record")
+        order = row.get("order")
+        event = row.get("event")
+        provider_ref = row.get("provider_ref")
+        route_ref = row.get("route_ref")
+        lane = row.get("lane")
+        mention = row.get("mention_capture")
+        live_turn = row.get("live_turn_capture")
+        started = row.get("started")
+        if (
+            type(order) is not int or order <= 0
+            or not isinstance(event, dict) or event.get("message_id") != path.stem
+            or not isinstance(provider_ref, str) or not re.fullmatch(r"[a-f0-9]{32}", provider_ref)
+            or not isinstance(route_ref, str) or not re.fullmatch(r"[a-f0-9]{32}", route_ref)
+            or not isinstance(lane, list) or not 1 <= len(lane) <= 2
+            or not all(isinstance(key, str) and 0 < len(key) <= 256 for key in lane)
+            or (mention is not None and not isinstance(mention, dict))
+            or (live_turn is not None and not isinstance(live_turn, dict))
+            or type(started) is not bool
+        ):
+            raise ValueError("invalid Lark Topic intake record")
+        packet: LarkTopicInput = {
+            "order": order, "event": event, "provider_ref": provider_ref,
+            "route_ref": route_ref, "lane": tuple(lane),
+            "mention_capture": mention, "started": started,
+        }
+        if live_turn is not None:
+            packet["live_turn_capture"] = live_turn
+        return packet
+
+    def _inputs(self) -> Iterator[tuple[Path, LarkTopicInput]]:
+        for path in self._directory.glob("*.json"):
+            if not MESSAGE_ID_PATTERN.fullmatch(path.stem):
+                continue
+            packet = self._read(path)
+            if packet is not None and packet["provider_ref"] == self._provider_ref:
+                yield path, packet
+
+    def retains(self, message_id: str) -> bool:
+        if not MESSAGE_ID_PATTERN.fullmatch(message_id):
+            return False
+        packet = self._read(self._directory / f"{message_id}.json")
+        return packet is not None and packet["provider_ref"] == self._provider_ref
+
+    def capture(
+        self, *, event: Mapping[str, object], route_ref: str, lane: tuple[str, ...],
+        mention_capture: dict[str, object] | None,
+        live_turn_capture: dict[str, object] | None = None,
+    ) -> bool:
+        if not self._source_matches:
+            raise ValueError("Lark Topic intake belongs to a different provider")
+        message_id = str(event.get("message_id") or "")
+        if not MESSAGE_ID_PATTERN.fullmatch(message_id):
+            raise ValueError("invalid Lark Topic input message id")
+        path = self._directory / f"{message_id}.json"
+        if path.is_file():
+            # Provider redelivery cannot overwrite the original body, route or
+            # pending/ambiguous attempt. The caller still wakes the same lane.
+            return False
+        self._last_order = max(self._last_order + 1, time_ns())
+        packet: LarkTopicInput = {
+            "order": self._last_order, "provider_ref": self._provider_ref,
+            "route_ref": route_ref, "lane": lane, "event": dict(event),
+            "mention_capture": mention_capture, "started": False,
+        }
+        if live_turn_capture is not None:
+            packet["live_turn_capture"] = live_turn_capture
+        self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        write_private_json_atomic(path, packet)
+        return True
+
+    def pending(
+        self, lane: tuple[str, ...] | None = None, *, limit: int | None = None,
+    ) -> list[Path]:
+        # Keep only references in memory while a reply waits on a Turn.
+        pending = (
+            (packet["order"], path)
+            for path, packet in self._inputs()
+            if not packet["started"] and (lane is None or packet["lane"] == lane)
+        )
+        ordered = sorted(pending) if limit is None else heapq.nsmallest(limit, pending)
+        return [path for _, path in ordered]
+
+    def read(self, path: Path) -> LarkTopicInput | None:
+        packet = self._read(path)
+        return packet if packet is not None and packet["provider_ref"] == self._provider_ref else None
+
+    def begin(self, path: Path, packet: LarkTopicInput) -> None:
+        # Persist the attempt fence before any Chat/model/provider effect.
+        write_private_json_atomic(path, {**packet, "started": True})
+
+    def finish(self, path: Path) -> None:
+        # The existing processed receipt is authoritative even after cleanup.
+        # If reply/ACK was ambiguous, retain the exact source instead of replay.
+        if path.stem in _load_processed(self._inbox / "processed.json"):
+            path.unlink(missing_ok=True)
 
 
 def ingest_lark_event_inbox(

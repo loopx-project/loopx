@@ -43,8 +43,11 @@ function causalCondition(waiting: JsonObject, target: JsonObject): JsonObject | 
   });
   const rows = evaluated.conditions as JsonObject[];
   const condition = jsonObject(rows[0]?.condition);
+  const currentGeneration = condition?.monitor_change_scope == null
+    ? condition?.material_change_generation
+    : condition?.scoped_material_change_generation;
   if (kind === "monitor_changed" &&
-      condition?.material_change_generation !== waiting.resume_monitor_generation) return null;
+      currentGeneration !== waiting.resume_monitor_generation) return null;
   return condition && resumeConditionHasKnownPendingTarget(condition, waiting)
     ? condition : null;
 }
@@ -59,7 +62,7 @@ export function isCausalBlockedWait(value: unknown, todoId: string | null): bool
   if (!wait || wait.schema_version !== CAUSAL_WAIT_SCHEMA || wait.source !== "todo" ||
       !todoId || wait.todo_id !== todoId || waiting?.todo_id !== todoId ||
       !target || wait.resume_when !== waiting.resume_when ||
-      timestamp(wait.observed_at) === null) return false;
+      blockedResumeInstant(wait.observed_at) === null) return false;
   try {
     return causalCondition(waiting, target) !== null;
   } catch {
@@ -67,14 +70,18 @@ export function isCausalBlockedWait(value: unknown, todoId: string | null): bool
   }
 }
 
-function timestamp(value: unknown): number | null {
+/** The same timezone-aware resume clock the writer freezes. Date.parse alone
+ * rolls impossible calendars and treats a missing offset as local time. */
+export function blockedResumeInstant(value: unknown): number | null {
   if (typeof value !== "string") return null;
   try {
     const resume = normalizeTodoResumeWhen({
       schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
       resume_when: `resume_at:${value}`,
     });
-    return resume ? Date.parse(resume.slice("resume_at:".length)) : null;
+    if (!resume) return null;
+    const instant = Date.parse(resume.slice("resume_at:".length));
+    return Number.isFinite(instant) ? instant : null;
   } catch {
     return null;
   }
@@ -82,7 +89,8 @@ function timestamp(value: unknown): number | null {
 
 function retainedTodo(todo: JsonObject): JsonObject {
   const fields = ["todo_id", "role", "status", "task_class", "archive_state",
-    "resume_when", "resume_ready", "resume_monitor_generation", "material_change_generation"];
+    "resume_when", "resume_ready", "resume_monitor_generation", "material_change_generation",
+    "material_change_scope_generations"];
   return Object.fromEntries(fields.filter((field) => todo[field] !== undefined)
     .map((field) => [field, todo[field]]));
 }
@@ -108,7 +116,7 @@ export function isMonitorUnavailableWait(value: unknown, todoId: string | null):
     monitor.role === "agent" && monitor.task_class === "continuous_monitor" &&
     monitor.status === "open" &&
     (monitor.archive_state == null || monitor.archive_state === "active") &&
-    timestamp(wait.observed_at) !== null;
+    blockedResumeInstant(wait.observed_at) !== null;
 }
 
 /** Freeze an existing blocked advancement lifecycle, never a retry schedule.
@@ -121,7 +129,7 @@ export function isBlockedLifecycleWait(value: unknown, todoId: string | null): b
     todo.role === "agent" && todo.task_class === "advancement_task" &&
     todo.status === "blocked" && (todo.done === undefined || todo.done === false) &&
     (todo.archive_state == null || todo.archive_state === "active") &&
-    wait.resume_when == null && wait.due_at == null && timestamp(wait.observed_at) !== null;
+    wait.resume_when == null && wait.due_at == null && blockedResumeInstant(wait.observed_at) !== null;
 }
 
 /** Preflight belongs to the same TS settlement owner as durable readback.
@@ -137,7 +145,7 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   if (matches.length !== 1 || !todo || !["open", "deferred", "blocked"].includes(String(todo.status))) {
     reject("requires the same unfinished Todo");
   }
-  const observed = timestamp(request.observed_at);
+  const observed = blockedResumeInstant(request.observed_at);
   if (observed === null) reject("has an invalid timestamp");
   if (todo.status === "blocked") {
     const wait = {schema_version: BLOCKED_LIFECYCLE_SCHEMA, source: "todo",
@@ -158,7 +166,8 @@ export function prepareBlockedWait(value: unknown): JsonObject {
     // supported Markdown and canonical sources. Keep canonical-only implicit
     // advancement retry scheduling in the separate branch below.
     const fields = ["claimed_by", "last_checked_at", "next_due_at", "result_hash",
-      "material_change", "material_change_generation", "cadence", "expires_at", "watch_only"];
+      "material_change", "material_change_generation", "material_change_scope",
+      "material_change_scope_generations", "cadence", "expires_at", "watch_only"];
     return {schema_version: MONITOR_UNAVAILABLE_SCHEMA, source: "turn_settlement",
       todo_id: request.todo_id, observed_at: request.observed_at, observation_available: false,
       monitor_todo: {...retainedTodo(todo), ...Object.fromEntries(
@@ -170,7 +179,8 @@ export function prepareBlockedWait(value: unknown): JsonObject {
   if (typeof resume === "string" && /^(?:monitor_changed|todo_done):/.test(resume)) {
     const fresh = currentCompletionCondition(todo, todos);
     if (fresh?.invalid_state === "dependency_cycle") reject("cannot qualify a completion dependency cycle; inspect dependency_cycle_todo_ids and repair the plan through the authorized Todo lifecycle");
-    const targets = todos.filter((target) => target.todo_id === resume.slice(resume.indexOf(":") + 1));
+    const dependencyId = condition?.target_todo_id;
+    const targets = todos.filter((target) => target.todo_id === dependencyId);
     const target = targets[0];
     const current = targets.length === 1 && target ? causalCondition(todo, target) : null;
     if (!target || !condition || !current ||
@@ -179,7 +189,12 @@ export function prepareBlockedWait(value: unknown): JsonObject {
     }
     // A projection must describe exactly the same generation as its source.
     if (condition.kind === "monitor_changed" &&
-        condition.material_change_generation !== current.material_change_generation) {
+        (condition.monitor_change_scope == null
+          ? condition.material_change_generation
+          : condition.scoped_material_change_generation) !==
+        (current.monitor_change_scope == null
+          ? current.material_change_generation
+          : current.scoped_material_change_generation)) {
       reject("has a stale causal target generation");
     }
     return { schema_version: CAUSAL_WAIT_SCHEMA, source: "todo", todo_id: request.todo_id,
@@ -201,7 +216,7 @@ export function prepareBlockedWait(value: unknown): JsonObject {
     reject("requires the same unfinished Todo to have a pending resume_when=resume_at:<timezone-aware-time> wait or registered causal wait; schedule it with todo update, read it back, then retry this Turn");
   }
   const dueAt = resume.slice("resume_at:".length);
-  const due = timestamp(dueAt);
+  const due = blockedResumeInstant(dueAt);
   if (due === null) reject("has an invalid timestamp");
   const delay = (due - observed) / 1000;
   if (delay < 60 || delay > 1800) reject("retry wait must be due in 1–30 minutes; update the Todo resume_at and retry this same Turn");

@@ -114,6 +114,14 @@ CCPO 研究可靠性约束下的成本优化，DOLORES 探索测试时构造推�
 
 **LoopX 实验：** 行动前记录预测，再绑定结果。将 shadow policy 与现有规则、便宜阈值对照；行动效果使用前瞻受控实验，被动日志不能独立证明反事实策略价值。
 
+近期具体路径是[预算内联合决策](target-yardstick-stride-decisions-v0.zh-CN.md#budgeted-planning)
+与 [EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)：
+先在已有 Stride/Yardstick 路径验证当前模型的策略，再比较完整预算 native 结果。
+M1-C 保留预测/成本资格化；校准预测和学习型分配依据证据后续推进，仍在同一 owner
+之后实现。新控制器运行时和学出的反事实价值均非前置条件。
+[Selecting Computations](https://aima.cs.berkeley.edu/~russell/papers/uai12-meta.pdf)
+提供元推理基础，不是对候选生成式搜索的保证。
+
 **验收与停止边界：** 计入控制器 token 与延迟，测验收 outcome 成本、错误停止、无效验证和人类注意力。控制器开销吞掉收益时停止。步幅增大不扩大权限。
 
 ### T04. 因果记忆效用与迁移条件

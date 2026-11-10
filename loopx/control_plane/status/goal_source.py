@@ -208,6 +208,16 @@ class GoalSource:
             "--goal-id", goal_id, "--todo-id", todo_id,
         ]))
 
+    def read_run_history(self, goal_id):
+        self.check_access(goal_id)
+        # Native history owns index reduction. Its returned coverage is checked
+        # by the TS projection; the existing byte/time limits fail explicitly.
+        return json.loads(self._execute([
+            self.cli, "--format", "json", "--registry", self.registry,
+            "--runtime-root", self.runtime_root, "history", "--goal-id", goal_id,
+            "--limit", "1000000",
+        ]))
+
     def read_completed_todos(self, goal_id):
         self.check_access(goal_id)
         return json.loads(self._execute([
@@ -270,7 +280,7 @@ class GoalSourceReader:
     def describe(self):
         return {"ok": True, "source": self.source.describe(), "read_only": True,
                 "scope": {"goal_id": self.source.goal_id} if self.source.goal_id else {"all_registered": True},
-                "operations": {"goals": True, "status": True, "history": True,
+                "operations": {"goals": True, "status": True, "history": True, "strategies": True,
                                "lifecycle": False, "conversation": False, "analysis": False}}
 
     def registered_status(self, goal_id, *, fresh=False):
@@ -314,6 +324,20 @@ class GoalSourceReader:
             raise ValueError("history_cursor_expired")
         return self._read_page(goal_id, cursor, scope=(self.source.namespace, goal_id),
             load=lambda: self._history_projector(self.source.read_events(goal_id), goal_id=goal_id))
+
+    def strategies(self, goal_id):
+        if goal_id is None:
+            raise SourceScopeError("Choose an original Goal before reading strategies")
+        self.registered_status(goal_id)
+        # Do not hold the status lock through long history IO. A fresh final
+        # membership/access read qualifies this snapshot before it is returned.
+        history = self.source.read_run_history(goal_id)
+        from ..effect_runtime import effect_runtime_result
+        projected = effect_runtime_result("presentation.goal_sources.strategies", {
+            "history": history, "goal_id": goal_id, "namespace": self.source.namespace,
+        })
+        self.registered_status(goal_id, fresh=True)
+        return {"ok": True, "goal_id": goal_id, "source": self.source.describe(), **projected}
 
     def findings(self, goal_id, cursor="", *, projector):
         """Read saved evidence; this transport has no complete task-list view."""
@@ -493,8 +517,8 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
         if source_namespace is not None and source_namespace != pinned:
             raise ValueError("Conflicting source identities")
         source_namespace = pinned
-    if operation not in {"describe", "goals", "status", "history"}:
-        raise ValueError("Only describe, goals, status and history reads are supported")
+    if operation not in {"describe", "goals", "status", "history", "strategies"}:
+        raise ValueError("Only describe, goals, status, history and strategies reads are supported")
     base = f"{url.scheme}://{url.netloc}/api/goal-source"
     opener = build_opener(_NoRedirect())
 
@@ -541,7 +565,7 @@ def read_endpoint(endpoint, operation, *, goal_id=None, cursor="", source_namesp
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("describe", "goals", "status", "history"))
+    parser.add_argument("operation", choices=("describe", "goals", "status", "history", "strategies"))
     parser.add_argument("--endpoint", required=True, help="Prepared owner-local reader URL")
     parser.add_argument("--goal-id")
     parser.add_argument("--cursor", default="")

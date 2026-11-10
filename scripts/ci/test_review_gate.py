@@ -59,7 +59,9 @@ class GateTests(unittest.TestCase):
         )
         self.assertIn("closed", workflow["on"]["pull_request"]["types"])
         self.assertNotIn("pull_request_target", workflow["on"])
-        self.assertEqual(maintenance["on"], {"pull_request_target": {"types": ["closed", "synchronize"]}})
+        self.assertEqual(set(maintenance["on"]), {"pull_request_target"})
+        self.assertEqual(set(maintenance["on"]["pull_request_target"]["types"]),
+                         {"closed", "synchronize", "opened", "reopened", "edited"})
         self.assertNotEqual(workflow["name"], maintenance["name"])
         concurrency = workflow["concurrency"]
         jobs = workflow["jobs"]
@@ -96,7 +98,13 @@ class GateTests(unittest.TestCase):
                          ["changes"])
         for name in ("changes", "merge-gate"):
             self.assertFalse(expression(jobs[name]["if"], "closed", event="pull_request_target"))
-        self.assertEqual(list(maintenance["jobs"]), ["cancel-obsolete-pr"])
+        self.assertEqual(set(maintenance["jobs"]), {"inspect-pr-diff", "cancel-obsolete-pr"})
+        inspection = maintenance["jobs"]["inspect-pr-diff"]
+        self.assertEqual(inspection["permissions"], {"contents": "read", "pull-requests": "read"})
+        for action in ("opened", "reopened", "edited", "synchronize", "closed"):
+            self.assertEqual(bool(expression(inspection["if"], action, event="pull_request_target")),
+                             action != "closed")
+            self.assertFalse(expression(inspection["if"], action))
         cleanup = maintenance["jobs"]["cancel-obsolete-pr"]
         self.assertTrue(expression(cleanup["if"], "closed", event="pull_request_target"))
         self.assertTrue(expression(cleanup["if"], "synchronize", event="pull_request_target"))

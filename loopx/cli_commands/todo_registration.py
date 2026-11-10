@@ -82,6 +82,15 @@ def register_todo_command(
         ),
     )
     todo_parser.add_argument(
+        "--recover-execution",
+        action="store_true",
+        help=(
+            "For todo update/complete without execution proof, consume only typed "
+            "claim_task recovery: claim once, then retry unchanged. Incompatible "
+            "with explicit claim/lease proof, --dry-run, or provider-CAS edits."
+        ),
+    )
+    todo_parser.add_argument(
         "--turn-instance-id",
         help=(
             "For todo complete/supersede or a replan successor add, bind the receipt to the original "
