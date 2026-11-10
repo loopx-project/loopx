@@ -22,16 +22,9 @@ def _terminal_range_seen(state: dict[str, Any], digest: str, total: int) -> bool
     )
 
 
-def verified_context_selection(
-    state: dict[str, Any], page: dict[str, Any], *, defer_section_digests: bool = False,
+def _context_selection_target(
+    page: dict[str, Any], references: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    from ..quota.turn_envelope import _turn_envelope_result
-
-    current = state.get("source_recovery")
-    if not isinstance(current, dict) or page.get("ok") is not True:
-        return None
-    references = [entry for key in ("source_recovery", "recovery")
-                  if isinstance(entry := state.get(key), dict)]
     reference_file = page.get("reference_file")
     selected = None
     observation = None
@@ -62,6 +55,39 @@ def verified_context_selection(
             # A whole original-source read covers sections without pretending
             # it was the separate native required-view delivery.
             pointers, view_digest = [""], source_digest
+    return {
+        "initial_read": initial_read,
+        "observation": observation,
+        "path": path,
+        "pointers": pointers,
+        "selected": selected,
+        "selection_paths": selection_paths,
+        "source_digest": source_digest,
+        "view_digest": view_digest,
+    }
+
+
+def verified_context_selection(
+    state: dict[str, Any], page: dict[str, Any], *, defer_section_digests: bool = False,
+) -> dict[str, Any] | None:
+    from ..quota.turn_envelope import _turn_envelope_result
+
+    current = state.get("source_recovery")
+    if not isinstance(current, dict) or page.get("ok") is not True:
+        return None
+    references = [entry for key in ("source_recovery", "recovery")
+                  if isinstance(entry := state.get(key), dict)]
+    target = _context_selection_target(page, references)
+    if target is None:
+        return None
+    path = target["path"]
+    source_digest = target["source_digest"]
+    pointers = target["pointers"]
+    view_digest = target["view_digest"]
+    selected = target["selected"]
+    observation = target["observation"]
+    selection_paths = target["selection_paths"]
+    initial_read = target["initial_read"]
     physical = Path(path).expanduser().absolute()
     physical = physical.parent.resolve(strict=True) / physical.name
     trusted = next((entry for entry in references if entry.get("sha256") == source_digest
@@ -79,13 +105,14 @@ def verified_context_selection(
     _, raw, source = read_context_capture_file(str(physical), source_digest, private=True)
     actual_digest = source_digest
     presentation_pointers: set[str] = set()
+    text_append = observation.get("text_append") if isinstance(observation, dict) else None
     if initial_read or selected is not None or "selected_pointers" in page:
         selection, selected_raw, actual_digest = context_selection_view(source, select=pointers,
             initial_read=initial_read, list_fields=False,
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
             present_goal_narrative=selected.get("present_goal_narrative") is True if selected else None,
-            selection_paths=selection_paths)
+            selection_paths=selection_paths, text_append=text_append)
         if selected_raw is None:
             return None
         raw = selected_raw
@@ -115,6 +142,7 @@ def verified_context_selection(
                 if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
                     inherited = observation["fields"]
             sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
-                consumed_pointers=inherited)["sections"]
+                consumed_pointers=inherited,
+                **({"observed_text_append": text_append} if inherited and text_append is not None else {}))["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
         "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}

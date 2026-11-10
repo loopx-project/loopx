@@ -2170,6 +2170,10 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         # The later task switch retains the same independent acceptance path.
         update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
 
+    warm_note = note.rstrip()
+    if not complete:
+        warm_note += " Appended after an incomplete observation."
+        update(TODO_ID, warm_note, "append-after-partial")
     second = capture("note-warm")
     _, original = read_context_read_reference(second["recovery"]["reference_file"])
     source_path = Path(original["path"])
@@ -2183,7 +2187,7 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     cold_authority = cold_facts[source_pointer + "/authority_read"]
     assert current_authority["provider_revision"] != cold_authority["provider_revision"]
     warm, facts, warm_bytes = read(second["first_read_command"])
-    assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    assert current_source[source_pointer]["todo"]["note"] == warm_note
     if revision == "selected_evidence":
         current_todo = current_source[source_pointer]["todo"]
         assert current_todo["evidence"] == "result:independent-verification"
@@ -2191,22 +2195,69 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     recovered, restored, fallback_bytes = read(second["first_read_command"])
     assert pointer not in recovered[0].get("previously_delivered_fields", [])
-    assert restored[pointer] == note.rstrip() and source_path.read_bytes() == source
+    assert restored[pointer] == warm_note and source_path.read_bytes() == source
 
     assert _spend_run_count(runtime) == 1
     deliver(journal, event, recovered)
     settle("note-warm")
-    revised = note + "Use the revised acceptance check before writing."
+    revised = "Revised acceptance check. " + note.rstrip()
     update(TODO_ID, revised, "revise")
     update(ALTERNATIVE_TODO_ID, revised, "revise")
     corrected, current, _ = read(capture("note-corrected")["first_read_command"])
     assert current[pointer] == revised and pointer not in corrected[0].get("previously_delivered_fields", [])
     deliver(journal, event, corrected)
     settle("note-corrected")
+
+    expected_spends = 3
+    if revision == "selected_evidence":
+        def appended_turn(turn, prefix, suffix):
+            update(TODO_ID, prefix + suffix, turn)
+            guard = capture(turn)
+            pages, _, wire_bytes = read(guard["first_read_command"])
+            body = json.loads("".join(page["content"] for page in pages))
+            appended = next(row for row in body["selections"] if row["pointer"] == pointer)
+            assert appended == {"pointer": pointer, "value": suffix,
+                                "presentation": "append_to_observed_text",
+                                "prefix_bytes": len(prefix.encode("utf-8"))}
+            assert pointer not in pages[0].get("previously_delivered_fields", [])
+            _, exact, _ = read(guard["recovery"]["command"] + " --select " + pointer)
+            assert exact[pointer] == prefix + suffix
+            reference = Path(pages[0]["reference_file"])
+            _, metadata = read_context_read_reference(str(reference))
+            fallback_name = metadata["observed_read"]["fallback_reference"]["filename"]
+            fallback_command = guard["first_read_command"].replace(
+                shlex.quote(str(reference)), shlex.quote(str(reference.with_name(fallback_name))))
+            _, _, full_bytes = read(fallback_command)
+            assert full_bytes - wire_bytes > 10_000
+            print(json.dumps({"provider": provider, "prior_read": observation, "turn": turn,
+                              "full_bytes": full_bytes, "append_bytes": wire_bytes}))
+            return guard, pages
+
+        _, appended = appended_turn("note-append", revised, " 新增决策 🧪，沿用前面的验收。")
+        note_proof = codex_context._state(journal)["consumed_pointers"][pointer]
+        assert len(appended) > 1
+        deliver(journal, event, appended[-1:])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] == note_proof
+        deliver(journal, event, appended[:-1])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] != note_proof
+        settle("note-append")
+
+        revised += " 新增决策 🧪，沿用前面的验收。"
+        second_suffix = " Second addition with new evidence."
+        chained, _ = appended_turn("note-append-next", revised, second_suffix)
+        revised += second_suffix
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+        fallback, exact, _ = read(chained["first_read_command"])
+        assert exact[pointer] == revised
+        assert pointer not in fallback[0].get("previously_delivered_fields", [])
+        settle("note-append-next")
+        update(ALTERNATIVE_TODO_ID, revised, "copy-final-note")
+        expected_spends += 2
+
     alternate, other, _ = read(capture("note-alternate", ALTERNATIVE_TODO_ID)["first_read_command"])
     assert other[pointer] == revised and other["/selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert pointer not in alternate[0].get("previously_delivered_fields", [])
-    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
+    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == expected_spends
 
     print(json.dumps({"provider": provider, "revision": revision, "observation": observation,
                       "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
@@ -2224,4 +2275,4 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         assert fallback_bytes - warm_bytes > 10_000
     else:
         assert pointer not in warm[0].get("previously_delivered_fields", [])
-        assert facts[pointer] == restored[pointer] == note.rstrip()
+        assert facts[pointer] == restored[pointer] == warm_note
