@@ -704,7 +704,8 @@ P0 blocked: admitted P1/P2.
 
 {policy_tail}"""
 def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
-    interface_budget = payload.get("interface_budget") if isinstance(payload.get("interface_budget"), dict) else {}
+    budget = payload.get("interface_budget")
+    interface_budget = budget if isinstance(budget, dict) else {}
     active_state = payload.get("active_state")
     resolved_active_state = payload.get("resolved_active_state")
     state_lines = [
