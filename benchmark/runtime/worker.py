@@ -291,8 +291,7 @@ def pending_turn(path: Path, turn_id: str, execution: Execution) -> dict:
         atomic_write_private_json(path, pending)
         return pending
     pending = read_json(path.read_text())
-    if ("validation_argv_sha256" in pending
-            and pending["validation_argv_sha256"] != validator["validation_argv_sha256"]):
+    if pending.get("validation_argv_sha256") != validator["validation_argv_sha256"]:
         raise ValueError("Pending Turn requires its original validation command")
     return pending
 

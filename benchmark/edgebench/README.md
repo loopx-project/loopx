@@ -181,10 +181,12 @@ Allow for that difference when choosing the phase budget.
 A lost reply leaves a private pending marker. The next Turn wake looks up the
 original journal by Goal, Agent and wake identity. A committed replay produces
 no Host invocation or additional spend. Missing or conflicting history holds
-the wake for reconciliation. Retain the original trial state while diagnosing
+the wake for reconciliation. Older markers without a validator digest also
+require reconciliation against the original validator; the current command
+cannot establish that history. Retain the original trial state while diagnosing
 a failure. To return to heartbeat, select `heartbeat-resume` for a new trial.
 The Controller–Worker profile and its matched comparison are specified in the
-[delivery RFC](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md#controller-delivery-cadence).
+[delivery RFC](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md#from-current-code-to-a-useful-product-dependencies-and-delivery-slices).
 
 All profiles use the same explicitly staged Codex binary and model/effort. This
 permits an updated Codex version with the native scaffold; it is not a claim of

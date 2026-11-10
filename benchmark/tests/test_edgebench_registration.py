@@ -7,6 +7,11 @@ import pytest
 pytest.importorskip("sforge")
 pytest.importorskip("harbor")
 
+_IMAGES = {
+    "work": {"image_id": "sha256:" + "a" * 64, "logical_size_bytes": 1},
+    "judge": {"image_id": "sha256:" + "b" * 64, "logical_size_bytes": 2},
+}
+
 
 @pytest.fixture
 def native_cli(tmp_path, monkeypatch):
@@ -32,7 +37,7 @@ def native_cli(tmp_path, monkeypatch):
     return run, args, tmp_path / "runs/run/fixture"
 
 
-@pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("profile", ["official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore", "turn-resume"])
 @pytest.mark.parametrize("custom_registration", [False, True])
 def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypatch,
                                                            profile, custom_registration):
@@ -49,7 +54,8 @@ def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypa
     def backend(**kwargs):
         assert kwargs.get("feedback") is None and kwargs.get("checkpoint") is None
         constructed.update(kwargs)
-        result = SimpleNamespace(image_exists=lambda image: True, feedback=None, checkpoint=None)
+        result = SimpleNamespace(image_exists=lambda image: True, feedback=None, checkpoint=None,
+                                 observe_local_images=lambda **keys: _IMAGES)
 
         def options(provider):
             assert provider is native_provider
@@ -85,7 +91,8 @@ def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypa
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     monkeypatch.setattr(run, "run_agent", native_provider)
     with pytest.raises(RuntimeError, match="synthetic worker boundary"):
-        run.main([*args, "--worker", profile])
+        run.main([*args, "--worker", profile,
+                  *(["--validation-command-json", '["trusted-validator"]'] if profile == "turn-resume" else [])])
     if custom_registration:
         assert events == ["prepare", "register", "bind"]
     else:
@@ -94,10 +101,12 @@ def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypa
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt["status"] == "runner_failed"
     assert receipt["feedback"] == "native"
+    assert receipt["local_docker_images"] == _IMAGES
+    assert ("validation_argv_sha256" in receipt) is (profile == "turn-resume")
     assert "checkpoint_export_directory" not in receipt
 
 
-@pytest.mark.parametrize("profile", ["official", "native-goal"])
+@pytest.mark.parametrize("profile", ["official", "native-goal", "turn-resume"])
 def test_registration_preparation_failure_prevents_native_admission(native_cli, monkeypatch, profile):
     run, args, trial = native_cli
     events = []
@@ -107,11 +116,13 @@ def test_registration_preparation_failure_prevents_native_admission(native_cli, 
         raise RuntimeError("synthetic registration unavailable")
 
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **kwargs: SimpleNamespace(
-        image_exists=lambda image: True, registration_options=prepare))
+        image_exists=lambda image: True, registration_options=prepare,
+        observe_local_images=lambda **keys: _IMAGES))
     monkeypatch.setattr(run, "run_agent", lambda **kwargs:
                         pytest.fail("failed preparation must prevent registration and all worker effects"))
     with pytest.raises(RuntimeError, match="synthetic registration unavailable"):
-        run.main([*args, "--worker", profile])
+        run.main([*args, "--worker", profile,
+                  *(["--validation-command-json", '["trusted-validator"]'] if profile == "turn-resume" else [])])
     assert events == ["prepare"]
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt["status"] == "runner_failed" and receipt["error_kind"] == "RuntimeError"

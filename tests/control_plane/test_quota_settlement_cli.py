@@ -4115,9 +4115,14 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
     assert cli_channel["quota_spend_source"] == expected_source
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
-    assert next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")["owner"] == "runtime"
-    assert any("--settle-turn" in action for action in cli_channel["next_cli_actions"])
+    # This ordinary guided entry retains the source's manual settlement.
+    # A new wire format cannot opt it into the native composed publisher.
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
+    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "agent"
+    assert f"--source {expected_source}" in spend["command_template"]
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    assert_complete_turn_decision(selected)
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4175,9 +4180,11 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
         "settlement_identity"
     ]
     assert cli_channel["quota_spend_source"] == "visible-goal"
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
-    assert next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")["owner"] == "runtime"
-    assert any("--settle-turn" in action for action in cli_channel["next_cli_actions"])
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
+    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "agent" and "--source visible-goal" in spend["command_template"]
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    assert_complete_turn_decision(selected)
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4288,11 +4295,11 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     assert settlement_plan["identity"] == identity
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
     assert guard["interaction_contract"]["cli_channel"]["quota_spend_source"] == expected_source
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
     spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert spend["owner"] == "runtime" and "command_template" not in spend
-    assert "--settle-turn" in next(step["command_template"] for step in settlement_plan["ordered_steps"]
-        if step["kind"] == "durable_writeback")
+    assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    assert_complete_turn_decision(guard)
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])

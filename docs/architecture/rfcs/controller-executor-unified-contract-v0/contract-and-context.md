@@ -8,6 +8,23 @@ behavior do not supersede the latest audit in the main document.
 
 ### C1 source audit: shared owners and the remaining split
 
+The complete single-worker EdgeBench entry and original-wake recovery from
+[#8480](https://github.com/loopx-project/loopx/pull/8480) now have an independent
+main proposal, [#8499](https://github.com/loopx-project/loopx/pull/8499): 23 files,
++493/−119, with 18 whole files byte-identical to the C1 candidate. After an
+accepted main merge, C1 can remove those duplicate diffs by integration. Until
+then retain the working caller and [#8484](https://github.com/loopx-project/loopx/pull/8484)'s
+existing dependency; historical experiment records stay together. This split
+does not qualify the original-quota outcome or complete-cost comparison.
+
+Ordinary guided-start and visible-Goal calls retain their source's agent-owned
+manual settlement. Only the existing qualified native publisher may expose a
+runtime-owned composed recipe. A complete carrier or progressive view cannot
+choose that owner. Five C1 CLI expectations incorrectly demanded composition
+for ordinary calls; current main readback confirms manual ownership. The
+corrected tests preserve the original identity, spend source and command, and
+validate the complete source rather than changing production semantics.
+
 The current complete-source validator also delegates executable required-read
 checks to the existing interaction owner. Explicit command/order coordinates
 cannot disappear or introduce an unsupported execution order; prose-only and
