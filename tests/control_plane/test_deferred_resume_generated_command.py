@@ -17,11 +17,14 @@ from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
+from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.todos.todo_summary import (
     canonical_todo_read_record,
     structured_todo_item,
 )
+from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
 from test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
@@ -127,7 +130,43 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     )
     assert rc == 0 and guard["effective_action"] == "successor_replan_required", guard
     assert guard["selected_todo"]["todo_id"] == TODO_ID
-    generated = guard["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
+    # Replay the signed capture through the same saved-project entrypoint used
+    # by native hosts. It must expose the real action before evidence paging.
+    profile = "codex_app_heartbeat" if host_args == ("--codex-app",) else "generic_cli"
+    complete = compose_turn_decision(guard,
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(profile))
+    capture = tmp_path / "resume-decision.json"
+    digest = write_decision_capture(capture, complete)
+    before_context = state.read_bytes()
+    capture_args = ("quota", "context-project", *host_args, "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--capture-file", str(capture), "--capture-sha256", digest)
+    bound = (*capture_args, "--turn-instance-id", "resume-command-turn")
+    native = ("--context-delivery", "on", "--codex-context-dir", str(tmp_path / "context"),
+        "--initial-read", "--max-page-output-bytes", "64000")
+    with monkeypatch.context() as context:
+        context.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        context.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        rc, opening = cli(*bound, *native)
+        wrong_rc, wrong = cli(*capture_args, "--turn-instance-id", "other-turn", *native)
+    assert wrong_rc != 0 and wrong["ok"] is False and "exact Goal, Agent and Turn" in wrong["reason"]
+    off_rc, off = cli(*bound, "--context-delivery", "off")
+    assert off_rc == 0 and off["mode"] == "full" and off["recovery"]["sha256"] == digest
+    assert rc == 0 and opening["eof"], opening
+    rows = json.loads(opening["content"])["selections"]
+    pointers = [row["pointer"] for row in rows]
+    cli_path = "/interaction_contract/cli_channel"
+    actions_path = cli_path + "/next_cli_actions"
+    settlement_path = cli_path + "/settlement_plan"
+    assert pointers.index(actions_path) < pointers.index("/interaction_contract/agent_channel/work_context/user_todos")
+    assert not any(path.startswith(settlement_path + "/ordered_steps") for path in pointers)
+    actions = next(row["value"] for row in rows if row["pointer"] == actions_path)
+    assert actions == guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    rc, full = cli("quota", "context-read", "--capture-file", str(capture),
+        "--capture-sha256", digest, "--select", settlement_path)
+    assert rc == 0 and full["eof"], full
+    assert json.loads(full["content"])["selections"][0]["value"] == complete["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert state.read_bytes() == before_context and _spend_run_count(runtime) == 0
+    generated = actions[0]
     assert generated.startswith("loopx ")
     resume = shlex.split(
         generated.replace(
@@ -201,7 +240,6 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         "task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID
     )
     assert rc == 0 and absent["active"] is False, absent
-    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     # Execute the delivered continuation instead of constructing a successful
     # guard that the consumer was never shown. No new Turn or premature spend.
     reentry_args = shlex.split(actions[1])[1:]

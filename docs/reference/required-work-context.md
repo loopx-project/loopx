@@ -273,6 +273,14 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+For an exact complete Turn bound to a Todo whose dated resume condition has
+fired, the starting selection puts the existing reopen and same-Turn guard
+commands before the longer work context. The continuation guard supplies the
+applicable execution and settlement steps after reopening. For an alternative
+that settles before reopening, select `/interaction_contract/cli_channel/settlement_plan`
+from the original recovery reference before acting. Reading or reopening the
+Todo does not authorize delivery or spend.
+
 The generated `first_read_command` and its paging cursor default to a 12,000-byte
 serialized UTF-8 output limit when the caller supplied no tool budget. This
 applies after explicit Todo selection as well. An explicit output limit still
