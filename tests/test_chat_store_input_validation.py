@@ -126,6 +126,49 @@ def test_managed_admission_uses_terminal_observations_and_full_replay(
         store.create_turn(sid, **{**request, "message": "Conflicting App request"})
 
 
+@pytest.mark.parametrize("managed", [False, True])
+@pytest.mark.parametrize("state", ["queued", "completed"])
+@pytest.mark.parametrize("warm", [False, True])
+def test_matched_request_read_failure_never_admits_a_duplicate(tmp_path, monkeypatch, managed, state, warm):
+    import errno
+
+    store, sid = _dedup_store(tmp_path)
+    create = store.create_turn if managed else store.create_queued_turn
+    request = {"client_turn_id": "original-request", "message": "Same original request"}
+    first, _ = create(sid, **request)
+    path = store._turn_path(sid, first["turn_id"])
+    if state == "completed":
+        store.update_turn(sid, first["turn_id"], status=state, response={"message": "Original answer"})
+        store.release_active_turn(sid, first["turn_id"])
+    if warm:
+        store.queued_turns(sid, strict=True)
+    before_messages = store.messages(sid)
+    read_text = Path.read_text
+    reads = 0
+
+    def faulty_read(candidate, *args, **kwargs):
+        nonlocal reads
+        if candidate == path:
+            reads += 1
+            if reads == (1 if warm and state == "completed" else 2):
+                raise OSError(errno.EIO, "synthetic transient read failure")
+        return read_text(candidate, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", faulty_read)
+        try:
+            replay, created = create(sid, **request)
+            assert not created
+            assert replay["turn_id"] == first["turn_id"]
+        except ValueError:
+            pass  # A known match may fail closed; its identity must survive.
+    assert store.messages(sid) == before_messages
+    turns = [json.loads(p.read_text()) for p in path.parent.glob("*.json") if not p.name.endswith(".events.json")]
+    assert [t["turn_id"] for t in turns if t.get("client_turn_id") == request["client_turn_id"]] == [first["turn_id"]]
+    healthy, created = create(sid, **request)
+    assert not created and healthy["turn_id"] == first["turn_id"]
+
+
 @pytest.mark.parametrize("fault", [None, "changed-turn", "failed", "wrong-invocation", "immutable"])
 def test_completed_native_retention_is_fenced_and_private(tmp_path: Path, fault: str | None) -> None:
     store, sid = _dedup_store(tmp_path)

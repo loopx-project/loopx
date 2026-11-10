@@ -80,7 +80,7 @@ class ChatIngressStore:
 
     def _turn_discovery_rows(
         self, session_id: str, turns_dir: Path, read: Callable[[Path], dict[str, Any]],
-    ) -> Iterator[tuple[Path, dict[str, Any]]]:
+    ) -> Iterator[tuple[Path, dict[str, Any], dict[str, Any] | None]]:
         from .chat_store import CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
         def terminal(path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -97,7 +97,31 @@ class ChatIngressStore:
             return None
 
         paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
-        return self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal)
+        fresh: dict[Path, dict[str, Any]] = {}
+
+        def read_current(path: Path) -> dict[str, Any]:
+            payload = read(path)
+            fresh[path] = payload
+            return payload
+
+        for path, observation in self._terminal_turn_discovery.rows(
+            turns_dir, paths, read=read_current, project=terminal,
+        ):
+            # Retain only the current iteration's complete read, never a body
+            # in the discovery cache or a second read on the cold path.
+            yield path, observation, fresh.pop(path, None)
+
+    def _matched_discovered_turn(
+        self, session_id: str, client_id: str, path: Path, fresh: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        from .chat_store import CHAT_TURN_SCHEMA_VERSION, _read_json
+
+        payload = fresh if fresh is not None else _read_json(path)
+        if (payload.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
+                or payload.get("session_id") != session_id or payload.get("turn_id") != path.stem
+                or payload.get("client_turn_id") != client_id):
+            raise ValueError("Matched Chat Turn is unavailable; retry the same client_turn_id.")
+        return payload
 
     def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
         from .chat_store import _read_json
@@ -105,14 +129,12 @@ class ChatIngressStore:
         turns_dir = self._session_dir(session_id) / "turns"
         if not turns_dir.is_dir():
             return None
-        for path, observation in self._turn_discovery_rows(session_id, turns_dir, _read_json):
+        for path, observation, fresh in self._turn_discovery_rows(session_id, turns_dir, _read_json):
             if observation.get("client_turn_id") != client_turn_id:
                 continue
             # Replay validation needs the complete current record, including
             # the original request body and the latest persisted result.
-            payload = _read_json(path)
-            if payload.get("client_turn_id") == client_turn_id:
-                return payload
+            return self._matched_discovered_turn(session_id, client_turn_id, path, fresh)
         return None
 
     def runtime_activation_lock(self):
@@ -147,7 +169,7 @@ class ChatIngressStore:
                 payload = _read_json(path)
             return payload
 
-        for _, payload in self._turn_discovery_rows(session_id, turns_dir, read):
+        for _, payload, _ in self._turn_discovery_rows(session_id, turns_dir, read):
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"

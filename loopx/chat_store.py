@@ -1067,17 +1067,14 @@ class ChatSessionStore(ChatIngressStore):
                 turns_dir = self._session_dir(session_token) / "turns"
                 turns = []
                 existing = None
-                for path, turn in self._turn_discovery_rows(session_token, turns_dir, _read_json):
+                for path, turn, fresh in self._turn_discovery_rows(session_token, turns_dir, _read_json):
                     if turn.get("schema_version") != CHAT_TURN_SCHEMA_VERSION:
                         continue
                     # The planner needs live prepared Turns and the full
                     # current request when its client ID matches.
                     if existing is None and turn.get("client_turn_id") == client_id:
-                        turn = _read_json(path)
-                        if turn.get("schema_version") != CHAT_TURN_SCHEMA_VERSION:
-                            continue
-                        if turn.get("client_turn_id") == client_id:
-                            existing = turn
+                        turn = self._matched_discovered_turn(session_token, client_id, path, fresh)
+                        existing = turn
                     turns.append(turn)
                 session = self.load_session(session_token)
                 active_turn = None
