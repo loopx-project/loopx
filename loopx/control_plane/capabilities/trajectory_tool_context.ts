@@ -16,7 +16,7 @@ export function trajectoryLoopXOperation(argv: unknown): string | null {
     args.splice(0, 2);
   }
   const group = args[0];
-  if (group === 'quota' && ['context-read', 'context-project', 'should-run', 'spend-slot', 'replan-context'].includes(args[1] ?? '')) return `quota ${args[1]}`;
+  if (group === 'quota' && ['context-read', 'context-project', 'should-run', 'spend-slot', 'replan-context', 'replan-view'].includes(args[1] ?? '')) return `quota ${args[1]}`;
   if (group === 'task-lease' && ['acquire', 'inspect', 'renew', 'release', 'transfer'].includes(args[1] ?? '')) return `task-lease ${args[1]}`;
   if (group === 'todo' && ['add', 'list', 'claim', 'complete', 'update'].includes(args[1] ?? '')) return `todo ${args[1]}`;
   return ['todo', 'refresh-state', 'explore', 'status', 'diagnose'].includes(group ?? '') ? group! : 'other loopx';

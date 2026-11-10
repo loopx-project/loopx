@@ -588,6 +588,7 @@ def test_dashboard_launcher_installs_missing_frontend_dependencies(
             **os.environ,
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "LOOPX_NPM_LOG": str(npm_log),
+            "LOOPX_PYTHON": str(python_stub),
         },
         text=True,
         capture_output=True,
@@ -643,6 +644,8 @@ def test_dashboard_launcher_honors_configured_python_runtime(
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "LOOPX_PYTHON_LOG": str(python_log),
     }
+    # Exercise each selection route without an ambient explicit override.
+    env.pop("LOOPX_PYTHON", None)
     if configured_via == "environment":
         env["LOOPX_PYTHON"] = str(configured_python)
     elif configured_via == "installer_record":
@@ -765,6 +768,7 @@ def test_dashboard_launcher_selects_a_compatible_nvm_node(
             **os.environ,
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NVM_DIR": str(tmp_path / "nvm"),
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_NPM_LOG": str(npm_log),
         },
         text=True,
@@ -874,14 +878,16 @@ def test_dashboard_launcher_ignores_stale_recorded_python(
         encoding="utf-8",
     )
 
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "LOOPX_COMMAND_LOG": str(command_log),
+    }
+    env.pop("LOOPX_PYTHON", None)
     completed = subprocess.run(
         ["bash", str(dashboard_script)],
         cwd=release_root,
-        env={
-            **os.environ,
-            "PATH": f"{fake_bin}:/usr/bin:/bin",
-            "LOOPX_COMMAND_LOG": str(command_log),
-        },
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -956,6 +962,7 @@ def test_dashboard_launcher_discovers_agent_bins_outside_restricted_path(
             "PATH": str(fake_bin),
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": str(nvm_bin),
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_COMMAND_LOG": str(command_log),
         },
         text=True,
@@ -1020,6 +1027,7 @@ def test_dashboard_launcher_selects_highest_semantic_nvm_lark_cli(
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "NVM_DIR": str(home / ".nvm"),
             "NVM_BIN": "",
+            "LOOPX_PYTHON": str(fake_bin / "python3.13"),
             "LOOPX_COMMAND_LOG": str(command_log),
         },
         text=True,

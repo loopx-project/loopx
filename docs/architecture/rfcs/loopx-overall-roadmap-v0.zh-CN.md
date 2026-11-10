@@ -4,7 +4,8 @@
 - 替代 / 关闭：无
 - 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 依据
   `5c62c5c03` 更新至 2026-10-11；controller/契约修订使用 2026-10-27 的
-  `08e290fb5`。管家故障复现基线单独保留在第 8 节。
+  `08e290fb5`。管家故障复现基线单独保留在第 8 节。历史工作集 RFC 的清单新增
+  使用 2026-11-09 的 `701795db2`，不代表对整个路线重新审计。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
@@ -423,6 +424,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [可组合状态机与恢复验证 v0](composable-state-machines-recovery-verification-v0.zh-CN.md) | S2/S3/S10 | 仅设计；复用局部 conformance 证据 | P1：一条 typed 边界，再验 ownership/writeback/settlement 故障序列与有条件推进；真实入口及后端证据 |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [Controller / Executor 与统一工作契约](controller-executor-unified-contract-v0.zh-CN.md) | S2/S4/S6/S7/S11 | 仅设计；schema cutover 与双会话未实现 | P1：C1–C9 收敛统一契约、精确差分、角色绑定、共享生命周期与 benchmark/App 采用；独立成果和完整成本先于默认提升 |
+| [可回读历史工作集与上下文策略扩展 v0](history-working-set-context-policy-v0.zh-CN.md) | S2/S4/S6/S8/S11 | 仅提案；#8450 细化 T02，尚未交付历史策略或插件端口 | 与在审 C1 协调；先验证一个最终模型输入消费者与同 capture 恢复，再验证来源绑定的可选历史视图、扩展生命周期及可比成果/完整成本，之后才评审推广 |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
@@ -451,7 +453,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现；§11.5 result/adoption 修订为提案 | P1：一条真实 provider result -> 有范围 interpretation -> adopted step/successor，精确 lineage/shared write gate 与 packaged readback；shadow 资格先于 opt-in，保留 composition gap；推断与 M4 portfolio 排序继续 defer |
 | [LoopX × LayerFS 复杂工程探索与效果评测 v0](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | S4/S8/S11 | 提案；无集成或收益声明 | 有界实验：真实环境 fork/handoff/干净导出，然后匹配预热 worktree 与控制策略进行比较；保留现有研究状态/权限 owner，计入完整成本和负结果；不新增优先级或默认值 |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 观测及源码层面的 replan 决策接续；自适应策略/恢复接续未资格化 | P2：§7.6 机制/证据范围复盘 -> 真实探针/采用/完整成本；§7.7 同起点接续及恢复验证先于自适应 promotion。保留每 Turn 结算与权限，不按固定小时强制转向、不改变默认 cadence |
-| [Target、Yardstick 与 Stride 联合决策 v0](target-yardstick-stride-decisions-v0.zh-CN.md) | S3/S6/S11 | 仅设计；无运行时或默认变化 | P1：复用 Stride owner 联合选择方向/尺子，并提供最小普通 Turn 提示；M1–M3 验证身份/恢复、范围化 fidelity、真实采用和完整效果/成本，先于推广 |
+| [Target、Yardstick 与 Stride 联合决策 v0](target-yardstick-stride-decisions-v0.zh-CN.md) | S3/S6/S11 | M1 源码路径已存在；预算规划为提案；数值 fidelity 与匹配收益未资格化 | P1：复用 Stride/Yardstick owner 做[预算内 EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)，再验完整预算收益；校准/学习型分配随后依证据推进。M2/M3 保留范围化 fidelity、采用和完整效果/成本资格化，先于推广 |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | S6/S11 | 已接受；Stage 1 verified-outcome 绑定 | P1 只读 reducer→P2 pilot：区分 recalled/applied/utility，归因不自动改 ranking |
 | [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | S6/S8 | 已接受；可选只读评估 | P2：显式 gap recall、来源与权限可解析、关闭不影响主流程；不当 work authority |

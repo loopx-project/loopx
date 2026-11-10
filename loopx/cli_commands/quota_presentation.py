@@ -8,6 +8,64 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.turn_envelope import build_turn_envelope, project_captured_replan_cli_view
 
 
+def _project_native_cli_settlement(payload: dict[str, object]) -> dict[str, object]:
+    """Publish one projected plan before capability binding and capture."""
+    from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result
+    from ..control_plane.quota.turn_envelope import _apply_context_projection_changes
+
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
+    todo = payload.get("selected_todo")
+    if not isinstance(cli, Mapping) or not isinstance(todo, Mapping):
+        return payload
+    try:
+        projection = effect_runtime_result("settlement.native_cli_projection", {
+            "cli": cli, "receipt": payload.get("heartbeat_receipt"), "todo_id": todo.get("todo_id"),
+        })
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # The already admitted Turn still has its canonical manual plan.
+        return payload
+    if not projection:
+        return payload
+    return {**payload, "interaction_contract": {
+        **interaction, "cli_channel": _apply_context_projection_changes(dict(cli), projection),
+    }}
+
+
+def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, object]:
+    """Select existing scheduling and recovery facts; do not decide a wake here."""
+    def select(source: object, *keys: str) -> dict[str, object]:
+        return {key: source[key] for key in keys if key in source} if isinstance(source, Mapping) else {}
+
+    view = select(
+        payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
+        "error", "error_code", "reason", "status", "recommended_action", "effective_action",
+    )
+    if payload.get("ok") is not True:
+        return view
+    contract = select(payload.get("interaction_contract"), "agent_channel")
+    view["interaction_contract"] = {"agent_channel": select(contract.get("agent_channel"), "must_attempt")}
+    hint = select(payload.get("scheduler_hint"), "action", "cadence_class", "reason")
+    if isinstance(source := payload.get("scheduler_hint"), Mapping):
+        for key, field in (
+            ("unchanged_poll", "local_scheduler"),
+            ("reset_policy", "reset_token"),
+            ("cold_path_detail", "local_scheduler"),
+        ):
+            if key in source:
+                hint[key] = select(source[key], field)
+    view["scheduler_hint"] = hint
+    for key, fields in (
+        ("selected_todo", ("todo_id",)),
+        ("agent_identity", ("agent_id",)),
+        ("autonomous_replan_obligation", ("required", "obligation_id", "agent_id", "resolution_mode")),
+        ("heartbeat_receipt", ("settlement_identity",)),
+    ):
+        if key in payload:
+            view[key] = select(payload[key], *fields)
+    return view
+
+
 def _quota_renderer(
     args: argparse.Namespace,
     *,

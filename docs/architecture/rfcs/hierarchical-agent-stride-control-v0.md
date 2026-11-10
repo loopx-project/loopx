@@ -548,6 +548,15 @@ slice. Scientific usefulness follows the independent qualification in
 
 ### 7.6 Research scope and evidence-conditioned control
 
+For remaining-budget and multi-step choice, use
+[joint decisions §5.8](target-yardstick-stride-decisions-v0.md#budgeted-planning).
+`next_probe` is the first bounded slice of a revisable continuation, whose value
+can include prerequisites, information and later confirmation. Immediate gain
+alone does not rank that continuation. This interpretation preserves the v2
+contract, due reviews and existing decision owner; the
+[EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.md#edgebench-budgeted-planning)
+tests its incremental benefit before wider policy adoption.
+
 The [execution, exploration and correction integration guide](../long-running-execution-exploration-and-correction.md)
 maps this boundary to Host continuation, Explore writeback, recovery and product
 readback. It provides source comparisons and one connected qualification episode;
@@ -914,6 +923,8 @@ baselines as descriptive references. A fresh concurrent baseline is not required
 for every iteration; such runs establish route adoption and useful iteration
 signals, not an isolated causal effect or promotion qualification. Reserve
 matched continuation and replication for decisions that need those claims.
+
+<a id="matched-research-continuation"></a>
 
 ### 7.7 Research-state branching and matched continuation
 

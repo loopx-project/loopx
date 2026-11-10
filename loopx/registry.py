@@ -389,6 +389,14 @@ def inspect_registry(path: Path) -> dict[str, Any]:
     seen_ids: set[str] = set()
     repo_goal_ids: dict[str, list[str]] = {}
     state_goal_ids: dict[str, list[str]] = {}
+    path_keys: dict[str, str] = {}
+
+    def inspection_path_key(path: Path) -> str:
+        # Group and report from the same resolution within this registry read.
+        spelling = os.fspath(path)
+        if spelling not in path_keys:
+            path_keys[spelling] = stable_path_key(path)
+        return path_keys[spelling]
 
     def add_problem(
         code: str,
@@ -416,10 +424,10 @@ def inspect_registry(path: Path) -> dict[str, Any]:
         repo_text = str(raw_goal.get("repo") or "")
         repo = Path(repo_text).expanduser() if repo_text else None
         if repo:
-            repo_goal_ids.setdefault(stable_path_key(repo), []).append(goal_id)
+            repo_goal_ids.setdefault(inspection_path_key(repo), []).append(goal_id)
             state_file = resolve_state_file(repo, raw_goal.get("state_file"))
             if state_file:
-                state_goal_ids.setdefault(stable_path_key(state_file), []).append(goal_id)
+                state_goal_ids.setdefault(inspection_path_key(state_file), []).append(goal_id)
 
     for raw_goal in goals:
         if not isinstance(raw_goal, dict):
@@ -431,7 +439,8 @@ def inspect_registry(path: Path) -> dict[str, Any]:
         repo_text = str(raw_goal.get("repo") or "")
         repo = Path(repo_text).expanduser() if repo_text else None
         state_file = resolve_state_file(repo, raw_goal.get("state_file")) if repo else None
-        repo_ids = repo_goal_ids.get(stable_path_key(repo), []) if repo else []
+        state_file_abs = inspection_path_key(state_file) if state_file else None
+        repo_ids = repo_goal_ids.get(inspection_path_key(repo), []) if repo else []
         adapter = cast(dict[str, Any], raw_goal.get("adapter")) if isinstance(raw_goal.get("adapter"), dict) else {}
         spawn_policy = cast(dict[str, Any], raw_goal.get("spawn_policy")) if isinstance(raw_goal.get("spawn_policy"), dict) else {}
         orchestration = compact_orchestration_policy(spawn_policy)
@@ -490,8 +499,8 @@ def inspect_registry(path: Path) -> dict[str, Any]:
                 "repo_goal_count": len(repo_ids),
                 "repo_goal_ids": repo_ids,
                 "state_file": raw_goal.get("state_file"),
-                "state_file_abs": stable_path_key(state_file) if state_file else None,
-                "state_file_exists": bool(state_file and state_file.exists()),
+                "state_file_abs": state_file_abs,
+                "state_file_exists": bool(state_file_abs and Path(state_file_abs).exists()),
                 "adapter_kind": adapter.get("kind"),
                 "adapter_status": adapter.get("status"),
                 "authority_sources": authority_sources,

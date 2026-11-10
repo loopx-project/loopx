@@ -10,10 +10,11 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ...file_lock import exclusive_file_lock
 from ...registry import atomic_write_json
-from .cadence_journal import cadence_intent, validate_cadence_window
+from .cadence_journal import cadence_intent, missed_cadence_bounds, read_cadence_journal, validate_cadence_window
 from .pending_intent import (
     _attempt_dir, _build_authored_source, _build_editorial_request,
     _canonical_digest, _load_editorial_response,
@@ -94,6 +95,12 @@ def _verify_source_facts(request: dict[str, Any], source: dict[str, Any]) -> Non
         raise ValueError("editorial facts do not match the frozen report source")
 
 
+def _include_missed_windows(request: dict[str, Any], root: Path, window: dict[str, Any]) -> None:
+    bounds = missed_cadence_bounds(runtime_root=root, window=window)
+    if bounds is not None:
+        request["missed_cadence"] = bounds
+
+
 def prepare_private_report(*, root: Path, window: dict[str, Any], read,
                            authorization_scope_id: str, authorization_goal_ids: list[str],
                            reporting: str) -> dict[str, Any]:
@@ -141,6 +148,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
             "Distinguish implementation, merged source, installed adoption and actual original-message delivery.",
             "A due unchanged window still needs a substantive report; observations or CI counts are not business progress.",
         ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
+        _include_missed_windows(request, root, window)
         request["request_digest"] = _canonical_digest(request)
         atomic_write_json(path, request)
         return request
@@ -217,6 +225,7 @@ def prepare_session_report(*, root: Path, window: dict[str, Any], actor: dict[st
             "Separate native Task completion, independent outcome evidence and actual message delivery. Preserve failed, blocked and unreadable evidence.",
             "A due unchanged period still needs a report; exclude report generation itself from business progress.",
         ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
+        _include_missed_windows(request, root, window)
         request["request_digest"] = _canonical_digest(request)
         folder.mkdir(parents=True, exist_ok=True)
         atomic_write_json(folder / "source.json", source)
@@ -224,7 +233,32 @@ def prepare_session_report(*, root: Path, window: dict[str, Any], actor: dict[st
         return request
 
 
-def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+def _report_sources(authored: dict[str, Any], request: dict[str, Any],
+                    completed_at: str) -> list[dict[str, Any]]:
+    from .adapters import build_periodic_report_source_result
+
+    sources = [_build_authored_source(authored, completed_at=completed_at)]
+    bounds = request.get("missed_cadence")
+    if bounds is None:
+        return sources
+    zone = ZoneInfo(request["window"]["schedule"]["timezone"])
+    first, last = (datetime.fromisoformat(bounds[key]).astimezone(zone).isoformat(" ", timespec="minutes")
+        for key in ("first_due_at", "last_due_at"))
+    chinese = authored["editorial"]["language"].lower().startswith("zh")
+    title = "缺报区间" if chinese else "Missed report windows"
+    summary = (f"计划截止时间从 {first} 到 {last} 的报告缺报（含两端，{zone.key}）。本期仅覆盖最新完整窗口。"
+        if chinese else f"Reports due from {first} through {last} ({zone.key}) were missed. This report covers the latest complete window.")
+    sources.append(build_periodic_report_source_result(source_id="calendar_gap",
+        source_kind="calendar_gap", status="complete", observed_at=completed_at,
+        sections=[{"section_id": "calendar_gap", "title": title, "items": [{
+            "item_id": "missed_windows", "title": title, "summary": summary,
+            "content_kind": "coverage", "visibility": "supporting",
+        }]}]))
+    return sources
+
+
+def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[str, Any],
+                          require_current_window: bool = False) -> dict[str, Any]:
     from .adapters import build_periodic_report_document
     from .bindings import build_periodic_report_generation_bundle
     from .post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
@@ -237,6 +271,10 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
 
     folder = attempt_directory(root, window)
     with exclusive_file_lock(folder / "generation.lock", operation="freeze_private_report"):
+        if require_current_window:
+            journal = read_cadence_journal(runtime_root=root, goal_id=window["goal_id"])
+            if not journal or journal["window"] != window or journal.get("retirement"):
+                raise ValueError("the original report is no longer the active window")
         request = _read(folder / "editorial-request.json")
         _verify_source_facts(request, _read(folder / "source.json"))
         response_path = folder / "editorial-response.json"
@@ -247,10 +285,10 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
         atomic_write_json(response_path, response)
         authored = _load_editorial_response(request=request, response_path=response_path)
         generated_at = datetime.now(timezone.utc).isoformat()
-        source = _build_authored_source(authored, completed_at=generated_at)
         document = build_periodic_report_document(title=authored["title"], generated_at=generated_at,
             period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
-            profile=window["profile_ref"], sources=[source], editorial=authored["editorial"],
+            profile=window["profile_ref"], sources=_report_sources(authored, request, generated_at),
+            editorial=authored["editorial"],
             trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
         markdown, html = render_periodic_report_markdown(document), render_periodic_report_html(document)
         bundle = build_periodic_report_generation_bundle(document=document, artifacts=[markdown, html])
@@ -302,7 +340,7 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
     window = validate_cadence_window(request["window"])
     document = build_periodic_report_document(title=authored["title"], generated_at=receipt["generated_at"],
         period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
-        profile=window["profile_ref"], sources=[_build_authored_source(authored, completed_at=receipt["generated_at"])],
+        profile=window["profile_ref"], sources=_report_sources(authored, request, receipt["generated_at"]),
         editorial=authored["editorial"],
         trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
     bundle = _read(folder / "generation-bundle.json")

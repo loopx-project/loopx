@@ -717,6 +717,7 @@ def inspect_loopx_turn_journal(
     turn_key: str,
     retry_failed: bool = False,
     session_binding_resolver: SessionBindingResolver | None = None,
+    require_decision_capture: bool = False,
 ) -> dict[str, object]:
     """Inspect one canonical Turn journal without granting execution authority."""
 
@@ -731,46 +732,61 @@ def inspect_loopx_turn_journal(
     try:
         with exclusive_file_lock(path):
             journal = _load_journal(path)
+            if journal is None:
+                raise ValueError("LoopX Turn journal does not exist")
+
+            request: dict[str, Any] = {}
+            session_check = None
+            recovery_error = None
+            assess_session = True
+            if retry_failed and journal.get("status") == "failed":
+                plan = journal.get("plan")
+                if isinstance(plan, Mapping):
+                    try:
+                        request = build_loopx_turn_host_request(plan)
+                    except (TypeError, ValueError) as exc:
+                        assess_session = False
+                        recovery_error = ValueError("failed-Turn Host request is invalid")
+                        session_check = {
+                            "kind": "host_session_binding",
+                            "outcome": "failed",
+                            "reason": "host_request_invalid",
+                        }
+                        recovery_error.__cause__ = exc
+
+            assessment = assess_existing_turn_recovery(
+                journal,
+                request,
+                goal_id=safe_goal_id,
+                agent_id=agent_id,
+                turn_key=turn_key,
+                retry_failed=retry_failed,
+                session_binding_resolver=session_binding_resolver,
+                assess_session=assess_session,
+                session_recovery_check=session_check,
+                recovery_error=recovery_error,
+            )
+            if (require_decision_capture
+                    and assessment.decision.get("action") == "continue"
+                    and assessment.decision.get("reinvoke_host") is True):
+                # Use dispatch's read-only check only when recovery needs Host
+                # input. Stored results and terminal replay need no new input.
+                try:
+                    stage_turn_decision_capture(
+                        journal["plan"], journal_path=path,
+                        decision=None, existing_journal=True,
+                    )
+                except json.JSONDecodeError:
+                    raise ValueError("Turn decision capture contains malformed JSON") from None
+                except OSError:
+                    raise ValueError("Turn decision capture could not be read") from None
+            return assessment.inspection
     except json.JSONDecodeError:
         raise ValueError("LoopX Turn journal contains malformed JSON") from None
     except LockAcquireTimeoutError:
         raise
     except OSError:
         raise ValueError("LoopX Turn journal could not be read") from None
-    if journal is None:
-        raise ValueError("LoopX Turn journal does not exist")
-
-    request: dict[str, Any] = {}
-    session_check = None
-    recovery_error = None
-    assess_session = True
-    if retry_failed and journal.get("status") == "failed":
-        plan = journal.get("plan")
-        if isinstance(plan, Mapping):
-            try:
-                request = build_loopx_turn_host_request(plan)
-            except (TypeError, ValueError) as exc:
-                assess_session = False
-                recovery_error = ValueError("failed-Turn Host request is invalid")
-                session_check = {
-                    "kind": "host_session_binding",
-                    "outcome": "failed",
-                    "reason": "host_request_invalid",
-                }
-                recovery_error.__cause__ = exc
-
-    return assess_existing_turn_recovery(
-        journal,
-        request,
-        goal_id=safe_goal_id,
-        agent_id=agent_id,
-        turn_key=turn_key,
-        retry_failed=retry_failed,
-        session_binding_resolver=session_binding_resolver,
-        assess_session=assess_session,
-        session_recovery_check=session_check,
-        recovery_error=recovery_error,
-    ).inspection
 
 
 def _receipt(

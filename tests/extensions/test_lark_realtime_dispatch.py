@@ -586,3 +586,67 @@ def test_idle_handler_failure_reconnects_through_the_existing_service_owner(
     assert health[-1]["status"] == "listening"
     assert health[-1]["restart_count"] == 1
     assert _processed(tmp_path) == 0
+
+
+def test_profile_without_steerable_binding_keeps_four_ordinary_workers(
+    tmp_path, monkeypatch
+):
+    snapshot = {
+        "private_profiles": {
+            "mew": {"cli_bin": "fake-lark", "provider_ref": "a" * 24}
+        }
+    }
+    all_four = threading.Barrier(4, timeout=3)
+    release = threading.Event()
+    entered = []
+    stop = threading.Event()
+
+    def admit(_profile, event):
+        entered.append(event["message_id"])
+        all_four.wait()
+        assert release.wait(5)
+        if len(entered) == 4:
+            stop.set()
+        return {"status": "command_recorded"}
+
+    def lines():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        for index in range(4):
+            yield json.dumps(
+                {
+                    **_event(f"role_{index}", f"topic_{index}"),
+                    "chat_type": "group",
+                    "message_type": "text",
+                }
+            )
+        assert release.wait(5)
+        yield "[event] exited (reason: timeout)\n"
+
+    service = LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path / "runtime",
+        runtime_controller=object(),
+        private_conversations=object(),
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(service, "_admit_private", admit)
+    stream = runtime.stream_lark_goal_topic_profile
+
+    def owned_stream(**kwargs):
+        result = stream(**kwargs, process_factory=lambda _args: _Consumer(lines()))
+        service._closed.set()
+        return result
+
+    monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", owned_stream)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(service._poll_profile, "mew", stop)
+        try:
+            deadline = threading.Event()
+            while len(entered) < 4 and not deadline.wait(0.02):
+                pass
+            assert len(entered) == 4
+        finally:
+            release.set()
+            stop.set()
+            service._closed.set()
+        future.result(timeout=6)

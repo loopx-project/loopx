@@ -186,6 +186,18 @@ parsing and qualification failure. Missing usage stays unknown, and retry
 archives the failed output, receipt and observed usage before a new attempt.
 This does not reconstruct unmeasured historical usage or complete monetary cost.
 
+Rechecking a saved result can fail if its output is missing, malformed or no
+longer qualifies. That refusal is not a new analysis attempt: it preserves the
+previous receipt, observed usage and elapsed time. Retry preparation failures
+also leave that receipt unchanged. Once a new running receipt is persisted,
+process and qualification failures belong to that new attempt. Restoring the
+saved output permits ordinary reuse without another model call; it does not
+turn an invalid result into an accepted one.
+
+中文：已有结果的复核被拒绝，或重试准备失败，不会改写上一轮回执、用量和耗时。
+新运行回执持久化后发生的失败才记入本次尝试。修复原输出后可直接复用，既不自动
+重跑模型，也不放宽结果资格检查。
+
 普通阅读依次呈现指标、研究汇报和完整研究历程；汇报先给概览和可展开结论，「深入解读」
 再用并排对照展开观察／竞争解释及实验条件／预期区分／反证，窄屏保持原顺序纵向阅读。
 两层复用同一结果和原文入口，浏览不触发模型。新分析仍使用既有授权、

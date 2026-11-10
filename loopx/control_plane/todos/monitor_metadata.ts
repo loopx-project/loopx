@@ -6,13 +6,20 @@ import { requireBoolean, requireJsonObject, requireNonEmptyString } from "../run
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { evaluateSchedulerStateTransition, SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA } from "../scheduler/state_transition_rules.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import {
+  advanceMonitorScopeGeneration,
+  monitorScopeResultAdvances,
+  normalizeMonitorChangeScope,
+  parseMonitorScopeGenerations,
+} from "./monitor_scope.ts";
 
 export const TODO_MONITOR_METADATA_REQUEST_SCHEMA = "loopx_todo_monitor_metadata_request_v0";
 export const TODO_MONITOR_METADATA_RESULT_SCHEMA = "loopx_todo_monitor_metadata_result_v0";
 export const MONITOR_CONFIGURATION_FIELDS = ["target_key", "cadence", "next_due_at", "expires_at", "watch_only"] as const;
 export const MONITOR_METADATA_FIELDS = ["target_key", "monitor_effect_id", "cadence", "next_due_at",
   "expires_at", "last_checked_at", "result_hash", "consecutive_no_change", "material_change",
-  "material_change_generation", "max_no_change_before_replan", "watch_only"] as const;
+  "material_change_generation", "material_change_scope", "material_change_scope_generations",
+  "max_no_change_before_replan", "watch_only"] as const;
 
 /** An observation is input evidence, never a patch to persisted counters. */
 export interface MonitorPollObservation extends JsonObject {
@@ -23,7 +30,7 @@ export interface MonitorPollObservation extends JsonObject {
 
 export function decodeMonitorPollObservation(value: unknown): MonitorPollObservation {
   const raw = requireJsonObject(value, "Monitor observation");
-  const strings = ["monitor_effect_id", "target_key", "cadence", "next_due_at"];
+  const strings = ["monitor_effect_id", "target_key", "cadence", "next_due_at", "material_change_scope"];
   for (const key of Object.keys(raw)) {
     if (!["generated_at", "result_hash", "material_change", ...strings].includes(key)) {
       throw new EffectRuntimeRequestError(`Monitor observation does not own ${key}`);
@@ -104,6 +111,13 @@ function normalizeMetadata(value: unknown): JsonObject {
     if (raw[field] === null) normalized[field] = null;
     else if (text(raw[field])) normalized[field] = text(raw[field]);
   }
+  if (normalized.material_change_scope != null &&
+      normalizeMonitorChangeScope(normalized.material_change_scope) !== normalized.material_change_scope) {
+    throw new EffectRuntimeRequestError("--material-change-scope must be a lowercase public-safe token of at most 96 characters");
+  }
+  if (normalized.material_change_scope_generations != null) {
+    parseMonitorScopeGenerations(normalized.material_change_scope_generations);
+  }
   if (normalized.cadence != null && schedule("1970-01-01T00:00:00Z", normalized.cadence).cadence_seconds === null) {
     throw new EffectRuntimeRequestError("--cadence must look like 30m, 2h, or 1d");
   }
@@ -133,6 +147,14 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
     throw new EffectRuntimeRequestError("monitor poll observation requires task_class=continuous_monitor");
   }
   const material = requireBoolean(observation.material_change, "material_change");
+  const rawScope = text(observation.material_change_scope);
+  const scope = rawScope ? normalizeMonitorChangeScope(rawScope) : null;
+  if (rawScope && scope === null) {
+    throw new EffectRuntimeRequestError("--material-change-scope must be a lowercase public-safe token of at most 96 characters");
+  }
+  if (scope !== null && !material) {
+    throw new EffectRuntimeRequestError("--material-change-scope requires --material-change");
+  }
   const resultHash = text(observation.result_hash);
   if (!resultHash) throw new EffectRuntimeRequestError("monitor todo writeback requires --result-hash");
   const generatedAt = text(observation.generated_at);
@@ -161,7 +183,8 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   const previousNoChange = counter(existing.consecutive_no_change);
   const replay = Boolean(effectId && effectId === previousEffect);
   if (replay) {
-    const facts = {result_hash: resultHash, material_change: String(material), last_checked_at: generatedAt,
+    const facts = {result_hash: resultHash, material_change: String(material),
+      material_change_scope: scope ?? "", last_checked_at: generatedAt,
       target_key: target, cadence, next_due_at: due || ""};
     const conflicts = Object.entries(facts).filter(([key, expected]) => text(existing[key]) !== expected).map(([key]) => key);
     if (conflicts.length) throw new EffectRuntimeRequestError(
@@ -177,18 +200,34 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   }
   const previousHash = text(existing.result_hash);
   if (reactivate && replay) throw new EffectRuntimeRequestError("a historical Monitor observation cannot reactivate completed work");
-  const advances = !replay && material && (reactivate || resultHash !== previousHash);
+  const resultAdvances = scope === null
+    ? resultHash !== previousHash
+    : monitorScopeResultAdvances(
+        existing.material_change_scope_generations,
+        scope,
+        resultHash,
+        existing.material_change_scope,
+        previousHash,
+      );
+  const advances = !replay && material && (reactivate || resultAdvances);
   const generation = previousGeneration + Number(advances);
+  const scoped = advanceMonitorScopeGeneration(
+    existing.material_change_scope_generations, scope, generation, advances, resultHash,
+  );
   const noChange = replay ? previousNoChange : material || (previousHash && previousHash !== resultHash)
     ? 0 : previousNoChange + 1;
   if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(noChange)) {
     throw new EffectRuntimeRequestError("monitor counter exceeds the safe integer range");
   }
   const metadata: JsonObject = replay
-    ? Object.fromEntries(MONITOR_METADATA_FIELDS.filter(key => existing[key] != null).map(key => [key, existing[key]]))
+    ? Object.fromEntries(MONITOR_METADATA_FIELDS
+      .filter(key => existing[key] != null).map(key => [key, existing[key]]))
     : {last_checked_at: generatedAt, result_hash: resultHash, consecutive_no_change: String(noChange),
       material_change: String(material), material_change_generation: String(generation)};
   if (!replay) {
+    if (scope !== null) metadata.material_change_scope = scope;
+    else if (Object.hasOwn(existing, "material_change_scope")) metadata.material_change_scope = null;
+    if (scoped.encoded) metadata.material_change_scope_generations = scoped.encoded;
     if (effectId) metadata.monitor_effect_id = effectId;
     if (target) metadata.target_key = target;
     if (cadence) metadata.cadence = cadence;
@@ -197,6 +236,10 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   return {metadata, transition: {monitor_effect_id: effectId || null, provider_replayed: replay,
     result_hash: resultHash, material_change: material, material_change_applied: advances,
     material_change_generation: generation, consecutive_no_change: noChange, last_checked_at: generatedAt,
+    ...(scope === null ? {} : {
+      material_change_scope: scope,
+      scoped_material_change_generation: scoped.scope_generation,
+    }),
     target_key: target || null, cadence: cadence || null, next_due_at: due}};
 }
 

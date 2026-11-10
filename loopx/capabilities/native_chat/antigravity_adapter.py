@@ -591,7 +591,7 @@ class AntigravityAdapter:
             planner = latest[-1].get("plannerResponse") or {}
             normal = (latest[-1].get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                 and planner.get("stopReason") == "STOP_REASON_STOP_PATTERN" and not planner.get("toolCalls")
-                and all(step.get("status") == "CORTEX_STEP_STATUS_DONE" for step in latest)
+                and all(_step_allows_completed_turn(step, final=latest[-1]) for step in latest)
                 and isinstance((latest[0].get("metadata") or {}).get("executionId"), str)
                 and bool((latest[0].get("metadata") or {}).get("executionId"))
                 and len({(step.get("metadata") or {}).get("executionId") for step in latest}) == 1)

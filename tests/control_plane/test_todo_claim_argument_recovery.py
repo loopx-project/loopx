@@ -6,11 +6,17 @@ import os
 import shlex
 import subprocess
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.cli_commands import todo as todo_command
+from loopx.control_plane.coordination.local_authority import (
+    LocalCoordinationAuthorityRejection,
+    LocalCoordinationAuthorityUnavailable,
+)
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 REPO = Path(__file__).resolve().parents[2]
@@ -409,6 +415,288 @@ def test_terminal_refusal_recovers_through_ordinary_claim(claim_cli):
     completed = snapshot()
     assert run(retry)["ok"]
     assert snapshot() == completed
+
+
+@pytest.mark.parametrize("command", ["update", "complete"])
+def test_explicit_one_command_execution_recovery(claim_cli, command):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    if command == "update":
+        assert run([
+            *prefix, *claim, "--claimed-by", "peer-a",
+            "--claim-operation-id", "active-before-one-command-recovery",
+        ])["ok"]
+    arguments = [
+        *prefix,
+        "todo",
+        command,
+        "--goal-id",
+        GOAL,
+        "--todo-id",
+        TODO,
+        "--agent-id",
+        "peer-a",
+        "--recover-execution",
+    ]
+    arguments += (
+        [
+            "--note", "Recovered without a caller-visible failed command.",
+            "--clear-resume-when",
+        ]
+        if command == "update"
+        else ["--evidence", "evidence:validated-output"]
+    )
+    result = run(arguments)
+    assert result["ok"] is True
+    recovery = result["execution_recovery"]
+    assert recovery == {
+        "schema_version": "todo_execution_recovery_v0",
+        "status": "recovered",
+        "initial_error_code": (
+            "lease_fence_required"
+            if command == "update"
+            else "handoff_mode_requires_lease"
+        ),
+        "claim_operation_id": recovery["claim_operation_id"],
+        "claim_status": "no_change" if command == "update" else "applied",
+        "external_invocations": 1,
+        "external_failed_calls": 0,
+    }
+    task = snapshot()[0][0]
+    assert task["status"] == ("open" if command == "update" else "done")
+    if command == "update":
+        assert task["note"] == "Recovered without a caller-visible failed command."
+    else:
+        replayed = run(arguments)
+        assert replayed["ok"] is True
+        assert replayed["changed"] is False
+        assert replayed["execution_recovery"]["status"] == "replayed"
+        assert replayed["execution_recovery"]["claim_operation_id"] == recovery["claim_operation_id"]
+        assert snapshot()[0][0] == task
+
+
+def test_one_command_recovery_never_replaces_explicit_stale_proof(claim_cli):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    assert run([
+        *prefix, *claim, "--claimed-by", "peer-a",
+        "--claim-operation-id", "current-execution",
+    ])["ok"]
+    before = snapshot()
+    rejected = run([
+        *prefix, "todo", "update", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", "peer-a", "--note", "Do not replace proof.",
+        "--recover-execution", "--task-lease-idempotency-key", "stale-proof",
+        "--task-lease-expected-version", "0",
+    ], expected_exit=1)
+    assert "accepts only omitted execution proof" in rejected["error"]
+    assert "execution_recovery" not in rejected
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_one_command_completion_replays_the_original_admitted_turn(tmp_path, monkeypatch, provider):
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority, _run_cli, _write_fixture,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, claimed=False)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    turn = "turn-original-recovered-completion"
+    code, guard = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn, "--runtime-profile", "generic_cli")
+    assert code == 0 and guard["should_run"], guard.get("state")
+    command = ("todo", "complete", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--recover-execution", "--evidence", "evidence:original-completion")
+    code, first = _run_cli(registry, runtime, *command)
+    assert code == 0, json.dumps(first)
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+    code, second = _run_cli(registry, runtime, *command)
+    assert code == 0 and second["ok"] and second["changed"] is False, json.dumps(second)
+    assert second["execution_recovery"]["claim_operation_id"] == first["execution_recovery"]["claim_operation_id"]
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == after
+
+
+def test_one_command_recovery_does_not_take_foreign_owner(claim_cli):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    assert run([
+        *prefix, *claim, "--claimed-by", "peer-b", "--agent-id", "peer-b",
+        "--claim-operation-id", "foreign-execution",
+    ])["ok"]
+    before = snapshot()
+    rejected = run([
+        *prefix, "todo", "update", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", "peer-a", "--note", "Forbidden takeover.",
+        "--recover-execution",
+    ], expected_exit=1)
+    assert rejected["error_code"] == "update_owner_mismatch"
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_one_command_recovery_preserves_missing_dependency(
+    tmp_path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "dependency-project"
+    project.mkdir()
+    runtime, state = tmp_path / "runtime", project / "state.md"
+    registry = tmp_path / "registry.json"
+    state.write_text("# Synthetic dependency\n", encoding="utf-8")
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{
+            "id": "dependency-goal",
+            "repo": str(project),
+            "state_file": state.name,
+            "coordination": {"registered_agents": ["peer-a"]},
+        }],
+    }), encoding="utf-8")
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="dependency-goal",
+        handoff_mode="hard_lease",
+        leases=[],
+        todos=[{
+            "schema_version": "todo_item_v0",
+            "todo_id": "todo_dependency_wait",
+            "role": "agent",
+            "status": "open",
+            "done": False,
+            "text": "Wait for a missing prerequisite.",
+            "archive_state": "active",
+            "source_section": "Agent Todo",
+            "index": 1,
+            "task_class": "advancement_task",
+            "claimed_by": "peer-a",
+            "resume_when": "todo_done:todo_missing_dependency",
+        }],
+    )
+    initialize_canonical_authority(
+        runtime,
+        "dependency-goal",
+        projection,
+        state_path=state,
+        provider=provider,
+    )
+    state.unlink()
+    before = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "list",
+        "--goal-id", "dependency-goal", "--todo-id", "todo_dependency_wait",
+    ], cwd=REPO, capture_output=True, text=True, timeout=90, check=True).stdout
+    completed = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "complete",
+        "--goal-id", "dependency-goal", "--todo-id", "todo_dependency_wait",
+        "--agent-id", "peer-a", "--evidence", "evidence:must-not-commit",
+        "--recover-execution",
+    ], cwd=REPO, capture_output=True, text=True, timeout=90)
+    assert completed.returncode == 1, completed.stdout + completed.stderr
+    rejected = json.loads(completed.stdout)
+    assert rejected["error_code"] == "handoff_mode_requires_lease"
+    assert rejected["recovery"]["action"] == "resolve_acquire_rejection"
+    assert rejected["recovery"]["reason_code"] == "todo_dependency_pending"
+    assert "execution_recovery" not in rejected
+    after = subprocess.run([
+        sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "todo", "list",
+        "--goal-id", "dependency-goal", "--todo-id", "todo_dependency_wait",
+    ], cwd=REPO, capture_output=True, text=True, timeout=90, check=True).stdout
+    assert json.loads(after)["todo"] == json.loads(before)["todo"]
+
+
+def test_one_command_recovery_reports_committed_claim_when_retry_fails(monkeypatch):
+    initial = LocalCoordinationAuthorityRejection(
+        "ordinary lifecycle operation needs a managed claim",
+        code="lease_fence_required",
+        payload={"recovery": {
+            "action": "claim_task",
+            "execution_authority_granted": False,
+            "claim": {"command": "loopx todo claim"},
+            "retry": {
+                "reference_source": "claim_operation_id_from_claim",
+                "requires_flags": ["--claim-operation-id"],
+            },
+        }},
+    )
+    args = Namespace(
+        goal_id="goal-retry-race",
+        todo_id="todo-retry-race",
+        role="agent",
+        agent_id="peer-a",
+        project=None,
+        state_file=None,
+    )
+
+    def claim(**kwargs):
+        assert kwargs["claim_only"] is True
+        assert kwargs["manage_execution"] is True
+        assert kwargs["claimed_by"] == kwargs["agent_id"] == "peer-a"
+        return {
+            "ok": True,
+            "execution_managed": True,
+            "claim_operation_id": "committed-claim",
+            "status": "applied",
+        }
+
+    monkeypatch.setattr(todo_command, "update_goal_todo", claim)
+
+    def retry(reference):
+        assert reference == "committed-claim"
+        raise LocalCoordinationAuthorityRejection(
+            "the unchanged retry lost a provider race",
+            code="provider_revision_mismatch",
+            payload={"expected_provider_revision": "1", "actual_provider_revision": "2"},
+        )
+
+    with pytest.raises(LocalCoordinationAuthorityUnavailable) as caught:
+        todo_command._recover_todo_execution_once(
+            args,
+            initial,
+            registry_path=Path("registry.json"),
+            runtime_root_arg=None,
+            retry_operation=retry,
+        )
+
+    assert caught.value.code == "todo_execution_recovery_retry_failed"
+    assert caught.value.payload == {
+        "execution_recovery": {
+            "schema_version": "todo_execution_recovery_v0",
+            "status": "claim_committed_retry_failed",
+            "initial_error_code": "lease_fence_required",
+            "claim_operation_id": "committed-claim",
+            "claim_status": "applied",
+            "retry_error_code": "provider_revision_mismatch",
+        },
+        "retry_failure": {
+            "expected_provider_revision": "1",
+            "actual_provider_revision": "2",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "flags,missing",
+    [
+        (["--resume-when", "capacity_available:test"], "--reason"),
+        (["--reason", "Wait for capacity"], "--resume-when"),
+    ],
+)
+def test_deferred_transition_names_missing_contract_before_claim(
+    claim_cli, flags, missing,
+):
+    _, run, snapshot, prefix, _, _, _, _ = claim_cli
+    before = snapshot()
+    rejected = run([
+        *prefix, "todo", "update", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", "peer-a", "--status", "deferred",
+        "--recover-execution", *flags,
+    ], expected_exit=1)
+    assert "requires --reason and --resume-when" in rejected["error"]
+    assert missing in rejected["error"]
+    assert snapshot() == before
 
 
 @pytest.mark.parametrize("command", ["update", "complete"])

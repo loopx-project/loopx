@@ -399,7 +399,7 @@ def resolve_active_goal_periodic_report_subscription(
     if (
         not isinstance(goal, Mapping)
         or goal_is_stopped(goal)
-        or goal.get("status") in {"stopped", "paused", "archived"}
+        or goal.get("status") == "archived"
     ):
         return None
     subscription = resolve_goal_periodic_report_subscription(goal, machine_defaults)

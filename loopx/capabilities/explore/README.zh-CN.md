@@ -26,6 +26,19 @@
 每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
 零分和负分仍为有效测量。
 
+开启 Yardstick 后，普通 `refresh-state` 的量化或决策附件会在关系图与 Todo
+关联提交后，通过 `explore_result_delivery` 返回与普通 finding 相同的反馈。
+成功重放只读原始已提交前缀，后来的结果不会改变首次回执。部分失败仍沿原 owner
+重试；反馈不产生 claim、spend 或评测。关闭 Yardstick 或不带量化信息的旧 refresh
+附件保持原有回执形状。
+
+尚未选择 outcome/proxy 决策时，量化回执还可返回当前 Todo 已提交证据的有界
+`work_measurements`，复用普通任务上下文的事实视图。不重复回传本次反馈，只补充至多
+两组其他比较，优先同一问题与近期证据；省略数量明确标注，原 registry/runtime 路由的
+`details_command` 可达其余组。系统不替 Agent 指定指标角色，
+也不要求增加一次声明或 probe。方法有实质变化时，原有可选决策字段仍可放在同一次
+普通结果附件中；记录比较事实不代表验收、执行许可或效果收益。
+
 若要复用已核实的比较条件，将三个字段一次保存到 `conditions.json`：
 
 ```json

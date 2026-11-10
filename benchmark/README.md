@@ -1399,6 +1399,20 @@ and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
 
+### Preserve an interrupted Official control
+
+For `--worker official --feedback native --eval-interval 0`, the explicit
+`--preserve-failed-worker` option keeps the original Docker worker after a
+confirmed final solver failure. Native auto-resume, scoring, and final archive
+collection keep their ordinary behavior. The retained worker is stopped and
+verified by exact identity; a failed stop observation or receipt write never
+falls through to deletion. Without the option, ordinary cleanup still applies.
+
+The private terminal receipt records source retention only. It does not
+export an authentication file, create a joint checkpoint, or authorize
+a resume. Recover the original evaluator, session, and finite remaining
+budget separately before treating later work as part of this control.
+
 ### Continue an interrupted Host in its retained filesystem
 
 The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
@@ -1495,6 +1509,15 @@ Recovery settles process transport only. Preserved pending semantic replan
 attempts still require their original settlement owner; an interrupted replan
 is not silently declared complete or cleared to force dispatch.
 
+Terminal failure capture discovers the current admitted scheduler phase under
+its existing Docker writer barrier. It reads the active phase clock and follows
+only that phase's `resume_from` chain back to the original scheduler state,
+retaining every intermediate phase and the latest failed attempt. Callers do
+not supply a phase list, and unrelated control files are never selected. Missing,
+malformed, cyclic or out-of-scope predecessors fail preservation without deleting
+the stopped source. The preserved worker and its pending Host witness remain
+necessary for recovery; capture alone grants no continuation or extra budget.
+
 ### Explicitly continue after native account allowance is repaired
 
 A hard native quota failure is still held by default. Repair or replenish the
@@ -1502,6 +1525,12 @@ authorized experiment account through its existing provider and verify its fresh
 allowance before requesting another phase. This does not change the desktop
 login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
 into automatic timed retries.
+
+`benchmark.runtime.codex_accounts` observes the native account owner without
+resuming desktop service recovery or adopting an out-of-band login selection.
+A missing or mismatched active selection remains an ownership error for the
+native account manager to resolve. `--execute` only permits the explicitly
+requested private continuation-login copy; it does not expand desktop authority.
 
 For a retained complete worker, the same scheduler entrypoint accepts
 `--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.
@@ -1534,6 +1563,16 @@ Goal/Stop/session/work admission. Repeating the request selects that same phase,
 including any later failure; it cannot clear the failure or extend its deadline.
 A later explicit repair must bind that new failure separately. Existing operator
 and account authority remain required; a digest is provenance, not permission.
+
+After in-place continuation is admitted, the scheduler atomically publishes
+`active-phase-deadline` beside its state, preserving that phase's exact existing
+deadline. Replaying the same request republishes the same deadline; a refused
+continuation does not replace it. Both held and terminal captures automatically
+select this physical clock, including when the container is paused or stopped.
+They preserve the original `phase-deadline` file as a recovery witness. Fresh
+workers without a continuation clock keep the standard path. An explicitly
+configured supervisor `phase_deadline_path` still takes precedence; unreadable or
+invalid clocks fail capture instead of silently falling back or granting time.
 
 The explicit failed-phase path additionally uses the installed optional native
 Codex provider's existing availability policy (`loopx-codex-provider-routing`).

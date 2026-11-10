@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -109,7 +110,38 @@ def build_turn_error_payload(
     }
 
 
-def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
+def _turn_plan_readback_lines(payload: Mapping[str, object]) -> list[str]:
+    """Render the existing inspection source; never recompute admission here."""
+    source = payload.get("work_contract")
+    if payload.get("schema_version") != "loopx_turn_plan_v1" or not isinstance(source, Mapping):
+        return []
+    lines = [
+        "Inspection only; this plan does not authorize execution.",
+        f"- should_run: {source.get('should_run')}",
+        f"- effective_action: {source.get('effective_action')}",
+    ]
+    reason = source.get("reason")
+    if isinstance(reason, str) and reason:
+        lines.append(f"- reason: {reason}")
+    selected = source.get("selected_todo")
+    if isinstance(selected, Mapping) and selected.get("todo_id"):
+        lines.extend([
+            "", "## Selected work (summary)",
+            f"- todo_id: {selected['todo_id']}",
+        ])
+        text = selected.get("text")
+        if isinstance(text, str) and text:
+            lines.append(text)
+    # The explicit detail surface carries the original contract and transaction.
+    # Keep every field, including future owner additions, instead of introducing
+    # a second hand-maintained projection of their execution semantics.
+    return [*lines, "", "## Full plan (inspection only)", "```json",
+            json.dumps(payload, ensure_ascii=False, indent=2), "```", ""]
+
+
+def render_loopx_turn_plan_markdown(
+    payload: dict[str, object], *, include_transaction_detail: bool = False,
+) -> str:
     if not payload.get("ok"):
         error = payload.get("error") or "invalid TurnEnvelope contract"
         return f"LoopX Turn plan failed: {error}"
@@ -122,6 +154,7 @@ def render_loopx_turn_plan_markdown(payload: dict[str, object]) -> str:
     return "\n".join(
         [
             "# LoopX Turn Plan",
+            *(_turn_plan_readback_lines(payload) if include_transaction_detail else []),
             f"- host: {host.get('kind')}",
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",

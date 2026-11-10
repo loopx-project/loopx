@@ -953,6 +953,130 @@ reward does not establish per-memory causal credit. Holdout replay or a bounded
 ablation is required before assigning strong utility. Benchmark content must
 never be retained in a way that contaminates later tasks.
 
+<a id="edgebench-budgeted-planning"></a>
+
+### 8.7 Budgeted research planning on EdgeBench
+
+**Hypothesis.** Comparing bounded multi-step continuations by their expected
+accepted outcome at the remaining horizon can improve native results over the
+current LoopX policy. This includes prerequisite work, informative measurements
+and time for confirmation, not just the next action's immediate score gain.
+[Joint decisions §5.8](target-yardstick-stride-decisions-v0.md#budgeted-planning)
+owns the decision semantics; §5.9 owns the subsequent calibration/learning path.
+This is a proposed experiment, not a completed run or established benefit.
+
+The [goal and theory companion](../../research/budgeted-research-planning.md)
+explains the budgeted objective, dependent progress, measurement value and
+causal comparison. Its [worked loop](../../research/budgeted-research-planning.md#worked-loop)
+connects decision-time evidence to adopted work and a terminal outcome. Use that
+rationale to interpret this protocol; a coherent local decision is not itself
+evidence of full-budget benefit.
+
+#### First implementation slice
+
+Use the existing single-agent Stride/Yardstick/Explore path. A revision-pinned
+benchmark treatment adds the §5.8 comparison to the current decision instructions:
+compare the supported continuation with a small number of plausible routes,
+identify dependencies and a discriminating next boundary, then execute the first
+coherent slice. Keep evidence and predictions in existing findings/plan reasoning;
+use supported `next_probe` and Yardstick fields for the immediate choice. Do not
+add unsupported v0 fields, a required extra model call or a per-Turn form.
+
+The first implementation PR should contain the bounded instruction change, its
+explicit treatment selection in the existing benchmark configuration/manifest,
+and one real-path readback/followthrough episode showing the model's next work.
+Keep default behavior unchanged. Pin the exact policy, source and projection used;
+existing detail reads suffice if a richer projection is not yet merged. Source
+delivery and model adoption qualify the path, not effectiveness. A dual-session
+Controller/Worker runtime, numerical fidelity engine and learned policy are not
+prerequisites. Later schema work needs an observed missing producer/consumer fact.
+
+#### Affordable conditional-effect pilot
+
+Start with three complementary task types, under the pinned upstream task names:
+
+| Task | Mechanism to investigate |
+| --- | --- |
+| ANN vector search | Investment in a different search mechanism can require several steps before a native gain. |
+| Ad placement | Local ranking can disagree with native outcomes; more local samples alone need not remove bias. |
+| Grid optimization | A better average can still violate a hard correctness or tail-time constraint. |
+
+These are hypotheses for the panel, not new empirical claims. Compare two arms:
+**current LoopX policy** and **the same path plus budgeted planning**. Both receive
+the same available evidence, resource facts, model/tools, feedback and acceptance
+rules; freeze context projection, starting candidate, contention policy and source
+revision. Changed reasoning is the treatment and its overhead counts. Do not
+quietly give only the planning arm a repaired proxy or extra native evaluations.
+
+A bounded starting design is **3 tasks × 2 independently generated, prospectively
+selected checkpoints × 2 arms × 3 hours = 36 additional worker-hours**. Report
+checkpoint creation, control and evaluation costs as well. The two source runs
+per task, checkpoint rule and assignment are selected before outcomes; do not
+choose favorable peaks. This small pilot screens mechanisms, not statistical
+sufficiency for a general gain claim. Freeze its resource ceilings before launch.
+
+Use the existing [matched-continuation boundary](hierarchical-agent-stride-control-v0.md#matched-research-continuation):
+a copied workspace alone is not a shared research state. Candidate/frontier,
+accepted incumbent, evidence, memory, pending results, available budget and native
+submission history/cooldown must be equivalently reconstructable, with fresh run
+identities and inherited immutable provenance. Prefer quiescent checkpoints to
+reduce ambiguity. The [adapter](../../../benchmark/edgebench/README.md) currently
+does not guarantee native judge restart/cooldown continuity; prove the required
+restore seam before admitting a pair. If unavailable, use a matched from-start
+comparison and report its actual budget rather than label a fresh registration
+as a checkpoint fork. This does not require building a general replay platform.
+
+Keep native cooldown and terminal selection unchanged. If three hours cannot
+accommodate a useful multi-step route and permitted confirmation, classify the
+pilot as uninformative and redesign its next preregistered horizon; do not loosen
+cooldown or add retroactive evaluation slots. Each valid pair estimates the
+conditional effect from that checkpoint over three hours. It does not establish
+the effect of running the policy from scratch for eighteen hours.
+
+#### Full-budget benefit and later refinement
+
+Keep candidate and controller generalization separate. Native feedback may be
+used during a run exactly as the frozen treatment permits; freezing a policy
+freezes its feedback-response rule, not its ability to adapt. Tasks/outcomes used
+to tune or select that rule are development evidence, not an independent test of
+transfer. Reserve new-task confirmation for the frozen controller, and preserve
+the distinction between independent candidate checks and held-out controller
+tasks. Repeated seeds on one task do not substitute for task coverage.
+
+After a useful pilot, compare **strong Official continuation, current LoopX, and
+the selected planning treatment from the start**, with matched task/model/seed
+blocks and an eighteen-hour budget per run. Freeze repeat count, resource caps,
+practically meaningful improvement/non-inferiority margins, terminal selection
+and analysis before collecting confirmatory outcomes. Retain the required §5
+baseline evidence; the focused pilot does not replace that evidence program.
+Report 6/12/18-hour curves with the eighteen-hour native outcome primary; keep
+first-submit/startup advantages distinct from sustained continuation benefit.
+An early lag can precede a later gain, but hindsight does not qualify persistence.
+
+Use the native accepted outcome and frozen best/final rule, not the highest local
+score or an untested final workspace. Preserve correctness failures, unfinished
+grading, cancellations and missing coverage with their declared treatment. Bind
+each result to the exact candidate, evaluator/input and submission. Report paired
+effects and uncertainty, time to accepted improvement, complete tokens/wall time,
+control and evaluator cost. Do not sum raw QPS and unrelated task scores; use
+per-task effects and only the benchmark's declared normalization for aggregates.
+
+Read pre-action predictions against realized method, resources, intermediate
+evidence and terminal outcome. Distinguish predicted value, actual adoption,
+information and confirmed gain. Attribute delayed gains to the relevant sequence
+for analysis, not automatically to its last action; observational associations
+remain non-causal. Only then add an affordable lookahead-depth or calibration
+ablation where a specific uncertainty justifies it, rather than a full factorial
+matrix upfront.
+
+Expand when repeated terminal benefits meet frozen margins and uncertainty
+requirements without unacceptable correctness, resource or authority regressions.
+Keep negative and inconclusive results. Freeze the selected policy before testing
+held-out tasks and workloads; adaptively queried native feedback is development
+evidence. Calibrated forecasts and learned allocation must beat the qualified
+current-model policy under the same complete budget. Benchmark evidence alone
+does not authorize production promotion or reuse of raw task data for training.
+
 ## 9. Benchmark Integration Plan
 
 ### 9.1 ALE

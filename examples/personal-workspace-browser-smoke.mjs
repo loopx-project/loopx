@@ -36,8 +36,11 @@ import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/ext
 import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
 // Isolated browser acceptance scenarios for the personal Agent workspace.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   launchBrowser,
@@ -165,14 +168,18 @@ scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 scenarioCatalog.push(managedAgentSessionsScenario);
 scenarioCatalog.push(conversationDocumentRequestScenario);
-const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
-const scenarios = requestedScenario
-  ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
-  : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
+export { scenarioCatalog };
 
 async function main() {
+  const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
+  const scenarios = requestedScenario
+    ? scenarioCatalog.filter((scenario) => scenario.id === requestedScenario)
+    : selectScenarioShard(scenarioCatalog, process.env.LOOPX_PERSONAL_WORKSPACE_SHARD);
+  const releaseSourcesSha256 = process.env.LOOPX_RELEASE_SOURCES_FILE
+    ? createHash("sha256").update(await readFile(process.env.LOOPX_RELEASE_SOURCES_FILE)).digest("hex")
+    : undefined;
   if (collectCoverage && packaged) {
     throw new Error("Source coverage requires the development smoke with source maps");
   }
@@ -217,7 +224,7 @@ async function main() {
         console.log(`scenario-end=${scenario.id} duration_ms=${Date.now() - startedAt}`);
         await writeFile(
           resolve(outputDir, "acceptance-results.json"),
-          `${JSON.stringify({ shard: process.env.LOOPX_PERSONAL_WORKSPACE_SHARD, catalog_count: scenarioCatalog.length, selected: scenarios.map(scenario => scenario.id), scenarios: results }, null, 2)}\n`,
+          `${JSON.stringify({ shard: process.env.LOOPX_PERSONAL_WORKSPACE_SHARD, catalog_count: scenarioCatalog.length, release_sources_sha256: releaseSourcesSha256, selected: scenarios.map(scenario => scenario.id), scenarios: results }, null, 2)}\n`,
           "utf8",
         );
       }
@@ -240,4 +247,18 @@ async function main() {
   }
 }
 
-await main();
+// The release gate imports the same catalog without starting a server/browser.
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch (error) {
+    // Imports from stdin or a virtual launcher can have no filesystem entry.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+if (isDirectEntry()) {
+  await main();
+}

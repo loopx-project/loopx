@@ -336,6 +336,14 @@ Synthetic real-HTTP/Core journeys cover repeated inputs, complete images and
 long captions, restart, missing/unknown receipts, byte mismatch, revocation and
 provider replacement. Installed provider readback remains a separate gate.
 
+The bound App history also displays a read-only notice for an original Lark
+file, audio or video that Core recorded as unsupported. It verifies the exact
+Session, current local owner binding and both original receipts before showing
+the notice. Its source time participates in history pagination; late rows
+invalidate any affected prefix, and a changed notice refreshes the App's
+transcript even when no Turn runs. The notice carries no resource bytes or
+credentials, creates no Turn, and does not resend the original reply.
+
 The implementation decision follows primary-source comparisons, not a claim
 that shared context already guarantees two-way delivery:
 
@@ -1386,10 +1394,14 @@ snapshot, then rechecks an exact connection/Goal source. Interrupted, repeated,
 mis-scoped or inconsistent cursors remain unreadable and retry through the
 existing recovery path, without model replay. Unpaged v1 callers remain
 compatible. This is a stateless read hint, not a new store, consumer, execution
-state or grant. Response row count is bounded; server-side journal reads and
-prefix hashing still scale with full history and no latency improvement is
-claimed. HTTP/store and source/packaged browser checks qualify this bounded
-history path; installed native input, reply threading and live App/Lark media
+state or grant. Response row count is bounded. File Chat may reuse one bounded
+strict parse after reading the journal again and confirming the same raw-byte
+digest. Changed or oversized data uses the strict parser; unreadable data
+still fails the request. Each page verifies its frozen prefix and reads its
+provider overlays afresh. Journal reads and prefix hashing still scale with
+full history. HTTP/store and source/packaged
+browser checks qualify this bounded history path; installed native input,
+reply threading and live App/Lark media
 remain separate acceptance. Earlier baseline and `--pagination-only` runs did
 not qualify the default return scenario's background wait. That historical
 timeout is retained; the default return journey now reads background revisions
@@ -1397,6 +1409,14 @@ across steward/Goal navigation. The App entry keeps one workspace and its
 readers mounted, sharing its source readback. Pending or failed discovery still
 gates the ordinary queue. Disposable HTTP/store checks qualify this continuation
 path, not installed native or live-provider acceptance.
+
+After a complete bound Session read, the App can refresh a changed snapshot
+using its proof of up to 5,000 already visible rows. The same endpoint checks
+the current projected prefix, including quotes and return status. Only an
+exact match returns the appended suffix of at most 200 rows. A changed prefix,
+a larger suffix or an older service uses the ordinary full read. The App still
+rechecks the original binding before publishing the combined transcript. This
+transient proof does not replace the frozen cursor or authorize any effect.
 
 Following the newest reply also survives a resized viewport or timeline, including
 image layout and expanded replies, without waiting for another message. Scrolling
@@ -2042,14 +2062,19 @@ metadata. Such work remains pending after the recovered prose is delivered;
 answer restoration does not certify the requested business or handoff complete.
 Cancellation failure retains the primary provider error and unconfirmed cleanup.
 
-After the recovered answer is independently delivered, a malformed batch whose
-only actions are string-brief handoffs can reserve one **format review** through
-the original Session queue. Fresh original native input/answer hashes, current
-binding, source readback and an idle queue are required. The review sends no
-business request again: that invocation disables native tools and user hooks,
-requires exact normal text-only completion, and withholds model prose until
-validation. Each normalized brief must retain its original context text and the
-same ordered recipients. Other actions, changed targets, unknown completion,
+After the original answer is independently delivered and its native result is
+matched, a malformed batch containing only handoffs with bounded textual briefs
+can reserve one **format review** through the original Session queue. Fresh
+original native input/answer hashes, current binding, source readback and an
+idle queue are required. Handoff `inputs` identify shared relative files;
+put PR, issue and other web links in `context`. When a brief is otherwise valid
+and every input is a plain HTTPS link without credentials, a query or a fragment,
+the reserved review on the original adapter retains the entire original brief
+verbatim as context with empty file inputs. It does not fetch URLs or send a
+new model request. Other eligible shapes and the configured Codex fallback
+use the existing tools-disabled, text-only native review;
+model prose is withheld until validation. Both paths preserve the original
+text and ordered recipients. Other actions, changed targets, unknown completion,
 new input, steering, stop or revoked authority admit no handoff.
 
 The existing ingress preserves the original source id, so ordinary publication
@@ -2059,7 +2084,7 @@ The original reply worker returns those receipts in a distinct presentation
 phase alongside the immutable failed Turn, failure notice and recovered answer.
 Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
-Other malformed actions and completed Turns without a recovered native result
+Other malformed actions and completed Turns without a verified native result
 remain explicit holds; this path is not a generic action or execution replayer.
 
 ### Completed private project result reviews

@@ -2,15 +2,72 @@
  * This is a projection, not a validation, lease or receipt authorization. */
 import {
   settlementIdentity, type JsonObject, type SettlementIdentityInput,
-  type SettlementPlan, type SettlementStep,
+  SETTLEMENT_PLAN_SCHEMA_VERSION, type SettlementPlan, type SettlementStep,
 } from "../effect_program.ts";
+import {isDeepStrictEqual} from "node:util";
 import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
-import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {contextProjectionChanges} from "./diagnostic_projection.ts";
+
+export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
+
+/** A transport projection over the existing plan, never a new settlement identity. */
+export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
+  const plan = jsonObject(cli.settlement_plan), actions = cli.next_cli_actions;
+  if (plan?.schema_version !== SETTLEMENT_PLAN_SCHEMA_VERSION || !Array.isArray(plan.ordered_steps)
+      || !Array.isArray(actions)) return cli;
+  const steps = plan.ordered_steps.map(jsonObject);
+  if (steps.some(step => !step)) return cli;
+  const writebacks = steps.filter(step => step?.kind === "durable_writeback");
+  const spends = steps.filter(step => step?.kind === "quota_spend");
+  const [writeback] = writebacks, [spend] = spends;
+  if (writebacks.length !== 1 || spends.length !== 1 || !writeback || !spend
+      || steps.indexOf(writeback) >= steps.indexOf(spend)
+      || writeback.owner !== "agent" || spend.owner !== "agent"
+      || typeof writeback.command_template !== "string" || typeof spend.command_template !== "string"
+      || typeof writeback.precondition !== "string" || typeof spend.precondition !== "string") return cli;
+  const writebackCommand = writeback.command_template, spendCommand = spend.command_template;
+  if (actions.filter(command => command === writebackCommand).length !== 1
+      || actions.filter(command => command === spendCommand).length !== 1
+      || actions.indexOf(writebackCommand) >= actions.indexOf(spendCommand)) return cli;
+  const composed = (command: string) => command + " --settle-turn --settlement-receipt";
+  const newWriteback = {...writeback, command_template: composed(writebackCommand),
+    ...(typeof writeback.semantic_closeout_command_template === "string"
+      ? {semantic_closeout_command_template: composed(writeback.semantic_closeout_command_template)} : {})};
+  const {command_template: _manualCommand, ...receiptStep} = spend;
+  const newSpend = {...receiptStep, owner: "runtime", precondition: spend.precondition +
+    ". The writeback command runs this step and returns its exact receipt. " +
+    "After a partial failure follow only settlement_owed for this Turn. After settlement do not run another spend."};
+  return {...cli, settlement_plan: {...plan, schema_version: COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION,
+    ordered_steps: steps.map(step => step === writeback ? newWriteback : step === spend ? newSpend : step)},
+  next_cli_actions: actions.filter(command => command !== spendCommand)
+    .map(command => command === writebackCommand ? newWriteback.command_template : command)};
+}
+
+/** The heartbeat publisher uses only its current admitted Todo and exact receipt. */
+export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
+  const cli = jsonObject(params.cli), receipt = jsonObject(params.receipt);
+  const preparation = jsonObject(cli?.execution_preparation);
+  const identity = jsonObject(jsonObject(cli?.settlement_plan)?.identity);
+  if (!cli || cli.selection_required === true || cli.spend_after_validation !== true
+      || preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION || preparation.state !== "ready"
+      || preparation.delivery_allowed !== true || receipt?.closeout_required !== true
+      || receipt.settlement_binding_owed === true
+      // Claiming within the original Turn can requalify its receipt.
+      || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
+      || !identity || typeof params.todo_id !== "string" || !params.todo_id || params.todo_id !== identity.todo_id
+      || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
+      || preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id
+      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return {};
+  const composed = composedCliSettlementChannel(cli);
+  return composed === cli ? {} : contextProjectionChanges(cli, composed);
+}
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
   const identity = settlementIdentity(

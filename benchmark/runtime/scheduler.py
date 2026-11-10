@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 import re
 import shlex
 import sys
@@ -21,6 +21,15 @@ PHASE_WORK_RESERVE_SECONDS = 160
 def phase_work_reserve(mode: str) -> int:
     """Heartbeat cleanup must not consume the remaining solver allowance."""
     return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
+
+
+def phase_state_name(root: PurePath, phase_deadline: float) -> str:
+    """Name a scheduler phase by the finite clock that owns its allowance."""
+    if (isinstance(phase_deadline, bool) or not isinstance(phase_deadline, (int, float))
+            or not math.isfinite(phase_deadline) or phase_deadline <= 0):
+        raise ValueError("Scheduler phase clock must be finite and positive")
+    suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
+    return f"{root.stem}.phase-{suffix}{root.suffix}"
 
 
 def _physical_state(path: Path) -> Path:
@@ -92,14 +101,15 @@ def _phase_receipt(state_file: Path, wake_log_dir: str | None) -> dict | None:
 
 def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | None = None,
                          replan_attempts=None, handoff: dict | None = None,
-                         failed_recovery: bool = False) -> None:
+                         failed_recovery: bool = False, idle_recovery: bool = False) -> None:
     if target.is_symlink():
         raise ValueError("Resumed scheduler state must not be a symlink")
     try:
         with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as stream:
             value = {"resume_from": str(predecessor)}
             if recovered is not None:
-                value["failed_host_recovery" if failed_recovery else "interruption_recovery"] = recovered
+                key = 'idle_host_recovery' if idle_recovery else 'failed_host_recovery' if failed_recovery else 'interruption_recovery'
+                value[key] = recovered
                 value.update(recovered_session_id=recovered["native"]["session_id"],
                     replan_attempts=replan_attempts or [])
                 if failed_recovery:
@@ -112,6 +122,8 @@ def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | N
     except FileExistsError:
         if failed_recovery:
             raise ValueError("Explicit failed continuation phase already exists") from None
+        if idle_recovery:
+            raise ValueError('Explicit idle handoff phase already exists') from None
 
 
 def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
@@ -153,7 +165,8 @@ def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
 
 def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                       wake_log_dir: str | None = None, env: dict[str, str] | None = None,
-                      retry_failed_state_sha256: str | None = None) -> str:
+                      retry_failed_state_sha256: str | None = None,
+                      idle_host_state_sha256: str | None = None) -> str:
     """Select a new transport phase only after an explicit budget continuation.
 
     Kernel state and native sessions stay in place. The original scheduler
@@ -165,6 +178,9 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         raise ValueError("Budget continuation requires an open finite phase deadline")
     if retry_failed_state_sha256 is not None and not re.fullmatch(r'[a-f0-9]{64}', retry_failed_state_sha256):
         raise ValueError('Explicit failed continuation requires its exact source-state digest')
+    if idle_host_state_sha256 is not None and (
+            not re.fullmatch(r'[a-f0-9]{64}', idle_host_state_sha256) or retry_failed_state_sha256 is not None):
+        raise ValueError('Explicit idle handoff requires one exact source-state digest')
     from .interruption_recovery import recovery_handoff
     handoff, _ = recovery_handoff(env or {})
     path = _physical_state(Path(state_file).absolute())
@@ -174,6 +190,20 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
     def hold(state: Path, reason: str) -> str:
         if retry_failed_state_sha256 is not None:
             raise ValueError(f"Explicit failed continuation {reason}")
+        if idle_host_state_sha256 is not None:
+            raise ValueError(f'Explicit idle handoff {reason}')
+        return str(state)
+
+    def activate(state: Path) -> str:
+        # The retained clock is an immutable recovery witness. Publish only
+        # this already-admitted phase for both Host capture paths, with no
+        # rounding up or new scheduler/native allowance.
+        from .layout import _ACTIVE_PHASE_DEADLINE_NAME
+        from loopx.file_lock import write_bytes_atomic
+
+        clock = _physical_state(path.with_name(_ACTIVE_PHASE_DEADLINE_NAME))
+        write_bytes_atomic(clock, f"{float(phase_deadline)!r}\n".encode(),
+                           mode=0o600, fsync_directory=True)
         return str(state)
 
     with ExitStack() as locks:
@@ -196,11 +226,42 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         if state is None:
             return hold(predecessor, "requires a readable retained scheduler state")
         prior = state.get("host_attempt")
-        recovery = state.get("interruption_recovery") or state.get('failed_host_recovery')
+        recovery = state.get("interruption_recovery") or state.get('failed_host_recovery') or state.get('idle_host_recovery')
         can_continue_stopped_phase = (isinstance(prior, dict) and prior.get("status") == "stopped"
                                       and prior.get("stop_exit_code") == BUDGET_EXHAUSTED_EXIT_CODE)
-        requested_suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-        same_phase = predecessor.name == f"{path.stem}.phase-{requested_suffix}{path.suffix}"
+        target = path.with_name(phase_state_name(path, phase_deadline))
+        same_phase = predecessor == target
+        if idle_host_state_sha256 is not None:
+            if (env is None or not wake_log_dir or env.get('LOOPX_EXECUTION_MODE') != 'heartbeat'
+                    or env.get('LOOPX_ITERATION_CONTEXT') != 'resume' or not env.get('LOOPX_INTERRUPTED_SOURCE')):
+                raise ValueError('Explicit idle handoff requires its original native and stopped-source routes')
+            retained = state.get('idle_host_recovery')
+            if same_phase and isinstance(retained, dict):
+                from .interruption_recovery import _physical_read, verify_idle_host_replay
+
+                parent = Path(state.get('resume_from', ''))
+                if (parent not in states or parent == predecessor
+                        or retained.get('source_state_sha256') != idle_host_state_sha256
+                        or hashlib.sha256(_physical_read(parent)).hexdigest() != idle_host_state_sha256
+                        or retained.get('phase_deadline_epoch') != phase_deadline
+                        or state.get('recovery_handoff') != handoff
+                        or state.get('recovered_session_id') != retained.get('native', {}).get('session_id')
+                        or hashlib.sha256(_physical_read(Path(env['LOOPX_INTERRUPTED_SOURCE']))).hexdigest()
+                            != retained.get('source_proof_sha256')):
+                    raise ValueError('Explicit idle handoff replay differs from its original phase')
+                verify_idle_host_replay(parent, retained, env=env)
+                return activate(predecessor)  # Keep any later work or failure in this same phase.
+            if (same_phase or hashlib.sha256(predecessor.read_bytes()).hexdigest() != idle_host_state_sha256):
+                raise ValueError('Explicit idle handoff source changed; inspect the retained phase')
+            from .interruption_recovery import read_idle_host
+
+            recovered = read_idle_host(state, state_file=predecessor, env=env, wake_log_dir=wake_log_dir)
+            if phase_deadline <= time.time():
+                raise ValueError('Explicit idle handoff exhausted its finite phase during qualification')
+            recovered.update(source_state_sha256=idle_host_state_sha256, phase_deadline_epoch=phase_deadline)
+            _create_resume_state(target, predecessor, recovered=recovered,
+                replan_attempts=state.get('replan_attempts'), handoff=handoff, idle_recovery=True)
+            return activate(target)
         explicit_failed_phase = (retry_failed_state_sha256 is not None and not same_phase
             and hashlib.sha256(predecessor.read_bytes()).hexdigest() == retry_failed_state_sha256)
         if ((recovery is not None or state.get("resume_from"))
@@ -220,7 +281,7 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                 _verify_failed_phase_replay(predecessor, state, failed_phase,
                                             states=states, digest=retry_failed_state_sha256,
                                             env=env, wake_log_dir=wake_log_dir)
-                return str(predecessor)  # Replay never erases a later failure in this phase.
+                return activate(predecessor)  # Replay never erases a later failure in this phase.
             if not explicit_failed_phase:
                 raise ValueError('Explicit failed continuation source changed; inspect the retained phase')
         if not isinstance(prior, dict):
@@ -254,14 +315,12 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         if recovered is not None:
             if failed_recovery and phase_deadline <= time.time():
                 raise ValueError('Explicit failed continuation exhausted its phase during qualification')
-            suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-            target = path.with_name(f"{path.stem}.phase-{suffix}{path.suffix}")
             recovered.update(source_state_sha256=hashlib.sha256(predecessor.read_bytes()).hexdigest(),
                              phase_deadline_epoch=phase_deadline)
             _create_resume_state(target, predecessor, recovered=recovered,
                                  replan_attempts=state.get("replan_attempts"), handoff=handoff,
                                  failed_recovery=failed_recovery)
-            return str(target)
+            return activate(target)
         if (prior.get("status") != "stopped"
                 or prior.get("stop_exit_code") != BUDGET_EXHAUSTED_EXIT_CODE
                 or "host_failure" in prior or _host_pending(predecessor) is None
@@ -270,12 +329,10 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             return str(predecessor)
         # Only the immutable phase clock names the new state. Todo/reset-token
         # changes cannot clear a failure already recorded in this new phase.
-        suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-        target = path.with_name(f"{path.stem}.phase-{suffix}{path.suffix}")
         if target.is_symlink():
             raise ValueError("Resumed scheduler state must not be a symlink")
         if target.exists():
-            return str(target)  # Never replace a retry/failure in this phase.
+            return activate(target)  # Never replace a retry/failure in this phase.
         # Only a stop before native dispatch admits this shortcut. An
         # interrupted native Turn still needs its original recovery/settlement.
         # Restrict legacy receipt discovery to the source scheduler snapshot;
@@ -286,7 +343,7 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                 or result.get("stage") != "execute"):
             return str(predecessor)
         _create_resume_state(target, predecessor, handoff=handoff)
-        return str(target)
+        return activate(target)
 
 
 def worker_command(env: dict[str, str], *, python: str, source: str,
@@ -323,11 +380,14 @@ def main() -> int:
     parser.add_argument("--host-timeout", required=True, type=float)
     parser.add_argument('--retry-failed-state-sha256',
         help='Explicitly continue only this exact returned quota failure after provider allowance repair')
+    parser.add_argument('--idle-host-state-sha256',
+        help='Explicitly hand off this sealed legacy empty-output Host to its verified idle native session')
     args = parser.parse_args()
     state = resume_state_file(args.state_file,
         phase_deadline=float(os.environ["LOOPX_PHASE_DEADLINE_EPOCH"]),
         agent_id=os.environ["LOOPX_AGENT_ID"], wake_log_dir=os.environ.get("LOOPX_WAKE_LOG_DIR"),
-        env=dict(os.environ), retry_failed_state_sha256=args.retry_failed_state_sha256)
+        env=dict(os.environ), retry_failed_state_sha256=args.retry_failed_state_sha256,
+        idle_host_state_sha256=args.idle_host_state_sha256)
     command = worker_command(dict(os.environ), python=args.python, source=args.source,
                              state_file=state, host_timeout=args.host_timeout)
     os.execvpe(command[0], command, os.environ)

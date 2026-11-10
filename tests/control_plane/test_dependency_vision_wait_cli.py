@@ -132,6 +132,15 @@ def assert_quiet(packet, waiting, *, monitor=False):
     assert hint["unchanged_poll"]["final_quota_replan_check_enabled"] is False
 
 
+def assert_observed_wait(worker, packet, *, monitor=False):
+    tick = worker.parse_tick(packet)
+    assert not tick.should_run and not tick.terminal
+    assert tick.action == ("backoff_until_material_transition" if monitor else "backoff_until_state_change")
+    assert tick.unchanged_limit is None and tick.after_limit == "continue"
+    assert not tick.final_probe_enabled
+    assert packet["effective_action"] == ("monitor_quiet_skip" if monitor else "agent_scope_wait")
+
+
 def canonical_todos(listed):
     # Resume conditions are fresh read models, including their clock witness.
     return [{key: value for key, value in todo.items() if key not in ("resume_condition", "resume_ready")}
@@ -157,11 +166,17 @@ def test_pending_dependency_stays_quiet_for_100_polls_restart_and_100_more(publi
     packets, sleeps = [], []
     counts = {"D": 0, "P": 0, "E": 0, "Q": 0}
 
+    def assert_source_wait():
+        raw = guard(goal)
+        assert_quiet(raw, waiting)
+        assert raw["vision_wait_state"]["resume_condition"]["target_todo_id"] == source
+
+    assert_source_wait()
+
     def probe(command, **kwargs):
         # A new public command reloads the actual provider on every tick.
         packet = goal.call(*command[command.index("quota"):])
-        assert_quiet(packet, waiting)
-        assert packet["vision_wait_state"]["resume_condition"]["target_todo_id"] == source
+        assert_observed_wait(worker, packet)
         packets.append(packet)
         return packet
 
@@ -190,6 +205,7 @@ def test_pending_dependency_stays_quiet_for_100_polls_restart_and_100_more(publi
         assert persisted["unchanged_count"] == expected
         assert len(packets) == expected
         assert not persisted.get("replan_attempts")
+        assert_source_wait()
     after = goal.call("todo", "list", "--goal-id", GOAL)
     assert canonical_todos(after) == canonical_todos(before)
     assert after["authority_read"]["provider_revision"] == before["authority_read"]["provider_revision"]
@@ -254,7 +270,7 @@ def test_real_worker_survives_restart_and_follows_its_dependency_source(public_g
     assert sleeps == ([3600, 3600] if kind == "monitor_changed" else [1800, 3600])
     assert len(packets) == 5 and len(wakes) == 1
     for packet in packets[:-1]:
-        assert_quiet(packet, waiting, monitor=kind == "monitor_changed")
+        assert_observed_wait(worker, packet, monitor=kind == "monitor_changed")
     assert packets[-1]["scheduler_hint"]["action"] == "run_now"
     assert packets[-1]["interaction_contract"]["agent_channel"]["must_attempt"] is True
     assert packets[-1]["selected_todo"]["todo_id"] == (waiting if kind == "todo_done" else source)
