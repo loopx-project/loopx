@@ -843,8 +843,19 @@ Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与
 有界阶段，正式 guest 的嵌套沙箱仍不可用。完整双角色分数、效果和成本打平仍需多题
 同条件重复验证，并以独立验收和完整成本决定是否调整默认配置。
 
+随后用相同的 150 秒预算，在同一题的四候选阶段对比了两种 CLI 拓扑。两组交付相同排列，
+独立黑盒复算通过，固定版本 judge 均给出 0.0000000033 分，通过五项中的四项，各结算一次。
+单 Worker 消耗 44.07 秒、115,498 token，双角色消耗 121.53 秒、206,253 token，
+后者按两个独立会话汇总。耗时包含独立回读与评测。先前失败的尝试暴露了账户 MCP 配置继承、
+shell 临时文件受限、模型服务容量不足，以及 Controller 将自己的只读权限误传给 Worker。
+另一次按完整协议启动的双角色任务在标准 guest 的原生沙箱预检处停止，未派发模型，
+评测轮次为零。这个用例支持保留单 Worker 默认值。
+
 **产品接入。** Managed Host、Chat、Steward 在资格验证后复用同一 Turn provider。
-当前原生 provider 自行启动 Codex App Server。复用桌面或 Chat 现有连接时，需验证其
+两个 headless 角色均使用 `codex exec`，与标准 heartbeat 和单 Worker Turn 的 CLI
+入口一致。后续调用用 `codex exec resume` 指定各自的原会话 ID。角色通过有界指令和
+结构化返回交接，无需注册 MCP。Host 明确告知 Controller 本次 Worker 的工作区权限，
+在停止或到期时中断运行中的 CLI。复用桌面或 Chat 现有连接时，需验证其
 归属、角色隔离、中断与向原对话返回结果。其他 Host 各自验证原生传输。先接通一个
 工作单元，再验证由 Steward 路由多个独立工作单元。
 
@@ -861,7 +872,7 @@ Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与
 
 ### Controller 推进节奏
 
-1. **交付通用双角色 Turn。** 运行时和 Turn owner 从公开 CLI 和首个 benchmark 调用方验证同一 Codex App Server provider。已有受管操作适配器能观察经认证的 `turn/start`，Chat host 已能发送
+1. **交付通用双角色 Turn。** 运行时和 Turn owner 从公开 CLI 和首个 benchmark 调用方验证同一个双角色 Codex CLI provider。已有受管操作适配器能观察经认证的 `turn/start`，Chat host 已能发送
    `turn/interrupt`。验证派工返回后仍可观察同一份持久化 worker attempt，覆盖断线
    重连和实际中断。缺口补在既有适配器。首个可运行切片限定一个 Agent、两个原生会话
    和一个有界任务，各会话独立维护上下文基线。Controller 是唯一面向 Core 的模型侧

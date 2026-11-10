@@ -1038,9 +1038,25 @@ and settled once. Its constrained workload and the guest's unavailable nested
 sandbox leave the full dual-role score comparison open. Use repeated matched
 cases with independent acceptance and complete costs for a promotion decision.
 
+A subsequent matched CLI diagnostic gave each topology 150 seconds to select
+among four measured candidates on that case. Both returned the same permutation,
+passed independent cost recomputation, scored 0.0000000033 on the pinned judge
+(four of five checks), and settled once. Single Worker took 44.07 seconds and
+115,498 tokens. Controller and Worker took 121.53 seconds and 206,253 tokens
+across two distinct sessions. Elapsed time includes independent readback and
+judging. Earlier failed attempts exposed MCP configuration inheritance, shell
+temporary-file restrictions, a provider capacity error and a Controller assigning
+its own read-only grant to the Worker. A separate full-protocol dual launch in
+the standard guest stopped at the native sandbox probe before inference, with
+zero evaluation rounds. This case supports retaining the single-worker default.
+
 **Product adoption.** Managed Host, Chat and Steward consume the same admitted
-Turn provider after qualification. The current native provider starts its own
-Codex App Server. An attached desktop or Chat connection needs a verified owner,
+Turn provider after qualification. Both headless roles use `codex exec`, the same CLI entry as
+standard heartbeat and single-worker Turn. Each role resumes its own explicit
+session ID with `codex exec resume`. The peer handoff uses a scoped instruction
+and a structured return. It requires no MCP registration. The Host tells the
+Controller the Worker's admitted workspace grant and interrupts a running CLI
+on stop or deadline. An attached desktop or Chat connection needs a verified owner,
 role isolation, interruption and result return to its original conversation.
 Each other Host qualifies its own transport. Connect one working unit before
 qualifying a Steward routing several independent units.
@@ -1058,7 +1074,7 @@ qualifying a Steward routing several independent units.
 
 ### Controller delivery cadence
 
-1. **Qualify the product Turn provider.** The runtime and Turn owners exercise the same Codex App Server provider through standalone CLI and benchmark entry points. The existing managed-operation adapter
+1. **Qualify the product Turn provider.** The runtime and Turn owners exercise the same two-role Codex CLI provider through standalone Turn and benchmark entry points. The existing managed-operation adapter
    observes authenticated `turn/start` and the Chat host already routes
    `turn/interrupt`. Verify that a durable worker attempt remains observable
    after dispatch returns, including reconnect and an actual interruption.
