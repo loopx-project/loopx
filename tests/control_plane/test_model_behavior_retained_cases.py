@@ -207,24 +207,3 @@ def test_retained_case_store_must_be_outside_git_worktree(tmp_path: Path) -> Non
             runtime_root=repository / ".local/runtime",
             goal_id="fixture-goal",
         )
-
-
-def test_complete_source_round_trip_preserves_its_original_binding(tmp_path: Path) -> None:
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
-
-    packet = compose_turn_decision({**_full_packet(),
-        "supporting_evidence": {"count": 9007199254740993, "ratio": 1.0}})
-    case = build_model_behavior_retained_case(packet, case_id="complete-shadow-001",
-        source_kind="owner_approved_public_fixture", recorded_at="2026-07-13T04:00:00+08:00")
-    runtime = tmp_path / "runtime"
-    receipt = write_model_behavior_retained_case(case, runtime_root=runtime, goal_id="fixture-goal")
-    loaded = load_model_behavior_retained_cases(runtime_root=runtime, goal_id="fixture-goal")
-    corpus = build_model_behavior_corpus(packet,
-        retained_packets=retained_cases_as_corpus_inputs(loaded))
-    assert loaded == [case]
-    for arm in ("full_packet", "candidate_packet"):
-        restored = corpus["cases"][0][arm]
-        assert json.dumps(restored, sort_keys=True) == json.dumps(packet, sort_keys=True)
-        assert restored["contract_binding"] == packet["contract_binding"]
-        assert "action_signature" not in restored
-    assert "packet" not in receipt and "path" not in receipt

@@ -569,6 +569,22 @@ def _terminal_writeback_action(
     )
 
 
+def _terminal_spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+    payload = _latest_tool_payload(request)
+    steps = payload["interaction_contract"]["cli_channel"]["settlement_plan"][
+        "ordered_steps"
+    ]
+    step = next(item for item in steps if item["kind"] == "quota_spend")
+    # This fixture exercises manual settlement. A composed plan delegates this
+    # effect to the runtime and must not supply an independent spend command.
+    assert step["owner"] == "agent"
+    return ScriptedExecToolAction(
+        command=step["command_template"].replace(
+            '"${LOOPX_TURN:?}"', "turn-portfolio-terminal",
+        )
+    )
+
+
 def _terminal_closeout_action(
     request: Mapping[str, Any],
 ) -> ScriptedExecToolAction:
@@ -687,6 +703,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 ScriptedExecToolAction("cat fixture/settlement-proof.json"),
                 _terminal_writeback_action,
+                _terminal_spend_action,
                 _terminal_closeout_action,
             ]
         )

@@ -100,6 +100,7 @@ json.dump(dict(schema_version='loopx_turn_result_v0', turn_key=request['turn_key
         "turn", "run-once", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
         "--host", "generic-cli", "--project", str(workspace),
         "--host-adapter-command-json", json.dumps([sys.executable, str(host_path)]),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--validation-command-json", json.dumps([sys.executable, "-c", validator]),
         "--no-global-sync", "--execute"]
     code, first = fixture._run_cli([*argv, "--turn-instance-id", "authored-source-body"])
