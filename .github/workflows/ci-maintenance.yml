@@ -13,13 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  refresh-pr-diff:
+  inspect-pr-diff:
     if: github.event_name == 'pull_request_target' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
     steps:
       - uses: actions/github-script@v8
         with:
@@ -34,29 +34,23 @@ jobs:
               current.head.repo?.id === expected.head.repo?.id &&
               current.base.ref === expected.base.ref && current.base.repo?.id === expected.base.repo?.id;
             if (!sameIdentity(pr) || !pr.head.repo?.id || !pr.base.repo?.id) {
-              return core.info('PR identity changed; stop diff refresh.');
+              return core.info('PR identity changed; stop diff inspection.');
             }
             const readTarget = async () => (await github.rest.repos.getBranch(
               {...repo, branch: pr.base.ref})).data.commit.sha;
             const target = await readTarget();
             if (pr.base.sha === target) return core.info('PR base snapshot is current.');
-            // GitHub can retain the original base snapshot after main is merged
-            // into the source branch, counting those unrelated changes again.
-            // Re-select the same base; never rewrite the source or retarget it.
+            // A changed target tip alone does not prove a wrong comparison.
+            // REST base updates have no target compare-and-swap: a final GET
+            // cannot prevent overwriting a concurrent maintainer retarget.
             const before = await readPR();
             if (!sameIdentity(before) || before.base.sha !== pr.base.sha) {
-              return core.info('PR changed before update; stop diff refresh.');
+              return core.info('PR changed during inspection; inspect the newer revision.');
             }
-            await github.rest.pulls.update({...repo, pull_number, base: pr.base.ref});
-            const after = await readPR();
-            if (!sameIdentity(after)) return core.info('PR changed during refresh; inspect the newer revision.');
-            // A concurrent target push may have been included by the update.
-            if (after.base.sha !== target && after.base.sha !== await readTarget()) {
-              throw new Error('PR base snapshot did not refresh; inspect its diff.');
-            }
-            core.info(`Refreshed #${pull_number} at unchanged head ${after.head.sha}: ` +
-              `${pr.changed_files} -> ${after.changed_files} files, ` +
-              `+${pr.additions}/-${pr.deletions} -> +${after.additions}/-${after.deletions}.`);
+            core.info(`Comparison inspection for #${pull_number}: PR base ${pr.base.sha}, ` +
+              `target ${pr.base.ref} at ${target}, head ${pr.head.sha}. ` +
+              'Verify the published inventory against the exact three-dot Git diff before repair. ' +
+              'This observation is read-only and does not prove an incorrect diff.');
 
   cancel-obsolete-pr:
     if: github.event_name == 'pull_request_target' && (github.event.action == 'closed' || github.event.action == 'synchronize')

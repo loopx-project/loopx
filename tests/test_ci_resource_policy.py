@@ -130,21 +130,21 @@ def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
 
 
 @pytest.mark.parametrize("action", ["opened", "reopened", "edited", "synchronize", "closed"])
-def test_diff_refresh_uses_trusted_code_and_its_own_minimal_write_scope(action: str) -> None:
+def test_diff_inspection_uses_trusted_code_and_read_only_scope(action: str) -> None:
     policy = workflow("ci-maintenance")
-    job = policy["jobs"]["refresh-pr-diff"]
+    job = policy["jobs"]["inspect-pr-diff"]
     context = event("pull_request_target")
     context["github"].event.action = action
     assert action in policy[True]["pull_request_target"]["types"]
     assert expression(job["if"], context) is (action != "closed")
     assert policy["permissions"] == {"contents": "read"}
-    assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert job["permissions"] == {"contents": "read", "pull-requests": "read"}
     assert job["timeout-minutes"] <= 2
     assert all(step["uses"].startswith("actions/github-script@") for step in job["steps"])
 
 
-def _run_diff_refresh(mode: str, branch: str = "main") -> dict:
-    script = workflow("ci-maintenance")["jobs"]["refresh-pr-diff"]["steps"][0]["with"]["script"]
+def _run_diff_inspection(mode: str, branch: str = "main") -> dict:
+    script = workflow("ci-maintenance")["jobs"]["inspect-pr-diff"]["steps"][0]["with"]["script"]
     harness = r'''
 let input = ''; for await (const chunk of process.stdin) input += chunk;
 const {script, mode, branch} = JSON.parse(input);
@@ -170,9 +170,12 @@ const github = {rest:{pulls:{get:async()=>{
     if (mode === 'base_before_write') pr.base.ref = 'other';
     if (mode === 'refreshed_before_write') pr.base.sha = target;
   }
-  return {data:structuredClone(pr)};
+  const snapshot = structuredClone(pr);
+  if (reads === 2 && mode === 'retarget_after_read') pr.base.ref = 'release/stable';
+  return {data:snapshot};
 }, update:async params=>{
   updates.push(params);
+  pr.base.ref = params.base;
   if (mode === 'failed_api') throw new Error('provider rejected update');
   if (mode !== 'not_applied') pr.base.sha = mode === 'target_moves' ? newer : target;
   if (mode === 'head_during_write') pr.head.sha = newer;
@@ -198,39 +201,29 @@ process.stdout.write(JSON.stringify({updates,notes,error,pr}));
 
 @pytest.mark.parametrize("branch", ["main", "release/stable"])
 @pytest.mark.parametrize("mode", ["stale", "same_repo", "target_moves"])
-def test_stale_diff_refresh_preserves_the_exact_source_and_actual_target(mode: str, branch: str) -> None:
-    observed = _run_diff_refresh(mode, branch)
+def test_diff_inspection_reports_evidence_without_mutation(mode: str, branch: str) -> None:
+    observed = _run_diff_inspection(mode, branch)
     assert observed["error"] is None
-    assert observed["updates"] == [{"owner": "owner", "repo": "fixture", "pull_number": 17, "base": branch}]
-    assert observed["pr"]["head"] == {
-        "sha": "b" * 40, "ref": "work", "repo": {"id": 1 if mode == "same_repo" else 2},
-    }
+    assert observed["updates"] == []
     assert observed["pr"]["base"]["ref"] == branch
-    assert any("9 -> 2 files" in note and "+30/-12 -> +3/-1" in note for note in observed["notes"])
+    assert any("Comparison inspection" in note and "read-only" in note for note in observed["notes"])
 
 
 @pytest.mark.parametrize("mode", [
     "fresh", "closed", "old_event_head", "old_event_source", "old_event_base", "missing_source",
     "head_before_write", "source_before_write", "base_before_write", "refreshed_before_write",
 ])
-def test_diff_refresh_does_not_write_after_identity_or_snapshot_drift(mode: str) -> None:
-    observed = _run_diff_refresh(mode)
+def test_diff_inspection_does_not_publish_stale_evidence(mode: str) -> None:
+    observed = _run_diff_inspection(mode)
     assert observed["updates"] == []
     assert observed["error"] is None
+    assert not any("Comparison inspection" in note for note in observed["notes"])
 
 
-@pytest.mark.parametrize("mode", ["head_during_write", "base_during_write", "not_applied", "failed_api"])
-def test_diff_refresh_requires_readback_and_never_retries_a_moved_revision(mode: str) -> None:
-    observed = _run_diff_refresh(mode)
-    assert len(observed["updates"]) == 1
-    assert not any("Refreshed #" in note for note in observed["notes"])
-    if mode == "not_applied":
-        assert "did not refresh" in observed["error"]
-    elif mode == "failed_api":
-        assert "provider rejected update" in observed["error"]
-    else:
-        assert observed["error"] is None
-        assert any("newer revision" in note for note in observed["notes"])
+def test_diff_inspection_cannot_overwrite_a_last_moment_retarget() -> None:
+    observed = _run_diff_inspection("retarget_after_read")
+    assert observed["pr"]["base"]["ref"] == "release/stable"
+    assert observed["updates"] == []
 
 
 @pytest.mark.parametrize("mode", ["delayed", "never", "changed"])
