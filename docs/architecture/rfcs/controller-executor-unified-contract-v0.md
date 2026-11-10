@@ -4,11 +4,11 @@
 
 - **RFC status:** Accepted, existing contract. Router and binding-unit extensions are proposed.
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
+- **Delivery maturity:** The single-worker EdgeBench entry is merged. #8484 qualifies a generic dual-role Turn on C1. Cross-admission continuity, multi-case benefit and conversation adoption remain open.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-11-09
-- **Latest source audit:** `3edaf9c25a56c9d714b097f2d6fee6ffabbd629d`; historical experiments retain their own baselines.
+- **Last normative revision:** 2026-11-10
+- **Source revisions:** main `9508f4de93`, C1 `9d283862e3`. Section 11 distinguishes implementation-PR evidence, original controls and open qualification.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
@@ -86,9 +86,9 @@ no runtime, changes no default and starts no experiment.
    qualified hosts**. Keep unread material discoverable from the current capture.
    Controller and executor have separate continuity evidence and cannot borrow
    each other's baseline. Full recovery remains available.
-5. Unification first qualifies the existing single-session path. Two-session
-   execution remains opt-in until matched outcome and complete-cost evidence
-   justifies adoption. This RFC launches no benchmark or privileged operation.
+5. Unify quota, public Turn and benchmark heartbeat first. Compare single worker
+   with standard heartbeat and opt into two roles on the same Turn provider.
+   Qualify outcomes and full costs under §11 before Managed Host, Chat and Steward adoption.
 6. The controller–worker execution loop is primary: assess ordinary results as
    well as blockers, give feedback and continue useful admitted work without a
    new user prompt. While the executor works, the controller also answers users,
@@ -981,23 +981,67 @@ No model busy-polling loop or new recurring automation follows from this RFC.
 
 ```mermaid
 flowchart TB
-  C1[C1/C2: qualify unified single-session against original quota] --> E[C7: matched product outcomes and complete cost]
-  F[Existing request / managed-operation / Session owners] --> U[C3-C6: isolated one-Host dual-session preview]
-  U --> I[C6/C8: autonomous work loop with conversation, correction and Stop]
-  I --> R[C6/C8: router connects two independent units]
-  I --> E
-  R --> M[Separate multi-unit evidence]
-  E --> Q[C8/C9: scoped adoption and old-path retirement]
-  F -.Independent correctness repairs and caller simplification may land first.-> C1
+  B[Benchmark case and independent acceptance] --> H[Original heartbeat and quota control]
+  B --> T[Same scheduler and quota, product Turn, single worker]
+  T --> U[C1/C2 unified single-worker contract]
+  U --> D[C3–C6 opt-in controller and worker on the same Turn]
+  H --> E[C7 matched outcomes and total costs]
+  U --> E
+  D --> E
+  E --> P[Managed Host and Chat on the qualified profile]
+  P --> R[Steward routes two independently accepted units]
 ```
 
-Run C1/C2 qualification and the isolated one-Host preview in parallel. The
-preview may consume an exact pinned version of the C1 contract in a disposable
-scope. Production profile cutover still requires C1 qualification. The unit
-comparison can start after single-session qualification and the first
-dual-session work loop. Router and multi-unit comparisons have their own
-evidence. Use the existing C tasks to assign work and keep independently useful
-repairs reviewable. The rows describe delivery dependencies and exit evidence.
+**First consumer and reference.** Run the public Turn provider through EdgeBench.
+Keep standard `heartbeat-resume` with its ordinary quota decision as the reference.
+At a new admission, select `--turn-topology single-worker` or `controller-worker`
+on the same benchmark entry. The standalone product entry is
+`loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`.
+Single worker remains the default. The capability and its recovery belong to Turn.
+The benchmark adapter supplies the profile, task validator and judge settings.
+[Single-worker integration](https://github.com/loopx-project/loopx/pull/8480) ·
+[Product provider and experiment controls](https://github.com/loopx-project/loopx/pull/8484)
+
+**Same admission and settlement.** Quota selects the work and owns the ordinary
+claim. After a successful claim, reread the very same Todo and verify its lease
+before dispatch. Deliver the canonical Goal requirements and original decision
+under C1. The Host verifies the complete inline decision against the journal
+capture, keeping private Core files outside both role sandboxes. The Controller
+delegates scoped work, assesses the Worker’s return and can change its next
+instruction. Core independently validates the artifact and settles the original
+Turn once. Pin topology, provider configuration and material on that journal.
+An uncertain attempt holds for reconciliation. A rejected receipt can be repaired
+on an authorized retry by the original read-only Controller. Preserve the Worker’s
+completed work, bound automatic corrections and read back a lost reply.
+A later admission can switch topology or roll back to single worker.
+
+**Same effective budget.** Give all three arms the full standard heartbeat
+phase deadline, including preparation, dispatch, work, validation and settlement.
+An expired phase stops new work and interrupts the active Host. Preserve its
+pending identity. Pin task entry, model and effort, sandbox, CPU, feedback and
+judge cadence, cooldown, evaluator, validator and external scheduler. Record
+solver time and end-to-end time, scored rounds, native score and pass rate,
+verifiable artifacts, calls, input/cached/output tokens per distinct thread,
+retries, quota spend and human intervention. Keep unavailable counts unknown.
+Native/plain controls retain their own protocol.
+
+**What the first case establishes.** With a 600-second solver budget on the
+public permutation case, standard heartbeat and unified single worker used
+602.27 and 602.24 seconds. Native tokens were 1,613,614 and 1,624,174. The
+evaluator selected scores of 0.0028922644 and 0.0000000218 respectively.
+Both reached 4/5 checks. The remaining integrity check also failed in the
+unaltered pinned judge with no submission. A separate live native dual-role
+stage selected from four candidates, passed independent cost recomputation
+and settled once. Its constrained workload and the guest's unavailable nested
+sandbox leave the full dual-role score comparison open. Use repeated matched
+cases with independent acceptance and complete costs for a promotion decision.
+
+**Product adoption.** Managed Host, Chat and Steward consume the same admitted
+Turn provider after qualification. The current native provider starts its own
+Codex App Server. An attached desktop or Chat connection needs a verified owner,
+role isolation, interruption and result return to its original conversation.
+Each other Host qualifies its own transport. Connect one working unit before
+qualifying a Steward routing several independent units.
 
 | Slice within existing C tasks | Complete reviewable delivery / existing owner to adopt | Exit evidence and concrete simplification |
 | --- | --- | --- |
@@ -1012,16 +1056,15 @@ repairs reviewable. The rows describe delivery dependencies and exit evidence.
 
 ### Controller delivery cadence
 
-1. **First native slice — run alongside C1.** The runtime and Turn owners
-   should qualify Codex App Server first. The existing managed-operation adapter
+1. **Qualify the product Turn provider.** The runtime and Turn owners exercise the same Codex App Server provider through standalone CLI and benchmark entry points. The existing managed-operation adapter
    observes authenticated `turn/start` and the Chat host already routes
    `turn/interrupt`. Verify that a durable worker attempt remains observable
    after dispatch returns, including reconnect and an actual interruption.
    Extend the existing adapter at the missing boundary if required. The first
    runnable slice uses one Agent, two native sessions with independent context
    baselines, and one scoped task. The Controller is the sole model-side Core
-   client. It consumes Progressive and Delta state and retains admission,
-   validation and settlement. The Worker receives the task, scoped ordinary
+   client. It consumes Progressive and Delta state and returns a typed result. Core owns admission,
+   independent validation and settlement. The Worker receives the task, scoped ordinary
    tools and artifact references. It returns findings and artifacts through the
    existing request chain. Verify through both session traces that an attempted
    Worker Core call is denied and ordinary scoped tools still work. The slice exits when a worker result causes an
@@ -1029,19 +1072,7 @@ repairs reviewable. The rows describe delivery dependencies and exit evidence.
    admission, the original attempt settles once, and an unavailable Controller
    still permits Host/Core Stop. Verify restart, duplicate and late outcomes on
    the same recorded attempt before admitting a replacement.
-2. **Make that unit usable while it works.** The request and App owners should
-   deliver one real journey through existing Chat and artifact projections. Ask
-   about a running task, get a substantive response from durable evidence before
-   the Worker finishes, inspect a versioned artifact and request a correction.
-   Apply it at a safe boundary and verify that the next artifact adopts the
-   effective revision. The Worker keeps its original attempt while in-flight
-   effects finish or reconcile. Offer unsolicited updates on material evidence
-   or required decisions, deduplicated by revision and audience. Reuse the
-   existing scheduler wait, Stop path and product readback. Once that journey
-   works, have the steward adopt the same request/return path for a second
-   independent unit. Verify that B advances while A is busy and that a refusal
-   or restart preserves both the original audiences and scope.
-3. **Measure whether separating the sessions pays.** Benchmark and acceptance
+2. **Measure whether separating the sessions pays.** Benchmark and acceptance
    owners first qualify the unified single-session path against original quota.
    Then compare the native two-session unit against both with frozen task
    acceptance, comparable budgets and matched Host/model settings. Record
@@ -1058,6 +1089,18 @@ repairs reviewable. The rows describe delivery dependencies and exit evidence.
    hypothesis. Default adoption and old-path retirement follow the scoped §9
    and C9 evidence, including rollback to qualified single-session admission
    with reconciliation of original attempts.
+3. **Make that unit usable while it works.** The request and App owners should
+   deliver one real journey through existing Chat and artifact projections. Ask
+   about a running task, get a substantive response from durable evidence before
+   the Worker finishes, inspect a versioned artifact and request a correction.
+   Apply it at a safe boundary and verify that the next artifact adopts the
+   effective revision. The Worker keeps its original attempt while in-flight
+   effects finish or reconcile. Offer unsolicited updates on material evidence
+   or required decisions, deduplicated by revision and audience. Reuse the
+   existing scheduler wait, Stop path and product readback. Once that journey
+   works, have the steward adopt the same request/return path for a second
+   independent unit. Verify that B advances while A is busy and that a refusal
+   or restart preserves both the original audiences and scope.
 
 Implement these slices through the current request, session, Turn and product
 owners. Each PR records its replaced caller, the new observable outcome, the

@@ -4,11 +4,11 @@
 
 - **RFC 状态：** 已接受，适用于既有契约。Router 与绑定单元扩展待评审。
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
+- **交付成熟度：** 单 Worker 的 EdgeBench 入口已合入。#8484 在 C1 上验收通用双角色 Turn；跨准入延续、多题效果与成本、对话产品接入待验证。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-11-09
-- **最新源码核对：** `3edaf9c25a56c9d714b097f2d6fee6ffabbd629d`；旧实验保留各自基线。
+- **最近规范性修订：** 2026-11-10
+- **源码版本：** main `9508f4de93`、C1 `9d283862e3`。§11 区分实现 PR 的实测、原始对照及待验收边界。
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -73,8 +73,8 @@ flowchart TB
 4. 先保存完整上下文，再组合两个独立交付层：**跨 Host 默认 Progressive**，以及
    **仅在已资格化 Host 自动使用 Delta**。未读材料仍可从当前 capture 发现。
    Controller 与 executor 分别证明连续性，不能借用对方的基线；完整恢复始终可用。
-5. 先在现有单会话路径验收契约统一；双会话保持 opt-in，直至可比成果与完整成本证据支持
-   采用。本文不启动 benchmark 或特权操作。
+5. 先统一 quota、公开 Turn 和 benchmark 标准 heartbeat。以 heartbeat 为对照验证单 Worker，
+   通过相同 Turn provider 显式选择双角色。按 §11 比较效果与完整成本后，再接入 Managed Host、Chat、Steward。
 6. Controller—worker 执行循环是主干：既评估普通结果也处理阻塞，反馈并继续有价值的
    已准入工作，无需用户再发一句话。Executor 工作期间，controller 同时回答用户、
    采用纠偏、展现有用产物。汇报是旁路活动，不是循环的默认归宿；两者由 C6/C8 验收。
@@ -799,20 +799,52 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 ```mermaid
 flowchart TB
-  C1[C1/C2：以原 quota 验收统一单会话] --> E[C7：同条件成果与完整成本对照]
-  F[已有请求 / 受管操作 / Session owners] --> U[C3-C6：一个隔离 Host 上的双会话预览]
-  U --> I[C6/C8：自主工作循环，同时对话、纠偏、Stop]
-  I --> R[C6/C8：Router 对接两个独立单元]
-  I --> E
-  R --> M[独立验证多单元协同]
-  E --> Q[C8/C9：范围化采用与旧路径退役]
-  F -.独立正确性修复与调用方精简可先交付.-> C1
+  B[benchmark 任务和独立验收] --> H[原 heartbeat 与 quota 对照]
+  B --> T[同一 scheduler 和 quota 经产品 Turn 运行单 worker]
+  T --> U[C1/C2 统一单 worker 契约]
+  U --> D[C3–C6 同一 Turn 可选 Controller 与 Worker]
+  H --> E[C7 同条件成果与完整成本]
+  U --> E
+  D --> E
+  E --> P[Managed Host 与 Chat 采用已验收模式]
+  P --> R[Steward 路由两个独立验收的单元]
 ```
 
-C1/C2 验收与单 Host 隔离预览并行推进。预览可在可丢弃的范围内使用固定版本的 C1
-契约。生产 profile 切换仍以 C1 验收为前提。单元对照等统一单会话通过验收、首个双会话
-工作闭环跑通即可启动。Router 和多单元对照各自提供证据。沿用现有 C 任务分工，可独立
-验收的修复单独评审。下表给出交付依赖和退出证据。
+**首个调用方与对照。** 先用 EdgeBench 调用公开 Turn provider，保留标准
+`heartbeat-resume` 及其常规 quota 决策作对照。在同一 benchmark 入口的新准入上用
+`--turn-topology single-worker` 或 `controller-worker` 选择拓扑。独立产品入口为
+`loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`。
+默认使用单 Worker。Turn 提供执行与恢复能力，benchmark 适配器传入拓扑、任务验证器和 judge 设置。
+[单 Worker 接入](https://github.com/loopx-project/loopx/pull/8480) ·
+[产品 provider 与实验对照](https://github.com/loopx-project/loopx/pull/8484)
+
+**相同的准入与结算。** Quota 选定工作并负责常规领取。领取成功后回读同一 Todo，
+核实 lease 再派发。C1 交付 Goal 的完整要求与原决策。Host 核对内联完整决策与
+journal 中捕获的原件，两个角色的沙箱均隔离 Core 私有文件。Controller 派发范围内的
+工作，评估 Worker 返回的结果并可改变下一条指令。Core 独立验证产物，在原 Turn 上
+结算一次。原 journal 固定拓扑、provider 配置和任务材料。结果归属不明时先对账。
+回执被拒绝后，经授权可由原只读 Controller 修正；保留 Worker 已完成的工作，限制自动
+修正次数，回包丢失时回读原记录。下一次新准入可以切换拓扑或回退到单 Worker。
+
+**相同的有效预算。** 三组均可用到标准 heartbeat 的阶段截止，包括准备、派发、工作、
+验证和结算。到期停止发起新工作并中断运行中的 Host，保留待恢复身份。固定任务入口、
+模型及推理强度、沙箱、CPU、反馈与评测频率、提交冷却、评测器、验证器及外部调度器。
+记录求解与全程时间、计分轮次、原生分数和通过率、可验证产物、调用次数、按独立线程
+统计的输入／缓存／输出 token、重试、配额和人工介入。无法观测的指标保留为未知。
+原生及 plain 对照沿用各自协议。
+
+**首题验证范围。** 在公开排列题的 600 秒求解预算下，标准 heartbeat 和统一单
+Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与 1,624,174，
+评测选中的分数分别为 0.0028922644 和 0.0000000218。两组均通过五项中的四项。
+未挂载任何提交时，固定版本的原始 judge 镜像也无法通过剩余的完整性校验。
+另一项真实原生双角色实验从四个候选中选解，经独立黑盒复算成本后结算一次。它验证的是
+有界阶段，正式 guest 的嵌套沙箱仍不可用。完整双角色分数、效果和成本打平仍需多题
+同条件重复验证，并以独立验收和完整成本决定是否调整默认配置。
+
+**产品接入。** Managed Host、Chat、Steward 在资格验证后复用同一 Turn provider。
+当前原生 provider 自行启动 Codex App Server。复用桌面或 Chat 现有连接时，需验证其
+归属、角色隔离、中断与向原对话返回结果。其他 Host 各自验证原生传输。先接通一个
+工作单元，再验证由 Steward 路由多个独立工作单元。
 
 | 既有 C 任务下的切片 | 完整可审查交付 / 必须采用的旧 owner | 退出证据与具体精简 |
 | --- | --- | --- |
@@ -827,24 +859,16 @@ C1/C2 验收与单 Host 隔离预览并行推进。预览可在可丢弃的范�
 
 ### Controller 推进节奏
 
-1. **先做真实 Host 上的闭环，与 C1 并行。** 运行时和 Turn owner 优先资格化 Codex
-   App Server。已有受管操作适配器能观察经认证的 `turn/start`，Chat host 已能发送
+1. **交付通用双角色 Turn。** 运行时和 Turn owner 从公开 CLI 和首个 benchmark 调用方验证同一 Codex App Server provider。已有受管操作适配器能观察经认证的 `turn/start`，Chat host 已能发送
    `turn/interrupt`。验证派工返回后仍可观察同一份持久化 worker attempt，覆盖断线
    重连和实际中断。缺口补在既有适配器。首个可运行切片限定一个 Agent、两个原生会话
    和一个有界任务，各会话独立维护上下文基线。Controller 是唯一面向 Core 的模型侧
-   客户端，读取 Progressive 与 Delta 状态，负责准入、验收、结算。Worker 收到任务、
+   客户端，读取 Progressive 与 Delta 状态并提交类型化结果，Core 负责准入、独立验收与结算。Worker 收到任务、
    范围内的普通工具与产物引用，经既有请求链返回发现和产物。用两份轨迹验证 Worker 的
    Core 调用被拒绝，同时范围内的普通工具可用。退出条件是 Worker 结果触发基于证据的判断和下一段有用工作，后者使用新鲜准入，
    原 attempt 仅结算一次，Controller 不可用时仍可经 Host/Core Stop。重启、重复或迟到
    的结果先按原 attempt 对账，再决定是否重派。
-2. **让用户在执行中真正用起来。** 请求与 App owner 通过现有 Chat 和产物投影交付
-   一条真实旅程。用户询问运行中的任务，在 Worker 完成前收到基于持久事实的实质答复，
-   查看有版本的产物，再提出纠偏。到安全边界应用 revision，检查下一份产物实际采用
-   纠偏。正在进行的效果仍在原 attempt 内完成或对账。主动汇报由有意义的新证据或需要
-   用户决定的事项触发，按 revision 和受众去重。沿用现有调度等待、Stop 和产品回读。
-   这条旅程跑通后，由管家沿同一请求和返回链接入第二个独立单元。验收 A 忙时 B 仍能
-   推进，且单元拒绝或重启后，两个单元各自的范围和原受众都能恢复。
-3. **实测拆会话的净收益。** Benchmark 与验收 owner 先把统一单会话同原 quota 对照
+2. **实测拆会话的净收益。** Benchmark 与验收 owner 先把统一单会话同原 quota 对照
    做完。再在固定任务验收、可比预算及匹配的 Host/模型设置下，对照两个单会话组与原生
    双会话组。分别记录 Controller 和 Worker 输入输出、调用、工具、重试、汇报、总耗时
    与人工介入，计入 Controller 或 Reviewer 要求返工一轮的成本。分开测答复、纠偏采用、
@@ -853,6 +877,13 @@ C1/C2 验收与单 Host 隔离预览并行推进。预览可在可丢弃的范�
    独立验收的成果。用后续验收核对本地标尺是否有用，保留错排与长期停滞的例子。可学习的
    Meta Model 属于后续研究假设。默认采用和旧路径退役继续遵循第 9 节与 C9 的分范围证据，
    并验证回退到合格单会话后仍能对账原 attempt。
+3. **让用户在执行中真正用起来。** 请求与 App owner 通过现有 Chat 和产物投影交付
+   一条真实旅程。用户询问运行中的任务，在 Worker 完成前收到基于持久事实的实质答复，
+   查看有版本的产物，再提出纠偏。到安全边界应用 revision，检查下一份产物实际采用
+   纠偏。正在进行的效果仍在原 attempt 内完成或对账。主动汇报由有意义的新证据或需要
+   用户决定的事项触发，按 revision 和受众去重。沿用现有调度等待、Stop 和产品回读。
+   这条旅程跑通后，由管家沿同一请求和返回链接入第二个独立单元。验收 A 忙时 B 仍能
+   推进，且单元拒绝或重启后，两个单元各自的范围和原受众都能恢复。
 
 沿用已有的 request、session、Turn 和产品 owner。每个 PR 记录被替换的调用方、新的可观察
 结果、验证证据和回退办法。预览沿用同一份权威状态和用户入口。
