@@ -81,7 +81,8 @@ ownership and model adoption unverified; it is not a fresh activation guard.
 - A lost release acknowledgement reconciles the running source and exact target
   without another unpause or dispatch. An uncertain pause acknowledgement remains
   held for explicit ownership recovery; the adapter cannot release another
-  actor's pause by guessing.
+  actor's pause by guessing. A pending request, unknown/partial phase or missing
+  durable pause acknowledgement cannot acquire ownership of an observed pause.
 - Process death or an unavailable probe leaves a durable intent. Preserve the
   original namespace and reconcile it; do not create a second activation identity
   or use an old checkpoint as rollback.

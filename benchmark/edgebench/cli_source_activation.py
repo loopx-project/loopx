@@ -175,6 +175,14 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
                 raise ValueError("Activation recovery differs from its original intent")
             if value.get("phase") == "released":
                 return _historical(value)  # Never pause or replay a released source.
+            # A durable request is not a pause acknowledgement. In particular,
+            # another actor can pause after this controller dies before its
+            # pause call; observing Paused cannot transfer that actor's barrier.
+            if (value.get("phase") not in ("paused", "qualified", "deferred", "switch_requested",
+                    "repair_requested", "release_requested") or value.get("pause_acknowledged") is not True or
+                    type(value.get("paused_at_epoch")) not in (int, float) or
+                    not math.isfinite(value["paused_at_epoch"]) or value["paused_at_epoch"] <= 0):
+                raise SourceActivationHeld("Original pause acknowledgement is not durable; ownership recovery is required")
         else:
             if receipt.exists():
                 raise ValueError("CLI activation intent already exists; reconcile the original")
@@ -206,7 +214,7 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
                 value["phase"] = "pause_uncertain"
                 write_json_atomic(receipt, value, mode=0o600, fsync_directory=True)
                 raise SourceActivationHeld("Pause acknowledgement unavailable; inspect original source") from None
-            value.update(phase="paused", paused_at_epoch=time.time())
+            value.update(phase="paused", pause_acknowledged=True, paused_at_epoch=time.time())
             write_json_atomic(receipt, value, mode=0o600, fsync_directory=True)
         state = _state(box, plan)
         if value["phase"] == "release_requested" and state["Running"] and not state["Paused"]:
@@ -260,6 +268,9 @@ def activate_cli_source(client, *, plan: dict, receipt: Path,
             verify_release(box, plan)
             value.update(phase="repair_requested", repair_target=repair)
             write_json_atomic(receipt, value, mode=0o600, fsync_directory=True)
+            if control() != "continue" or _goal_control(box, plan) != "continue":
+                raise SourceActivationHeld("Current control stopped before the launcher repair")
+            _held_state(box, plan)
             _put_link(box, plan["launcher"], plan["old_target"] if repair == "old" else plan["new_target"],
                       uid=plan["launcher_uid"], gid=plan["launcher_gid"])
         if control() != "continue":

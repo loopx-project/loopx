@@ -260,3 +260,62 @@ def test_native_head_and_an_unstarted_get_close_release_the_daemon_container_loc
     assert box.attrs["State"]["Paused"] is True
     assert time.monotonic() - started < 5
     box.unpause()
+
+
+@pytest.mark.parametrize("partial", [{"phase": phase} for phase in (
+    "pause_requested", "pause_uncertain", "unknown-phase", None, 17)] + [
+    {"phase": "paused", "pause_acknowledged": True},
+    {"phase": "qualified", "pause_acknowledged": True, "paused_at_epoch": "unconfirmed"},
+])
+def test_unacknowledged_or_unknown_intent_cannot_acquire_another_actors_pause(source, monkeypatch, partial):
+    box, params, _ = source
+    from docker.models.containers import Container
+
+    pause = Container.pause
+
+    def controller_died_before_pause(container):
+        if container.id == box.id:
+            raise KeyboardInterrupt("Injected controller death before Docker pause")
+        return pause(container)
+
+    monkeypatch.setattr(Container, "pause", controller_died_before_pause)
+    with pytest.raises(KeyboardInterrupt):
+        activation.activate_cli_source(**params, execute=True)
+    value = json.loads(params["receipt"].read_bytes())
+    assert value["phase"] == "pause_requested" and "pause_acknowledged" not in value
+    value.update(partial)
+    params["receipt"].write_text(json.dumps(value))
+    pause(box)  # A different actor establishes its own real physical barrier.
+    with pytest.raises(activation.SourceActivationHeld, match="acknowledgement"):
+        activation.activate_cli_source(**params, execute=True, reconcile=True)
+    box.reload()
+    assert box.attrs["State"]["Paused"] is True
+    assert activation._link(box, params["plan"]["launcher"]) == params["plan"]["old_target"]
+    assert json.loads(params["receipt"].read_bytes())["phase"] == partial["phase"]
+
+
+def test_repair_rechecks_stop_after_target_verification(source, monkeypatch):
+    box, params, control = source
+    write = activation._put_link
+
+    def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt("Injected controller death after confirmed pause")
+
+    monkeypatch.setattr(activation, "_put_link", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        activation.activate_cli_source(**params, execute=True)
+    value = json.loads(params["receipt"].read_bytes())
+    assert value["pause_acknowledged"] is True and value["phase"] == "switch_requested"
+    verify = params["verify_release"]
+
+    def stop_after_verification(*args):
+        verify(*args)
+        control[0] = "stop"
+
+    params["verify_release"] = stop_after_verification
+    monkeypatch.setattr(activation, "_put_link", write)
+    with pytest.raises(activation.SourceActivationHeld, match="stopped before"):
+        activation.activate_cli_source(**params, execute=True, reconcile=True, repair="new")
+    box.reload()
+    assert box.attrs["State"]["Paused"] is True
+    assert activation._link(box, params["plan"]["launcher"]) == params["plan"]["old_target"]
