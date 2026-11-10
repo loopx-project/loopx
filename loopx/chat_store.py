@@ -1492,12 +1492,32 @@ class ChatSessionStore(ChatIngressStore):
                 "delta_count", "sse_reconnect_count", "expires_at", "host_claim_id",
                 "completion_id", "loopx_execution", "loopx_request",
                 "collaboration_answer",
+                "native_context_preparation",
             }
             unknown = set(changes) - allowed
             if unknown:
                 raise ValueError(f"unsupported chat turn fields: {sorted(unknown)}")
             if expected_statuses is not None and payload.get("status") not in expected_statuses:
                 return None
+            if "native_context_preparation" in changes:
+                observation = changes["native_context_preparation"]
+                flags = {"native_checkpoint_requested", "working_checkpoint_available", "manager_context_migration",
+                    "provider_context_migration", "project_context_migration", "manager_profile_changed",
+                    "settings_changed", "executor_reallocated", "isolated_answer_review"}
+                fields = flags | {"schema_version", "planned_method", "source_thread_id", "history_message_count",
+                    "manager_context_version", "required_manager_context_version"}
+                if (payload.get("status") != "queued" or payload.get("upstream_turn_id")
+                        or not isinstance(observation, dict) or set(observation) != fields
+                        or observation.get("schema_version") != "codex_native_context_preparation_v0"
+                        or observation.get("planned_method") not in {"thread/start", "thread/resume", "thread/fork"}
+                        or not isinstance(observation.get("source_thread_id"), str) or not observation["source_thread_id"]
+                        or any(type(observation.get(key)) is not bool for key in flags)
+                        or any(type(observation.get(key)) is not int or observation[key] < 0
+                            for key in ("history_message_count", "required_manager_context_version"))
+                        or observation.get("manager_context_version") is not None
+                            and type(observation["manager_context_version"]) is not int
+                        or payload.get("native_context_preparation", observation) != observation):
+                    raise ValueError("native context preparation is an immutable queued-Turn observation")
             if "collaboration_answer" in changes:
                 answer = changes["collaboration_answer"]
                 if (payload.get("origin") != "peer" or not isinstance(payload.get("collaboration_request"), dict)

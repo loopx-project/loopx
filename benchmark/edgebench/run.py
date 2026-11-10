@@ -122,8 +122,11 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--managed-run-json", type=Path,
                         help="Opt-in private binding for native terminal proof, consumed by the controller")
-    parser.add_argument("--turn-envelope", action="store_true",
+    turn_view = parser.add_mutually_exclusive_group()
+    turn_view.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    turn_view.add_argument("--complete-turn", action="store_true",
+                        help="Explicit complete v1 Turn contract with shared exact-Turn settlement; heartbeat workers only")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
@@ -246,6 +249,8 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.complete_turn and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
+        parser.error("--complete-turn requires a heartbeat worker")
     if args.context_delivery is None:
         args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
@@ -455,6 +460,7 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
+                         **({"complete_turn": True} if args.complete_turn else {}),
                          context_delivery=args.context_delivery,
                          **({"execution_observation": args.execution_observation}
                             if args.execution_observation is not None else {}),
@@ -538,7 +544,7 @@ def main(argv=None):
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": sforge_source if native_result_scope is not None else active_source_receipt(),
         "local_docker_images": local_docker_images,
-        **turn_envelope_receipt(explicit=args.turn_envelope),
+        **turn_envelope_receipt(explicit=args.turn_envelope, complete=args.complete_turn),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
         **({"execution_observation": args.execution_observation}
            if args.execution_observation is not None else {}),

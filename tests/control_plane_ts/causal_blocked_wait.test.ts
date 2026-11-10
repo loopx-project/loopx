@@ -75,6 +75,18 @@ test("deferred dependency work retains the original Turn's blocked closeout proo
     todos: [request.todos[0], {...request.todos[1], status: "done"}]}), /registered pending/);
 });
 
+test("a blocked prerequisite keeps an exact no-spend wait without clearing its blocker", () => {
+  const request = fixture("todo_done");
+  request.todos[1].status = "blocked";
+  assert.ok(request.todos[0].resume_condition);
+  request.todos[0].resume_condition.target_status = "blocked";
+  const before = structuredClone(request);
+  const wait = prepareBlockedWait(request);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_waiting"), true);
+  assert.equal(isBoundedBlockedRetry(wait, "todo_other"), false);
+  assert.deepEqual(request, before);
+});
+
 
 test("corrupt calendars and offset-less clocks are not bounded retries", () => {
   const retry = (observed: string, due: string) => ({

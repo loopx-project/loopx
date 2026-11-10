@@ -4,11 +4,11 @@
 
 - **RFC 状态：** 已接受，适用于既有契约。Router 与绑定单元扩展待评审。
 - **替代 / 关闭：** 无
-- **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
+- **交付成熟度：** 单 Worker 的 EdgeBench 入口已合入。#8484 在 C1 上验收通用双角色 Turn；跨准入延续、多题效果与成本、对话产品接入待验证。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-11-06
-- **最新源码核对：** `f91e26d91d3e4e1b28b69f5881a059ea78891082`；旧实验保留各自基线。
+- **最近规范性修订：** 2026-11-10
+- **源码版本：** main `9508f4de93`、C1 `9d283862e3`。§11 区分实现 PR 的实测、原始对照及待验收边界。
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
 
@@ -73,8 +73,8 @@ flowchart TB
 4. 先保存完整上下文，再组合两个独立交付层：**跨 Host 默认 Progressive**，以及
    **仅在已资格化 Host 自动使用 Delta**。未读材料仍可从当前 capture 发现。
    Controller 与 executor 分别证明连续性，不能借用对方的基线；完整恢复始终可用。
-5. 先在现有单会话路径验收契约统一；双会话保持 opt-in，直至可比成果与完整成本证据支持
-   采用。本文不启动 benchmark 或特权操作。
+5. 先统一 quota、公开 Turn 和 benchmark 标准 heartbeat。以 heartbeat 为对照验证单 Worker，
+   通过相同 Turn provider 显式选择双角色。按 §11 比较效果与完整成本后，再接入 Managed Host、Chat、Steward。
 6. Controller—worker 执行循环是主干：既评估普通结果也处理阻塞，反馈并继续有价值的
    已准入工作，无需用户再发一句话。Executor 工作期间，controller 同时回答用户、
    采用纠偏、展现有用产物。汇报是旁路活动，不是循环的默认归宿；两者由 C6/C8 验收。
@@ -139,7 +139,7 @@ flowchart TB
 
 ### 当前交付的源码核对
 
-以下 2026-11-06 核对绑定 main `f91e26d91d3e4e1b28b69f5881a059ea78891082`。
+以下 2026-11-10 核对绑定 main `ab1406611809dc7707028a7f257f9717040bad2c`。
 代码中存在机制只证明已有实现边界，不代表双会话用户旅程或收益已经验收。
 
 | 能力 | 源码事实 / 在途工作 | 对本设计的决定 |
@@ -150,7 +150,7 @@ flowchart TB
 | 原受众返回 | [`return_delivery.ts`](../../../loopx/control_plane/collaboration/return_delivery.ts) 区分 provider 已写入但无定位符与未写入 | Router 汇总不得重新执行任务来补投递；投递不等于 requester 采用 |
 | 受管操作复用 | Codex/DSH 均调用 [`managed_operation_host.py`](../../../loopx/control_plane/turn_driver/managed_operation_host.py) 与 `select_managed_operation_session` | C3.1 的通用 handler 抽取已存在；复用并检查剩余调用方，不重复开重构项目 |
 | 双角色绑定 | [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) 按 Goal/Agent/Todo 或 Agent scope 保存 session；尚无本提案的 controller/worker 成对绑定 | C3 需要同一 Agent 的 role/generation 与独立队列、连续性；仅有两个 thread ID 不够 |
-| 统一工作契约 | quota / Turn 活跃格式分支仍在；[#7430](https://github.com/loopx-project/loopx/pull/7430) 是开放的 C1 提案，本次核对头 `3a4f6f64f288ab6c663c829ed5f5670c42d72595` | 与其既有 owner 协同，保留原单会话成果/成本验收；不把 router 多单元交付追加为它的合入条件 |
+| 统一工作契约 | [#7430](https://github.com/loopx-project/loopx/pull/7430) 已合入，随后由 [#8265](https://github.com/loopx-project/loopx/pull/8265) 回退；C1 替换由 [#8266](https://github.com/loopx-project/loopx/pull/8266) 继续。[#8238](https://github.com/loopx-project/loopx/pull/8238) 和 [#8323](https://github.com/loopx-project/loopx/pull/8323) 已分别改善结算读取和叙事读取。[#8304](https://github.com/loopx-project/loopx/pull/8304) 已合入分阶段重规划路径。 | 继续将可独立验收的修复合入主干。切换 profile 前，按原 quota 单会话验收替换路径。此前传输或写回测量只适用于各自测过的路径。 |
 | 通用 Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) 仍为 Draft，本次核对头 `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | 可作为适配器候选；bounded 调用不证明双向长期 session/异步控制，不把 OAR 或全 Host 重写设为先决条件 |
 
 旧的逐字段审计与实验保留原版本，位于下面的技术附录；其中历史 Draft/测试记录不能
@@ -799,35 +799,133 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 ```mermaid
 flowchart TB
-  C1[C1/C2：单会话契约与上下文收敛] --> U[C3-C6：一个真实双会话单元]
-  F[已有请求 / 受管操作 / Session owners] --> U
-  U --> I[C6/C8：自主工作循环，同时对话、纠偏、Stop]
-  I --> R[C6/C8：Router 对接两个独立单元]
-  I --> E[C7：单元成果与完整成本对照]
-  R --> E
-  E --> Q[C8/C9：范围化采用与旧路径退役]
-  F -.独立正确性修复与调用方精简可先交付.-> C1
+  B[benchmark 任务和独立验收] --> H[原 heartbeat 与 quota 对照]
+  B --> T[同一 scheduler 和 quota 经产品 Turn 运行单 worker]
+  T --> U[C1/C2 统一单 worker 契约]
+  U --> D[C3–C6 同一 Turn 可选 Controller 与 Worker]
+  H --> E[C7 同条件成果与完整成本]
+  U --> E
+  D --> E
+  E --> P[Managed Host 与 Chat 采用已验收模式]
+  P --> R[Steward 路由两个独立验收的单元]
 ```
 
-这是实际依赖，不是要求每个 Agent 从第一格开始的固定队列。C1 保持原验收范围；
-其共享 owner 前置、现有请求/恢复修复和删除已被替代代码可独立交付。新 profile 的
-实际切换依赖它消费的统一契约已合格，但不等所有宿主、全部语言迁移或所有 benchmark
-完成。认领依据整体 roadmap、当前用户成果、瓶颈和在途 owner；表中编号不是 PR 数。
+**首个调用方与对照。** 先用 EdgeBench 调用公开 Turn provider，保留标准
+`heartbeat-resume` 及其常规 quota 决策作对照。在同一 benchmark 入口的新准入上用
+`--turn-topology single-worker` 或 `controller-worker` 选择拓扑。独立产品入口为
+`loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`。
+默认使用单 Worker。Turn 提供执行与恢复能力，benchmark 适配器传入拓扑、任务验证器和 judge 设置。
+[单 Worker 接入](https://github.com/loopx-project/loopx/pull/8480) ·
+[产品 provider 与实验对照](https://github.com/loopx-project/loopx/pull/8484)
+
+C1 对照与隔离的双角色验证可并行。绑定确切的 C1 版本，契约变更后重验受影响的调用方，再决定生产切换。
+
+**相同的准入与结算。** Quota 选定工作并负责常规领取。领取成功后回读同一 Todo，
+核实 lease 再派发。C1 交付 Goal 的完整要求与原决策。Host 核对内联完整决策与
+journal 中捕获的原件，两个角色的沙箱均隔离 Core 私有文件。Controller 派发范围内的
+工作，评估 Worker 返回的结果并可改变下一条指令。Core 独立验证产物，在原 Turn 上
+结算一次。原 journal 固定拓扑、provider 配置和任务材料。结果归属不明时先对账。
+回执被拒绝后，经授权可由原只读 Controller 修正；保留 Worker 已完成的工作，限制自动
+修正次数，回包丢失时回读原记录。下一次新准入可以切换拓扑或回退到单 Worker。
+
+**两个角色实际交换什么。** Controller 交付原任务目标、验收条件和相关材料。
+任务指定了方法时遵循原要求，其余求解方式由 Worker 自选。Host 原样转发指令，
+在执行时强制实施文件和工具边界。阶段截止覆盖整个往返。只要原准入仍有效且时间充足，
+Controller 可以根据返回的证据再派一段工作。调用方提供 Worker 任务文件时，首条指令为
+`dispatch`，Host 按准入时固定的内容原样发送文件，包括题目本身的规则。EdgeBench
+通过这条路径交付原题。只有 Controller 持有补充材料时，由它撰写派工指令。两种路径都
+可以在后续回合纠偏。首份 Worker 返回之后，Controller 才收到 Core 回执的详细写法。
+原生沙箱在执行时实施约束，角色提示省去权限说明。
+
+| 发送方 → 接收方 | 消息 | 后续动作 |
+| --- | --- | --- |
+| Controller → Host，调用方提供了原题 | `{"instruction":"dispatch","result":null}` | Worker 收到与原文件逐字节一致的任务。 |
+| Controller → Worker，自拟派工 | `{"instruction":"寻找实测成本最低的解，将最佳结果保存到 results/。","result":null}` | Host 把指令交给 Worker 会话，Worker 使用其权限内的工具执行。 |
+| Worker → Controller | `{"finding":"候选 B 的实测成本最低，回读时发现缺一行。","artifacts":["results/best.txt"]}` | Host 将发现和产物路径送回原 Controller 会话。 |
+| Controller → Worker，需要返工时 | `{"instruction":"补齐缺行，重新检查整个文件。","result":null}` | 同一个 Worker 续跑，仍用 `finding` 和 `artifacts` 返回。 |
+| Controller → Core | `instruction=null`，`result` 是完整的类型化 Turn 回执，包含 `result_kind`、`work_evidence` 和 `validation_evidence` | Core 检查回执，对实质性成果运行独立 validator，再结算原准入。 |
+
+Worker 的回读为 Controller 判断是否返工提供证据，独立验收由 Core 的 validator 完成。
+私有 Turn 记录把角色步骤、消息摘要绑定到原生会话。原生记录仍在时，操作者可以按摘要核对
+原文，Core 无需再存一份完整对话。
+
+**相同的有效预算。** 三组均可用到标准 heartbeat 的阶段截止，包括准备、派发、工作、
+验证和结算。到期停止发起新工作并中断运行中的 Host，保留待恢复身份。固定任务入口、
+模型及推理强度、沙箱、CPU、反馈与评测频率、提交冷却、评测器、验证器及外部调度器。
+记录求解与全程时间、计分轮次、原生分数和通过率、可验证产物、调用次数、按独立线程
+统计的输入／缓存／输出 token、重试、配额和人工介入。无法观测的指标保留为未知。
+原生及 plain 对照沿用各自协议。
+
+**首题验证范围。** 在公开排列题的 600 秒求解预算下，标准 heartbeat 和统一单
+Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与 1,624,174，
+评测选中的分数分别为 0.0028922644 和 0.0000000218。两组均通过五项中的四项。
+未挂载任何提交时，固定版本的原始 judge 镜像也无法通过剩余的完整性校验。
+另一项真实原生双角色实验从四个候选中选解，经独立黑盒复算成本后结算一次。它验证的是
+有界阶段，正式 guest 的嵌套沙箱仍不可用。完整双角色分数、效果和成本打平仍需多题
+同条件重复验证，并以独立验收和完整成本决定是否调整默认配置。
+
+先前用相同的 150 秒预算，在同一题的四候选阶段对比了两种 CLI 拓扑。两组交付相同排列，
+独立黑盒复算通过，固定版本 judge 均给出 0.0000000033 分，通过五项中的四项，各结算一次。
+单 Worker 消耗 44.07 秒、115,498 token，双角色消耗 121.53 秒、206,253 token，
+后者按两个独立会话汇总。耗时包含独立回读与评测。先前失败的尝试暴露了账户 MCP 配置继承、
+shell 临时文件受限、模型服务容量不足，以及 Controller 将自己的只读权限误传给 Worker。
+另一次按完整协议启动的双角色任务在标准 guest 的原生沙箱预检处停止，未派发模型，
+评测轮次为零。这个用例支持保留单 Worker 默认值。
+
+开放搜索使用原题的公开黑盒，算法由求解者选择。在 240 秒阶段的原生调试中，已逐字节
+核对 Worker 首条任务消息和调用方提供的完整原题。求解命令在固定版本的原始离线工作镜像
+中运行，分配两个 CPU。此前也观察到 Host 到期时尚未返回回执，但已有提交可由独立
+judge 评分。分别记录最后验证的分数、黑盒调用次数、完整 token 和 Core 结算。实现 PR
+保留各拓扑的实验读回与标准 guest 的验证边界。[实验记录](https://github.com/loopx-project/loopx/pull/8484)
+
+**产品接入。** Managed Host、Chat、Steward 在资格验证后复用同一 Turn provider。
+两个 headless 角色均使用 `codex exec`，与标准 heartbeat 和单 Worker Turn 的 CLI
+入口一致。后续调用用 `codex exec resume` 指定各自的原会话 ID。角色通过有界指令和
+结构化返回交接，无需注册 MCP。Host 在停止或到期时中断运行中的 CLI。复用桌面或 Chat 现有连接时，需验证其
+归属、角色隔离、中断与向原对话返回结果。其他 Host 各自验证原生传输。先接通一个
+工作单元，再验证由 Steward 路由多个独立工作单元。
 
 | 既有 C 任务下的切片 | 完整可审查交付 / 必须采用的旧 owner | 退出证据与具体精简 |
 | --- | --- | --- |
-| **C1/C2 — 完成现有契约切换** | 沿 #7430 的来源、consumer 与恢复工作收敛，不另写 router packet | 原单会话 quota 对照、字段/条款保真、真实 caller、off 与恢复；逐 caller 删除旧格式 writer，保留具名历史 decoder |
+| **C1/C2 — 完成现有契约切换** | 收敛 #8266 的来源、consumer 与恢复工作，复用既有契约 | 原单会话 quota 对照、字段/条款保真、真实 caller、off 与恢复；逐 caller 删除旧格式 writer，保留具名历史 decoder |
 | **C3/C4 — 一个绑定单元** | 在现有 session/managed-operation owner 中实现同一 Agent 两角色；先资格化一个支持隔离、观察和中断的 Host | 两个真实会话、独立上下文基线；并发/重启不覆盖绑定，旧 generation 不可写；删除被实际替换的单槽位假设，不另建双会话 runtime |
 | **C5/C6.1/C8 — 主循环与执行中交互** | 真实 worker 长操作返回 handle；controller 消费用户与 worker 输入；复用 request revision、queue reservation、Stop 与 readback | 无用户唤醒也能普通结果→评估/反馈→后续执行；原结算与新鲜接续正确；worker 未完成时已有实质答复；纠偏改变后续产物；注意力/安全插队与防饿死场景通过；取消无需等模型；替换该 caller 的整项阻塞等待与重复状态分类，交付同一个 App 旅程 |
 | **C6.2/C8 — Router 接两个单元** | 管家使用既有多接收方、原受众返回与选择绑定；直达 controller 复用同一修订入口 | A 忙时 B 可独立推进；部分拒绝不重跑 A；router 重启后结果回原受众，跨单元权限和预算不扩大；删除重复汇总/路由分支 |
 | **C7/C8 — 比较与小范围采用** | 相同 workload/Host 下比较原单会话、统一单会话、双会话；额外单列多单元协调组 | 同预算成果与完整成本、响应/纠偏/停止时延、人工介入；小任务负例与模型/Host 边界公开。打包 App/CLI 与受支持 Lark 失败恢复分别验证 |
 | **C9 — 点名退役与默认决策** | 每条替换随 caller、历史读取窗口和回退证据删旧代码，采用决定按合格 workload/profile 范围作出 | 无第二套决策/任务/预算账本；新准入关闭后原 attempt 可对账；保留合格单会话，不以少代码或多会话数量证明收益 |
 
-建议最近的实施决策是：先对齐 C1 在途交付与当前 session owner，选择一个真正支持
-worker 非阻塞观察、工具隔离和 Stop 的 Host，形成“一个自主单元循环 + 执行中交互”的可审查
-切片；管家已有多接收方链在其后采用。相关绑定/恢复精简若能直接改善现有 caller，可
-先合入，不要求等 C1 整体完成。无需先做全局 scheduler、通用消息中间件、无限层级 Agent
-或第三套状态存储。尚未完成的双向 Host 能力应补在实际 adapter，不把接口统一当作完成。
+<a id="controller-delivery-cadence"></a>
+
+### Controller 推进节奏
+
+1. **交付通用双角色 Turn。** 运行时和 Turn owner 从公开 CLI 和首个 benchmark 调用方验证同一个双角色 Codex CLI provider。已有受管操作适配器能观察经认证的 `turn/start`，Chat host 已能发送
+   `turn/interrupt`。验证派工返回后仍可观察同一份持久化 worker attempt，覆盖断线
+   重连和实际中断。缺口补在既有适配器。首个可运行切片限定一个 Agent、两个原生会话
+   和一个有界任务，各会话独立维护上下文基线。Controller 是唯一面向 Core 的模型侧
+   客户端，读取 Progressive 与 Delta 状态并提交类型化结果，Core 负责准入、独立验收与结算。Worker 收到任务、
+   范围内的普通工具与产物引用，经既有请求链返回发现和产物。用两份轨迹验证 Worker 的
+   Core 调用被拒绝，同时范围内的普通工具可用。退出条件是 Worker 结果触发基于证据的判断和下一段有用工作，后者使用新鲜准入，
+   原 attempt 仅结算一次，Controller 不可用时仍可经 Host/Core Stop。重启、重复或迟到
+   的结果先按原 attempt 对账，再决定是否重派。
+2. **实测拆会话的净收益。** Benchmark 与验收 owner 先把统一单会话同原 quota 对照
+   做完。再在固定任务验收、可比预算及匹配的 Host/模型设置下，对照两个单会话组与原生
+   双会话组。分别记录 Controller 和 Worker 输入输出、调用、工具、重试、汇报、总耗时
+   与人工介入，计入 Controller 或 Reviewer 要求返工一轮的成本。分开测答复、纠偏采用、
+   实际停止和任务完成时延。开跑前冻结验收 oracle 与成本/时延阈值。保留可能被协调开销
+   主导的简单任务。沿用 Stride 和 Yardstick，检验延长执行段、改标尺或停止是否改善后续
+   独立验收的成果。用后续验收核对本地标尺是否有用，保留错排与长期停滞的例子。可学习的
+   Meta Model 属于后续研究假设。默认采用和旧路径退役继续遵循第 9 节与 C9 的分范围证据，
+   并验证回退到合格单会话后仍能对账原 attempt。
+3. **让用户在执行中真正用起来。** 请求与 App owner 通过现有 Chat 和产物投影交付
+   一条真实旅程。用户询问运行中的任务，在 Worker 完成前收到基于持久事实的实质答复，
+   查看有版本的产物，再提出纠偏。到安全边界应用 revision，检查下一份产物实际采用
+   纠偏。正在进行的效果仍在原 attempt 内完成或对账。主动汇报由有意义的新证据或需要
+   用户决定的事项触发，按 revision 和受众去重。沿用现有调度等待、Stop 和产品回读。
+   这条旅程跑通后，由管家沿同一请求和返回链接入第二个独立单元。验收 A 忙时 B 仍能
+   推进，且单元拒绝或重启后，两个单元各自的范围和原受众都能恢复。
+
+沿用已有的 request、session、Turn 和产品 owner。每个 PR 记录被替换的调用方、新的可观察
+结果、验证证据和回退办法。预览沿用同一份权威状态和用户入口。
 
 <a id="superagent-acceptance"></a>
 
@@ -865,9 +963,9 @@ worker 非阻塞观察、工具隔离和 Stop 的 Host，形成“一个自主�
 | --- | --- | --- |
 | **C1 — 统一契约；新 profile 切换依赖** | Interaction/work-context + quota/Turn owner：盘点字段/指令、capture/视图/读取证据映射及分版本双层配置；捕获同一 schema，迁移普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节 quota 基线效果/完整成本对照；保留显式 off，cutover 合格前保留绑定版本的 reader |
 | **C2 — 一个上下文交付管线；C1** | Context owner + host observer：组合跨 Host Progressive、独立资格化 Delta、同 capture 详情/恢复和保守未读发现，替换分阶段候选交付及重复 packet 分支 | 未变未读约束抵达下一 Turn 实际工作；按完整成本验收无 Hook reader、精确证据/连续性和四种分层组合；full 回退不重新准入；经既有 owner 回退编码/配置 |
-| **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
-| **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
-| **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
+| **C3 — 会话绑定与原生生命周期；切换依赖 C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
+| **C4 — 共享受治理生命周期；切换依赖 C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
+| **C5 — Replan 与结果编写边界；切换依赖 C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
 | **C6 — Controller/executor 交流；C2–C5** | Manager/request + host owner：复用版本化语义请求与结果返回，用自然语言工作/材料交流替换 executor 的 schema 约束任务；执行时用户仍可交互 | 完整来源、局部自主、Core 隔离、无需人工催促的普通结果→评估→反馈→后续执行、有序 revision 下的反馈实际采用、原结算/新鲜接续与独立验收结果；第 9 节忙碌、冲突、Stop 和迟到结果场景；回退后新工作使用合格单会话 profile |
 | **C7 — Benchmark 复用与完整成本归因；C4/C6** | Benchmark toolkit/execution owner：薄 adapter 选择相同产品 profile；合并重复 launch/session 配置，跟踪两个会话，不改冻结 trial | Native/plain 对照不变，可比组配置/replay 与完整成本覆盖；合并 helper 不启动 job |
 | **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、主动循证汇报、适合任务的丰富展现、反馈/readback、Stop 和产物返回 | 第 9 节打包 managed 及受支持 attached heartbeat 旅程，包括 host 不可用、迟到结果、安静/去重汇报、可访问降级、受众拒绝和恢复；安装资格另验；不新增 packet 格式开关 |
@@ -968,7 +1066,7 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 | 既有任务 / 工作包 | 精简结果 | 启动条件 |
 | --- | --- | --- |
 | **C3.1 受管操作协议** | 通用 handler 与 session 选择已共享；新角色沿该边界扩展，核对后才删除剩余重复调用方 | 复用 `managed_operation_host.py`；不能再次把已完成抽取列为待办，保留两个真实 Host 的原生差异 |
-| **C3.2 会话绑定调用方** | 复用共享持久化；以既有完整操作替换调用方重建 binding 和跨 Host 私有导入 | 若独立拆开只剩改名/facade，则与 C3.1 一起交付；role/generation 扩展等待 C1 稳定 |
+| **C3.2 会话绑定调用方** | 复用共享持久化；以既有完整操作替换调用方重建 binding 和跨 Host 私有导入 | 若独立拆开只剩改名/facade，则与 C3.1 一起交付；预览可固定 C1 版本；role/generation 切换等 C1 验收 |
 | **C4.1 回执到继续决策** | 采用已合格 typed Turn 观察/继续边界；退役被替代的 Python 回执重建与决策 | 保留 journal 恢复与下一工作决策的区别；整合 C1 及已有恢复修复 |
 | **C4.2 外层 worker 采用** | 消费已合格语义结果，移除自行重建的公共重试/继续策略 | C4.1；保留唤醒归属、原回执和不透明命令的不确定性 |
 | **C4.3 结算 adapter 收敛** | 复用 settlement 原语；仅在义务一致时删除第二套步骤/条件解释器 | 候选：比较 Host Todo completion 与 Turn settlement，并对齐在途结算 PR |

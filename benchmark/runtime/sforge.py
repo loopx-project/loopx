@@ -108,7 +108,7 @@ class SForgeWorker(CodexAgent):
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
                  warm_start=None, research_sidecar: bool = False,
-                 native_result_scope: dict | None = None):
+                 native_result_scope: dict | None = None, complete_turn: bool = False):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -123,6 +123,8 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        self.complete_turn = Execution(mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
+            turn_envelope=turn_envelope, complete_turn=complete_turn).complete_turn
         self.native_child_limit = Execution(mode="plain", native_child_limit=native_child_limit).native_child_limit
         if self.native_child_limit is not None and (not feedback_prompt or not workspace_instructions):
             raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
@@ -408,6 +410,7 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                **({"complete_turn": True} if self.complete_turn else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}
                    if self.execution_observation is not None else {}),
