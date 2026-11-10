@@ -459,6 +459,12 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 原绑定和规范结算，无效来源保留状态观察但不能交付指导。这增加完整 native 来源验证。
 早期仅状态路径的 RPC 减少不证明模型窗口或整任务收益，native 签名退役仍未完成。
 
+集成 main `5988be01` 保留共享的静默完成规则，没有恢复已退役的另一套 heartbeat
+正文。这不构成 C1 资格：当前长 scope thin 与完整能力 CLI 夹具仍超过原 5,100 展示
+预算，捕获长路由的 Agent JSON 仍超过 5,400 上限。一次临时展示预算扩容因削弱既有
+超长 scope 负例且未解决独立 JSON 失败而被放弃；完整指令和原上限均保留，继续按
+同一 caller 完整修复。这些失败与独立评审、原 quota 成果及完整成本资格继续开放。
+
 当前 Todo 备注现已采用 [main 的字段 registry](https://github.com/loopx-project/loopx/pull/8386)，
 C1 删除自身独立的备注规则和重复的原生回归。共享身份绑定 Goal、registry/runtime 路由、
 canonical provider 和当前 Todo；新鲜证据更新不会使未变的备注正文失效。原生 CLI 回归

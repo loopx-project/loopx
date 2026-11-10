@@ -628,6 +628,16 @@ observations but cannot deliver advice. This adds native complete-source validat
 The earlier status-only RPC reduction does not qualify model-window or whole-task
 benefit, and native signature retirement remains open.
 
+Integration with main `5988be01` retains the shared quiet-completion rule and
+keeps the retired alternate heartbeat body deleted. It does not qualify C1:
+current long-scope thin and complete-capability CLI fixtures exceed the retained
+5,100 presentation budget, and the captured long-route Agent JSON remains above
+its 5,400 ceiling. A provisional presentation allowance increase was rejected
+because it weakened an existing oversized-scope negative and left the independent
+JSON failure. Keep the complete instructions and original limits while repairing
+this caller coherently; these failures remain open alongside independent review
+and original-quota outcome/full-cost qualification.
+
 Selected Todo notes now adopt the [main field registry](https://github.com/loopx-project/loopx/pull/8386).
 C1 removes its separate note rule and duplicate native regression. The shared
 identity binds the Goal, registry/runtime route, canonical provider and selected
