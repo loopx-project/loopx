@@ -5,7 +5,7 @@
 - **Delivery maturity:** M1 source implementation; budgeted planning proposed; M2/M3 unqualified
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-11-05
-- **Last normative revision:** 2026-11-09
+- **Last normative revision:** 2026-11-10
 - **Implementation baseline:** `8f6e88cb2a0fb76aba32bce979ba51293c1981f8`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
 - **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
@@ -753,6 +753,18 @@ immutable attribution of execution to that Todo. Recording the first decision
 remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
+The initial measurement cue and an established pair's comparison reuse the same
+local choice guidance at meaningful evidence or probe boundaries: expected
+accepted-outcome gain within accepted constraints, remaining horizon and complete
+implementation, search and confirmation cost, including model/control overhead.
+Unknowns remain unknown. A supported route may continue; without material change,
+continue the authorized slice. A local gain alone does not select the best next
+investment. This guidance adds no required comparison, evaluator call, decision
+attachment or review, and does not infer a profile from metric names or recent
+presentation order. The shared measurement-facts owner also projects this guidance
+in an enabled same-work finding receipt. A larger measurement index remains on
+demand rather than enlarging every opening read. Actual model adoption and outcome
+benefit remain unqualified.
 
 During an open Turn, an explicit Explore finding can use the ordinary result
 attachment and the same canonical Todo question as refresh-state. Its write
