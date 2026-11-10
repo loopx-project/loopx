@@ -66,7 +66,7 @@ def register_turn_commands(
 
     plan = command_sub.add_parser(
         "plan",
-        help="Build one typed read-only host decision without launching or writing.",
+        help="Inspect a typed host decision without launching or changing Goal state.",
     )
     add_subcommand_format(plan)
     # The default host and the default execution mode are one decision: the
@@ -88,7 +88,7 @@ def register_turn_commands(
     plan.add_argument(
         "--include-transaction-detail",
         action="store_true",
-        help="Include session binding and transaction receipt planning detail.",
+        help="Include session binding, transaction receipt planning detail, and the complete inline work contract.",
     )
     plan.add_argument("--limit", type=int, default=5)
 
@@ -336,9 +336,14 @@ def register_turn_commands(
         action="store_true",
         help="Retry a failed transaction from its last side-effect-safe phase.",
     )
-    run_once.add_argument(
+    resume = run_once.add_mutually_exclusive_group()
+    resume.add_argument(
         "--resume-turn-key",
         help="Resume the exact journaled transaction without recomputing its plan.",
+    )
+    resume.add_argument(
+        "--resume-turn-instance-id",
+        help="After a lost reply, resume only the unique original journal for this Goal, Agent and Turn instance.",
     )
     run_once.add_argument(
         "--no-global-sync",

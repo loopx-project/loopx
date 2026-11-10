@@ -15,11 +15,14 @@ from tests.test_loopx_turn_managed_step import _failed_journal
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("source_fault", [None, "unknown_action", "missing_read_command", "unknown_read_order"])
-def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
-    tmp_path, monkeypatch, provider, source_fault,
+@pytest.mark.parametrize("entrypoint", ["quota", "managed"])
+def test_real_current_entrypoints_check_and_preserve_the_complete_source(
+    tmp_path, monkeypatch, provider, source_fault, entrypoint,
 ):
     from loopx.cli import main as cli_main
+    from loopx.cli_commands import quota as quota_command
     from loopx.cli_commands.turn_decision import FreshTurnDecisionOwner
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
     from loopx.control_plane.turn_driver import loop_controller, turn_journal_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -52,6 +55,15 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
         return current
 
     monkeypatch.setattr(FreshTurnDecisionOwner, "resolve", lambda self: source_data(resolve(self)))
+    exported = quota_command._export
+
+    def with_quota_source(name):
+        function = exported(name)
+        if name == "build_live_quota_should_run_decision":
+            return lambda *args, **kwargs: source_data(function(*args, **kwargs))
+        return function
+
+    monkeypatch.setattr(quota_command, "_export", with_quota_source)
     observed = []
     request = loop_controller.effect_runtime_projection_result
 
@@ -66,10 +78,21 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
     argv = [*prefix, "turn", "managed-step", "--goal-id", lineage["goal_id"], "--agent-id", lineage["agent_id"],
         "--turn-key", journal["turn_key"], "--host", "dsh", "--execution-mode", "isolated-headless",
         "--observed-attempt", "1", "--observed-max-attempts", "3"]
+    if entrypoint == "quota":
+        argv = [*prefix, "quota", "should-run", "--goal-id", lineage["goal_id"],
+            "--agent-id", lineage["agent_id"], "--todo-id", lineage["todo_id"],
+            "--turn-instance-id", "complete-source-qualification", "--context-delivery", "off"]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        code = cli_main(argv)
-        result = json.loads(output.getvalue())
+        try:
+            code = cli_main(argv)
+            result = json.loads(output.getvalue())
+        except EffectRuntimeRejected as error:
+            # This existing quota emitter propagates a typed composition
+            # rejection; managed-step returns its JSON diagnostic. Preserve
+            # that boundary rather than count it as a successful work result.
+            assert entrypoint == "quota" and source_fault
+            code, result = 1, {"ok": False, "error": str(error)}
     if source_fault:
         assert code == 1 and result["ok"] is False, result
         expected = {"unknown_action": "Turn effective_action",
@@ -78,9 +101,14 @@ def test_real_managed_entrypoint_checks_and_preserves_the_complete_source(
         assert expected in result["error"], result
         assert observed == []
     else:
-        assert code == 0 and result["disposition"] == "wait", result
-        assert len(observed) == 1
-        source = observed[0]
+        if entrypoint == "managed":
+            assert code == 0 and result["disposition"] == "wait", result
+            assert len(observed) == 1
+            source = observed[0]
+        else:
+            assert code == 0 and result["should_run"] is True, result
+            assert observed == []
+            source = result
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert "action_signature" not in source
         assert source["future_supporting_evidence"] == evidence

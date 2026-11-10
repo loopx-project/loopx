@@ -42,6 +42,33 @@ def test_checked_complete_progressive_projection_keeps_sparse_numeric_source(tmp
     turn.assert_complete_turn_decision(contract)
 
 
+def test_composed_source_uses_one_lossless_literal_transport(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source = _quota_payload()
+    source["observations"] = [1.0, -0.0, 2**60 + 1, 1e-7]
+    source["fixture_material"] = "Full evidence / 完整证据. " * 1400
+    original_rpc = turn.effect_runtime_projection_result
+    observations = []
+
+    def capture(method, params, **kwargs):
+        if params["operation"] == "compose_complete":
+            observations.append((method, params))
+        return original_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(turn, "effect_runtime_projection_result", capture)
+    complete = turn.compose_turn_decision(source)
+    (method, request), = observations
+    assert _json(request["payload"]) == _json(source)
+    assert "source_transport" not in request and "composed_settlement" not in request
+    assert _json(complete["observations"]) == _json(source["observations"])
+    assert complete["fixture_material"] == source["fixture_material"]
+    turn.assert_complete_turn_decision(complete)
+    for retired in ("source_transport", "composed_settlement"):
+        # A stale live adapter must fail, not silently select another source or plan.
+        with pytest.raises(RuntimeError, match="literal source and canonical settlement plan"):
+            original_rpc(method, {**request, retired: None})
+
+
 def test_prior_complete_numeric_binding_needs_its_pinned_reader():
     source = _quota_payload()
     source["observations"] = [0.5, 1.0, -0.0, 2**60 + 1, 1e-7]

@@ -199,8 +199,9 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert ordinary['blocked_priority_fallback'] == fallback
-    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback_ref'] == '$.blocked_priority_fallback'
-    assert 'blocked_priority_fallback' not in ordinary['heartbeat_recommendation']
+    assert ordinary == full
+    assert ordinary['schema_version'] == 'loopx_turn_envelope_v1'
+    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert ordinary['heartbeat_receipt'] == full['heartbeat_receipt']
     assert ordinary['interaction_contract']['cli_channel']['settlement_plan'] == full[
         'interaction_contract']['cli_channel']['settlement_plan']
@@ -219,7 +220,7 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
     from tests.control_plane.canonical_authority_fixture import (
-        initialize_canonical_authority, isolate_sqlite_runtime,
+        empty_todo_display, initialize_canonical_authority, isolate_sqlite_runtime,
     )
     from tests.control_plane.test_quota_settlement_cli import _spend_run_count
 
@@ -240,30 +241,42 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     projection = build_todo_runtime_shadow_projection(
         goal_id=GOAL_ID, handoff_mode='soft_claim', todos=read_fixture_todos(state),
     )
+    # Keep work in its canonical provider and the full non-Todo Goal readable
+    # through the ordinary source reader before strict Host dispatch.
+    empty_todo_display(state)
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'boundary-decision'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope', '--decision-output-dir', str(capture))
+    code, envelope = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture))
     assert code == 0, envelope
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
     assert full['goal_boundary']['write_scope'] == scopes
     assert full['goal_boundary']['guards'] == guards
+    assert envelope == full
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    envelope = build_turn_envelope(full)
     for field in ('write_scope', 'guards', 'requires_parent_approval'):
         assert envelope['boundary'][field] == full['goal_boundary'][field], field
-    authority = extract_turn_authority({'turn_envelope': envelope})
-    assert authority['write_scope'] == scopes
-    assert authority['boundary']['guards'] == guards
-    assert authority['boundary']['requires_parent_approval'] == ['publish', 'production-action']
-    assert 'write_scope' not in authority['boundary']  # Existing aliases carry these facts once.
+    authority = extract_turn_authority({'work_contract': full, 'turn_envelope': envelope})
+    assert authority['goal_boundary'] == full['goal_boundary']
+    # Historical requests still decode their scope aliases, while new requests
+    # transport the original complete contract without deriving a second view.
+    historical = extract_turn_authority({'turn_envelope': envelope})
+    assert historical['write_scope'] == scopes
+    assert historical['boundary']['guards'] == guards
+    assert historical['boundary']['requires_parent_approval'] == ['publish', 'production-action']
+    assert 'write_scope' not in historical['boundary']
     prompt = render_prompt(authority)
-    transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\n', 1)[1])
-    assert transported == authority
+    transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\n', 1)[1])
+    assert transported == {'schema_version': 'loopx_turn_host_request_v1', 'work_contract': full}
     altered = json.loads(json.dumps(envelope))
     altered['boundary']['guards'][-1] = 'Continue without the final restriction.'
+    with pytest.raises(ValueError, match='complete Turn contract rejected'):
+        extract_turn_authority({'work_contract': full, 'turn_envelope': altered})
     with pytest.raises(ValueError, match='action signature'):
         extract_turn_authority({'turn_envelope': altered})
     before = _heartbeat_receipt_count(runtime, TURN_ID)
@@ -273,6 +286,73 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     assert _spend_run_count(runtime) == 0
     assert saved.read_bytes() == original_bytes
     assert envelope['action']['delivery_allowed'] == full['interaction_contract']['agent_channel']['delivery_allowed']
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("projection_fails", [False, True])
+def test_explicit_off_turn_envelope_preserves_bounded_view_and_complete_capture(
+    tmp_path, monkeypatch, provider, projection_fails,
+):
+    from loopx.cli import main
+    from loopx.control_plane.quota import turn_envelope
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _initialize_fixture_authority, _spend_run_count
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    monkeypatch.chdir(project)
+    bindings = ["--registry", str(registry), "--runtime-root", str(runtime)]
+    guard = ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+             "--turn-instance-id", TURN_ID, "--codex-app", "--context-delivery", "off", "--turn-envelope"]
+
+    from contextlib import redirect_stdout
+    from io import StringIO
+
+    if projection_fails:
+        compose = turn_envelope.compose_turn_decision_with_raw_envelope
+
+        def reject_view(payload, **options):
+            # The typed compatibility projector rejects this target; the
+            # original complete decision is still valid and must be saved.
+            return compose(payload, **{**options, "captured_decision_path": ""})
+
+        monkeypatch.setattr(turn_envelope, "compose_turn_decision_with_raw_envelope", reject_view)
+
+    def deliver(output_format, *extra, expected=0):
+        output = StringIO()
+        with redirect_stdout(output):
+            assert main([*bindings, "--format", output_format, *guard, *extra]) == expected
+        return output.getvalue()
+
+    directory = tmp_path / "complete-capture"
+    output = deliver("json", "--decision-output-dir", str(directory), expected=int(projection_fails))
+    raw = (directory / "decision.json").read_bytes()
+    source = json.loads(raw)
+    turn_envelope.assert_complete_turn_decision(source)
+    shown = json.loads(output)
+    if projection_fails:
+        assert shown["error_code"] == "quota_decision_transport_failed"
+        assert shown["heartbeat_receipt"] == source["heartbeat_receipt"]
+        assert shown["captured_decision"] == {"path": str(directory / "decision.json")}
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+        assert _spend_run_count(runtime) == 0
+        return
+    assert shown["schema_version"] == "loopx_turn_envelope_v0"
+    assert shown["contract_capsule"] and shown["action_signature"]["matches"] is True
+    assert shown["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
+    identity = source["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    assert identity["turn_instance_id"] == TURN_ID and identity["todo_id"] == TODO_ID
+    assert shown["action"]["selected_todo"]["todo_id"] == TODO_ID
+    assert shlex.split(shown["detail_ref"]["full_decision"]) == ["cat", "--", str(directory / "decision.json")]
+    before = _heartbeat_receipt_count(runtime, TURN_ID)
+    markdown = deliver("markdown")
+    assert markdown.startswith("# LoopX Turn Envelope")
+    assert "effective_action: `normal_run`" in markdown
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == before == 1
+    assert _spend_run_count(runtime) == 0
+    assert (directory / "decision.json").read_bytes() == raw
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
@@ -308,6 +388,7 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
     saved = capture / 'decision.json'
     full = json.loads(saved.read_text())
+    assert full['schema_version'] == 'loopx_turn_envelope_v1'
     app = envelope['scheduler']['app_automation']
     assert 'ack_cli_args' not in app
     ref = app['ack_cli_args_detail_ref']
@@ -358,6 +439,8 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert json.loads((second / 'decision.json').read_text())['heartbeat_receipt']['status'] == 'replayed'
     assert json.loads(saved.read_text()) == full
 
+    assert fresh['action_signature']['source_decision_hash'] == json.loads(
+        (second / 'decision.json').read_text())['contract_binding']['content_hash']
     assert shlex.split(fresh['detail_ref']['full_decision']) == ['cat', '--', str(second / 'decision.json')]
     # Missing old evidence fails locally; it never substitutes a new guard observation.
     saved.unlink()
@@ -370,15 +453,18 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert _heartbeat_receipt_count(runtime, TURN_ID) == before
 
 
-def test_full_display_is_unchanged_by_capture_location():
+def test_full_display_preserves_the_actual_capture_source(tmp_path):
     from loopx.cli_commands.quota import _project_quota_cli_payload
+    from loopx.cli_commands.quota_capture import capture_decision
     from tests.test_turn_envelope import _full_decision
     args = argparse.Namespace(turn_envelope=False, quota_command='should-run')
-    source = _full_decision()
-    baseline = _project_quota_cli_payload(source, args, frozenset(), None)
-    captured = _project_quota_cli_payload(source, args, frozenset(), None,
-                                         captured_decision_path='/tmp/observation/decision.json')
-    assert captured == baseline
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    source = compose_turn_decision(_full_decision())
+    capture_decision(tmp_path, source)
+    raw = (tmp_path / 'decision.json').read_bytes()
+    captured = json.loads(raw)
+    assert _project_quota_cli_payload(captured, args, frozenset()) == source
+    assert (tmp_path / 'decision.json').read_bytes() == raw
 
 
 @pytest.mark.parametrize('kind', ['missing', 'file', 'symlink'])
@@ -685,7 +771,8 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
         'execution_authority_granted': False,
     }
     assert code == 0 and selected['ok'] is True, selected
-    assert selected['schema_version'] == 'loopx_turn_envelope_v0'
+    assert selected['schema_version'] == 'loopx_turn_envelope_v1'
+    assert selected == observed['decision']
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
 
 
@@ -728,9 +815,9 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
     def refuse_recovery(payload, **kwargs):
         saved = kwargs['capture_directory'] / 'decision.json'
         attempts.append(saved.read_bytes())
-        if turn_envelope:
-            assert payload['schema_version'] == 'loopx_turn_envelope_v0'
-            assert 'heartbeat_receipt' not in payload
+        assert payload['schema_version'] == 'loopx_turn_envelope_v1'
+        assert payload == json.loads(attempts[-1])
+        assert payload['heartbeat_receipt']['turn_instance_id'] == TURN_ID
         raise QuotaDecisionTransportError(
             'Current context recovery could not be published or safely invalidated. '
             'Read the saved original decision/receipt; do not rerun admission.'

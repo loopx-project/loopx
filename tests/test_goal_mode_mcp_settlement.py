@@ -25,6 +25,50 @@ GOAL_ID = "mcp-settlement-fixture"
 AGENT_ID = "claude"
 
 
+@pytest.mark.parametrize("source", [
+    {"ok": True, "normal_delivery_allowed": True, "selected_todo": {"todo_id": "todo_legacy"},
+     "interaction_contract": {"cli_channel": {"next_cli_actions": ["refresh", "spend"],
+                                               "settlement_plan": {"identity": "original"}}}},
+    {"schema_version": "loopx_turn_envelope_v0", "decision": "backoff"},
+])
+def test_mcp_legacy_content_and_string_result_schema_remain_compatible(monkeypatch, source):
+    import asyncio
+
+    pytest.importorskip("mcp.server.fastmcp")
+    from mcp.types import CallToolResult
+    from loopx.goal_mode_mcp import create_fastmcp_server
+
+    server, control = create_fastmcp_server(
+        GoalModeMCPConfig(server_name="synthetic-mcp", runtime_profile="claude_code",
+                          legacy_host_surface="claude_code"),
+        lambda: {"goal_id": GOAL_ID, "agent_id": AGENT_ID})
+    monkeypatch.setattr(control, "run_cli", lambda *_args, **_kwargs: json.dumps(source))
+
+    async def exercise():
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        for name in ("should_run", "list_todos"):
+            schema = tools[name].outputSchema
+            assert schema["properties"]["result"]["type"] == "string"
+            assert schema["required"] == ["result"]
+            result = await server.call_tool(name, {})
+            assert isinstance(result, CallToolResult)
+            assert len(result.content) == 1
+            assert result.structuredContent == {"result": result.content[0].text}
+            received = json.loads(result.content[0].text)
+            # Existing Python adapter aliases remain a string API and keep the
+            # same historical host projection as the actual MCP tool.
+            assert json.loads(getattr(control, name)()) == received
+            if "schema_version" in source:
+                assert received == source
+            else:
+                contract = received["interaction_contract"]
+                assert contract["mcp_channel"]["delivery_todo_id"] == "todo_legacy"
+                assert contract["cli_channel"]["next_cli_actions"] == []
+                assert "settlement_plan" not in contract["cli_channel"]
+
+    asyncio.run(exercise())
+
+
 def test_host_settlement_adapter_uses_two_runtime_crossings_and_stops_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

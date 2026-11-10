@@ -392,63 +392,50 @@ def _reference_context(
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
     sources = context.get("sources") if isinstance(context, dict) else None
-    needs_context = bool(sources) and (task_title or explore_guidance)
-    if not needs_context and (diagnostics is None or (
-        diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True
-    )):
-        if not goal_acceptance and not vision_audit and not replan_authoring:
-            return payload
-        if goal_acceptance:
-            # A reference can only be created or relocated when two literal
-            # owners are present. Equality, schema and owner choice stay in TS.
-            def contains_contract(value: Any, *path: str) -> bool:
-                for key in path:
-                    value = value.get(key) if isinstance(value, dict) else None
-                return isinstance(value, dict) and bool(value)
+    if goal_acceptance:
+        # A reference can only be created or relocated when two literal owners
+        # are present. Check structural presence here, leave equality, schema
+        # and the choice of owner to TypeScript.
+        def contains_contract(value: Any, *path: str) -> bool:
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            return isinstance(value, dict) and bool(value)
 
-            carriers = (
-                any(contains_contract(row, "content", "goal_acceptance_contract") for row in sources)
-                if isinstance(sources, list) else False,
-                contains_contract(payload, "planning_horizon", "core_goal", "acceptance_contract"),
-                contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
-                contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
-            )
-            if sum(carriers) < 2 and not vision_audit and not replan_authoring:
-                return payload
+        carriers = (
+            any(contains_contract(row, "content", "goal_acceptance_contract") for row in sources)
+            if isinstance(sources, list) else False,
+            contains_contract(payload, "planning_horizon", "core_goal", "acceptance_contract"),
+            contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
+            contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
+        )
+        goal_acceptance = sum(carriers) >= 2
+    if not (vision_audit or goal_acceptance or replan_authoring or (sources and (task_title or explore_guidance))) and (
+        diagnostics is None or (diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True)
+    ):
+        return payload
     from .turn_envelope import _turn_envelope_result
 
     # The typed projection reads and edits these roots. Untouched capture
     # facts stay local. Apply the returned paths against the original payload.
     source = {key: payload[key] for key in (
         "mode", "groups", "next_automatic_turn", "agent_todo_summary", "user_todo_summary",
-        "todo_summary_projection", "planning_horizon", "autonomous_replan_obligation",
+        "todo_summary_projection",
         "interaction_contract", "agent_lane_next_action", "selected_todo",
     ) if key in payload}
     if replan_authoring and "replan_action_packet" in payload:
         source["replan_action_packet"] = payload["replan_action_packet"]
-    if (
-        isinstance(contract, dict)
-        and isinstance(agent, dict)
-        and isinstance(context, dict)
-        and isinstance(context.get("sources"), list)
-    ):
-        # Edits address rows by their original index. Keep unrelated rows in
-        # place without sending their bodies through the display RPC.
-        rows = [
-            row if isinstance(row, dict) and (
-                (task_title and row.get("source") == "selected_todo")
-                or (explore_guidance and row.get("kind") == "explore_turn_context")
-                or (goal_acceptance and row.get("source") == "goal_acceptance")
-            ) else None
-            for row in context["sources"]
-        ]
-        source["interaction_contract"] = {
-            **contract,
-            "agent_channel": {
-                **agent,
-                "work_context": {**context, "sources": rows},
-            },
-        }
+    if goal_acceptance:
+        source.update({key: payload[key] for key in ("planning_horizon", "autonomous_replan_obligation") if key in payload})
+    if (isinstance(contract, dict) and isinstance(agent, dict)
+            and isinstance(context, dict) and isinstance(context.get("sources"), list)):
+        # Edits address rows by their original index. An unrelated source has
+        # no fields read by this projection; its complete body stays local.
+        rows = [row if isinstance(row, dict) and (
+            (goal_acceptance and row.get("source") == "goal_acceptance") or (task_title and row.get("source") == "selected_todo")
+            or (explore_guidance and row.get("kind") == "explore_turn_context")
+        ) else None for row in context["sources"]]
+        source["interaction_contract"] = {**contract, "agent_channel": {
+            **agent, "work_context": {**context, "sources": rows}}}
     if vision_audit:
         source["vision_continuation_audit"] = payload["vision_continuation_audit"]
         frontier = payload.get("goal_frontier_projection")
@@ -456,8 +443,8 @@ def _reference_context(
             source["goal_frontier_projection"] = {"vision_continuation_audit": frontier["vision_continuation_audit"]}
     result = _turn_envelope_result("reference_context", payload=source,
         task_title=task_title, explore_guidance=explore_guidance,
-        goal_acceptance=goal_acceptance,
         **({"vision_audit": True} if vision_audit else {}),
+        goal_acceptance=goal_acceptance,
         **({"replan_authoring": True} if replan_authoring else {}),
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
@@ -530,14 +517,9 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action = dict(agent_lane_next_action)
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
-    diagnostics = None
-    if ((not include_todo_summary_detail and isinstance(payload.get("agent_todo_summary"), dict))
-            or (not include_user_todo_summary_detail and isinstance(payload.get("user_todo_summary"), dict))):
-        diagnostics = {"agent_detail": include_todo_summary_detail,
-            "user_detail": include_user_todo_summary_detail}
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        goal_acceptance=True, vision_audit=share_audit, replan_authoring=share_authoring,
-        explore_guidance=not include_vision_detail, diagnostics=diagnostics)
+        vision_audit=share_audit, replan_authoring=share_authoring, explore_guidance=not include_vision_detail, goal_acceptance=True, diagnostics={
+            "agent_detail": include_todo_summary_detail, "user_detail": include_user_todo_summary_detail})
     if share_audit and isinstance(vision_audit, dict):
         compact = {**compact, "vision_continuation_audit": _compact_vision_continuation_audit(vision_audit)}
     return _promote_interaction_contract(
@@ -550,8 +532,6 @@ def compact_quota_plan_cli_payload(
 ) -> dict[str, Any]:
     """Bound read-only CLI summaries after complete planning; retain full opt-ins."""
     if payload.get("mode") not in {"status", "plan"} or not isinstance(payload.get("groups"), dict):
-        return payload
-    if {"agent-todos", "user-todos"} <= detail_sections:
         return payload
 
     return _reference_context(payload, task_title=False, explore_guidance=False, diagnostics={

@@ -462,7 +462,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     "after-ready-released-execution", "legacy-same-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
-def test_native_hook_replays_the_original_claim_after_guard_timeout(
+def test_native_hook_recovers_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
 ):
     import io
@@ -531,19 +531,26 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert code == 0 and payload["ok"], payload
         return payload
 
+    def projected_read(command):
+        result = subprocess.run(shlex.split(command), cwd=tmp_path, capture_output=True,
+                                check=True, text=True)
+        return json.loads(result.stdout)
+
     if legacy:
-        # Before the upgrade the Host issued the ordinary claim without a
-        # persisted operation ID, then could lose the ready result.
+        # Older Hosts may have committed a claim without a captured operation ID.
         legacy_claim = read(*before["execution_preparation"]["claim"]["cli_args"])
         original_id = legacy_claim["claim_operation_id"]
+        original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     else:
-        first_context = hook()["hookSpecificOutput"]["additionalContext"]
-        first_request = json.loads(first_context.rsplit("Receipt: ", 1)[1])
-        assert first_request["event"] == "host_execution_preparation_readback_required"
+        hint = hook()["hookSpecificOutput"]["additionalContext"]
+        request = json.loads(hint.rsplit("Receipt: ", 1)[1])
+        assert request["event"] == "host_execution_preparation_readback_required"
+        assert (request["goal_id"], request["agent_id"], request["todo_id"], request["turn_instance_id"]) == (
+            GOAL, AGENT, TODO, turn,
+        )
         original_id = claims[0]["claim_operation_id"]
-        assert original_id == f"todo-claim:codex-capture:{digest}"
-        assert first_request["claim_operation_id"] == original_id
-    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+        assert request["claim_operation_id"] == original_id == f"todo-claim:codex-capture:{digest}"
+        original = projected_read(request["receipt_command"])
     lease = original["receipts"][0]["result"]["lease"]
     if released:
         read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
@@ -588,11 +595,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
             )
             if after_ready:
                 assert receipt["context"]["recovery_command"]
-        for command_key in ("receipt_command", "lease_command"):
-            proc = subprocess.run(
-                shlex.split(receipt[command_key]), cwd=tmp_path, capture_output=True, text=True, check=True,
-            )
-            assert json.loads(proc.stdout)["ok"]
+        assert projected_read(receipt["receipt_command"])["receipts"] == original["receipts"]
+        assert projected_read(receipt["lease_command"]) == current
         if released:
             assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
         else:

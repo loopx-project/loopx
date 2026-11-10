@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping
 from copy import deepcopy
-import json
 from typing import Any, cast
+import json
 import zlib
 
 from ..effect_runtime import _encode_rpc_json, effect_runtime_projection_result, source_number_tokens
@@ -97,17 +97,14 @@ def _turn_envelope_result(
         operation in {"build", "quota_signature", "replan_cli_view", "bind_capture",
                       "capability_automation_source"}
         and isinstance(payload, Mapping)
-        and (
-            (operation == "replan_cli_view" and params.get("source_edits") is True)
-            or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv")))
-        )
+        and ((operation == "replan_cli_view" and params.get("source_edits") is True)
+             or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv"))))
     )
-    if complete or operation == "compose_complete" or operation == "replan_view" or staged_replan or operation == "reference_context":
-        tokens = source_number_tokens(payload)
-        if tokens:
-            request["source_number_tokens"] = tokens
-    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
-        tokens = source_number_tokens(params)
+    token_source = payload if isinstance(payload, Mapping) else params
+    if complete or staged_replan or operation in {"replan_view", "reference_context",
+            "compose_complete", "context_delivery", "context_recovery",
+            "progressive_context_delivery", "context_read_sections"}:
+        tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
     if operation == "capability_automation_source" and set(params) == {"payload"} and isinstance(payload, Mapping):
@@ -285,13 +282,39 @@ def compose_turn_decision(
     ) = None,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
+    source, _ = _compose_turn_source(payload,
+        scheduler_execution_context=scheduler_execution_context)
+    return source
+
+
+def compose_turn_decision_with_raw_envelope(
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+    captured_decision_path: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Return the complete capture and its bounded compatibility view in one call."""
+    return _compose_turn_source(payload,
+        scheduler_execution_context=scheduler_execution_context,
+        legacy_output={"include_legacy_envelope": True,
+                       **({"captured_decision_path": captured_decision_path}
+                          if captured_decision_path is not None else {})})
+
+
+def _compose_turn_source(
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+    legacy_output: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
-        scheduler_execution_args=args, source_edits=True)
-    return _apply_context_projection_changes(source, result)
-
+        scheduler_execution_args=args, source_edits=True,
+        **(legacy_output or {}))
+    view = result.pop("legacy_envelope", None) if legacy_output is not None else None
+    return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
 
 def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
     """Validate the original contract; keep its host binding and caller-owned bytes."""

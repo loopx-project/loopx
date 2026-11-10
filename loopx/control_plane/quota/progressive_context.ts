@@ -9,6 +9,7 @@ import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.t
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
   from "../work_items/interaction_contract.ts";
+import {projectReplanSemantics} from "../work_items/replan_semantics.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
@@ -184,7 +185,7 @@ function reusableVisionAuthoring(context: JsonObject): ReusableReadField | undef
 }
 
 function observedSectionDigest(body: string, field?: ReusableReadField): string {
-  // Matching content is insufficient when a field is bound to another source.
+  // A repeated body at the same position can belong to a different source.
   const value = field?.sourceIdentity === undefined ? body : JSON.stringify([field.sourceIdentity, body]);
   return createHash("sha256").update(value).digest("hex");
 }
@@ -292,41 +293,28 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
   if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
       + MIN_REUSABLE_BODY_BYTES >= bytes(original)) return authoringOnly();
   Object.assign(reused, retainedAuthoring);
-  if (request.include_initial_read_plan === true) {
-    // The IO adapter already has the ordinary plan. Keep unchanged runs even
-    // when reused sections are far apart in the ordered selection.
-    const positions = new Map(grouped.map((row, index) => [row.pointer, index]));
-    const splices: {start: number; end: number; selections: typeof selections}[] = [];
-    let start = 0, next = 0;
-    for (let end = 0; end < original.length; end++) {
-      const position = positions.get(original[end].pointer);
-      if (position === undefined || position < next) continue;
-      if (start < end || next < position)
-        splices.push({start, end, selections: grouped.slice(next, position)});
-      start = end + 1;
-      next = position + 1;
-    }
-    if (start < original.length || next < grouped.length)
-      splices.push({start, end: original.length, selections: grouped.slice(next)});
-    const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
-    if (splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: grouped})))
-      return {...edits, reused};
-  }
-  return {selections: grouped, reused};
+  return {...(request.include_initial_read_plan === true
+    ? compactObservedSelection(original, grouped) : {selections: grouped}), reused};
 }
 
 function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
-  // The IO adapter already has the ordinary plan. Keep its exact ordering
-  // and send only the changed middle when it is cheaper than the whole list.
-  let start = 0, end = ordinary.length, stop = selected.length;
-  while (start < end && start < stop && ordinary[start].pointer === selected[start].pointer) start++;
-  while (end > start && stop > start && ordinary[end - 1].pointer === selected[stop - 1].pointer) {
-    end--;
-    stop--;
+  // Reuse main's ordered edit algorithm for the opening and its linked remainder.
+  const positions = new Map(selected.map((row, index) => [row.pointer, index]));
+  const splices: {start: number; end: number; selections: ReadSelection[]}[] = [];
+  let start = 0, next = 0;
+  for (let end = 0; end < ordinary.length; end++) {
+    const position = positions.get(ordinary[end].pointer);
+    if (position === undefined || position < next) continue;
+    if (start < end || next < position)
+      splices.push({start, end, selections: selected.slice(next, position)});
+    start = end + 1;
+    next = position + 1;
   }
-  const selection_splice = {start, end, selections: selected.slice(start, stop)};
-  return Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(selected))
-    ? {selection_splice} : {selections: selected};
+  if (start < ordinary.length || next < selected.length)
+    splices.push({start, end: ordinary.length, selections: selected.slice(next)});
+  const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
+  return splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: selected}))
+    ? edits : {selections: selected};
 }
 
 /** Compose the ready opening with the same observation, without comparing
@@ -596,7 +584,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   }
   if (staged) {
     if (required.context_details === undefined) {
-      required = {...required, context_details: {path: details.path, sha256: details.sha256}};
+      required = {...required, context_details: sourceNavigation};
     }
     // Staging can omit whole subtrees, but the retained numeric facts still
     // refer to the same source fields, including in the encoded full/delta.
@@ -691,25 +679,89 @@ function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof init
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
     groups: ReturnType<typeof initialContextReadGroups>, readyScope?: ReturnType<typeof prepareReadyOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
+      replan_review?: JsonObject;
       ordinary_opening_rows?: number;
     } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
-  const plan = select(pointers);
+  const ordinary = select(pointers);
+  const review = successorReplanReadSelection(context, pointers);
+  // Both plans address this same capture. Reuse the ordinary addresses already
+  // in the response; only send typed paths that the review actually adds.
+  const relativeReview = review && (() => {
+    const positions = new Map((ordinary.selections as {pointer: string}[]).map((row, i) => [row.pointer, i]));
+    return {selections: (review.selections as {pointer: string; path: Path}[])
+      .map(row => positions.get(row.pointer) ?? row)};
+  })();
   let {opening, remaining} = groups;
   if (readyScope) {
     // The reader chooses the split using the actual serialized opening.
     opening = opening.flatMap(field => field === readyScope.boundary ? readyScope.controls : [field]);
     remaining = [readyScope.detail, ...remaining];
   }
-  const ordinaryRows = readyScope ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
+  const ordinaryRows = readyScope ? (ordinary.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
-  return {initial: true, plan, ...(opening.length && remaining.length
+  return {initial: true, plan: ordinary, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(readyScope ? {linked_opening_detail: readyScope.detail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(readyScope ? {linked_opening_detail: readyScope.detail, ordinary_opening_rows: ordinaryRows} : {}),
+    ...(relativeReview ? {replan_review: relativeReview} : {})};
+}
+
+/** Address a review before choosing a successor. The ordinary reader and
+ * complete source retain authoring for every other outcome. */
+export function successorReplanReadSelection(context: JsonObject, pointers: string[]): JsonObject | undefined {
+  const obligation = jsonObject(context.autonomous_replan_obligation);
+  const replan = jsonObject(context.replan_action_packet);
+  const review = jsonObject(obligation?.replan_context);
+  const writer = jsonObject(replan?.writeback_contract);
+  const receipt = jsonObject(context.heartbeat_receipt);
+  const identity = jsonObject(receipt?.settlement_identity);
+  const interaction = jsonObject(context.interaction_contract), cli = jsonObject(interaction?.cli_channel);
+  const plan = jsonObject(cli?.settlement_plan);
+  const binding = jsonObject(jsonObject(cli?.replan_settlement_contract)?.settlement_binding);
+  const choices = jsonObject(replan?.uncovered_frontier)?.required_any_of;
+  if (!pointers.length || context.schema_version !== "loopx_turn_envelope_v1" ||
+      context.ok !== true || context.should_run !== true || context.normal_delivery_allowed !== false ||
+      context.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED || context.selected_todo != null ||
+      jsonObject(interaction?.user_channel)?.action_required !== false || cli?.turn_binding_required === true ||
+      replan?.schema_version !== "replan_action_packet_v0" || replan.decision !== "replan_required" ||
+      replan.settlement_only === true || !obligation || review?.schema_version !== "replan_context_v0" ||
+      receipt?.status !== "committed" ||
+      !identity || identity.binding_kind !== "autonomous_replan" || !identity.replan_obligation_id ||
+      identity.replan_obligation_id !== obligation.obligation_id || identity.replan_obligation_id !== replan.obligation_id ||
+      identity.replan_obligation_id !== review.obligation_id || identity.goal_id !== context.goal_id ||
+      identity.goal_id !== review.goal_id || identity.agent_id !== review.agent_id ||
+      typeof identity.turn_instance_id !== "string" || identity.turn_instance_id !== receipt?.turn_instance_id ||
+      plan?.schema_version !== "quota_settlement_plan_v1" || !isDeepStrictEqual(plan.identity, identity) ||
+      binding?.kind !== "autonomous_replan" || binding.id !== identity.replan_obligation_id ||
+      binding.cli_argument !== "--replan-obligation-id" ||
+      typeof writer?.successor_binding_args !== "string" || !writer.successor_binding_args ||
+      typeof writer.successor_settlement !== "string" || !writer.successor_settlement ||
+      !Array.isArray(choices) || !choices.includes("new_runnable_successor")) return undefined;
+  if (!Array.isArray(plan.ordered_steps) || plan.ordered_steps.some(value => {
+    const step = jsonObject(value);
+    return !step || (step.kind !== "validation" && step.kind !== "durable_writeback" && step.kind !== "quota_spend") ||
+      (Object.hasOwn(step, "optional_attachments") && (!Array.isArray(step.optional_attachments) ||
+        step.optional_attachments.some(item => jsonObject(item)?.required !== false)));
+  })) return undefined;
+  // Reuse the typed owner for plain reviews. Cadence, observed stalls, capability
+  // gates, lifecycle recovery and mixed triggers need their ordinary authoring.
+  if (!projectReplanSemantics({operation: "receipt_review_source", obligation,
+    agent_id: identity.agent_id}).review_source) return undefined;
+
+  const ob = "/autonomous_replan_obligation", policy = "/replan_action_packet";
+  const contract = policy + "/writeback_contract", cliPath = "/interaction_contract/cli_channel";
+  const omit = [ob, cliPath + "/next_cli_actions", cliPath + "/settlement_plan"];
+  const scoped = pointers.filter(path => !omit.some(root => path === root || path.startsWith(root + "/")));
+  const atReview = scoped.indexOf(policy + "/planning_guidance");
+  if (atReview < 0) return undefined;
+  scoped.splice(atReview + 1, 0, ob, policy + "/uncovered_frontier",
+    cliPath + "/replan_settlement_contract", contract + "/successor_binding_args",
+    contract + "/successor_settlement", ...(typeof writer.successor_command === "string" ? [contract + "/successor_command"] : []));
+  return capturedContextSelection({context, initial_read: true}, scoped);
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -935,17 +987,19 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const steps = orderedSettlementSteps(plan);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   const [writeback, spend] = settlementSteps ?? [];
+  const manualSettlement = plan?.schema_version === "quota_settlement_plan_v1";
+  // Recorded v2 captures retain their original runtime-owned receipt step.
+  // Native CLI projection may compose the current plan before binding; history remains unchanged.
   const composedSettlement = plan?.schema_version === "quota_settlement_plan_v2" && writeback?.owner === "agent"
     && spend?.owner === "runtime" && !Object.hasOwn(spend, "command_template");
-  const templates = plan?.schema_version === "quota_settlement_plan_v1"
-    ? [writeback?.command_template, spend?.command_template]
+  const templates = manualSettlement ? [writeback?.command_template, spend?.command_template]
     : composedSettlement ? [writeback?.command_template] : undefined;
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
   const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
     && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
-    && templates?.every(command => typeof command === "string" && command.length > 0)
+    && templates?.every(command => typeof command === "string" && command.length > 0) === true
     && isDeepStrictEqual(cli?.next_cli_actions, templates);
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",

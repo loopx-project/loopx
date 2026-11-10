@@ -440,6 +440,8 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
     if "baseline_reference" in view:
         result["baseline_reference"] = reference(view["baseline_reference"])
         result["continuity_basis"] = view["continuity_basis"]
+    if "replan_review_command" in view:
+        result["replan_review_command"] = view["replan_review_command"]
     if "first_read_command" in view:
         recovery = view["recovery"]
         first_page_bytes, first_output_bytes = command_budget(view["first_read_command"])

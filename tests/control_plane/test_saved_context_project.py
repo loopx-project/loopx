@@ -427,7 +427,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
     (True, False, "explicit-root"),
 ], ids=["off", "on", "on-after-compaction", "alias-before-session", "explicit-before-session", "explicit-root"])
 def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted, placement):
-    """The saved guard is presented after SessionStart, then really bound once."""
+    """Execute same-Turn selection from the saved guard with and without SessionStart."""
     from benchmark.runtime.checkpoint import capture_before_replan
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -499,6 +499,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     else:
         source = wake / "checkpoint-start-view.json"
     raw = source.read_bytes()
+    if enabled:
+        assert raw == original_guard
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
@@ -833,8 +835,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         argv[index] = str(damaged)
                         queue.insert(0, shlex.join(argv))
                         rejected_read = True
-                if benchmark and progressive and name in ("cold", "warm"):
-                    queue.clear()  # The first tool result already contains the requested facts.
+                # The initial explicit selection contains only Goal and receipt.
+                # Read the offered choices and selection command before choosing.
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -991,19 +993,24 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     baseline = None
     for published, descriptor in observed.values():
         projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
+        if large_capture:
+            # Oversized inputs use the exact saved document without a delta target.
+            assert descriptor["mode"] == "full" and "target" not in descriptor
+            assert published == projected
+            assert projected["retained_material"] == {
+                "requirement": unicode_requirement, "supporting": supporting_material}
+            continue
         current = prepare_context_delivery(projected,
             scope={key: descriptor["target"][key] for key in
                 ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in descriptor["target"]},
-            capture_id=descriptor["target"]["capture_id"], surface="quota_packet")
+            capture_id=descriptor["target"]["capture_id"],
+            surface="complete_turn" if projected.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet")
         # Full presentation publishes the original document; only deltas have
         # a separate wire target. Both retain the same typed recovery check.
         wire = current if descriptor["mode"] == "full" else published
         assert current["target"] == descriptor["target"]
         restored = restore_context_delivery(wire, baseline=baseline, current=current)
         assert restored["context"] == projected
-        if large_capture:
-            assert restored["context"]["retained_material"] == {
-                "requirement": unicode_requirement, "supporting": supporting_material}
         if wire["mode"] == "delta":
             assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
         # Match the native journal's exact prior full capture and depth. The
@@ -1044,6 +1051,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         value = value[int(part)] if isinstance(value, list) else value[part]
                     assert "context_ref" not in value
                     rows[i] = value
+            if "context_reference_instruction" in presentation and "context_details" not in original:
+                details = presentation.pop("context_details")
+                assert set(details) == {"command_template"}
+                reader = shlex.split(details["command_template"])
+                signed_source = Path(reader[reader.index("--capture-file") + 1]).read_bytes()
+                assert hashlib.sha256(signed_source).hexdigest() == reader[reader.index("--capture-sha256") + 1]
+                assert json.loads(signed_source) == original
             presentation.pop("context_reference_instruction", None)
             assert presentation == original  # only presentation transport differs
     else:

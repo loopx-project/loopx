@@ -13,6 +13,7 @@ import re
 import shlex
 import subprocess
 import sys
+import traceback
 
 import pytest
 
@@ -20,7 +21,7 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
-from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
+from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
     reference_metadata_oracle,
@@ -477,6 +478,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         if host == "code_mode":
             pragma = ('// @exec: {"max_output_tokens":24000}\n' if automatic_output_budget else
                 '// @exec: {"max_output_tokens":12000}\n' if native_pragma else "")
+            if bounded_pages and native_read_batch > 2:
+                # A smaller output budget can shorten any page. Follow each
+                # returned cursor inside the same bounded batch rather than
+                # leaving gaps between precomputed offsets.
+                options = {"max_output_tokens": tool_output_tokens(cmd, 11000 if reader_output_bytes else 2000)}
+                code = ("let command=" + json.dumps(cmd) + ";for(let i=0;i<" + str(native_read_batch) + ";i++){"
+                    "const r=await tools.exec_command({..." + json.dumps(options) + ",cmd:command});"
+                    "text(r.exit_code===0?r.output:r);if(r.exit_code!==0)break;"
+                    "const page=JSON.parse(r.output);if(page.eof!==false)break;command=page.next_command;}")
+                return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
+                    "name": "exec", "input": pragma + code}
             # Exercise the shipped default page size and bounded batching for
             # both output forms. One model round per page can exhaust the
             # unchanged native turn deadline before same-capture recovery ends.
@@ -503,10 +515,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     def observed_response(request, number, message):
         try:
             return response(request, number, message)
-        except Exception as error:
+        except Exception:
             # End the native fixture and report the original assertion,
             # rather than making Codex retry a broken HTTP connection.
-            errors.append(error)
+            errors.append(traceback.format_exc())
             return message
 
     with local_inference_provider(observed_response, usage) as (url, calls, observed):
@@ -591,7 +603,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     "components": [{"id": "task", "source_path": str(state)}], "point_metadata": {}}))
                 env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
             result = run_once(env)
-            assert not errors, errors
+            assert not errors, "\n".join(errors)
             assert result["ok"] and result["host_invoked"], result
             assert result["context_transport"] == {"available": True}
             assert result["session"]["session_id"]
@@ -601,7 +613,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 # checked first readback through the real CLI, rather than
                 # reusing a stale guard/Turn from resumed history to obtain an
                 # artificially eligible warm packet.
-                from test_quota_settlement_cli import _run_cli
                 expected = hashlib.sha256(read_paths["cold"].read_text().rstrip("\n").encode()).hexdigest()
                 assert stages["cold_readback_sha256"] == expected
                 artifact = project / "native-context-readback.txt"
@@ -667,7 +678,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if recovery_resume:
                 assert _app_server(binary, env, workspace, home, True, sandbox=sandbox,
                                    resume=session_id, turn_timeout_sec=60) == session_id
-    assert not errors, errors
+    assert not errors, "\n".join(errors)
 
     assert stages["phase"] == "done"
     assert len(snapshots) == 2  # compaction/readback never invokes a third guard
@@ -701,7 +712,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-        capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
+        capture_id=wires["warm"]["target"]["capture_id"], surface="complete_turn")
+    assert current["target"] == wires["warm"]["target"]
     baseline = wires["cold"]
     if resumed and qualified_resume and not resume_loss:
         assert wires["warm"]["base"] == baseline["target"]
@@ -713,13 +725,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
         baseline = prepare_context_delivery(baseline["context"], scope={
             k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-            capture_id=baseline["target"]["capture_id"], surface=surface)
+            capture_id=baseline["target"]["capture_id"], surface="complete_turn")
         assert baseline["target"] == wires["warm"]["base"]
     restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
-    for document in (wires["cold"]["context"], current["context"]):
-        context = (document["work_context"] if surface == "turn_envelope" else
-                   document["interaction_contract"]["agent_channel"]["work_context"])
+    # Both CLI spellings now emit the same complete contract. Compare every
+    # reconstructed fact with its original capture, not two compact views.
+    for document, (_, raw) in zip((wires["cold"]["context"], current["context"]), snapshots, strict=True):
+        original = json.loads(raw)
+        assert document == original
+        assert document["schema_version"] == "loopx_turn_envelope_v1"
+        context = document["interaction_contract"]["agent_channel"]["work_context"]
         selected = next(source["content"]["todo"] for source in context["sources"]
                         if source["source"] == "selected_todo")
         assert selected["todo_id"] == TODO_ID and selected["text"] == body
@@ -804,7 +820,7 @@ def test_native_known_history_budget_keeps_larger_batches_and_recovery(tmp_path,
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "code_mode", surface, False, True, True, "missing", shared_root=True,
         native_pragma=True, native_read_batch=8, native_history_tokens=10000,
-        reader_output_bytes=4000)
+        reader_output_bytes=4000, bounded_pages=True)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

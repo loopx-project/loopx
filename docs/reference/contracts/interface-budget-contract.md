@@ -452,9 +452,10 @@ three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
 ### Canonical CLI fixture qualification
 
-The historical quota policy rows explicitly use `--context-delivery off`,
+The historical v0 quota policy rows explicitly use `--context-delivery off`,
 including detail selectors and the TurnEnvelope variant. Their complete JSON
-and Markdown, semantic keys, growth checks and ceilings remain unchanged.
+and Markdown, semantic keys, growth checks and ceilings were retained for that
+qualification. The C1 v1 migration decision below records a different carrier.
 Default progressive navigation is a different transport: the real File/SQLite
 test follows its digest-bound recovery through every byte, checks the complete
 policy and unchanged effect log, and rejects a modified capture. Navigation
@@ -464,8 +465,9 @@ defaults are unchanged. Both differential arms import their own pinned product
 with one frozen current caller fixture, so a fixture revision alone cannot
 appear as a product output change.
 
-历史 quota 策略行显式使用 `--context-delivery off`，详情和 TurnEnvelope 变体同样适用；
-完整正文、语义、增长和原预算保留。默认渐进导航另经真实 File/SQLite reader 完整补读、
+历史 v0 quota 策略行显式使用 `--context-delivery off`，详情和 TurnEnvelope 变体同样适用；
+该次资格保留完整正文、语义、增长和原预算。后文单列 C1 v1 载体迁移的决定。
+默认渐进导航另经真实 File/SQLite reader 完整补读、
 effect 日志不变与原捕获被改写后的拒绝验证。分别计量导航和全部补读字节，不将短导航
 冒充完整决策或模型成本收益；生产默认不变。两端各自导入已固定的产品版本，并共用
 同一份冻结的当前调用夹具，避免将夹具修订误计为产品输出变化。
@@ -513,6 +515,133 @@ quota 小型／拥挤夹具为 9,558／10,225 字符、182／166 行，比同一
 10,000 字符／190 行。TurnEnvelope 为 10,681 JSON 字符，启用多子 Agent 后为
 12,268；Markdown 为 4,521 字符／135 行，stdout 上限调整为 13,000／4,800 字符、
 140 行。原失败保留；其它限制、集合增长、wire-byte 目标、执行权限及冻结实验标准不变。
+
+The C1 proposal deliberately replaces the bounded v0 effect packet with the
+complete `loopx_turn_envelope_v1` source. Ordinary quota, its explicit
+`--turn-envelope` spelling and detail modes share the typed composition
+owner; Markdown now carries parseable complete JSON rather than v0's short
+narrative. `turn plan --include-transaction-detail` retains session/transaction
+metadata and the complete inline contract used by native and structured Hosts.
+Reusing the default inspection projection here would change that consumer
+contract. Restoring the old Markdown heading costs nine characters without
+changing the decoded source. No source clauses are shortened.
+
+On the same small File fixture, main `b78246ff79` emits 9,113 / 2,425 /
+11,283 characters for explicit quota JSON / Markdown / transaction JSON;
+C1's complete producer emits 24,248 / 24,536 / 26,886. The original
+13,000 / 4,800 / 15,000 failures remain failures. The expanded File/SQLite
+qualification combines the original small fixture, enabled multi-subagent
+policy, 128-character routes and a bound Turn/capture. Maxima are
+28,928 / 27,414 / 28,955 characters. Their versioned allowances become
+30,000 / 28,000 / 30,000, leaving 1,072 / 586 / 1,045 characters.
+The original line allowances remain 300 / 140 / 380.
+
+The same 98-row diagnostic also exposes complete-source costs in other
+`--context-delivery off` rows. Calibrate only the exceeded allowances:
+
+| Inline v1 fixture | Observed characters | Previous ceiling | v1 ceiling |
+| --- | ---: | ---: | ---: |
+| Ordinary quota Markdown, small / crowded / multi-Agent | 24,536 / 44,485 / 29,866 | 10,000 / 17,000 / 7,000 | 25,000 / 45,000 / 30,500 |
+| Ordinary quota JSON, multi-Agent | 29,574 | 26,500 | 30,000 |
+| Six explicit detail Markdown modes | 24,648–25,474 | 10,000 | 26,000 |
+
+The budget owner and probe distinguish the registered versions, require
+current semantic fields, and reject old or incomplete carriers; an unchanged
+heading alone cannot qualify v1. A frozen comparison caller recognizes v0 and
+v1's declared Turn carriers separately, without weakening v1 inspection/effect
+checks. Other character ceilings, every line/collection/growth guard, explicit
+off, source integrity, execution quota, transport hard limits and frozen
+experiments remain unchanged. Native Windows is not qualified by this POSIX
+run. These allowances accept additional inline cost; they neither reduce
+output nor establish model adoption, accepted outcomes or lower complete cost.
+The original-quota single-session comparison remains open.
+
+C1 提议以完整 `loopx_turn_envelope_v1` 替换有界 v0 effect packet。普通 quota、
+显式 `--turn-envelope` 和详情模式复用同一 typed composition；Markdown 改为可解析的
+完整 JSON。`--include-transaction-detail` 继续内联 native／structured Host 使用的
+完整契约及事务元数据，不能套用默认检视投影。恢复旧标题增加 9 字符，原文不缩减。
+
+同一 small File 夹具的 main 三项为 9,113／2,425／11,283 字符，C1 为
+24,248／24,536／26,886；原 13,000／4,800／15,000 失败保留。File／SQLite 另组合
+多子代理、128 字符路径和 Turn／capture 绑定，最大值为 28,928／27,414／28,955，
+仅将这三项展示预算定标为 30,000／28,000／30,000。上表同时列出 98 行诊断发现的
+其余超限及其新预算，旧失败不追溯改绿。版本、完整正文、错版本／缺字段拒绝、
+全部行数、集合／增长门、off、完整性、权限、传输硬限制和冻结实验均保留。
+本轮没有 native Windows 资格，也没有输出节省、模型采用、整题成果或完整成本收益
+结论；原 quota 单会话验收继续开放。
+
+#### Complete quota carrier differential qualification
+
+A new matched qualification against main `36289306` and C1 `94cd16bb`
+retains the earlier **28 failing rows out of 98**. The producer's extra inline
+cost is real. The previous differential consumer also compared the historical
+partial narrative/signature with a declared complete v1 carrier. The replacement
+consumer observes 19 original current-control values: actor/work selection,
+execution, scope/stops, required reads, original CLI actions, spend duties,
+lane/profile/replan and user/scheduler decisions. It hashes the original JSON
+types, ordered lists and complete selected prose, rather than a shortened summary.
+This subset witness does not certify complete-source parity or model adoption.
+
+The v1 Markdown row must decode its own JSON and contain the declared schema,
+binding and required roots. Historical narrative has only five scalar controls;
+its remaining witness may come from the paired JSON fixture only after those
+five actually printed values match. Missing, duplicate or mismatched values do
+not qualify the transition. Complete-source/recovery tests remain separate.
+
+Only the registered original-quota/v0-to-v1 rows receive the following one-time
+**growth allowances**, in addition to the existing comparison policy. These
+are not new absolute output ceilings. Row, variant, scenario, format, policy,
+carrier version, heading and all 19 control hashes must match the declaration.
+
+| Quota transition | Observed added characters | One-time character/UTF-8-byte allowance |
+| --- | ---: | ---: |
+| Ordinary JSON, small / crowded / multi-Agent | 959 / 1,958 / 4,060 | 1,024 / 2,048 / 4,096 |
+| Six explicit detail JSON modes | at most 959 | 1,024 |
+| Explicit envelope JSON, including gate / multi-subagent | at most 16,003 characters / 16,115 bytes | 16,256 |
+| Ordinary Markdown, small / crowded / multi-Agent | 17,060 / 36,373 / 23,425 | 17,184 / 36,512 / 23,552 |
+| Six explicit detail Markdown modes | at most 17,984 | 18,112 |
+| Explicit envelope Markdown | 22,221 | 22,352 |
+
+Markdown gets at most three extra lines for ordinary rows or six for explicit
+variants. JSON compact-payload growth has the same allowance as its characters.
+Separately, the complete ordered thin read/recovery instruction block adds
+104 JSON or 100 Markdown characters; its one-time allowance is 128 characters/
+bytes and four Markdown lines. The block requires current work context before
+action, needed original sections for missing detail/recovery, the original
+identity without re-admission, explicit full reads and capture/handoff flags.
+It does not demand an unconditional full reread after context loss.
+
+Same-v1 comparisons, unknown/partial carriers, altered controls and growth above
+these bounds still fail. Version/signature changes become explicit review
+signals only for the qualified transition. The 98-row run has no mechanical
+failures and **28 rows requiring semantic/cost review**; this is not automatic
+acceptance. Existing absolute v1 ceilings, collection/per-Todo guards, host hard
+limits, explicit-off behavior, source integrity and frozen experiments remain.
+All 98 candidate stdout character, byte, line and compact-payload measurements
+are unchanged by this consumer repair. It saves no output and establishes no
+model-input, billing, accepted-outcome or complete-cost improvement.
+
+新定标以 main `36289306` 和 C1 `94cd16bb` 为匹配基线，保留原 **98 行中 28 行失败**
+的记录。完整内联带来的增量成本仍然存在；旧差分 consumer 还在把历史局部叙述／
+signature 与完整 v1 carrier 比较。新 consumer 逐值观察上述 19 项当前控制事实，
+保留 JSON 类型、列表顺序及完整所选正文，再分别计算摘要。这只是当前控制子集的
+见证，不代替完整来源、恢复或模型采用验证。
+
+v1 Markdown 必须解析自己的 JSON，并具备声明的 schema、binding 和必要根字段。
+历史叙述只展示 5 个标量；只有逐一验证实际打印值与配对 JSON 相同后，才能借用后者的
+其它 fixture 控制值。缺失、重复或不一致均不合格。上表只给已登记版本迁移一次性的
+增长余量，不提高绝对输出上限：行、variant、场景、格式、policy、版本、标题及
+19 项控制摘要必须符合声明。普通／显式 Markdown 最多各增 3／6 行；JSON 紧凑正文
+使用同样的字符增长余量。
+
+薄提示的完整有序读取／恢复块另增加 JSON 104 或 Markdown 100 字符，只给 128
+字符／字节及 4 行的一次性余量。它保留行动前的工作上下文、缺失事实的原分节恢复、
+原身份、不重新准入、显式全文要求及 capture／handoff flags；丢失上下文不意味着
+无条件重读整包。相同 v1 基线、未知／不完整 carrier、控制变化和超出余量仍失败。
+当前 98 行没有机械门失败，但 **28 行仍须语义与成本审阅**，不自动验收。
+绝对 v1、集合／单 Todo、Host 硬限制、off、完整性和冻结实验标准继续生效。
+这次 consumer 修复前后，候选 98 行的 stdout 字符、字节、行数和紧凑正文测量全部
+相同，没有输出节省，也不证明模型输入、计费、验收成果或完整成本收益。
 
 ### Native fixture qualification
 

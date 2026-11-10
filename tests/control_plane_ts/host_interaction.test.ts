@@ -38,3 +38,16 @@ test("replan, blocked and unavailable guards never lose their actual actions", (
   assert.deepEqual(projectMcpInteraction(failed), failed);
   assert.deepEqual(projectMcpInteraction({ok: true}), {ok: true});
 });
+
+test("declared complete contracts fail closed before legacy MCP projection", () => {
+  for (const schema_version of [null, "loopx_turn_envelope_v1", "loopx_turn_envelope_v99"]) {
+    assert.throws(() => projectMcpInteraction(guard({schema_version})),
+      /complete Turn decision|Turn contract binding/);
+    assert.throws(() => projectMcpInteraction(guard({schema_version, ok: false})),
+      /complete Turn decision|Turn contract binding/);
+  }
+  assert.throws(() => projectMcpInteraction(guard({contract_binding: null})),
+    /unsupported complete Turn decision version/);
+  const historical = {schema_version: "loopx_turn_envelope_v0", decision: "backoff"};
+  assert.deepEqual(projectMcpInteraction(historical), historical);
+});

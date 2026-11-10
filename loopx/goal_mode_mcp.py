@@ -10,9 +10,10 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from .control_plane.host_adapter_settlement import (
+    McpGuardContent,
     HostTodoSettlementRequest,
     host_vision_request,
     project_host_interaction,
@@ -174,12 +175,17 @@ class GoalModeMCPControlPlane:
             ],
         )
 
-    def should_run(self) -> str:
+    def _read_guard(self) -> str:
+        """Read the CLI source once, before its host transport projection."""
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
         args, legacy_args = self.should_run_args(goal_id, self.bound_agent_id())
-        return project_host_interaction(self.run_cli(args, legacy_args=legacy_args))
+        return self.run_cli(args, legacy_args=legacy_args)
+
+    def should_run(self) -> str:
+        result = project_host_interaction(self._read_guard())
+        return result.source if isinstance(result, McpGuardContent) else result
 
     def list_todos(self) -> str:
         return self.should_run()
@@ -317,6 +323,7 @@ def create_fastmcp_server(
     try:
         from mcp.server.fastmcp import FastMCP
         from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.types import CallToolResult, TextContent
     except Exception as exc:  # pragma: no cover - exercised by real adapter startup
         raise SystemExit(
             "MCP SDK v1 is required. Install the adapter with loopx-kunluncode install.\n"
@@ -336,21 +343,34 @@ def create_fastmcp_server(
 
     server = GoalModeServer(config.server_name)
 
+    def guard_content(source: str) -> CallToolResult:
+        result = project_host_interaction(source)
+        content = [TextContent(type="text", text=result.source if isinstance(result, McpGuardContent) else result)]
+        if isinstance(result, McpGuardContent):
+            content.append(TextContent(type="text", text=json.dumps(result.channel, ensure_ascii=False)))
+        # Keep the SDK's existing string result contract as well as native text.
+        return CallToolResult(content=content, structuredContent={"result": content[0].text})
+
     if config.legacy_host_surface == "claude_code":
         @server.tool()
         def host_prompt() -> str:
             """Read current Claude Goal execution rules for this server's bound identity."""
             return control.host_prompt()
 
-    @server.tool()
-    def should_run() -> str:
-        """Whether the bound goal and agent should run now."""
-        return control.should_run()
+    def should_run() -> Any:
+        """Read the bound decision; MCP guidance is separate in complete-v1, inline in legacy results."""
+        return guard_content(control._read_guard())
 
-    @server.tool()
-    def list_todos() -> str:
-        """List open todos visible to the bound agent."""
-        return control.list_todos()
+    def list_todos() -> Any:
+        """Read visible Todo decisions; MCP guidance is separate in complete-v1, inline in legacy results."""
+        return guard_content(control._read_guard())
+
+    # The SDK is optional and imported inside this factory. Supply its evaluated
+    # native-result annotation before registration; postponed annotations cannot
+    # otherwise resolve these local SDK types. The string output schema is stable.
+    for read_guard in (should_run, list_todos):
+        read_guard.__annotations__["return"] = Annotated[CallToolResult, str]
+        server.tool()(read_guard)
 
     @server.tool()
     def claim_task(todo_id: str, agent_id: str) -> str:

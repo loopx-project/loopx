@@ -49,7 +49,8 @@ def test_progressive_activation_does_not_require_native_continuity(profile):
 
 
 @pytest.mark.parametrize("host", [(), ("--runtime-profile", "generic_cli"), ("--trae_app",), ("--antigravity_app",)])
-def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host):
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host, output_format):
     import os
     import sys
 
@@ -64,8 +65,11 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
         # The generic acceptance fixture runs machine-facing raw CLI reads.
         # This case exercises the omitted model-facing option instead.
         response = run_source_cli(["--registry", str(registry), "--runtime-root", str(runtime),
-            "--format", "json", *arguments], env=environment, check=False, timeout=30)
-        return response.returncode, json.loads(response.stdout)
+            "--format", output_format, *arguments], env=environment, check=False, timeout=30)
+        text = response.stdout
+        if output_format == "markdown":
+            text = text.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        return response.returncode, json.loads(text)
 
     for i in range(8):
         document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": "agent-a",
@@ -177,7 +181,8 @@ def test_default_progressive_does_not_admit_conflicting_host_declarations(accept
     assert cli("inspect")[1] == before
 
 
-def test_saved_context_progressive_recovery_keeps_original_turn_without_native_setup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("complete", [False, True], ids=["quota", "complete-turn"])
+def test_saved_context_progressive_recovery_keeps_original_turn_without_native_setup(tmp_path, monkeypatch, complete):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import handle_native_context_command
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
@@ -186,11 +191,20 @@ def test_saved_context_progressive_recovery_keeps_original_turn_without_native_s
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     original = {**payload(), "agent_identity": {"agent_id": "agent"},
         "heartbeat_receipt": {"turn_instance_id": "original-work"}}
+    if complete:
+        from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+        from test_replan_host_context_projection import _quota_payload
+
+        source = _quota_payload()
+        source["planning_horizon"] = original["planning_horizon"]
+        source["heartbeat_receipt"] = original["heartbeat_receipt"]
+        original = compose_turn_decision(source)
     path = tmp_path / "captured.json"
     write_decision_capture(path, original)
     saved = path.read_bytes()
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
-        "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", "original-work",
+        "--goal-id", original["goal_id"], "--agent-id", original["agent_identity"]["agent_id"],
+        "--turn-instance-id", original["heartbeat_receipt"]["turn_instance_id"],
         "--capture-file", str(path), "--capture-sha256", hashlib.sha256(saved).hexdigest(),
         "--context-delivery", "auto", "--delta-delivery", "off"])
     result = []
@@ -199,7 +213,22 @@ def test_saved_context_progressive_recovery_keeps_original_turn_without_native_s
     current = required_document(result[0])
     assert current["heartbeat_receipt"] == original["heartbeat_receipt"]
     assert "sources" not in outcome(current)
+    required, source = outcome(current)["requirements"][0], outcome(original)["requirements"][0]
+    assert required["description"] == source["description"]
+    assert required["agent_review"]["conclusion"] == "unmet" and "note" not in required["agent_review"]
+    assert json.loads(Path(current["context_details"]["path"]).read_bytes()) == original
     assert path.read_bytes() == saved and not list(tmp_path.rglob("session.json"))
+    if complete:
+        # The outer file digest can match even when the inner Turn binding no longer does.
+        original["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["revision"] += 1
+        malformed = tmp_path / "malformed.json"
+        args.capture_file = str(malformed)
+        args.capture_sha256 = write_decision_capture(malformed, original)
+        args.initial_read = True
+        result.clear()
+        assert handle_native_context_command(args, print_payload=lambda value, *_: result.append(value)) == 1
+        assert result[0]["ok"] is False and not ({"first_read_command", "content"} & result[0].keys())
+        assert result[0]["recovery"]["sha256"] == args.capture_sha256
 
 
 def test_heartbeat_keeps_layer_choices_in_the_generated_guard():

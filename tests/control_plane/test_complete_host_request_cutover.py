@@ -142,12 +142,46 @@ def test_disabled_memory_does_not_read_or_activate_complete_plan(complete_host_r
 
     _legacy, contract = complete_host_request
     plan = _plan(contract)
-    monkeypatch.setattr("loopx.control_plane.capability_hooks.turn_context_source",
+    monkeypatch.setattr("loopx.control_plane.quota.turn_envelope.complete_turn_host_source",
         lambda *_a, **_kw: pytest.fail("disabled capability must not read its source or provider"))
     for recall in ({}, {"experiment": {"enabled": False}}, {"experiment": {
         "enabled": True, "available": False, "configured_for_agent": True, "automatic_ingest": True}}):
         assert reward_memory_automation_enabled({**plan, "reward_memory_recall": recall},
                                                 operation="automatic_ingest") is False
+
+
+@pytest.mark.parametrize("damage", ["body", "identity", "mixed-adapter"])
+def test_memory_participation_rejects_damaged_complete_source(complete_host_request, damage):
+    from loopx.capabilities.reward_memory.turn_hooks import memory_context_result
+
+    _, contract = complete_host_request
+    source = deepcopy({key: value for key, value in contract.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    policies = {"automatic_recall": True, "automatic_ingest": True}
+    source.setdefault("goal_boundary", {})["capabilities"] = {"reward_memory": {
+        "enabled": True, "configured_for_agent": True, "experiment_available": True, **policies,
+    }}
+    contract = compose_turn_decision(source)
+    plan = _plan(contract)
+    recall = {"experiment": {"goal_id": source["goal_id"],
+        "agent_id": source["agent_identity"]["agent_id"],
+        "enabled": True, "available": True, "configured_for_agent": True, **policies},
+        "context": {"guidance": [{"content_summary": "Use the independent test evidence."}]}}
+    intact = memory_context_result(plan, recall)
+    assert intact["context_fields"]["reward_memory_recall"]["context"] == recall["context"]
+    assert "reward_memory_reflection_json" in intact["result_fields"]
+
+    damaged = deepcopy(plan)
+    if damage == "body":
+        damaged["work_contract"]["goal_boundary"]["write_scope"] = ["another-scope"]
+    elif damage == "identity":
+        damaged["source_decision_hash"] = "sha256:" + "0" * 64
+    else:
+        damaged["turn_envelope"] = build_turn_envelope(contract)
+    outcome = memory_context_result(damaged, recall)
+    assert outcome["context_fields"] == {} and outcome["instructions"] == []
+    assert outcome["result_fields"] == {}
+    assert outcome["readback"]["reward_memory_recall"]["context"] is None
 
 
 def test_original_capture_publication_keeps_the_complete_request_version(

@@ -94,6 +94,59 @@ and an independent validator:
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
+Default `turn plan` output is an inspection projection. JSON plans ready for a
+host or replan show the current decision and executable guidance inline. A
+host-ready plan also keeps scheduler and handoff constraints visible.
+`detail_ref.command` reads the same complete `work_contract` from private
+storage. When private capture is unavailable, the complete source stays inline.
+`boundary.inspection_only=true` prevents execution even if a caller restores
+session/transaction metadata. `--include-transaction-detail` retains that metadata
+and the complete inline contract.
+`turn run-once` retains and validates the original complete contract before
+dispatch; an inspection does not authorize that operation.
+
+In the C1 proposal, `quota should-run --turn-envelope` is a compatibility
+spelling for the same `loopx_turn_envelope_v1` producer as ordinary quota.
+It does not select the old bounded v0 packet. Explicit `--context-delivery off`
+retains every source fact and clause inline; Markdown carries that complete
+JSON under the existing `LoopX Turn Envelope` heading. The
+[versioned presentation budgets](../contracts/interface-budget-contract.md#canonical-cli-fixture-qualification)
+record its additional cost. Historical v0 capture/journal readers remain
+version-specific; new callers do not fall back to v0. Benchmark wake options
+and their recorded boolean identities remain unchanged: an explicit spelling
+is not a second decision producer or proof of Progressive/Delta adoption.
+
+Complete-source requests use Host request v1: `work_contract` is the complete
+admitted input; `turn_key`, session/result transport and original `detail_ref`
+readers retain their roles. The external stdin and native model prompt omit the
+private `turn_envelope` effect adapter. They do not contain a competing
+`turn_authority` decision. Unsupported versions, missing or invalid complete
+sources, mixed v1/adapter carriers and mismatched capture headers are rejected.
+This changes the complete-source Host wire; external adapters that read v0's
+`turn_envelope` must read v1's `work_contract` before accepting new Turns.
+
+New complete-source planning writes `loopx_turn_plan_v1`: one `work_contract`,
+its `source_decision_hash`, and the original capture header when present. It
+does not generate or persist a `turn_envelope`. Plan, capture, Host dispatch,
+CLI resume, native conversation recovery, capability context, child-result
+context and journal inspection/query derive work facts from the same checked
+TypeScript source owner. Existing session, route, action-hash codec, GoalRef,
+scoped settlement identity and receipt/effect owners retain their roles.
+
+Recorded `loopx_turn_plan_v0` journals keep two explicit readers: transitional
+plans cross-check their complete source against their recorded adapter;
+historical adapter-only plans keep their original decoder. Missing source in
+a v1 plan, a mixed v1/adapter carrier, unknown versions and invalid source or
+capture bindings refuse recovery rather than selecting an older format. No
+journal, capture or settlement receipt is rewritten to migrate its version.
+The shipped DSH stdio adapter likewise retains both Host wire readers.
+
+This private-plan transition alone does not establish retirement of every
+other consumer or qualify whole-workflow outcomes and complete costs. Rollback may stop new v1
+admission, but outstanding v1 plans must retain a compatible reader until their
+pending effects and supported recovery window are reconciled. An older binary
+alone cannot resume a v1 journal; do not strip its version or recreate its input.
+
 Use `loopx turn plan --include-transaction-detail --format markdown` to inspect
 `should_run`, the effective action, reason and selected work summary. Its **Full
 plan** JSON block retains the complete source contract, session and transaction
@@ -1054,6 +1107,25 @@ writeback ordering.
 
 ## Cross-Iteration Context Policy
 
+Saved acceptance detail uses the existing generic `quota context-read --select`
+reader and the original capture's file SHA-256. Exact JSON pointers can select
+several related outcomes in one read; `--selection-sha256` binds the selected
+layout across continuation pages. Offsets and EOF describe that selected view,
+not complete model retention. The complete original source remains available.
+Advisory `outcome_context_navigation_v1` describes registered relationships and
+limitations; it neither establishes semantic independence nor imposes a separate
+reading gate. Goal intent, cumulative constraints, permissions and stops remain
+binding. Staged `replan-view --replan-stage acceptance --outcome-ref REF` retains
+its existing exact decision-bound reference; it is not a second ordinary reader.
+
+已保存的验收详情使用既有通用 `quota context-read --select` 和原 capture 的文件
+SHA-256，可一次选取多项精确 JSON pointer。接续 `--selection-sha256` 绑定所选
+布局，offset 和 EOF 仅描述所选视图，不证明模型完整保留；原完整来源仍可读取。
+`outcome_context_navigation_v1` 只建议注册关系下的读取顺序并披露限制，不证明语义
+独立，也不增加另一层读取门禁。Goal 原意、累计约束、权限和停止条件保持。
+Staged `replan-view --replan-stage acceptance --outcome-ref REF` 保留原 decision
+绑定的精确引用，不成为普通读取的另一条路径。
+
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:
 
@@ -1103,12 +1175,16 @@ Turn-start context, inbox synchronization and recall. It does not mint a new
 TurnEnvelope for recovery. The existing actor/Goal-lifetime checks, typed
 journal/session recovery decision, provider revalidation and post-writeback
 recovery still apply; `--retry-failed-turn` retains its existing bounded policy.
-A new invocation without a resume key continues through fresh admission.
+If the reply containing the key was lost, `--resume-turn-instance-id ID` resolves
+the unique journal for the original Goal, Agent and instance before entering
+that same path. Missing, unreadable or ambiguous history stops recovery before
+Host invocation. Use a fresh instance ID for a new admission.
 
 中文：显式 resume 先读原计划，不为恢复另建一次选任务、TurnEnvelope 或 Turn-start
 上下文、inbox 同步和 recall。原身份／Goal 生命周期、journal／Session 恢复、provider
-当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。无 resume key 的新轮次
-继续走完整 fresh 准入。
+当前校验与写回后恢复流程保持；失败重试仍受既有有界策略约束。若包含 key 的回包丢失，可用
+`--resume-turn-instance-id ID` 按原 Goal、Agent 和轮次定位唯一 journal，再进入相同
+恢复流程。历史缺失、不可读或不唯一时停在 Host 调用前。新准入使用新轮次 ID。
 
 ## Adapter Requirements
 

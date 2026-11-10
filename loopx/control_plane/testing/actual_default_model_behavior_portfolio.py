@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from ...bootstrap_command_pack import build_start_goal_guided_packet
-from ..quota.cli_projection import compact_quota_should_run_cli_payload
 from ..quota.turn_envelope import quota_action_signature_document
 from ..work_items.interaction_contract import build_interaction_contract
 from .action_portfolio_scenarios import (
+    compose_scenario_decision,
     turn_scenario_source as _turn_scenario_source,
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID,
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
@@ -755,26 +755,16 @@ def _build_actual_default_model_behavior_scenario_sources(
     return packets
 
 
-def _compact_actual_default_model_behavior_scenario_sources(
-    sources: Mapping[str, Mapping[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    return {
-        scenario_id: (
-            compact_quota_should_run_cli_payload(deepcopy(dict(packet)))
-            if packet.get("mode") == "should-run"
-            else deepcopy(dict(packet))
-        )
-        for scenario_id, packet in sources.items()
-    }
-
-
 def build_actual_default_model_behavior_scenario_inputs(
     root: Path,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Build paired source and actual-default actor packets from one fixture."""
 
     sources = _build_actual_default_model_behavior_scenario_sources(root)
-    return sources, _compact_actual_default_model_behavior_scenario_sources(sources)
+    return sources, {
+        scenario_id: compose_scenario_decision(packet) if packet.get("mode") == "should-run" else deepcopy(packet)
+        for scenario_id, packet in sources.items()
+    }
 
 
 def build_actual_default_model_behavior_scenario_packets(
@@ -839,8 +829,12 @@ def _validate_quota_hot_path_compaction_regression(
 ) -> None:
     if _pretty_json_size(source) <= ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression source must exceed the hot-path budget")
-    if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
-        raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    packet_bytes = _pretty_json_size(packet)
+    if packet_bytes > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
+        raise ValueError(
+            f"compaction-regression packet exceeds the hot-path budget: "
+            f"{packet_bytes} bytes > {ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET} bytes"
+        )
     if packet.get("capability_gate") != source.get("capability_gate"):
         raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:
@@ -930,6 +924,7 @@ def _validate_identity_scenario_contract(
 def _validate_planning_context_scenario(
     spec: _ScenarioSpec,
     source_packet: Mapping[str, Any],
+    actor_packet: Mapping[str, Any],
     contract: dict[str, Any],
 ) -> None:
     if spec.scenario_id == "turn_future_primary_fallback":
@@ -949,7 +944,7 @@ def _validate_planning_context_scenario(
                 "without binding the alternative"
             )
     if spec.scenario_id == "turn_external_wait_fallback":
-        _validate_external_wait_fallback_scenario(source_packet)
+        _validate_external_wait_fallback_scenario(source_packet, actor_packet)
     if spec.scenario_id == "turn_planning_horizon_strategic_context":
         _validate_planning_horizon_model_scenario(source_packet)
     if spec.scenario_id != "turn_human_gate":
@@ -1084,7 +1079,7 @@ def _scenario_contract(
             f"scenario {spec.scenario_id} does not produce {spec.expected_route}"
         )
     _validate_identity_scenario_contract(spec, source_packet, contract)
-    _validate_planning_context_scenario(spec, source_packet, contract)
+    _validate_planning_context_scenario(spec, source_packet, actor_packet, contract)
     _validate_control_plane_composition_scenario(spec, source_packet, contract)
     if spec.scenario_id == "turn_required_vision_replan":
         contract.update(required_vision_scenario_contract(source_packet, contract))

@@ -755,6 +755,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
+                          captured_recovery: dict[str, Any] | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None,
                           saved_capture: bool = False) -> NativeContextPreparation:
@@ -763,6 +764,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     Serialization prevents invalidation from moving the epoch during preparation.
     Full fallback must recover this capture or refuse lookup, never an older one.
     Saved-file comparison is independent of any complete model-read observation.
+    A trusted caller may reuse the identical source it just published; this
+    reference must never come from the external continuity request.
     """
     from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
@@ -804,7 +807,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         state.pop(key, None)
                 state["read_scope"] = read_scope
                 request = _native_context_request(state, scope, capture_id)
-                recovery = capture_context_projection(
+                recovery = dict(captured_recovery) if captured_recovery is not None else capture_context_projection(
                     payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
                 state.pop("section_reads", None)  # partial reads of an older source are not current coverage

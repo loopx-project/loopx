@@ -1005,7 +1005,7 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("host interaction projection requires v1");
     }
     return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase,
-      packet: projectMcpInteraction(requireJsonObject(value.packet, "packet"))};
+      packet: projectMcpInteraction(requireJsonObject(value.packet, "packet"), value.source_number_tokens)};
   }
   if (phase === "classify_guard") {
     if (typeof value.guard_output !== "string") {

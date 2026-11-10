@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import os
 from pathlib import Path
 import subprocess
@@ -60,29 +61,29 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         },
         "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
     }
-    _, wire = project(tmp_path, payload=payload)
-    source_sha256 = wire["recovery"]["sha256"]
-    eligible = {**event, "hook_event_name": "PostToolUse"}
-    request = context.native_execution_preparation_request(str(tmp_path), eligible)
+    claim_source = "1" * 64
+    context.record_native_claim_source(payload, claim_source, directory=str(tmp_path), context_root=None)
+    _, wire = project(tmp_path, capture_id=claim_source, payload=payload)
+    request = context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    )
     assert request == {
         "goal_id": "fixture",
         "agent_id": "agent",
         "todo_id": "todo_fixture",
-        "claim_args": [
-            *payload["execution_preparation"]["claim"]["cli_args"],
-            "--claim-operation-id",
-            f"todo-claim:codex-capture:{source_sha256}",
-        ],
+        "claim_args": [*payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id", f"todo-claim:codex-capture:{claim_source}"],
+        "claim_source_sha256": claim_source,
         "authority_route": {
             "registry_path": str(tmp_path / "registry.json"),
             "runtime_root": str(tmp_path / "runtime"),
         },
         "turn_instance_id": "turn-fixture",
-        "claim_source_sha256": source_sha256,
-        "source_sha256": source_sha256,
+        "source_sha256": wire["recovery"]["sha256"],
     }
     child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
     assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    eligible = {**event, "hook_event_name": "PostToolUse"}
     assert context.native_execution_preparation_request(
         str(tmp_path), eligible, readback_for="0" * 64,
     ) is None
@@ -105,7 +106,7 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "turn_instance_id": "turn-fixture",
         "capture_path": str(ready_capture),
         "capture_sha256": ready_digest,
-        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
     }
     state_before_child = (tmp_path / "session.json").read_bytes()
     context.record_native_execution_preparation(
@@ -120,7 +121,7 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
         **request,
         "readback_only": True,
-        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
         "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
     }
     assert context.native_execution_preparation_request(
@@ -128,7 +129,7 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     ) == {
         **request,
         "readback_only": True,
-        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
         "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
     }
     deliver(tmp_path, event, read_pages(tmp_path, wire))
@@ -139,18 +140,20 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
     )["readback_only"] is True
     payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
-    _, next_wire = project(tmp_path, capture_id="next", payload=payload)
+    next_claim_source = "2" * 64
+    context.record_native_claim_source(payload, next_claim_source, directory=str(tmp_path), context_root=None)
+    _, next_wire = project(tmp_path, capture_id=next_claim_source, payload=payload)
     next_sha256 = next_wire["recovery"]["sha256"]
-    assert next_sha256 != source_sha256
+    assert next_sha256 != request["source_sha256"]
     assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
         **request,
         "claim_args": [
             *payload["execution_preparation"]["claim"]["cli_args"],
             "--claim-operation-id",
-            f"todo-claim:codex-capture:{next_sha256}",
+            f"todo-claim:codex-capture:{next_claim_source}",
         ],
         "turn_instance_id": "next-turn",
-        "claim_source_sha256": next_sha256,
+        "claim_source_sha256": next_claim_source,
         "source_sha256": next_sha256,
     }
 
@@ -280,6 +283,70 @@ def deliver(root, event, pages):
         assert context.codex_context_hook(str(root), {**event, "hook_event_name": "PostToolUse",
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
+
+def test_native_projection_reuses_planner_and_returns_exact_file_manifest(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.quota import turn_envelope
+
+    setup(tmp_path, monkeypatch)
+    operation = turn_envelope._turn_envelope_result
+    calls = []
+
+    def counted(name, **request):
+        calls.append(name)
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", counted)
+    payload, wire = project(tmp_path)
+    # Main's typed transaction owns material planning and encoding together.
+    # Complete inputs use that same call without reviving a separate planner RPC.
+    assert calls == ["context_delivery"]
+    assert wire["mode"] == "full" and wire["context"] == payload
+    recovery = wire["recovery"]
+    original = Path(recovery["path"]).read_bytes()
+    view = native_context_capture_view(wire, Path(recovery["path"]).parent,
+        context_directory=str(tmp_path))
+    assert view["path"] == recovery["path"] and view["sha256"] == recovery["sha256"]
+    assert not (Path(view["path"]).parent / "delivery.json").exists()
+    assert Path(view["path"]).read_bytes() == original
+    assert "content" not in view and view["index_command"]
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    page = read_context_capture(build_parser().parse_args(shlex.split(view["command"])[1:]))
+    assert json.loads(page["content"]) == payload and page["eof"] is True
+
+
+def test_material_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    _, old = project(tmp_path, "old")
+    deliver(tmp_path, event, read_pages(tmp_path, old))
+    assert "candidate" in context._state(tmp_path) and "pending" not in context._state(tmp_path)
+    operation = turn_envelope._turn_envelope_result
+    observed = []
+
+    class PlannerInterrupted(BaseException):
+        pass
+
+    def interrupt(name, **request):
+        if name == "context_delivery":
+            observed.append(context._state(tmp_path))
+            raise PlannerInterrupted()
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", interrupt)
+    current = {"ok": True, "goal_id": "fixture", "requirements": "New current requirements after the prior delivery."}
+    with pytest.raises(PlannerInterrupted):
+        project(tmp_path, "current", payload=current)
+    expected = tmp_path / "current" / "projection.json"
+    assert observed[0]["recovery"]["path"] == str(expected)
+    assert observed[0]["pending"]["path"] == str(expected)
+    stored = context._state(tmp_path)
+    assert stored["recovery"]["path"] == str(expected)
+    assert stored["pending"]["path"] == str(expected)
+    assert json.loads(expected.read_bytes()) == current
+    assert stored["recovery"]["sha256"] != old["recovery"]["sha256"]
 
 @pytest.mark.parametrize("order", ["sequential", "terminal_first", "one_batch"])
 def test_selected_read_can_defer_digests_without_losing_coverage(tmp_path, monkeypatch, order):

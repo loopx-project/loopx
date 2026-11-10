@@ -535,7 +535,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
 
     The typed owner applies the shrink guard. This neither creates a native
     journal nor requires/adopts an execution Turn. All recovery is same-capture.
-    A caller may supply the exact decision it just verified for staged reads.
+    A caller may supply the exact decision it just saved or verified for staged reads.
     """
     from ..quota.turn_envelope import prepare_progressive_context
 

@@ -1,5 +1,6 @@
 """A deferred selection must expose a runnable recovery before settlement."""
 import json
+from pathlib import Path
 import shlex
 import subprocess
 
@@ -423,6 +424,12 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
     rc, envelope = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
     assert rc == 0, envelope
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
+    assert envelope["schema_version"] == "loopx_turn_envelope_v1"
+    assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
+    # C1's public writer emits the complete contract. The historical executor
+    # adapter must still derive the same first-call action from that source.
+    envelope = build_turn_envelope(envelope)
     assert envelope["action_signature"]["matches"] is True
     contract = envelope["contract_capsule"]["interaction_contract"]
     assert contract["mode"] == "autonomous_replan"
@@ -512,10 +519,23 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     )
     read = json.loads(result.stdout)
     assert read["ok"] and read["eof"]
-    _, source_reference = read_context_read_reference(presented["recovery"]["reference_file"])
+    # Native model output uses opaque reader references. Compare their complete
+    # machine-owned source identity, not a digest omitted from the model view.
+    _, original_reference = read_context_read_reference(presented["recovery"]["reference_file"])
     _, selected_reference = read_context_read_reference(read["reference_file"])
-    assert selected_reference["path"] == source_reference["path"]
-    assert selected_reference["sha256"] == source_reference["sha256"]
+    assert selected_reference["path"] == original_reference["path"]
+    assert selected_reference["sha256"] == original_reference["sha256"]
+    saved_capture = Path(selected_reference["path"])
+    assert json.loads(saved_capture.read_bytes()) == original
     assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
+    # Identical JSON semantics with different original bytes still fail closed;
+    # a reader failure cannot allocate another admission or spend.
+    saved_capture.write_bytes(saved_capture.read_bytes() + b" ")
+    refusal = subprocess.run(
+        [*reader, "--select", "/heartbeat_receipt"],
+        cwd=project, capture_output=True, text=True, check=False, timeout=60,
+    )
+    rejected = json.loads(refusal.stdout)
+    assert refusal.returncode != 0 and rejected["ok"] is False and "content" not in rejected
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0

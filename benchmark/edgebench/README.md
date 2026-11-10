@@ -154,13 +154,37 @@ its own image provenance, and a later retag can change what gets launched.
 
 ## Worker profiles
 
-The five worker profiles are `official`, `single`, `native-goal`,
-`heartbeat-resume`, and `heartbeat-explore`. `official` uses SForge's Codex Stop
+The worker profiles are `official`, `single`, `native-goal`, `heartbeat-resume`,
+`heartbeat-explore`, and `turn-resume`. `official` uses SForge's Codex Stop
 hook and outer recovery. `single` executes once with neither. `native-goal` uses
 the shared native Codex Goal transport. The heartbeat profiles use the shared
 LoopX scheduler and resume store. `heartbeat-explore` additionally enables the
 existing Explore Graph and analysis-only Explore Harness gates with the
 `adaptive-resilient` profile; this grants no child-agent execution authority.
+
+Use `--worker turn-resume --validation-command-json '["/opt/task-checks/check-work"]'`
+to run the same case through the public `loopx turn run-once` entry. Supply a
+trusted executable available **inside the guest** that reads the normalized
+result on stdin and checks an independent work postcondition. Pin that
+executable with the trial image or source. The receipts record the digest of
+the argv. Keep hidden tests and judge credentials outside the solver. Only
+the native judge supplies the benchmark score.
+
+Both `heartbeat-resume` and `turn-resume` use the external quota scheduler,
+planned task entry and one Agent-scoped Codex session by default. Turn sends
+the captured work to the Host, runs the validator and settles through Core.
+For a comparison, freeze both source revisions, task, feedback, model, effort
+and effective solve time. Heartbeat's native context delivery defaults on.
+Turn uses its product Host request and reserves 160 seconds for managed cleanup.
+Allow for that difference when choosing the phase budget.
+
+A lost reply leaves a private pending marker. The next Turn wake looks up the
+original journal by Goal, Agent and wake identity. A committed replay produces
+no Host invocation or additional spend. Missing or conflicting history holds
+the wake for reconciliation. Retain the original trial state while diagnosing
+a failure. To return to heartbeat, select `heartbeat-resume` for a new trial.
+The Controller–Worker profile and its matched comparison are specified in the
+[delivery RFC](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md#controller-delivery-cadence).
 
 All profiles use the same explicitly staged Codex binary and model/effort. This
 permits an updated Codex version with the native scaffold; it is not a claim of

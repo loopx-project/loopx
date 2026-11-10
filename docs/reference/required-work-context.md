@@ -232,6 +232,10 @@ Its `context-read --initial-read` uses the same exact-address selector. New priv
 selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
+Initial navigation can replace fully selected children with their complete
+captured parent to avoid repeating addresses. An unselected child, including
+optional or unknown material, prevents that merge; selected facts and obligations
+stay identical. Explicit selectors and index entries keep their original addresses.
 Historical recipe-only references and explicit-file initial cursors still reject
 a changed selection digest; recover through the same original full-capture
 reference, without another admission or rewriting the saved descriptor. These
@@ -262,8 +266,8 @@ pointer order. Current controls, required sources and settlement obligations
 precede the complete unread-material index. A coalesced parent keeps
 its first selected child's position; explicit selectors retain canonical order.
 This reorders the same selected facts without reducing the total body or
-guaranteeing that all requirements fit one page. Earlier initial-selection
-digests still reject a changed profile; recover from the original full capture.
+guaranteeing that all requirements fit one page. Historical recipe-only references and raw initial cursors still reject a changed
+profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. A warm
 delta's existing `command` still reads its wire delta; its initial read and
@@ -272,6 +276,22 @@ This is a starting selection, not all required sources: read applicable criteria
 evidence and the complete operation/settlement contract before depending on them.
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
+
+A complete quota decision may advertise `replan_review_command` when the
+current bound review can create a runnable successor. It selects the current
+Goal and replan evidence, applicable controls, and exact successor binding from
+the same capture. Follow its cursor and the current read obligations before
+choosing work. When creating that successor, settle the original Turn from
+the creation receipt. For another outcome, use the ordinary reader and read
+the complete applicable authoring contract before acting. Cadence and stall
+reviews, capability-owned outcomes, and original settlement recovery keep
+the ordinary reader. This optional read does not admit work or prove retention.
+
+中文：如果当前绑定的重规划允许创建可运行的后继，完整 quota 决策可提供
+`replan_review_command`。它从同一捕获读取当前 Goal、重规划证据、适用控制和后继的
+精确绑定。选择工作前读完续页并履行当前读取义务；创建后继时，用创建回执结算原
+Turn。选择其他结果时，先沿常规读取取得完整适用的写回契约。周期与停滞复盘、
+能力专属结果和原结算恢复继续走常规读取。这个按需入口不重新准入，也不证明上下文已保留。
 
 The generated `first_read_command` and its paging cursor default to a 12,000-byte
 serialized UTF-8 output limit when the caller supplied no tool budget. This
@@ -535,6 +555,13 @@ retains its complete body and declaration. Todo-less reads and the explicit
 `goal-acceptance inspect` command keep their existing full inventory. This
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
+
+The complete Turn contract stores equal, nonempty registered Todo-summary lanes
+once when a local reference is smaller. A `<lane>_ref` names a literal array in
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
 
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
