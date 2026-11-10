@@ -1759,21 +1759,16 @@ class CodexChatAgentSession:
         with self._request_id_lock:
             request_id = self.next_request_id
             self.next_request_id += 1
-        turn_input: list[dict[str, Any]] = [
-            {
-                "type": "text",
-                "text": text
-                if output_schema is not None
-                else _turn_prompt(
-                    text,
-                    context_summary=self.context_summary,
-                    execution_mode=self.execution_mode,
-                    runtime_profile=self.runtime_profile,
-                    project_work=self.project_context is not None and self.sandbox == "workspace-write",
-                    public_source_read_context=self._public_source_read_context,
-                ),
-            }
-        ]
+        if output_schema is None:
+            text = _turn_prompt(
+                text,
+                context_summary=self.context_summary,
+                execution_mode=self.execution_mode,
+                runtime_profile=self.runtime_profile,
+                project_work=self.project_context is not None and self.sandbox == "workspace-write",
+                public_source_read_context=self._public_source_read_context,
+            )
+        turn_input: list[dict[str, Any]] = [{"type": "text", "text": text}]
         from .chat_attachments import native_attachment_inputs
         turn_input.extend(native_attachment_inputs(attachments))
         # A running app-server is not permission for a new native Turn. Hold
