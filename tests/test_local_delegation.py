@@ -490,14 +490,20 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
     original_brief = brief()
     with pytest.raises(Exception, match="no delegation grant"):
         ungranted.start("analysis", "other", original_brief)
-    registry = json.loads(original.registry.read_text())
-    registry["goals"][0]["status"] = "stopped"
-    original.registry.write_text(json.dumps(registry))
+    def lifecycle(operation, expected):
+        command = ("goal-lifecycle", "--goal-id", original.goal_id, "--operation", operation)
+        preview = demo.cli(root, *command)
+        changed = demo.cli(root, *command, "--actor-kind", "owner",
+            "--expected-state-fingerprint", preview["observed_state_fingerprint"], "--execute")
+        assert changed["after_state"] == expected and changed["readback"]["verified"]
+
+    # Exercise Stop through its owner; hand-editing status leaves the activation
+    # metadata invalid and never reaches the retained-result boundary.
+    lifecycle("stop", "stopped")
     assert reconnected.read("analysis-1")["status"] == "accepted"
     with pytest.raises(ValueError, match="stopped"):
         reconnected.start("analysis", "new-operation", original_brief)
-    registry["goals"][0]["status"] = "active"
-    original.registry.write_text(json.dumps(registry))
+    lifecycle("resume", "active")
     output = root / "analyst" / "initial" / "output.json"
     output.write_text("{}")
     with pytest.raises(ValueError, match="acceptance rejected"):
