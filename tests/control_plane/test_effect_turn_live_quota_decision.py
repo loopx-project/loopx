@@ -46,25 +46,30 @@ def test_receipt_guard_fields_use_the_typed_identity_and_guard(selected: str) ->
     assert fields["receipt_bound_guard_recorded_at"] == "2026-08-01T00:00:00Z"
 
 
-def test_todo_bound_action_selection_keeps_legacy_semantic_replan_guard(
+@pytest.mark.parametrize("binding", ["todo", "autonomous_replan", "unbound"])
+def test_action_selection_keeps_only_admitted_settlement_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    binding: str,
 ) -> None:
     from loopx.cli_commands import quota_action_selection
 
     obligation_id = "replan-1111111111111111"
+    settlement_obligation_id = "replan-2222222222222222"
+    details = {"semantic_replan_obligation_id": obligation_id}
+    if binding == "todo":
+        details.update(
+            todo_id="todo_legacy",
+            settlement_effect_id=f"{GOAL_ID}:agent-a:todo_legacy:guided-start:legacy",
+            settlement_receipt_revision="identity_upgrade",
+        )
+    elif binding == "autonomous_replan":
+        details["replan_obligation_id"] = settlement_obligation_id
     receipt = {
         "goal_id": GOAL_ID,
         "agent_id": "agent-a",
         "run_id": "guided-start:legacy",
-        "details": {
-            "todo_id": "todo_legacy",
-            "semantic_replan_obligation_id": obligation_id,
-            "settlement_effect_id": (
-                f"{GOAL_ID}:agent-a:todo_legacy:guided-start:legacy"
-            ),
-            "settlement_receipt_revision": "identity_upgrade",
-        },
+        "details": details,
     }
     monkeypatch.setattr(
         quota_action_selection,
@@ -88,8 +93,13 @@ def test_todo_bound_action_selection_keeps_legacy_semantic_replan_guard(
         turn_instance_id="guided-start:legacy",
     )
 
-    assert selection.receipt_bound_todo_id == "todo_legacy"
-    assert selection.receipt_bound_replan_obligation_id == obligation_id
+    assert selection.receipt_bound_todo_id == ("todo_legacy" if binding == "todo" else None)
+    expected_replan = {
+        "todo": obligation_id,
+        "autonomous_replan": settlement_obligation_id,
+        "unbound": None,
+    }[binding]
+    assert selection.receipt_bound_replan_obligation_id == expected_replan
 
 
 def _turn_start_dispatch(

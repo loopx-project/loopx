@@ -30,6 +30,7 @@ class AntigravityActivity:
         self.completed: set[str] = set()
         self.thinking_digests: dict[str, str] = {}
         self.output_digests: dict[str, str] = {}
+        self.tool_calls: dict[str, dict[str, Any] | None] = {}
 
     def observe(self, index: int, native: dict[str, Any]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -83,10 +84,30 @@ class AntigravityActivity:
             calls = planner.get("toolCalls")
             for offset, call in enumerate(calls if isinstance(calls, list) else []):
                 if isinstance(call, dict) and isinstance(call.get("name"), str):
-                    start({"id": f"agy_call_{index}_{offset}", "type": "dynamicToolCall",
-                           "tool": call["name"]})
+                    item = {"id": f"agy_call_{index}_{offset}", "type": "dynamicToolCall", "tool": call["name"]}
+                    call_id = call.get("id")
+                    if isinstance(call_id, str) and call_id:
+                        previous = self.tool_calls.setdefault(call_id, item)
+                        if previous != item:
+                            self.tool_calls[call_id] = None  # Ambiguous IDs cannot close another call.
+                    start(item)
             # A finished planner has only requested the tool. It is not proof
             # that the tool ran or completed; never fabricate that transition.
+        elif kind == "CORTEX_STEP_TYPE_CODE_ACTION":
+            if not isinstance(native.get("codeAction"), dict):
+                return events
+            metadata = native.get("metadata")
+            call = metadata.get("toolCall") if isinstance(metadata, dict) else None
+            call_id = call.get("id") if isinstance(call, dict) else None
+            requested = self.tool_calls.get(call_id) if isinstance(call_id, str) else None
+            # Match the provider's exact call identity, not its name, path or
+            # arguments. An unlinked action has its own observed activity row.
+            item = dict(requested) if requested else {
+                "id": f"agy_edit_{index}", "type": "dynamicToolCall", "tool": "native.codeAction"}
+            start(item)
+            if status in {"CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_ERROR"}:
+                item["status"] = "failed" if status == "CORTEX_STEP_STATUS_ERROR" else "completed"
+                finish(item)
         elif kind == "CORTEX_STEP_TYPE_VIEW_FILE":
             view = native.get("viewFile")
             if not isinstance(view, dict):
