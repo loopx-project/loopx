@@ -62,6 +62,28 @@ test("resume syntax is normalized by the typed Todo boundary", () => {
   }), null, resume_when);
 });
 
+test("an active blocked completion target is a known pending dependency", () => {
+  const waiting = todo("todo_waiting", "deferred", "advancement_task", {
+    resume_when: "todo_done:todo_dependency",
+  });
+  const evaluate = (source: Record<string, unknown>[]) => (evaluateTodoResumeConditions({
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+    items: [waiting], source_items: source,
+  }).conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+  for (const status of ["open", "deferred", "blocked"]) {
+    const condition = evaluate([todo("todo_dependency", status, "advancement_task", {
+      archive_state: "active", claimed_by: "agent-peer",
+    })]);
+    assert.equal(condition.satisfied, false);
+    assert.equal(resumeConditionHasKnownPendingTarget(condition, waiting), true, status);
+  }
+  for (const source of [
+    [], [todo("todo_dependency", "done")], [todo("todo_dependency", "unknown")],
+    [todo("todo_dependency", "blocked", "advancement_task", {archive_state: "archived"})],
+    [todo("todo_dependency", "blocked", "continuous_monitor")],
+  ]) assert.equal(resumeConditionHasKnownPendingTarget(evaluate(source), waiting), false);
+});
+
 test("resume_at emits one stable due receipt across repeated ticks and restart", () => {
   const item = todo("todo_scheduled", "deferred", "advancement_task", {
     resume_when: "resume_at:2026-09-14T09:30:00+08:00",
