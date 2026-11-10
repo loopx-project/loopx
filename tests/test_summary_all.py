@@ -13,6 +13,7 @@ from control_plane.canonical_authority_fixture import (
 )
 
 import loopx.summary_all as summary_all
+from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 from loopx.paths import global_registry_path
 
 
@@ -982,3 +983,141 @@ def test_real_peer_manager_reads_preserve_work_gates_and_authority(
     assert state.read_bytes() == source_bytes and registry.read_bytes() == registry_bytes
     for payload in (todos, summary, gates):
         assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_global_summary_and_gates_compact_oversized_source_payloads(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    heavy_blob = "x" * 1_100_000
+    agents = [f"worker-{idx}" for idx in range(1, 9)]
+    status_payload = {
+        "ok": True,
+        "heavy_unused_projection": [heavy_blob for _ in range(6)],
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": "heavy-goal",
+                    "status": "eligible",
+                    "waiting_on": "user",
+                    "recommended_action": "Run worker-1 slice.",
+                    "archived_debug_payload": heavy_blob,
+                }
+            ]
+        },
+        "global_registry": {"findings": []},
+        "run_history": {
+            "goals": [
+                {
+                    "id": "heavy-goal",
+                    "coordination": {"registered_agents": agents},
+                    "raw_snapshot": heavy_blob,
+                }
+            ],
+            "recent_runs": [
+                {
+                    "goal_id": "heavy-goal",
+                    "generated_at": "2099-01-01T00:00:00Z",
+                    "classification": "productive_turn",
+                    "recommended_action": "Continue slice.",
+                    "verbose_trace": heavy_blob,
+                }
+            ],
+        },
+    }
+
+    def build_quota(_status, *, goal_id, agent_id=None):
+        assert goal_id == "heavy-goal"
+        if agent_id is None:
+            return {
+                "ok": True,
+                "goal_id": "heavy-goal",
+                "state": "eligible",
+                "normal_delivery_allowed": False,
+                "unused_envelope": heavy_blob,
+            }
+        if agent_id == "worker-1":
+            return {
+                "ok": True,
+                "goal_id": "heavy-goal",
+                "state": "eligible",
+                "normal_delivery_allowed": True,
+                "agent_identity": {"agent_id": "worker-1"},
+                "selected_todo": {
+                    "todo_id": "todo_worker_1",
+                    "status": "open",
+                    "priority": "P1",
+                    "text": "Ship bounded RPC fix.",
+                    "extra_notes": heavy_blob,
+                },
+                "agent_lane_next_action": {
+                    "todo_id": "todo_worker_1",
+                    "status": "open",
+                    "agent_id": "worker-1",
+                    "text": "Ship bounded RPC fix.",
+                    "extra_notes": heavy_blob,
+                },
+                "recommended_action": "Ship bounded RPC fix.",
+                "unused_context": heavy_blob,
+            }
+        if agent_id == "worker-2":
+            return {
+                "ok": True,
+                "goal_id": "heavy-goal",
+                "state": "operator_gate",
+                "normal_delivery_allowed": False,
+                "agent_identity": {"agent_id": "worker-2"},
+                "gate_id": "gate_worker_2",
+                "user_todo_summary": {
+                    "open_count": 1,
+                    "gate_open_items": [
+                        {
+                            "todo_id": "todo_gate_2",
+                            "task_class": "user_gate",
+                            "text": "Approve synthetic migration?",
+                            "extra_notes": heavy_blob,
+                        }
+                    ],
+                },
+                "interaction_contract": {
+                    "user_channel": {
+                        "action_required": True,
+                        "question": "Approve synthetic migration?",
+                    },
+                    "large_replan_context": heavy_blob,
+                },
+            }
+        return {
+            "ok": True,
+            "goal_id": "heavy-goal",
+            "state": "eligible",
+            "normal_delivery_allowed": False,
+            "agent_identity": {"agent_id": agent_id},
+            "unused_context": heavy_blob,
+        }
+
+    assert len(json.dumps(status_payload)) > MAX_REQUEST_BYTES
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", build_quota)
+
+    summary_payload = summary_all.build_summary_all(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        time_range="24h",
+        limit=5,
+    )
+    gates_payload = summary_all.build_global_gates(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        limit=5,
+    )
+
+    assert summary_payload["ok"] is True
+    assert len(summary_payload["lanes"]) == 1
+    assert summary_payload["lanes"][0]["top_todo_id"] == "todo_worker_1"
+    assert summary_payload["summary"]["open_gate_count"] == 1
+    assert gates_payload["ok"] is True
+    assert gates_payload["summary"]["open_gate_count"] == 1
+    assert gates_payload["gates"][0]["question"] == "Approve synthetic migration?"
