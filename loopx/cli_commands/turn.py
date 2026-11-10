@@ -12,7 +12,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+from ..control_plane.quota.turn_envelope import compose_turn_decision
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
@@ -24,8 +24,8 @@ from .turn_decision import build_fresh_turn_decision_owner
 from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
-    project_turn_plan_inspection,
     build_turn_error_payload,
+    project_turn_plan_inspection,
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
 )
@@ -50,7 +50,7 @@ def handle_turn_command(
     print_payload: PrintPayload,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
-    native_execution_preparer: Callable[[Mapping[str, Any], Mapping[str, Any]], str | None] | None = None,
+    native_execution_preparer: Callable[[Mapping[str, Any]], str | None] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> int | None:
@@ -259,12 +259,8 @@ def handle_turn_command(
             scheduler_context = decision_owner.scheduler_execution_context
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
-            turn_envelope = build_turn_envelope(
-                decision,
-                scheduler_execution_context=scheduler_context,
-            )
             if native_execution_preparer is not None and args.turn_command == "run-once" and args.execute:
-                prepared_todo = native_execution_preparer(decision, turn_envelope)
+                prepared_todo = native_execution_preparer(decision)
                 if prepared_todo is not None:
                     # Host preparation changes canonical lease state. Plan and
                     # settle against a fresh read of the same Turn and Todo.
@@ -277,7 +273,6 @@ def handle_turn_command(
                             or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
                             or decision.get("normal_delivery_allowed") is not True):
                         raise ValueError("native task preparation did not make the same Todo ready")
-                    turn_envelope = build_turn_envelope(decision, scheduler_execution_context=scheduler_context)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
@@ -413,7 +408,9 @@ def handle_turn_command(
     renderer = (
         _render_loopx_turn_execution_markdown
         if args.turn_command == "run-once"
-        else _render_loopx_turn_plan_markdown
+        else lambda value: _render_loopx_turn_plan_markdown(
+            value, include_transaction_detail=args.include_transaction_detail,
+        )
     )
     print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

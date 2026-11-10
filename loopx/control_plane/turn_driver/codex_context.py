@@ -390,23 +390,30 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
             try:
                 state = _state(root)
                 read_state = state
-                same = state.get("session_id") == session and state.get("cwd") == event.get("cwd")
+                same_session = state.get("session_id") == session
+                same = same_session and state.get("cwd") == event.get("cwd")
                 if same:
                     recovery = state.get("recovery")
                     if name == "PostToolUse":
                         pages = _verified_context_pages(state, pages)
                         read_state = observe_native_read(state, event,
                             [page for page in pages if "read_sections" not in page])
+                elif same_session and name == "PostToolUse":
+                    # Tool workdirs are not host lifecycle transitions. Keep
+                    # only byte-verified selections from the current capture.
+                    pages = _verified_context_pages(state, pages, selected_only=True)
+                    if not pages or not isinstance(event.get("cwd"), str) or not event["cwd"]:
+                        return {}
                 updated = update_native_context_lifecycle(read_state, event,
                     new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
                     resume_verified=name == "SessionStart" and native_resume_verified(state, event))
-                if name == "PostToolUse":
+                if name == "PostToolUse" and same:
                     checkpoint_native_read(read_state, updated, event,
                         [page for page in pages if "read_sections" not in page])
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if same and isinstance(ready_digest, str) and any(
+                    if isinstance(ready_digest, str) and any(
                         page.get("ok") is True
                         and ready_digest in (page.get("sha256"), page.get("source_sha256"))
                         for page in pages
@@ -622,7 +629,8 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
     return pages
 
 
-def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]], *,
+                            selected_only: bool = False) -> list[dict[str, Any]]:
     """Compare observed output with trusted journal references before reduction.
 
     Cache each bounded immutable file only within this hook. Neither output
@@ -636,6 +644,8 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
         references.append(ready_ref)
     files: dict[str, bytes] = {}
     result = []
+    # One tool response can contain the terminal page anywhere in its batch.
+    defer_section_digests = not any(page.get("eof") is True for page in pages)
     for page in pages:
         # These observations originate only below, after byte/source checks.
         page = {key: value for key, value in page.items() if key not in ("read_sections", "source_sha256")}
@@ -646,12 +656,14 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
             from .native_context_selection import verified_context_selection
 
             try:
-                observed = verified_context_selection(state, page)
+                observed = verified_context_selection(state, page, defer_section_digests=defer_section_digests)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 observed = None
             if observed is not None:
                 result.append(observed)
             continue  # Never promote a selected read to full-delivery proof.
+        if selected_only:
+            continue
         reference = next((value for value in references if value.get("sha256") == page.get("sha256")), None)
         if reference is None or page.get("ok") is not True:
             result.append(page)  # the typed owner handles failures and unrelated reads
@@ -876,6 +888,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
                     result["baseline_reference"] = request["baseline_reference"]
+                read_plan = transaction.get("initial_read_plan")
                 if result.get("schema_version") == "context_delivery_v1":
                     state["recovery"]["target"] = result["target"]
                     state["recovery"]["continuity_basis"] = "captured_file"
@@ -889,12 +902,14 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     if plan := transaction.get("observed_first_read"):
                         from .native_first_read import observed_first_read_reference
 
-                        reference = observed_first_read_reference(directory, result["target"], recovery,
-                            transaction["context"], plan, transaction.get("initial_read_plan"))
-                        if reference is not None:
+                        pinned = observed_first_read_reference(directory, result["target"], recovery,
+                            transaction["context"], plan, read_plan)
+                        if pinned is not None:
+                            reference, opening = pinned
                             state["pending"]["observed_first_read"] = reference
+                            if opening is not None:
+                                read_plan = {**read_plan, "observed_opening": opening}
                     _save(root, state)
-                read_plan = transaction.get("initial_read_plan")
                 if read_plan is not None:
                     read_plan = {**read_plan, "capture": {key: recovery[key] for key in ("path", "sha256")}}
                 return NativeContextPreparation(result, read_plan)

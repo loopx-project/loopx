@@ -4,6 +4,7 @@ import { completionDependencyCycles } from "./completion_dependency.ts";
 import { readGoalRolloutEventSnapshot } from "../rollout_receipt_log.ts";
 
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { monitorScopeGeneration, normalizeMonitorChangeScope } from "./monitor_scope.ts";
 import {
   optionalNonEmptyString,
   requireInteger,
@@ -42,7 +43,7 @@ export const TODO_RESUME_KINDS = [
 
 export const UNSUPPORTED_TODO_RESUME_CONDITION_MESSAGE =
   "unsupported Todo resume condition; supported conditions are: " +
-  "todo_done:<todo_id>, monitor_changed:<monitor_todo_id>, " +
+  "todo_done:<todo_id>, monitor_changed:<monitor_todo_id>[@<scope>], " +
   "pr_merged:[owner/repo]#<number>, capacity_available:<capability>, " +
   "or resume_at:<timezone-aware-rfc3339-timestamp>";
 
@@ -70,6 +71,7 @@ interface ResumeSpec {
   kind: TodoResumeKind;
   target: string;
   normalized: string;
+  scope?: string;
 }
 
 interface ResumeTimestamp {
@@ -129,6 +131,7 @@ interface TodoItem extends JsonObject {
   resume_when?: string;
   resume_monitor_generation?: number;
   material_change_generation?: number;
+  material_change_scope_generations?: string;
 }
 
 function nonNegativeInteger(value: unknown, label: string): number | null {
@@ -189,6 +192,11 @@ function todoItem(value: unknown, label: string): TodoItem {
   if (materialGeneration !== null) {
     item.material_change_generation = materialGeneration;
   }
+  const scopeGenerations = optionalString(
+    raw.material_change_scope_generations,
+    `${label}.material_change_scope_generations`,
+  );
+  if (scopeGenerations !== undefined) item.material_change_scope_generations = scopeGenerations;
   return item;
 }
 
@@ -209,8 +217,17 @@ function parseResumeWhen(value: unknown): ResumeSpec | null {
   const separator = normalized.indexOf(":");
   if (separator < 1) return null;
   const kind = normalized.slice(0, separator);
-  const target = normalized.slice(separator + 1);
+  const rawTarget = normalized.slice(separator + 1);
   if (!TODO_RESUME_KINDS.includes(kind as TodoResumeKind)) return null;
+  let target = rawTarget;
+  let scope: string | undefined;
+  if (kind === "monitor_changed" && rawTarget.includes("@")) {
+    const parts = rawTarget.split("@");
+    if (parts.length !== 2) return null;
+    target = parts[0]!;
+    scope = normalizeMonitorChangeScope(parts[1]) ?? undefined;
+    if (!scope) return null;
+  }
   if ((kind === "todo_done" || kind === "monitor_changed") && !TODO_ID_PATTERN.test(target)) {
     return null;
   }
@@ -218,19 +235,25 @@ function parseResumeWhen(value: unknown): ResumeSpec | null {
     return null;
   }
   if (kind === "pr_merged" && !PR_RESUME_PATTERN.test(normalized)) return null;
-  return { kind: kind as TodoResumeKind, target, normalized };
+  return { kind: kind as TodoResumeKind, target, normalized, ...(scope ? {scope} : {}) };
 }
 
 function requireResumeWhen(value: unknown, label: string): ResumeSpec {
   const parsed = parseResumeWhen(value);
   if (!parsed) {
     throw new EffectRuntimeRequestError(
-      `${label} must use todo_done:<todo_id>, monitor_changed:<monitor_todo_id>, ` +
+      `${label} must use todo_done:<todo_id>, monitor_changed:<monitor_todo_id>[@<scope>], ` +
         "pr_merged:[owner/repo]#<number>, capacity_available:<capability>, " +
         "or resume_at:<timezone-aware-rfc3339-timestamp>",
     );
   }
   return parsed;
+}
+
+/** Project only a typed Todo dependency; a monitor scope is never part of its identity. */
+export function todoResumeDependencyId(value: unknown): string | null {
+  const spec = parseResumeWhen(value);
+  return spec?.kind === "todo_done" || spec?.kind === "monitor_changed" ? spec.target : null;
 }
 
 export function normalizeTodoResumeWhen(value: unknown): string | null {
@@ -549,7 +572,10 @@ function conditionFor(
   }
   const monitor = byId.get(spec.target);
   const baseline = item.resume_monitor_generation;
-  const generation = monitor?.material_change_generation ?? 0;
+  const globalGeneration = monitor?.material_change_generation ?? 0;
+  const generation = spec.scope && monitor
+    ? monitorScopeGeneration(monitor.material_change_scope_generations, spec.scope)
+    : globalGeneration;
   condition.target_todo_id = spec.target;
   condition.target_status = monitor?.status ?? null;
   condition.target_task_class = monitor?.task_class ?? null;
@@ -565,7 +591,11 @@ function conditionFor(
     }
   }
   condition.baseline_generation = baseline ?? null;
-  condition.material_change_generation = generation;
+  condition.material_change_generation = globalGeneration;
+  if (spec.scope) {
+    condition.monitor_change_scope = spec.scope;
+    condition.scoped_material_change_generation = generation;
+  }
   condition.generation_fence = "strictly_greater_than_baseline";
   if (!monitor) condition.invalid_state = "monitor_not_found";
   else if (monitor.task_class !== "continuous_monitor") {
@@ -633,13 +663,17 @@ export function resumeConditionHasKnownPendingTarget(condition: JsonObject, wait
       return ["open", "deferred"].includes(String(condition.target_status))
         && ["advancement_task", "user_gate", "user_action", "blocker"].includes(String(condition.target_task_class))
         && (condition.target_archive_state === null || condition.target_archive_state === "active");
-    case "monitor_changed":
+    case "monitor_changed": {
+      const observedGeneration = spec.scope
+        ? condition.scoped_material_change_generation
+        : condition.material_change_generation;
       return condition.target_task_class === "continuous_monitor" && condition.target_status === "open"
         && typeof condition.baseline_generation === "number" && Number.isSafeInteger(condition.baseline_generation)
         && condition.baseline_generation >= 0 && condition.baseline_generation === waitingTodo.resume_monitor_generation
-        && typeof condition.material_change_generation === "number"
-        && Number.isSafeInteger(condition.material_change_generation) && condition.material_change_generation >= 0
-        && condition.material_change_generation <= condition.baseline_generation;
+        && typeof observedGeneration === "number"
+        && Number.isSafeInteger(observedGeneration) && observedGeneration >= 0
+        && observedGeneration <= condition.baseline_generation;
+    }
     case "capacity_available": return condition.provider_required === false
       && condition.provider === "runtime_available_capabilities" && condition.capability === spec.target;
     case "pr_merged": {
@@ -904,6 +938,8 @@ function externalWaitMetadata(
   const baselineGeneration =
     sameCondition && waitingTodo.resume_monitor_generation !== undefined
       ? waitingTodo.resume_monitor_generation
+      : spec.scope
+      ? monitorScopeGeneration(dependency.material_change_scope_generations, spec.scope)
       : dependency.material_change_generation ?? 0;
   updates.resume_monitor_generation = baselineGeneration;
   return { updates, baselineGeneration };

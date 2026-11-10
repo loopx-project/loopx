@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import logging
 import json
+import re
+from hashlib import sha256
 import threading
 from itertools import islice
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 from ...extensions.background_runtime import HostedWorker
@@ -248,7 +251,58 @@ def report(
     }
 
 
-def project_chat_return_deliveries(root, session_id, messages, *, source_store=None):
+def _chat_return_files(root, route, path, reply, message, store, registry):
+    """Read the published result, never its mutable workspace source or sender."""
+    if not reply.get("attachments") or store is None:
+        return []
+    session = store.load_session(route["session_id"])
+    turn = store.load_turn(route["session_id"], message.get("turn_id")) if message.get("turn_id") else None
+    if (not session or not turn or message.get("role") not in {"agent", "assistant"}
+            or session.get("channel_id") != route.get("channel_id")
+            or turn.get("client_turn_id") != route.get("client_turn_id")
+            or turn.get("session_id") != session["session_id"]):
+        return []
+    if route.get("goal_ref") and registry is None:
+        return []
+    with (collaboration_goal_scope(registry, goal_id=route["goal_id"], agents=(),
+            caller_goal_ref=route.get("goal_ref")) if route.get("goal_ref") else nullcontext(None)) as scope:
+        row = _entry(root, route["goal_id"], route["agent_id"], route["request_id"], scope=scope)
+        if any(row.get(key) != route.get(key) for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+            return []
+        from ...control_plane.collaboration.inbox import inspect_result_identity
+        inspected = inspect_result_identity(reply, row, path)
+        if inspected is None:
+            return []
+        attachments = inspected["value"].get("attachments") or []
+    base = f"/api/chat/sessions/{quote(session['session_id'], safe='')}/messages/{quote(message['message_id'], safe='')}/files/"
+    return [{"id": f"result-file.{item['sha256']}.{index}", "name": item["name"], "size": item["size"],
+             "mime_type": "application/octet-stream", "data_url": base + f"{item['sha256']}.{index}"}
+            for index, item in enumerate(attachments)]
+
+
+def read_chat_return_file(root, store, session_id, message_id, file_id, *, registry):
+    """Resolve one file through its original saved message, then verify bytes."""
+    match = re.fullmatch(r"([a-f0-9]{64})\.([0-3])", file_id)
+    if not match:
+        raise KeyError("returned file unavailable")
+    digest = match[1]
+    message = next((item for item in store.messages(session_id, strict=True)
+                    if item.get("message_id") == message_id and item.get("origin") == "manager_followup"), None)
+    if message is None:
+        raise KeyError("returned file unavailable")
+    # Only files independently resolved from the immutable result can authorize
+    # a download; persisted input attachments are not file-store locators.
+    projected = project_chat_return_deliveries(root, session_id, [{**message, "attachments": []}],
+        source_store=store, registry=registry)[0]
+    attachment = next((item for item in projected.get("attachments", [])
+                       if item["id"] == "result-file." + file_id), None)
+    if attachment is None:
+        raise KeyError("returned file unavailable")
+    from ...control_plane.collaboration.result_files import read_result_file
+    return attachment, read_result_file(root, {"sha256": digest, "size": attachment["size"]})
+
+
+def project_chat_return_deliveries(root, session_id, messages, *, source_store=None, registry=None):
     """Attach public-safe delivery readback to returned Chat transcript rows."""
 
     from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
@@ -262,7 +316,8 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     }
     if not pending_message_ids:
         return list(messages)
-    statuses = {}
+    statuses, files = {}, {}
+    visible = {message.get("message_id"): message for message in messages}
     routes = _root(root) / "roundtrips"
 
     def candidate_paths():
@@ -310,6 +365,14 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
                 continue
+            def observe_result(result_path, reply):
+                mid = "handoff." + _hash([request_id, result_path.stem])
+                try:
+                    files[mid] = _chat_return_files(root, route, result_path, reply,
+                        visible[mid], source_store, registry)
+                except (OSError, ValueError, KeyError, TypeError):
+                    # Preserve delivery history even when a file cannot be read.
+                    files[mid] = []
             # A legacy/unmatched row can require the exhaustive route fallback.
             # Match immutable result keys before reading potentially long reply
             # bodies and delivery sidecars for off-page results. The existing
@@ -317,6 +380,7 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             for item in reply_status(
                 root, route,
                 include_result_key=lambda key: "handoff." + _hash([request_id, key]) in pending_message_ids,
+                observe_result=observe_result,
             ):
                 message_id = "handoff." + _hash([request_id, item.get("result_key", item["phase"])])
                 if message_id not in pending_message_ids:
@@ -332,7 +396,11 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
             continue
     return [
         (
-            {**message, "return_delivery": statuses[message.get("message_id")]}
+            {**message, "return_delivery": statuses[message.get("message_id")],
+             **({"attachments": [*(item for item in (message.get("attachments") or [])
+                                    if item.get("id") not in {file["id"] for file in files[message["message_id"]]}),
+                                  *files[message["message_id"]]]}
+                if files.get(message.get("message_id")) else {})}
             if message.get("message_id") in statuses
             else message
         )
@@ -341,10 +409,12 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
 
 
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None, turn_id=None):
+                                  message_limit=None, message_cursor=None, turn_id=None,
+                                  resume_from=None, project_history_messages=None):
     """Project return delivery state into one existing Chat snapshot."""
 
-    snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
+    strict = message_limit is not None or resume_from is not None
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
                 else store.session_snapshot(session_id))
     if turn_id is not None:
         if message_limit is None:
@@ -355,6 +425,12 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         # OriginalRequest already displays only this Turn. Select it before
         # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
+    elif project_history_messages is not None:
+        # Extension-owned, presentation-only rows must join the frozen page
+        # prefix. A selected Turn only reads its canonical messages.
+        snapshot["messages"] = project_history_messages(snapshot["messages"])
+    if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
+        return None  # Bound the complete visible stream, including provider-only notices.
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
                               cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
@@ -363,7 +439,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
-        root, session_id, snapshot["messages"], source_store=store
+        root, session_id, snapshot["messages"], source_store=store, registry=registry
     )
     from .presentation import project_collaboration
     # Use the frozen context to choose the carrier, projecting only this page.
@@ -377,6 +453,78 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         snapshot["message_page"] = page["message_page"]
     return snapshot
 
+
+
+def parse_chat_history_selection(query):
+    """Validate one HTTP history selection before any recovery observation."""
+    if (set(query) - {"message_limit", "message_cursor", "turn_id", "known_history"}
+            or any(len(values) != 1 or not values[0] for values in query.values())
+            or ("message_limit" not in query and set(query) & {"message_cursor", "turn_id", "known_history"})):
+        raise ValueError("invalid history page arguments")
+    limit = int(query["message_limit"][0]) if "message_limit" in query else None
+    if limit is not None and not 1 <= limit <= 200:
+        raise ValueError("message_limit must be between 1 and 200")
+    basis = query.get("known_history", [None])[0]
+    parsed_basis = None
+    if basis is not None:
+        if limit != 200 or "turn_id" in query or "message_cursor" in query:
+            raise ValueError("invalid history resume arguments")
+        count_text, _, proof = basis.partition(":")
+        if not re.fullmatch(r"[1-9][0-9]{0,3}", count_text):
+            raise ValueError("invalid known history proof")
+        count = int(count_text)
+        if count > 5000 or len(proof) != ((count + 199) // 200) * 64 or not re.fullmatch(r"[a-f0-9]+", proof):
+            raise ValueError("invalid known history proof")
+        parsed_basis = (basis, count, proof)
+    return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
+            "turn_id": query.get("turn_id", [None])[0], "known_history": parsed_basis}
+
+
+def _visible_history_page_digest(session_id, offset, messages):
+    # Bind the displayed rows, including fresh provider projections, to the source.
+    body = json.dumps([session_id, offset, messages], sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    return sha256(body).hexdigest()
+
+
+def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider,
+                                project_history_messages=None):
+    """Compose the same provider projections for page reads and suffix proof."""
+    basis = selection["known_history"]
+    if basis is None:
+        snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
+            project_history_messages=project_history_messages,
+            **{key: value for key, value in selection.items() if key != "known_history"})
+        snapshot["messages"] = project_provider(snapshot["messages"])
+        if selection["message_limit"] == 200 and selection["turn_id"] is None:
+            page = snapshot["message_page"]
+            if 1 <= page["total"] <= 5000:
+                page["visible_page_sha256"] = _visible_history_page_digest(
+                    session_id, page["offset"], snapshot["messages"])
+        return snapshot
+
+    basis, count, proof = basis
+    resume = {"schema_version": "loopx_chat_history_resume_v1"}
+    restart = {"ok": True, **resume, "status": "restart"}
+    snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count,
+        project_history_messages=project_history_messages)
+    if snapshot is None or len(snapshot["messages"]) > 5000:
+        return restart
+    messages = project_provider(snapshot["messages"])
+    current_prefix = "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:min(offset + 200, count)])
+        for offset in range(0, count, 200))
+    if current_prefix != proof:
+        return restart
+    total = len(messages)
+    # The old last page may have been short; earlier pages were just verified.
+    unchanged = count if total == count else count - count % 200
+    next_proof = proof[:((unchanged + 199) // 200) * 64] + "".join(
+        _visible_history_page_digest(session_id, offset, messages[offset:offset + 200])
+        for offset in range(unchanged, total, 200))
+    return {**snapshot, "messages": messages[count:], "history_resume": {
+        **resume, "base": basis, "next": f"{total}:{next_proof}",
+    }}
 
 
 RETURN_DELIVERY_TRANSACTION = "manager_return_delivery_transaction_v0"
@@ -527,6 +675,15 @@ def _deliver_return(host, path, sender, frozen_route):
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}
     settled = transact("settle", outcome=outcome, message_id=plan["message_id"])
+    # The reply may already be visible while its provider receipt is queued.
+    # Invalidate the existing session read hint after settlement so cached
+    # conversations re-read the receipt without rewriting history or activity.
+    try:
+        store.update_session(source["route"]["session_id"])
+    except (OSError, ValueError):
+        # Publication is already committed. A presentation hint failure must
+        # never reclassify delivery or cause the original reply to be resent.
+        logging.getLogger(__name__).warning("Manager return session read hint unavailable")
     if settled.get("observe_verified"):
         from ...usage_ping import observe_verified_return
         observe_verified_return()

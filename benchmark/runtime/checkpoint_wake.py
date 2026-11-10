@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
+from loopx.control_plane.turn_driver.decision_capture import bind_handoff_capture_root
 from .checkpoint import _mark_replan_attempt, _participant_id, held_quota_decision, read_checkpoint_request
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 
@@ -55,6 +56,7 @@ class CheckpointWake:
             self.listener = self.stack.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
             self.listener.bind(self.socket_path)
             self.listener.listen(1)
+            bind_handoff_capture_root(self.socket_path, self.capture_root)
             return self
         except BaseException:
             self.stack.close()

@@ -2377,7 +2377,13 @@ def test_set_connection_reconnect_reuses_root_without_resend(tmp_path: Path) -> 
     assert _connect_registered_agent(**kwargs)["ok"] is True
     first_sends = [call for call in state["calls"] if "+messages-send" in call]
     assert len(first_sends) == 1
-    assert _connect_registered_agent(**kwargs)["ok"] is True
+    # Reconnect uses the saved source, including the Inbox registered above.
+    # Rewriting the initial seed here would erase that registration first.
+    kwargs["registry"] = json.loads(
+        (tmp_path / ".loopx" / "registry.json").read_text(encoding="utf-8")
+    )
+    reconnected = _connect_registered_agent(**kwargs)
+    assert reconnected["ok"] is True, reconnected
     total_sends = [call for call in state["calls"] if "+messages-send" in call]
     assert len(total_sends) == 1
     connection = binding_for_goal(

@@ -28,6 +28,7 @@ from ..control_plane.turn_driver.native_context_profile import (
     native_context_page_budget,
 )
 from .quota_context_reader import (
+    budgeted_ready_opening,
     _capture_selection_transport_template,
     bind_capture_selection_transport as bind_capture_selection_transport,
     _saved_context_read_page,
@@ -108,16 +109,17 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    initial_read_content = b""
     # A stateless attached page uses the ordinary verified selector below.
     # Its recovery recipe does not require an extra root index to be planned.
     stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
-        nonlocal initial_read_pointers, initial_read_reference
+        nonlocal initial_read_pointers, initial_read_reference, initial_read_content
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference, _ = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, initial_read_content = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
@@ -188,6 +190,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    opening_observation = None
     if (progressive_enabled and observed and "first_read_command" in result
             and observed["pointer_bytes"] <= first_output_bytes // 4):
         first = Path(observed["path"])
@@ -195,6 +198,13 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
             reference_file=first, page_bytes=first_page_bytes,
             max_page_output_bytes=first_output_bytes, reader_argv=reader_argv)
+        opening_observation = (initial_read_plan or {}).get("observed_opening")
+        if opening_observation is None or opening_observation["path"] != str(first):
+            return result
+    if not page_attached and initial_read_plan and initial_read_plan.get("linked_opening_detail"):
+        return budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
+            page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
+            context_directory=context_directory, observation=opening_observation)
     return result
 
 
@@ -517,8 +527,13 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
         raise QuotaCommandValidationError(
             "native Codex context delivery needs JSON and a capture destination")
     if handoff is not None:
-        validate_handoff_socket(handoff)
-        if requested is None and root is None:
+        handoff_root = None
+        if root is not None:
+            handoff_root = Path(root).expanduser().absolute()
+        elif requested is not None:
+            handoff_root = Path(requested).expanduser().absolute().parent
+        validate_handoff_socket(handoff, capture_root=handoff_root)
+        if handoff_root is None:
             raise QuotaCommandValidationError("decision handoff requires an explicit decision capture destination")
     if requested is None and root is None:
         return None
@@ -853,21 +868,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
                         request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        if "claim_source_sha256" not in request:
+                        if "claim_source_sha256" not in request or not request.get("turn_instance_id"):
                             raise LegacyNativePreparationCapture()
                         if request.get("readback_only") is True:
                             preparation_context = codex_execution_preparation_readback_context(request) or ""
                         else:
-                            capture = (
-                                Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
-                                if request.get("turn_instance_id") else None
-                            )
+                            capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                             receipt = execute_codex_execution_preparation(
                                 request,
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
                                 capture_directory=capture,
-                                context_directory=directory if capture is not None else None,
+                                context_directory=Path(directory),
                             )
                             record_native_execution_preparation(
                                 directory,
@@ -878,25 +890,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                             # Publish the decision that the Host just verified;
                             # a model must not need a second guard to obtain its
                             # Goal, task, requirements and settlement contract.
-                            if capture is not None:
-                                source = capture / "decision.json"
-                                # The existing saved-capture owner preserves a
-                                # pinned full recovery even if native projection
-                                # fails. It never rereads authority or admits work.
-                                digest = receipt.pop("capture_sha256")
-                                receipt.pop("capture_path", None)
-                                receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
-                                    **vars(args), "quota_command": "context-project",
-                                    "capture_file": str(source),
-                                    "capture_sha256": digest,
-                                    "goal_id": request["goal_id"], "agent_id": request["agent_id"],
-                                    "turn_instance_id": request["turn_instance_id"],
-                                }), hook_session=event["session_id"])
-                                if receipt["context"].get("ok") is False:
-                                    from ..command_invocation import current_loopx_cli_argv
+                            source = capture / "decision.json"
+                            # The saved-capture reader never rereads authority or admits work.
+                            digest = receipt.pop("capture_sha256")
+                            receipt.pop("capture_path")
+                            receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
+                                **vars(args), "quota_command": "context-project",
+                                "capture_file": str(source),
+                                "capture_sha256": digest,
+                                "goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                                "turn_instance_id": request["turn_instance_id"],
+                            }), hook_session=event["session_id"])
+                            if receipt["context"].get("ok") is False:
+                                from ..command_invocation import current_loopx_cli_argv
 
-                                    receipt["context"]["recovery_command"] = context_capture_read_command(
-                                        source, digest, reader_argv=current_loopx_cli_argv())
+                                receipt["context"]["recovery_command"] = context_capture_read_command(
+                                    source, digest, reader_argv=current_loopx_cli_argv())
                             preparation_context = codex_execution_preparation_context(receipt)
                 except LegacyNativePreparationCapture as error:
                     preparation_context = str(error)

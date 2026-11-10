@@ -161,7 +161,7 @@ def refine_goal_outcome(
     registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     if "owner_agent_id" in refinement and refinement["owner_agent_id"] not in registered_agent_ids_for_goal(goal):
         raise ValueError("Outcome owner must be a registered Agent")
-    # The registry's legacy omitted-status form denotes an active Goal too.
+    # Registration eligibility is independent of the typed activation gate.
     if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
         raise ValueError("Outcome refinement requires an active Goal")
     return _result("goal.acceptance.refine", {**route, "actor_agent_id": agent_id,

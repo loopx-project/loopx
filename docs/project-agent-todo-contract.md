@@ -475,6 +475,13 @@ Deferred todos may carry a machine-readable resume condition with
   material-change generation. The transition binds the monitor's current
   generation as a baseline, so unchanged polls, note edits, and replay of the
   same material result do not wake the todo.
+- `resume_when=monitor_changed:<monitor_todo_id>@<scope>`: the same fence,
+  narrowed to one public-safe case/run or other caller-owned scope. Record the
+  corresponding transition with `quota monitor-poll --material-change
+  --material-change-scope <scope>`. Unrelated scoped transitions may advance
+  the monitor's global generation without waking this Todo. LoopX retains up
+  to 128 distinct scope generations per Monitor and refuses a new scope after
+  that bound instead of evicting evidence for an existing wait.
 - `resume_when=resume_at:<timezone-aware-rfc3339-timestamp>`: the todo becomes
   ready at or after one exact instant. A timezone is mandatory; authoring
   normalizes equivalent offsets to UTC. Before that instant the todo remains a
@@ -497,6 +504,9 @@ On a material observation, use `quota monitor-poll --material-change
 `resume_when=monitor_changed:<monitor_todo_id>` with that independent Todo via
 `--successor-todo-id`. The resume condition—not `status=blocked`—keeps the
 waiting Todo out of runnable selection until the monitor generation advances.
+When one Monitor covers multiple cases or runs, add
+`--material-change-scope <case/run>` and use the matching
+`monitor_changed:<monitor_todo_id>@<case/run>` condition.
 Relevant command results expose the compact
 `monitor_advancement_authoring_v0` contract so an Agent can recover this
 sequence without parsing documentation prose.
@@ -992,7 +1002,7 @@ loopx todo update \
   --goal-id <goal-id> \
   --todo-id <waiting_todo_id> \
   --agent-id <registered-agent> \
-  --resume-when monitor_changed:<monitor_todo_id> \
+  --resume-when monitor_changed:<monitor_todo_id>@<case/run-scope> \
   --successor-todo-id <runnable_successor_todo_id> \
   --reason "<public-safe external-wait rationale>"
 ```
