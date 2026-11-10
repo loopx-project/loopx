@@ -238,11 +238,12 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
 
     The caller independently proves the exact Host returned and explicitly
     requests recovery after an operator repair. Non-quota failures also require
-    the exact returned error digest; it never classifies an unknown error from
-    its message. This observation starts no Turn and supplies no checkpoint.
+    the exact returned error digest and a precise provider rollout cursor.
+    This observation starts no Turn and supplies no checkpoint.
     """
     from loopx.control_plane.turn_driver.codex_cli import _codex_error_info_category
     from loopx.control_plane.turn_driver.host_failure import require_host_failure_kind
+    from .codex_rollout_file import read_failed_turn_cursor
 
     require_host_failure_kind(failure_kind)
     if ((returned_error_sha256 is None and failure_kind != "quota_exhausted") or not session_id
@@ -253,9 +254,9 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
             or process_started_at > process_stopped_at or timeout <= 0):
         raise ValueError("Failed native recovery requires its returned failure and process window")
     deadline = time.monotonic() + timeout
-    original = (_native_observation_fingerprint(Path(env['CODEX_HOME']), deadline=deadline)
-                if returned_error_sha256 is not None else None)
-    observer = (_idle_native_reader(env, timeout=timeout, deadline=deadline) if original is not None
+    home = Path(env['CODEX_HOME']) if returned_error_sha256 is not None else None
+    original = _native_observation_fingerprint(home, deadline=deadline) if home is not None else {}
+    observer = (_idle_native_reader(env, timeout=timeout, deadline=deadline) if home is not None
                 else native_checkpoint_reader(env, timeout=timeout, deadline=deadline))
     with observer as transport:
         def request(method, params):
@@ -264,7 +265,19 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
                 raise TimeoutError("Failed native recovery readback window closed")
             transport.response_timeout_sec = remaining
             return transport.request(method, params)
-        _native_thread_readback(request, env, session_id)
+        thread = _native_thread_readback(request, env, session_id)
+        cursor = None
+        if home is not None:
+            source = thread.get('path')
+            rollout = Path(source) if isinstance(source, str) else None
+            if rollout is None or not rollout.is_relative_to(home):
+                raise ValueError('Failed native rollout must be in the original store')
+            relative = rollout.relative_to(home)
+            if (not relative.parts or relative.parts[0] not in ('sessions', 'archived_sessions')
+                    or original.get(str(relative)) is None):
+                raise ValueError('Failed native rollout must be a retained source file')
+            cursor = read_failed_turn_cursor(rollout, session_id=session_id, workspace=env['LOOPX_PROJECT'],
+                process_started_at=process_started_at, process_stopped_at=process_stopped_at, deadline=deadline)
         turns = _retained_history(request, session_id)
         tail = turns[-1]
         error = tail.get("error")
@@ -273,12 +286,14 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
                             if returned_error_sha256 is not None else None)
         category, structured = _codex_error_info_category(error.get('codexErrorInfo') if isinstance(error, dict) else None)
         start, end = tail.get("startedAt"), tail.get("completedAt")
+        end_bound = process_stopped_at if cursor is not None else math.ceil(process_stopped_at)
         if (tail.get("status") != "failed"
+                or (cursor is not None and tail.get('id') != cursor['turn_id'])
                 or (returned_error_sha256 is not None and error_projection != returned_error_sha256)
                 or (returned_error_sha256 is None and (not structured or category != failure_kind))
                 or any(type(value) not in (int, float) or not math.isfinite(value)
                        for value in (start, end))
-                or not math.floor(process_started_at) <= start <= end <= math.ceil(process_stopped_at)):
+                or not math.floor(process_started_at) <= start <= end <= end_bound):
             raise ValueError("Native failure differs from the original returned Host")
         effect_turns = turns if returned_error_sha256 is not None else [tail]
         if any(item.get("status") in {"inProgress", "running", "pending"}
@@ -290,10 +305,10 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
             raise ValueError("Failed native history advanced during readback")
         result = {"session_id": session_id, "turn_id": tail["id"], "status": "failed",
                 "failure_kind": failure_kind, "turn_count": len(turns),
-                **({'error_sha256': error_digest, 'returned_error_sha256': error_projection}
-                   if error_digest is not None else {}),
+                **({'error_sha256': error_digest, 'returned_error_sha256': error_projection,
+                    'rollout_cursor': cursor} if cursor is not None else {}),
                 "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
-    if original is not None and _native_observation_fingerprint(Path(env['CODEX_HOME']), deadline=deadline) != original:
+    if home is not None and _native_observation_fingerprint(home, deadline=deadline) != original:
         raise ValueError('Failed native source changed during isolated readback')
     return result
 
@@ -385,7 +400,7 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         raise ValueError("native pending guard call identity differs")
 
 
-def _native_thread_readback(request, env: dict[str, str], session_id: str) -> None:
+def _native_thread_readback(request, env: dict[str, str], session_id: str) -> dict[str, Any]:
     readback = request("thread/read", {"threadId": session_id, "includeTurns": False})
     if readback.get("thread", {}).get("id") != session_id:
         raise ValueError("native checkpoint session identity mismatch")
@@ -393,6 +408,7 @@ def _native_thread_readback(request, env: dict[str, str], session_id: str) -> No
     if (not workspace.is_absolute() or workspace.resolve(strict=True) != workspace or
             readback["thread"].get("cwd") != str(workspace)):
         raise ValueError("native checkpoint session workspace differs from the declared code basis")
+    return readback['thread']
 
 
 def native_completed_cursor(env: dict[str, str], session_id: str, *,

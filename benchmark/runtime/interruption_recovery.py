@@ -368,10 +368,11 @@ def _returned_failure_witness(path: Path, receipt: dict, session_id: str,
 
     process = receipt.get('native_process') or {}
     before, after = process.get('before_cleanup') or {}, process.get('after_cleanup') or {}
+    returned_at = _number(before.get('observed_at_unix'))
     if (receipt.get('timed_out') or receipt.get('error_kind')
             or any(type(frame.get('return_code')) is not int or frame['return_code'] != 1
                    for frame in (before, after))
-            or not started <= _number(before.get('observed_at_unix')) <= stopped
+            or not started <= returned_at <= stopped
             or before.get('signal') is not None or after.get('signal') is not None
             or process.get('cleanup_trigger') != 'scope_completed'
             or process.get('scope_error_type') is not None):
@@ -395,6 +396,7 @@ def _returned_failure_witness(path: Path, receipt: dict, session_id: str,
         raise ValueError('Explicit returned failure differs from its original native invocation')
     error = events[-1].get('error')
     return {'session_id': session_id, 'process_started_at': started, 'process_stopped_at': stopped,
+            'process_returned_at': returned_at,
             'stdout_sha256': hashlib.sha256(raw).hexdigest(), 'stderr_sha256': hashlib.sha256(diagnostic).hexdigest(),
             'error_sha256': native_failure_error_digest(error),
             'error_projection_sha256': native_failure_error_digest(error, cli_projection=True)}
@@ -483,10 +485,15 @@ def verify_failed_host_replay_witness(state_file: Path, prior: dict, recovery: d
     returned = recovery.get('returned_failure')
     if failure['kind'] != 'quota_exhausted' or returned is not None:
         started, stopped = _process_window(receipt)
+        cursor = native.get('rollout_cursor')
         if (not isinstance(returned, dict)
                 or returned != _returned_failure_witness(path, receipt, prior['session_id'], started, stopped)
                 or not digest(native.get('error_sha256'))
-                or native.get('returned_error_sha256') != returned.get('error_projection_sha256')):
+                or native.get('returned_error_sha256') != returned.get('error_projection_sha256')
+                or not isinstance(cursor, dict) or cursor.get('turn_id') != native['turn_id']
+                or not digest(cursor.get('record_sha256'))
+                or not started <= _number(cursor.get('started_at')) <= _number(cursor.get('completed_at'))
+                    <= returned['process_returned_at']):
             raise ValueError('Explicit failed continuation returned failure proof changed')
     current_env = process_environment(Path(env['LOOPX_CODEX_HOME']), base=env)
     current = CodexAgentSession(current_env, context='resume',
@@ -562,7 +569,7 @@ def read_failed_host(state: dict, *, state_file: Path, env: dict[str, str],
     returned = (_returned_failure_witness(path, receipt, current.session_id, started, stopped)
                 if failure['kind'] != 'quota_exhausted' else None)
     native = native_failed_turn(env, current.session_id, failure_kind=failure['kind'],
-        process_started_at=started, process_stopped_at=stopped,
+        process_started_at=started, process_stopped_at=returned['process_returned_at'] if returned else stopped,
         **({'returned_error_sha256': returned['error_projection_sha256']} if returned is not None else {}))
     allowance = require_native_receiver_allowance(env)
     with current.admission.launch_lifetime(operation='benchmark_failed_host_recovery'):

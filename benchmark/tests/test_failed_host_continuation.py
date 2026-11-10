@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -176,7 +177,9 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
 
 
 @pytest.mark.parametrize('fault', [None, 'no_witness', 'missing_error', 'wrong_error', 'new_error_field',
-    'structured_conflict', 'running', 'pending_prefix', 'outside_window', 'changed_history', 'changed_source'])
+    'structured_conflict', 'running', 'pending_prefix', 'outside_window', 'changed_history', 'changed_source',
+    'missing_rollout', 'later_foreign_tail', 'same_second_foreign_tail', 'late_rollout', 'coarse_rollout',
+    'ambiguous_rollout'])
 def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(tmp_path, monkeypatch, fault):
     home = tmp_path / 'native'
     home.mkdir()
@@ -190,6 +193,20 @@ def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(t
     turns = [dict(id='prefix', status='completed', items=[]),
              dict(id='original-failed-turn', status='failed', startedAt=110, completedAt=120,
                   error=copy.deepcopy(native_error), items=[])]
+    rollout = home / 'sessions' / 'rollout-fixture-original.jsonl'
+    rollout.parent.mkdir()
+    markers = [
+        (110.5, {'type': 'task_started', 'turn_id': 'original-failed-turn'}),
+        ({'late_rollout': 120.5, 'coarse_rollout': 120.0}.get(fault, 120.125),
+         {'type': 'task_complete', 'turn_id': 'original-failed-turn', 'error': cli_error}),
+    ]
+    if fault == 'ambiguous_rollout':
+        markers.insert(1, (112.0, {'type': 'task_started', 'turn_id': 'foreign-turn'}))
+    records = [{'type': 'session_meta', 'payload': {'id': 'original', 'cwd': str(tmp_path)}}]
+    records.extend({'type': 'event_msg', 'timestamp': datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+                    'payload': payload} for stamp, payload in markers)
+    if fault != 'missing_rollout':
+        rollout.write_text(''.join(json.dumps(record) + '\n' for record in records))
     if fault == 'missing_error':
         turns[-1].pop('error')
     elif fault == 'wrong_error':
@@ -204,12 +221,15 @@ def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(t
         turns[0]['items'] = [{'type': 'commandExecution', 'status': 'pending'}]
     elif fault == 'outside_window':
         turns[-1]['startedAt'] = 99
+    elif fault in ('later_foreign_tail', 'same_second_foreign_tail'):
+        stamp = 121 if fault == 'later_foreign_tail' else 120
+        turns.append(dict(turns[-1], id='foreign-turn', startedAt=stamp, completedAt=stamp))
     calls = []
     class Transport:
         def request(self, method, params):
             calls.append(method)
             if method == 'thread/read':
-                return {'thread': {'id': 'original', 'cwd': str(tmp_path)}}
+                return {'thread': {'id': 'original', 'cwd': str(tmp_path), 'path': str(rollout)}}
             assert method == 'thread/turns/list'
             rows = copy.deepcopy(turns)
             if fault == 'changed_history' and calls.count(method) > 1:
@@ -229,7 +249,7 @@ def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(t
     kwargs = {} if fault == 'no_witness' else {'returned_error_sha256': returned_digest}
     def read():
         return native.native_failed_turn({'LOOPX_PROJECT': str(tmp_path), 'CODEX_HOME': str(home)},
-            'original', failure_kind='unknown', process_started_at=100, process_stopped_at=125, **kwargs)
+            'original', failure_kind='unknown', process_started_at=100.25, process_stopped_at=120.25, **kwargs)
     if fault:
         with pytest.raises(ValueError):
             read()
@@ -240,6 +260,9 @@ def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(t
         assert result['returned_error_sha256'] == returned_digest
         assert result['error_sha256'] == hashlib.sha256(json.dumps(native_error, sort_keys=True,
             separators=(',', ':')).encode()).hexdigest()
+        assert result['rollout_cursor'] == {'turn_id': 'original-failed-turn', 'started_at': 110.5,
+            'completed_at': 120.125, 'record_sha256': hashlib.sha256(
+                b''.join(rollout.read_bytes().splitlines(keepends=True)[1:])).hexdigest()}
         with pytest.raises(ValueError, match='completed final cursor'):
             native._complete_history(Transport().request, 'original')
     if fault != 'changed_source':
@@ -254,7 +277,7 @@ def test_returned_unknown_failure_binds_error_and_isolated_stable_native_store(t
 ] + [
     ('unknown', 1, fault) for fault in
     (None, 'stop', 'profile', 'session', 'source_digest', 'exhausted', 'unknown_allowance',
-     'stop_after_prepare', 'no_return', 'missing_error', 'native_error', 'pending_native',
+     'stop_after_prepare', 'no_return', 'after_return', 'missing_error', 'native_error', 'pending_native',
      'stdout_session', 'stdout_truncated')
 ])
 def test_real_sqlite_failed_host_can_explicitly_resume_original_session(tmp_path, monkeypatch, kind, prior_attempt, fault):
@@ -270,11 +293,14 @@ def test_real_sqlite_failed_host_can_explicitly_resume_original_session(tmp_path
     (project / 'failure-error.json').write_text(json.dumps(failure_error))
     native_home = Path(env['LOOPX_CODEX_HOME'])
     native_home.mkdir(parents=True, exist_ok=True)
+    rollout = native_home / 'sessions' / 'rollout-fixture-original-native.jsonl'
     (native_home / 'state_5.sqlite').write_bytes(b'retained native fixture')
     retained_store = (native_home / 'state_5.sqlite').read_bytes()
     Path(env['CODEX_BIN']).write_text(f'#!{sys.executable}\n' + '''
 import json,os,pathlib,sys,time
+from datetime import datetime, timezone
 history=pathlib.Path('native-history.json')
+rollout=pathlib.Path(os.environ['LOOPX_CODEX_HOME'])/'sessions'/'rollout-fixture-original-native.jsonl'
 if 'app-server' in sys.argv:
     for line in sys.stdin:
         message=json.loads(line)
@@ -284,12 +310,13 @@ if 'app-server' in sys.argv:
         elif method=='account/read': result={'account':{'type':'chatgpt'}}
         elif method=='account/rateLimits/read':
             result=json.loads(pathlib.Path('observed-allowance.json').read_text()) if pathlib.Path('observed-allowance.json').exists() else {'rateLimits':{'primary':{'usedPercent':40}}}
-        elif method=='thread/read': result={'thread':{'id':'original-native','cwd':str(pathlib.Path.cwd())}}
+        elif method=='thread/read': result={'thread':{'id':'original-native','cwd':str(pathlib.Path.cwd()),'path':str(rollout)}}
         elif method=='thread/turns/list': result={'data':[json.loads(history.read_text())],'nextCursor':None}
         else: raise AssertionError(method)
         print(json.dumps({'jsonrpc':'2.0','id':message['id'],'result':result}),flush=True)
     sys.exit(0)
 with pathlib.Path('native-argv').open('a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
+started=time.time()
 print(json.dumps({'type':'thread.started','thread_id':'original-native'}),flush=True)
 print(json.dumps({'type':'turn.started'}),flush=True)
 payload=sys.stdin.read()
@@ -298,14 +325,21 @@ if pathlib.Path('allowance-repaired').exists():
     pathlib.Path('continued-work').write_text('next candidate on retained session')
     print(json.dumps({'type':'turn.completed'}),flush=True)
     sys.exit(0)
-now=int(time.time())
+completed=time.time()
 error=json.loads(pathlib.Path('failure-error.json').read_text())
 native_error={**error,'additionalDetails':None}
 if 'codexErrorInfo' not in native_error:
     native_error.update(codexErrorInfo='other',misalignment=None)
 history.write_text(json.dumps({'id':'failed-work','status':'failed',
-    'error':native_error,'startedAt':now,'completedAt':now,
+    'error':native_error,'startedAt':int(started),'completedAt':int(completed),
     'items':[{'type':'commandExecution','status':'completed'}]}))
+rollout.parent.mkdir(parents=True, exist_ok=True)
+meta={'type':'session_meta','payload':{'id':'original-native','cwd':str(pathlib.Path.cwd())}}
+def marker(stamp, kind, **payload):
+    return {'type':'event_msg','timestamp':datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+            'payload':{'type':kind,'turn_id':'failed-work',**payload}}
+rollout.write_text(''.join(json.dumps(record)+'\\n' for record in (meta,
+    marker(started,'task_started'),marker(completed,'task_complete',error=error))))
 print(json.dumps({'type':'turn.failed','error':error}),flush=True)
 sys.exit(1)
 ''')
@@ -356,6 +390,10 @@ sys.exit(1)
     elif fault == 'no_return':
         receipt['native_process']['before_cleanup']['return_code'] = None
         receipts[0].write_text(json.dumps(receipt))
+    elif fault == 'after_return':
+        task_start = json.loads(rollout.read_text().splitlines()[1])['timestamp']
+        receipt['native_process']['before_cleanup']['observed_at_unix'] = datetime.fromisoformat(task_start).timestamp()
+        receipts[0].write_text(json.dumps(receipt))
     elif fault in ('missing_error', 'native_error', 'pending_native'):
         history = json.loads((project / 'native-history.json').read_text())
         if fault == 'missing_error':
@@ -405,6 +443,9 @@ sys.exit(1)
         assert phase_initial['failed_host_recovery']['native']['turn_id'] == 'failed-work'
         assert phase_initial['failed_host_recovery']['native']['error_sha256'] == native_error_digest
         assert phase_initial['failed_host_recovery']['native']['returned_error_sha256'] == error_digest
+        cursor = phase_initial['failed_host_recovery']['native']['rollout_cursor']
+        assert cursor['turn_id'] == 'failed-work'
+        assert proof['process_started_at'] <= cursor['started_at'] <= cursor['completed_at'] <= proof['process_returned_at']
     assert resume() == str(phase)
     if fault is None:
         from benchmark.runtime import codex_readiness
@@ -433,6 +474,11 @@ sys.exit(1)
             with pytest.raises(ValueError, match='returned failure'):
                 resume()
             output.write_bytes(returned_output)
+            incomplete = copy.deepcopy(phase_initial)
+            del incomplete['failed_host_recovery']['native']['rollout_cursor']
+            phase.write_text(json.dumps(incomplete))
+            with pytest.raises(ValueError, match='returned failure'):
+                resume()
         for field in ("allowance", "native", "receipt_sha256", "session_profile_digest",
                       *(("returned_failure",) if kind == 'unknown' else ())):
             incomplete = copy.deepcopy(phase_initial)
