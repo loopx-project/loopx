@@ -1474,6 +1474,89 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
+  it.each([
+    ['runtime-context', 'before'], ['runtime-context', 'after'],
+    ['time-context', 'before'], ['time-context', 'after'],
+    ['skill-catalog', 'before'], ['skill-catalog', 'after'],
+  ])('admits a continuation with %s context added %s downstream listeners', async (kind, phase) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = {
+      ...userMessage('host context'),
+      source: kind === 'skill-catalog'
+        ? { kind, form: 'catalog', entries: [] }
+        : { kind, form: 'snapshot', sections: [] },
+    } as UserMessage
+    const messages = [queued, context]
+    const downstream = vi.fn(async () => ({ kind: 'enter' as const, messages }))
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued],
+      new AbortController().signal, downstream,
+    )
+
+    expect(downstream).toHaveBeenCalledOnce()
+    expect(decision).toEqual({ kind: 'enter', messages })
+    expect(host.nextStep).toEqual([])
+    expect(fixture.quotaCalls).toHaveLength(3)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('restores competing work added %s downstream listeners with host context', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = { ...userMessage('host snapshot'), source: { kind: 'runtime-context' } } as unknown as UserMessage
+    const human = userMessage('new human work')
+    const messages = [queued, context, human]
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued, context],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([context, human])
+    expect(fixture.quotaCalls).toHaveLength(phase === 'before' ? 1 : 2)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('does not treat a plugin snapshot as host context %s downstream listeners', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const plugin = { ...userMessage('competing plugin work'),
+      source: { kind: 'plugin-snapshot', form: 'snapshot', sections: [] },
+    } as unknown as UserMessage
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? [queued, plugin] : [queued],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages: [queued, plugin] }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([plugin])
+    await driver.dispose()
+  })
+
   it('pauses automatic continuation when a downstream pre-step fails', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()

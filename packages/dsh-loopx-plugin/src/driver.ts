@@ -159,6 +159,12 @@ function isDriverMessage(message: UserMessage): boolean {
   return continuationSource(message) !== undefined
 }
 
+function isHostContextMessage(message: UserMessage): boolean {
+  // DSH kind identifies the producer; snapshot/catalog forms also describe plugin messages.
+  const kind: string = message.source.kind
+  return kind === 'runtime-context' || kind === 'time-context' || kind === 'skill-catalog'
+}
+
 function sameReservation(message: UserMessage, reservation: Reservation): boolean {
   const source = continuationSource(message)
   return message.id === reservation.messageId
@@ -674,7 +680,7 @@ export class LoopXContinuationDriver {
       this.restoreOtherMessages(agent, messages, submitted)
       return { kind: 'reject' }
     }
-    if (messages.some(message => message.id !== submitted.id)) {
+    if (messages.some(message => message.id !== submitted.id && !isHostContextMessage(message))) {
       this.retireReservation(state)
       this.restoreOtherMessages(agent, messages, submitted)
       return { kind: 'reject' }
@@ -706,7 +712,7 @@ export class LoopXContinuationDriver {
       return decision
     }
     const admitted = decision.messages.find(message => message.id === reservation.messageId)
-    if (decision.messages.length !== 1
+    if (decision.messages.filter(message => !isHostContextMessage(message)).length !== 1
       || admitted === undefined
       || !sameReservation(admitted, reservation)) {
       this.retireReservation(state)
