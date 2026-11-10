@@ -25,7 +25,7 @@ for ordinary calls; current main readback confirms manual ownership. The
 corrected tests preserve the original identity, spend source and command, and
 validate the complete source rather than changing production semantics.
 
-The candidate integrates main `ea67e68972fc` and reconciles the proposed
+The candidate integrates main `d78064e0c848` and reconciles the proposed
 [#8489](https://github.com/loopx-project/loopx/pull/8489) and
 [#8494](https://github.com/loopx-project/loopx/pull/8494) slices. The explicit Host
 profile uses the existing typed native CLI settlement projection before capture;

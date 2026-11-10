@@ -18,7 +18,7 @@ native publisher 和显式完整 Host profile 可展示 runtime 负责的组合�
 确认应保留手动归属；修正后的测试核对原身份、spend 来源与命令，并验证完整来源，
 不通过改变生产语义来迎合测试。
 
-候选已集成 main `ea67e68972fc`，并衔接提案
+候选已集成 main `d78064e0c848`，并衔接提案
 [#8489](https://github.com/loopx-project/loopx/pull/8489) 和
 [#8494](https://github.com/loopx-project/loopx/pull/8494)。显式 Host profile 在 capture 前
 使用既有 typed native CLI 结算投影；adapter 只补充六项资格事实，不再复制整份来源。
