@@ -37,6 +37,17 @@
 .research-case-study .case-section h3 { font-size: 23px; font-weight: 600; line-height: 1.5; margin: 0 0 18px; }
 .case-section > .personal-md { max-width: 80ch; }
 .case-sources { margin-block-top: 8px; }
+.case-process { margin: 28px 0; }
+.case-process figcaption { font-size: var(--text-body); font-weight: 600; margin-bottom: 18px; }
+.case-process ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 24px; }
+.case-process li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; align-items: start; }
+.case-process-order { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--pw-line); border-radius: 50%; font-size: var(--text-body); font-variant-numeric: tabular-nums; }
+.research-case-study .case-process h4 { font-size: 18px; font-weight: 600; line-height: 1.55; margin: 0 0 8px; }
+.case-process .personal-md p:last-child { margin-bottom: 0; }
+@container (min-width: 900px) {
+  .case-process ol { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 20px; }
+  .case-process li { grid-template-columns: 1fr; border-top: 1px solid var(--pw-line); padding-top: 14px; }
+}
 .case-citation-links { list-style: none; margin: 0; padding: 0; }
 .case-citation-links button { display: block; text-align: start; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: none; border: 0; min-height: 44px; padding: 8px 0; cursor: pointer; overflow-wrap: anywhere; }
 .case-table-scroll { overflow-x: auto; margin-block: 24px; }.case-table-scroll table { border-collapse: collapse; width: 100%; font-size: var(--text-body); line-height: 1.7; }

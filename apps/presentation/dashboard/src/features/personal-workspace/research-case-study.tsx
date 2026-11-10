@@ -119,6 +119,13 @@ export function ResearchCaseStudy({study, zh, historical, scope, navigation, onC
       <div className="case-sections">{study.sections.map((s, n) => <section className="case-section" key={s.id} id={prefix + s.id} tabIndex={-1}>
         <div className="case-section-number">{String(n + 1).padStart(2, '0')}</div><h3>{s.title}</h3>
         <MarkdownText text={s.text}/>
+        {s.process ? <figure className="case-process">
+          <figcaption>{s.process.label}</figcaption>
+          <ol role="list">{s.process.steps.map((step, i) => <li key={i}>
+            <span className="case-process-order" aria-hidden="true">{i + 1}</span>
+            <div><h4>{step.title}</h4><MarkdownText text={step.text}/></div>
+          </li>)}</ol>
+        </figure> : null}
         {s.series ? <CaseSeries series={s.series} zh={zh}/> : null}
         {s.table ? <div className="case-table-scroll" tabIndex={0} role="region" aria-label={s.title}><table><thead><tr>{s.table.columns.map((c, i) => <th key={i} scope="col">{c}</th>)}</tr></thead>
           <tbody>{s.table.rows.map((row, i) => <tr key={i}>{row.map((cell, j) => j === 0 ? <th key={j} scope="row">{cell}</th> : <td key={j}><MarkdownText text={cell}/></td>)}</tr>)}</tbody></table></div> : null}

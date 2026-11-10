@@ -30,6 +30,21 @@ assert.ok(renderedStudy.includes('not current results'));
 assert.match(renderedStudy, /候选 A<.*?>7<.*?候选 B<.*?>Not recorded<.*?候选 C<.*?>3</,
   'Saved chart observations stay in author order, with numbers and the unrecorded value visible together');
 for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
+assert.ok(!renderedStudy.includes('case-process'), 'Older saved readings do not acquire an inferred diagram');
+const illustratedStudy = structuredClone(study);
+illustratedStudy.sections[0].process = {label: 'An authored explanation', steps: [
+  {title: 'A candidate', text: '**An observation** is not independent acceptance.'},
+  {title: 'Unresolved adoption', text: '<script>globalThis.figureExecuted=true</script>'},
+]};
+const renderedFigure = renderToStaticMarkup(createElement(ResearchCaseStudy, {
+  study: illustratedStudy, zh: true, historical: false, scope: caseFixture.analyses[0].input.scope,
+  navigation: studyNavigation('illustrated-pack'), onCitation: () => {throw Error('render executed');},
+}));
+assert.match(renderedFigure, /<figure class="case-process"><figcaption>An authored explanation/);
+assert.ok(renderedFigure.indexOf('A candidate') < renderedFigure.indexOf('Unresolved adoption'));
+assert.ok(renderedFigure.includes('<strong>An observation</strong>'));
+assert.ok(renderedFigure.includes('&lt;script&gt;'));
+assert.ok(!renderedFigure.includes('<script>'), 'Figure text shares the inert Markdown boundary');
 
 const casePack = {pack_id: "one", title: "First study", scope: caseFixture.analyses[0].input.scope,
   case_study: study, case_study_summary: {title: study.title}, applicability: "current"};

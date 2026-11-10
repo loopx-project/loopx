@@ -28,7 +28,15 @@ The document has `title`, `language` (`zh` or `en`), `summary`, summary
 `title`, Markdown `text` and `citations`, and can combine a table
 (`columns`, `rows`), categorical numeric series (`label`, `unit`, `points`
 of `{label, value}` with null for missing measurements), or a timeline
-of `{label, title, text}` entries. Authors choose the order and composition.
+of `{label, title, text}` entries. An optional `process` figure has a `label`
+and two to six ordered `steps`, each with a `title` and Markdown `text`.
+Use it to explain a mechanism or processing pipeline, with uncertainty in the
+authored labels and text; it is not a history, causal inference or executable
+plan. Step titles are bounded to 160 characters and text to 2,000 characters.
+The figure uses its section's evidence and the same source/pack version as
+the surrounding reading. It needs no additional model call or sandbox. Old
+documents without it retain their existing shape and rendering. Authors choose
+the order and composition.
 Reading should explain conclusions, unfamiliar domain concepts, competing
 approaches, decisive observations and remaining uncertainty. It does not require
 exercises, actions or note-taking. Charts preserve gaps and show exact values;

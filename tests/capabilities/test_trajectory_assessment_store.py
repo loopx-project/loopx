@@ -1469,6 +1469,18 @@ def test_authored_case_survives_source_change_and_revises_without_model_job(pack
         read_citation(**op, source_id="source", first_line=1, last_line=2)
     assert register_pack(**scope, input_path=input_path, source_root=sources,
                          title="Case reading", case_study_json=document)["pack_id"] == registered["pack_id"]
+    illustrated = json.loads(json.dumps(study))
+    illustrated["sections"][0]["process"] = dict(label="An explanatory pipeline", steps=[
+        dict(title="Candidate", text="The mechanism is a hypothesis."),
+        dict(title="Measurement", text="No gain was measured.")])
+    document.write_text(json.dumps(illustrated), encoding="utf-8")
+    diagram = register_pack(**scope, input_path=input_path, source_root=sources,
+                            title="Illustrated reading", case_study_json=document)
+    assert diagram["pack_id"] != registered["pack_id"]
+    assert diagram["analysis_key"] == registered["analysis_key"]
+    assert inspect_pack(**scope, pack_id=diagram["pack_id"])["case_study"] == illustrated
+    assert "process" not in inspect_pack(**scope, pack_id=registered["pack_id"])["case_study"]["sections"][0]
+    assert read_citation(**(op | {"pack_id": diagram["pack_id"]}), **citation)["text"].startswith("The native measurement")
     study["summary"] = "The evidence does not establish a treatment effect."
     document.write_text(json.dumps(study), encoding="utf-8")
     revised = register_pack(**scope, input_path=input_path, source_root=sources,

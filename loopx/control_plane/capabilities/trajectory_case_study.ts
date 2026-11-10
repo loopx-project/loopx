@@ -12,6 +12,7 @@ export interface TrajectoryCaseStudy {
     table?: {columns: string[]; rows: string[][]};
     series?: {label: string; unit: string; points: Array<{label: string; value: number | null}>};
     timeline?: Array<{label: string; title: string; text: string}>;
+    process?: {label: string; steps: Array<{title: string; text: string}>};
   }>;
   limitations: string[];
 }
@@ -71,6 +72,15 @@ export function qualifyTrajectoryCaseStudy(raw: unknown, input: TrajectoryInput)
       const event = object(v, 'event');
       return {label: text(event.label, 'event label', 120), title: text(event.title, 'event title', 240), text: text(event.text, 'event text', 4000)};
     });
+    if (s.process !== undefined) {
+      const process = object(s.process, 'process');
+      const steps = array(process.steps, 'process steps', 6).map(v => {
+        const step = object(v, 'process step');
+        return {title: text(step.title, 'process step title', 160), text: text(step.text, 'process step text', 2000)};
+      });
+      if (steps.length < 2) fail('process needs at least two steps');
+      section.process = {label: text(process.label, 'process label', 240), steps};
+    }
     return section;
   });
   if (!sections.length || new Set(sections.map(s => s.id)).size !== sections.length) fail('section identities');

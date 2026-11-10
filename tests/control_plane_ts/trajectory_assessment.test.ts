@@ -744,3 +744,30 @@ test('authored reading binds to frozen source lines without changing model seman
     assert.throws(()=>prepareTrajectoryAssessment({input:input(),config,case_study:bad}),/invalid case study/);
   }
 });
+
+test('authored process figures retain explanation order and reject incomplete or unbounded content', () => {
+  const citation = {source_id: 's', first_line: 10, last_line: 11};
+  const study = {title: 'A processing explanation', language: 'en', summary: 'The mechanism remains a hypothesis.',
+    citations: [citation], limitations: ['The steps are an explanation, not observed causal effects.'],
+    sections: [{id: 'mechanism', title: 'From input to measurement', text: 'Read the original to assess this interpretation.',
+      citations: [citation], process: {label: 'A proposed mechanism', steps: [
+        {title: 'Representation', text: 'A smaller representation may reduce **work**.'},
+        {title: 'Native measurement', text: 'The complete workload may still reject it.'},
+      ]}}]};
+  const result = prepareTrajectoryAssessment({input: input(), config, case_study: study});
+  assert.deepEqual(result.case_study, study);
+  const {case_study: _reading, ...model} = result;
+  assert.deepEqual(model, prepared(), 'A figure cannot change model, scoring or execution semantics');
+  for (const change of [
+    d => {d.sections[0].process.steps = [];},
+    d => {d.sections[0].process.steps.pop();},
+    d => {d.sections[0].process.steps = Array(7).fill(d.sections[0].process.steps[0]);},
+    d => {d.sections[0].process.steps[0].title = '';},
+    d => {d.sections[0].process.steps[0].text = 'x'.repeat(2001);},
+    d => {d.sections[0].process.steps[0].text = '\0';},
+    d => {d.sections[0].citations = [];},
+  ] as Array<(d: any) => void>) {
+    const bad = structuredClone(study); change(bad);
+    assert.throws(() => prepareTrajectoryAssessment({input: input(), config, case_study: bad}), /invalid case study/);
+  }
+});
