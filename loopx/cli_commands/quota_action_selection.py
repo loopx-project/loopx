@@ -127,12 +127,16 @@ def load_requested_quota_action_selection(
     details: Mapping[str, object] = (
         details_value if isinstance(details_value, Mapping) else {}
     )
+    # Recovery discovery can name a replan without admitting its settlement.
+    # Only a bound Todo carries that generation beside its settlement identity.
+    receipt_todo_id = heartbeat_receipt_settlement_todo_id(existing)
     return RequestedQuotaActionSelection(
         requested_todo_id=requested_todo_id,
         receipt=existing,
-        receipt_bound_todo_id=heartbeat_receipt_settlement_todo_id(existing),
+        receipt_bound_todo_id=receipt_todo_id,
         receipt_bound_replan_obligation_id=(
-            heartbeat_receipt_semantic_replan_obligation_id(existing)
+            (heartbeat_receipt_semantic_replan_obligation_id(existing)
+             if receipt_todo_id else None)
             or heartbeat_receipt_settlement_replan_obligation_id(existing)
         ),
         receipt_pending_action_todo_id=(
