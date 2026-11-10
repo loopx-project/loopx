@@ -58,7 +58,7 @@ def resolve_heartbeat_capture_root(
     if decision_handoff_socket is not None:
         from ..turn_driver.decision_capture import validate_handoff_socket
 
-        validate_handoff_socket(decision_handoff_socket)
+        validate_handoff_socket(decision_handoff_socket, capture_root=directory)
     return directory
 
 

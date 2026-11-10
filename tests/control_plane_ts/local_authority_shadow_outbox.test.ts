@@ -32,10 +32,12 @@ const GOAL_B = {
 };
 
 test("released Todo manifests replay without rewriting history and allow the next capture", async (t) => {
+  const scopedMonitorFields = ["material_change_scope", "material_change_scope_generations"];
   for (const absent of [
-    ["completion_receipt_id"],
-    ["completion_receipt_id", "completion_result"],
-    ["completion_receipt_id", "completion_result", "completion_validation_revision", "completion_validation_revision_history"],
+    scopedMonitorFields,
+    [...scopedMonitorFields, "completion_receipt_id"],
+    [...scopedMonitorFields, "completion_receipt_id", "completion_result"],
+    [...scopedMonitorFields, "completion_receipt_id", "completion_result", "completion_validation_revision", "completion_validation_revision_history"],
   ]) {
     const f = await fixture(t);
     const commit = f.store.commitAuthority.bind(f.store);
@@ -64,7 +66,7 @@ test("released Todo manifests replay without rewriting history and allow the nex
     if (history.status !== "page") continue;
     assert.equal(history.transactions.length, 3);
     assert.equal(((history.transactions[1]!.projection.todo_read_model as JsonObject).contract_fields as string[])
-      .includes("completion_receipt_id"), false);
+      .includes("completion_receipt_id"), !absent.includes("completion_receipt_id"));
     assert.equal(((history.transactions[2]!.projection.todo_read_model as JsonObject).contract_fields as string[])
       .includes("completion_receipt_id"), true);
   }

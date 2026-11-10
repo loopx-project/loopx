@@ -24,14 +24,29 @@ def normalize_goal_activation_state(value: Any) -> GoalActivationState:
         raise ValueError("goal activation state must be active or stopped") from exc
 
 
+def require_current_registry_goal_activation(goal: Mapping[str, Any]) -> None:
+    """Reject retired storage fields, without interpreting them as live authority."""
+    if "activation_state" in goal or goal.get("status") in ("paused", "stopped"):
+        raise ValueError(
+            "Goal activation metadata requires upgrade; run "
+            "loopx authority-archive upgrade --all-known --execute "
+            "to back up and migrate the registry before activation"
+        )
+
+
 def goal_activation_state(goal: Mapping[str, Any] | None) -> GoalActivationState:
-    """Return the typed Goal activation state; older registries default active."""
+    """Read canonical activation or its derived read-model projection.
+
+    Registry IO rejects stored activation_state aliases and retired pause values;
+    only the explicit upgrade decoder may consume them. Omitted activation is active.
+    """
 
     if not isinstance(goal, Mapping):
         return GoalActivationState.ACTIVE
     projected = goal.get("activation_state")
     if projected is not None:
         return normalize_goal_activation_state(projected)
+    require_current_registry_goal_activation(goal)
     activation = goal.get("activation")
     if activation is None:
         return GoalActivationState.ACTIVE

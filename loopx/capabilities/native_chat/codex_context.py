@@ -113,7 +113,8 @@ def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
     return env
 
 
-def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapping[str, Any]) -> dict[str, Any]:
+def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapping[str, Any], *,
+                            provider: str = "loopx_host_chatgpt_http") -> dict[str, Any]:
     """Use native HTTP for the trusted-host ChatGPT auth bridge.
 
     These are public transport defaults, not imported account configuration.
@@ -122,7 +123,8 @@ def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapp
     """
     if host_config.get("model_provider"):
         return dict(host_config)
-    provider = "loopx_host_chatgpt_http"
+    if provider == "openai":
+        return {**host_config, "model_provider": provider}
     # Per-thread config overlays may retain omitted fields from lower layers.
     # Do not inherit a project-defined endpoint, headers or environment key.
     if provider in native_config.get("model_providers", {}):

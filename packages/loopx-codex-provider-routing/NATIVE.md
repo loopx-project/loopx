@@ -42,6 +42,20 @@ boundary to adopt it. Do not retain custom launch scripts or editable imports in
 temporary worktree. A missing optional channel or its credentials remains an
 explicit unavailable channel; never reconstruct credentials from chat history.
 
+When an existing macOS `com.loopx.codex-native-accounts` LaunchAgent watches
+the same account root as managed Chat, adopt the qualified Core and its pinned
+provider environment together. Run the installed target's
+`update activate --service all --runtime-executable <target-loopx>`.
+The supported direct `watch` job participates in the same handoff as Chat and
+Status. The handoff waits for accepted Chat and account work, starts the
+observer first, and verifies its lock and both loaded builds from the 0.15.5
+observer heartbeat before committing.
+It restores the previous job routes on failure. Once the watcher has been
+adopted, a Core update without a pinned provider defers before replacing any
+service. Core-only updates still leave unbound standalone watchers in place.
+Run the provider's separate relay reconciliation after the managed processes
+have adopted the same build.
+
 `loopx-native-account-provider` reads this JSON protocol on stdin:
 
 ```json
@@ -168,6 +182,13 @@ permission failures affect only that model. An expired rejection remains
 eligible and a subsequent accepted request clears its preference penalty.
 Selection reuses the existing private runtime observations, adds no probes,
 and never retries an admitted stream or overrides the subscription/API role.
+
+Version 0.15.6 treats an API route as ready only while at least one configured
+key is currently eligible after authentication, rate-limit and billing
+observations. If the active API pool becomes unavailable, an available
+subscription is selected again; when none is available, status reports
+`all_unavailable` instead of claiming `api_active`. `api_fallback` stays enabled
+through this transition.
 
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).

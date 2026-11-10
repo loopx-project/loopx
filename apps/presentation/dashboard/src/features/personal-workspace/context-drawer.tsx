@@ -46,7 +46,7 @@ import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./
 import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, hasGoalUsage } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { TaskRequest, taskRequestIdentity, type TaskRequestRead } from "./task-request";
-import { parseTodoResumeCondition } from "./todo-resume-condition";
+import { parseTodoResumeCondition, todoResumeTransition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
@@ -475,7 +475,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         operation: operation === "resume" ? "edit" : operation,
         ...(operation === "resume" ? {status: "open"} : {}),
         ...(operation === "block" ? { note: t("drawer.taskSuccessorNote") } : {}),
-        ...(operation === "defer" && resumeWhen ? { resume_when: resumeWhen } : {}),
+        ...(operation === "defer" && resumeWhen ? todoResumeTransition(resumeWhen) : {}),
         todo_id: todo.todoId,
         ...(proof ?? {}),
       },

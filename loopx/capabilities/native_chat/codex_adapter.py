@@ -984,8 +984,14 @@ class CodexAppServerAdapter:
     def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None]) -> dict[str, Any]:
         return self.session.send(message, on_event=event_sink)
 
-    def steer_turn(self, message: str, expected_turn_id: str) -> str:
-        return self.session.steer(message, expected_turn_id=expected_turn_id)
+    def steer_turn(self, message: str, expected_turn_id: str, client_message_id: str | None = None) -> str:
+        return self.session.steer(message, expected_turn_id=expected_turn_id,
+                                  **({"client_message_id": client_message_id} if client_message_id is not None else {}))
+
+    def steering_delivery_readback(self, turn_id: str) -> list[dict[str, Any]]:
+        """Read every native item page without dispatching or resuming a Turn."""
+        return list(self.session._control_items("thread/items/list", {"turnId": turn_id},
+                    time.monotonic() + min(self.session.response_timeout_sec, 5.0)))
 
     def start_turn_with_attachments(
         self,
