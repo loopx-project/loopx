@@ -27,7 +27,8 @@ def fixture_preservation(tmp_path, monkeypatch, fault=None):
     container = SimpleNamespace(id="a" * 64, attrs={"State": {
         "Running": False, "Paused": False, "Restarting": False, "Pid": 0}}, reload=lambda: None)
     supervisor = SimpleNamespace(destination=tmp_path, controller_file=tmp_path / "controller.json",
-        token="dummy-token", container=container, close=close)
+        token="dummy-token", container=container, close=close,
+        capture_phase_deadline_path=lambda: "/opt/loopx-benchmark/control/phase-deadline")
     def capture(*args, **kwargs):
         calls.append("capture")
         if fault == "capture":

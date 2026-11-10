@@ -1555,10 +1555,15 @@ including any later failure; it cannot clear the failure or extend its deadline.
 A later explicit repair must bind that new failure separately. Existing operator
 and account authority remain required; a digest is provenance, not permission.
 
-For in-place continuation, bind the checkpoint supervisor's `phase_deadline_path`
-to the same new immutable clock supplied to the resumed scheduler. Both held
-and terminal captures use that clock. Preserve the stopped phase's clock at
-its original path. Fresh workers retain the standard path.
+After in-place continuation is admitted, the scheduler atomically publishes
+`active-phase-deadline` beside its state, rounded down from that phase's existing
+deadline. Replaying the same request republishes the same deadline; a refused
+continuation does not replace it. Both held and terminal captures automatically
+select this physical clock, including when the container is paused or stopped.
+They preserve the original `phase-deadline` file as a recovery witness. Fresh
+workers without a continuation clock keep the standard path. An explicitly
+configured supervisor `phase_deadline_path` still takes precedence; unreadable or
+invalid clocks fail capture instead of silently falling back or granting time.
 
 The explicit failed-phase path additionally uses the installed optional native
 Codex provider's existing availability policy (`loopx-codex-provider-routing`).

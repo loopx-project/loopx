@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
-from benchmark.runtime.layout import _PHASE_DEADLINE
+from benchmark.runtime.layout import _ACTIVE_PHASE_DEADLINE, _PHASE_DEADLINE
 
 from .checkpoint_controller import _controller
 from .checkpoint_worker import _archive, _guest_path, _validate_request, capture_worker, qualify_export_storage
@@ -36,8 +36,7 @@ class CheckpointSupervisor:
                 raise ValueError("Terminal preservation requires a fresh private receipt")
             _validate_request({"container_id": "0" * 64, "components": terminal_components,
                                "phase_deadline_path": phase_deadline_path})
-            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt,
-                                                    phase_deadline_path=phase_deadline_path)
+            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt)
         self.token = None
         self.stop = threading.Event()
         self.thread = None
@@ -56,6 +55,20 @@ class CheckpointSupervisor:
         if self.token is not None or not (environment or {}).get("SFORGE_TOKEN"):
             raise ValueError("Checkpoint controller requires one native worker registration")
         self.token = environment["SFORGE_TOKEN"]
+
+    def capture_phase_deadline_path(self):
+        """Use a published continuation clock; fresh workers keep their default."""
+        if self.phase_deadline_path != _PHASE_DEADLINE:
+            return self.phase_deadline_path
+        from docker.errors import NotFound
+
+        with tempfile.TemporaryDirectory(prefix=".phase-clock-", dir=self.destination) as temporary:
+            try:
+                _archive(self.container, _ACTIVE_PHASE_DEADLINE, Path(temporary) / "clock",
+                         deadline=time.time() + 5)
+            except NotFound:
+                return _PHASE_DEADLINE
+        return _ACTIVE_PHASE_DEADLINE
 
     def start(self, container):
         if self.thread is not None or self.token is None:
@@ -177,7 +190,7 @@ class CheckpointSupervisor:
                         request = stage / "request.json"
                         request.write_text(json.dumps({"container_id": container.id,
                             "components": value["components"],
-                            "phase_deadline_path": self.phase_deadline_path,
+                            "phase_deadline_path": self.capture_phase_deadline_path(),
                             "handoff": {"source_path": remote, "sha256": digest}}))
                         remaining = value["deadline_epoch"] - time.time()
                         if remaining <= 0:

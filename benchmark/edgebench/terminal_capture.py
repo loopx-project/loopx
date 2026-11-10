@@ -49,11 +49,10 @@ def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str
 
 class FailurePreservation:
     """One terminal attempt; a stopped source remains until explicit disposal."""
-    def __init__(self, supervisor, components, receipt_path, *, phase_deadline_path=_PHASE_DEADLINE):
+    def __init__(self, supervisor, components, receipt_path):
         self.supervisor = supervisor
         self.components = components
         self.receipt_path = receipt_path
-        self.phase_deadline_path = phase_deadline_path
         self.receipt = None
         self.retain_source = False
 
@@ -107,7 +106,7 @@ class FailurePreservation:
             self._persist_receipt()
             request = self.supervisor.destination / "terminal-request.json"
             write_json_atomic(request, {"container_id": self.supervisor.container.id,
-                "components": self.components, "phase_deadline_path": self.phase_deadline_path},
+                "components": self.components, "phase_deadline_path": supervisor.capture_phase_deadline_path()},
                 mode=0o600, fsync_directory=True)
             point = capture_worker(supervisor.controller_file, token=supervisor.token,
                 capture_id=self.receipt["capture_id"],
