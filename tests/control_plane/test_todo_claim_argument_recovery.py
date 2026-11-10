@@ -492,6 +492,33 @@ def test_one_command_recovery_never_replaces_explicit_stale_proof(claim_cli):
     assert snapshot() == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_one_command_completion_replays_the_original_admitted_turn(tmp_path, monkeypatch, provider):
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority, _run_cli, _write_fixture,
+    )
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, claimed=False)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    turn = "turn-original-recovered-completion"
+    code, guard = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn, "--runtime-profile", "generic_cli")
+    assert code == 0 and guard["should_run"], guard.get("state")
+    command = ("todo", "complete", "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--recover-execution", "--evidence", "evidence:original-completion")
+    code, first = _run_cli(registry, runtime, *command)
+    assert code == 0, json.dumps(first)
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+    code, second = _run_cli(registry, runtime, *command)
+    assert code == 0 and second["ok"] and second["changed"] is False, json.dumps(second)
+    assert second["execution_recovery"]["claim_operation_id"] == first["execution_recovery"]["claim_operation_id"]
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) == after
+
+
 def test_one_command_recovery_does_not_take_foreign_owner(claim_cli):
     _, run, snapshot, prefix, claim, _, _, _ = claim_cli
     assert run([

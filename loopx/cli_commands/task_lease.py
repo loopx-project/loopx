@@ -270,9 +270,16 @@ def handle_task_lease_command(
         # Presentation only: retain every native refusal and explicit proof.
         # An exact read is useful for both grammar and semantic failures; it
         # neither chooses another owner nor retries a mutation with new proof.
-        inspection_args = [*loopx_cli_argv()[1:], f"--registry={registry_path}", "--format", "json"]
+        route_args = [*loopx_cli_argv()[1:], f"--registry={registry_path}", "--format", "json"]
         if runtime_root_arg is not None:
-            inspection_args.append(f"--runtime-root={runtime_root_arg}")
+            route_args.append(f"--runtime-root={runtime_root_arg}")
+        recovery = payload.get("recovery")
+        if isinstance(recovery, dict) and recovery.get("action") == "inspect_own_conflicting_lease":
+            for name in ("inspect", "release"):
+                step = recovery.get(name)
+                if isinstance(step, dict) and isinstance(step.get("cli_args"), list):
+                    step["cli_args"] = [*route_args, *step["cli_args"]]
+        inspection_args = [*route_args]
         inspection_args.extend(["task-lease", "inspect", f"--goal-id={args.goal_id}", f"--todo-id={args.todo_id}"])
         payload["inspection"] = {"cli_args": inspection_args,
             "reason": "Read the current holder, state and version. Keep the original execution identity on retries; another holder requires an explicit handover, not borrowed proof.",
