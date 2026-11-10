@@ -441,7 +441,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
     copied, cleaned = [], []
-    def archive(handle, remote):
+    def archive(remote):
         copied.append(str(remote))
         payload = io.BytesIO()
         event = json.dumps({"type": "event_msg", "payload": {"type": "task_complete",
@@ -451,8 +451,9 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
             member = tarfile.TarInfo("sessions/fixture/session.jsonl")
             member.size = len(event)
             bundle.addfile(member, io.BytesIO(event))
-        return payload.getvalue()
-    monkeypatch.setattr(backend, "copy_from_container", archive)
+        return iter([payload.getvalue()]), {}
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(get_archive=archive))
     monkeypatch.setattr(DockerBackend, "cleanup_container",
                         lambda self, handle, logger: cleaned.append(handle))
     backend.cleanup_container("fixture-container")
@@ -486,7 +487,9 @@ def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monke
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w"):
         pass
-    monkeypatch.setattr(backend, "copy_from_container", lambda *args: payload.getvalue())
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(
+        get_archive=lambda remote: (iter([payload.getvalue()]), {})))
     monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
                         lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
     cleaned = []
@@ -688,9 +691,9 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert profile["task_entry"] == entry
     assert profile["planning_horizon_goal"] is expected_horizon
 @pytest.mark.parametrize('profile', ['heartbeat-resume', 'heartbeat-explore'])
-@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('enabled,complete', [(False, False), (True, False), (False, True)])
 @pytest.mark.parametrize('cadence', [None, 2, 6])
-def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, cadence):
+def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeypatch, profile, enabled, complete, cadence):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from sforge.harness.config import SForgeConfig
@@ -700,21 +703,25 @@ def test_envelope_treatment_reaches_shared_worker_and_receipts(tmp_path, monkeyp
         pass  # Transport only; the real renderer/guard test runs without a solver.
     monkeypatch.setattr(BenchmarkCodex, 'install', installed)
     worker = SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
-                          profile=profile, cwd='/task', turn_envelope=enabled,
+                          profile=profile, cwd='/task', turn_envelope=enabled, complete_turn=complete,
                           replan_after_turns=cadence)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd='/task')
     assert env.get('LOOPX_TURN_ENVELOPE') == ('1' if enabled else None)
     assert worker.runtime.execution.turn_envelope is enabled
+    assert env['LOOPX_COMPLETE_TURN'] == ('1' if complete else '0')
+    assert worker.runtime.execution.complete_turn is complete
     assert worker.runtime.replan_after_turns == (cadence or 6)
     receipt = json.loads((tmp_path / 'worker-profile.json').read_text())
     assert receipt['outer_resume'] is False
+    assert receipt.get('complete_turn') is (True if complete else None)
     assert receipt.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in receipt
     from types import SimpleNamespace
     context = SimpleNamespace()
     worker.runtime._populate_context(context)
+    assert context.metadata.get('complete_turn') is (True if complete else None)
     assert context.metadata.get('turn_envelope') is (True if enabled else None)
     if not enabled:
         assert 'turn_envelope' not in context.metadata
@@ -732,6 +739,134 @@ def test_envelope_rejects_incompatible_sforge_worker(profile):
     with pytest.raises(ValueError, match='turn_envelope'):
         SForgeWorker(SForgeConfig(agent_model='fixture', agent_effort='xhigh'),
                      profile=profile, cwd='/task', turn_envelope=True)
+
+
+@pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("delivery", ["off", "on"])
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+def test_complete_worker_reaches_original_ready_guard_without_a_model(
+        tmp_path, monkeypatch, profile, delivery, checkpoint_preflight):
+    """Actual adapter → worker → renderer → CLI → typed source; no model/API call."""
+    import os
+    import shlex
+    import subprocess
+    import sys
+    from pathlib import Path
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
+    from benchmark.runtime.worker import heartbeat_body
+    from loopx.control_plane.turn_driver import codex_context
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.test_quota_settlement_cli import (
+        _write_fixture, _initialize_fixture_authority, _run_cli, _heartbeat_receipt_count,
+        GOAL_ID, AGENT_ID, TODO_ID,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    requested = "Continue useful authorized work for at least 120 seconds while feasible."
+    state.write_text(state.read_text().replace("Settle one standard Codex App delivery.", requested))
+    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+    assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/unread-fixture-credential")
+    async def installed(self, environment):
+        pass  # No provider login, install, native session or model is requested.
+    monkeypatch.setattr(BenchmarkCodex, "install", installed)
+    agent = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd=str(project), complete_turn=True, context_delivery=delivery)
+    agent.install_stop_hook(None, None, tmp_path, None)
+    env = agent.runtime._worker_env(cwd=str(project))
+    assert env["LOOPX_COMPLETE_TURN"] == "1" and env["LOOPX_CONTEXT_DELIVERY"] == delivery
+    source = Path(__file__).resolve().parents[2]
+    turn = "original-complete-turn"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    journal = tmp_path / "native-context"
+    journal.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "complete-fixture-session")
+    event = {"session_id": "complete-fixture-session", "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup"}
+    codex_context.codex_context_hook(str(journal), event)
+    env.update(PYTHONPATH=str(source), PATH=os.environ["PATH"], LOOPX_PYTHON=sys.executable,
+        LOOPX_CLI=str(source / "scripts/loopx"), LOOPX_PROJECT=str(project), LOOPX_REGISTRY=str(registry),
+        LOOPX_RUNTIME_ROOT=str(runtime), LOOPX_GOAL_ID=GOAL_ID, LOOPX_AGENT_ID=AGENT_ID,
+        LOOPX_WAKE_LOG_DIR=str(tmp_path / "wakes"), LOOPX_CODEX_CONTEXT_DIR=str(journal),
+        CODEX_THREAD_ID=event["session_id"], LOOPX_PHASE_DEADLINE_EPOCH="9876543210.125")
+    body = heartbeat_body(env, turn, native_goal=False)
+    block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    assert block.count("--complete-turn") == 1 and "--turn-envelope" not in block
+    if checkpoint_preflight:
+        from benchmark.runtime.checkpoint import capture_before_replan
+
+        request = tmp_path / "checkpoint-request.json"
+        request.write_text(json.dumps({"destination": str(tmp_path / "checkpoints"),
+            "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
+            "evaluation_opportunity": True, "controller_handoff": True,
+            "components": [{"id": "workspace", "source_path": str(project)}], "point_metadata": {}}))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
+        receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+        body = capture_before_replan(env, receipt, body)
+        assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
+        assert "Do not repeat the initial guard below" in body
+        original, = wake.glob("checkpoint-start-*/decision-*/decision.json")
+        assert (wake / "checkpoint-start-guard.json").read_bytes() == original.read_bytes()
+        if delivery == "off":
+            packet = json.loads((wake / "checkpoint-start-view.json").read_text())
+            assert str(wake / "checkpoint-start-view.json") in body
+        else:
+            block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+            assert "context-project" in block and "should-run" not in block
+            packet = json.loads(subprocess.run(shlex.split(block), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+            assert "content" in packet
+    else:
+        result = subprocess.run(["bash", "-c", block + " --todo-id " + TODO_ID], cwd=project,
+            env=env, capture_output=True, text=True, check=True)
+        packet = json.loads(result.stdout)
+        original, = (wake / "decisions").rglob("decision.json")
+    saved = original.read_bytes()
+    complete = json.loads(saved)
+    assert_complete_turn_decision(complete)
+    assert complete["schema_version"] == "loopx_turn_envelope_v1"
+    cli = complete["interaction_contract"]["cli_channel"]
+    assert cli["execution_preparation"]["state"] == "ready"
+    assert cli["settlement_plan"]["identity"] == complete["heartbeat_receipt"]["settlement_identity"]
+    assert cli["settlement_plan"]["identity"]["turn_instance_id"] == turn
+    assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
+    assert len(cli["next_cli_actions"]) == 1 and "--settle-turn --settlement-receipt" in cli["next_cli_actions"][0]
+    assert requested in saved.decode() and "9876543210.125" not in body + saved.decode()
+    if delivery == "off":
+        assert packet == complete
+    else:
+        page = packet if checkpoint_preflight else json.loads(subprocess.run(
+            shlex.split(packet["recovery"]["command"]), cwd=project, env=env,
+            capture_output=True, text=True, check=True).stdout)
+        while True:
+            assert page["ok"]
+            codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": f"page-{page['offset']}", "tool_response": json.dumps(page)})
+            command = page.get("next_command")
+            if not command:
+                break
+            page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                capture_output=True, text=True, check=True).stdout)
+        if checkpoint_preflight:
+            # Selected initial facts do not certify a complete delta baseline.
+            # Follow the same published full recovery for this byte oracle.
+            command = packet["navigation"]["recovery"]["command"]
+            while command:
+                page = json.loads(subprocess.run(shlex.split(command), cwd=project, env=env,
+                    capture_output=True, text=True, check=True).stdout)
+                assert page["ok"]
+                codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostToolUse",
+                    "tool_use_id": f"full-page-{page['offset']}", "tool_response": json.dumps(page)})
+                command = page.get("next_command")
+        assert codex_context._state(journal)["candidate"]["basis"] == "native_hook_assumption"
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert original.read_bytes() == saved
 
 
 @pytest.mark.parametrize("profile,options", [

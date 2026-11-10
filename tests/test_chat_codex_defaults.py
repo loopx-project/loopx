@@ -1,4 +1,5 @@
 """Configured Goal Chat defaults use native settings without retargeting work."""
+import json
 import os
 import subprocess
 import sys
@@ -98,7 +99,7 @@ def test_saved_profile_alias_opens_ordinary_conversation(tmp_path, monkeypatch, 
         runtime.close()
 
 
-def runtime_fixture(tmp_path, monkeypatch):
+def runtime_fixture(tmp_path, monkeypatch, *, registry_path=None):
     base, gpt = tmp_path / ".codex-ds", tmp_path / ".codex-gpt"
     base.mkdir()
     gpt.mkdir()
@@ -106,7 +107,7 @@ def runtime_fixture(tmp_path, monkeypatch):
     monkeypatch.setenv("LOOPX_CHAT_CODEX_HOME", str(base))
     monkeypatch.setenv("LOOPX_CODEX_HOMES", str(gpt))
     root = tmp_path / "runtime"
-    runtime = ChatRuntimeController(store=ChatSessionStore(root), codex_bin="fixture")
+    runtime = ChatRuntimeController(store=ChatSessionStore(root), registry_path=registry_path, codex_bin="fixture")
     monkeypatch.setattr(runtime, "capabilities", lambda: [
         {"agent_id": "codex", "available": True, "adapter_kind": "codex_app_server"},
     ])
@@ -151,6 +152,52 @@ def test_model_effort_and_speed_are_separate_and_reversible_defaults(tmp_path, m
         assert restored["codex_home"] == str(base)
         assert (gpt / "config.toml").read_text() == 'model = "gpt-6.1-sol"\nmodel_reasoning_effort = "max"\n'
         assert not runtime.store.messages(selected["session_id"])
+    finally:
+        runtime.close()
+
+
+def test_goal_codex_defaults_follow_chat_settings_when_coordination_uses_a_separate_root(tmp_path, monkeypatch):
+    from loopx import chat_providers
+
+    coordination = tmp_path / "coordination"
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps({"common_runtime_root": str(coordination), "goals": []}), encoding="utf-8"
+    )
+    runtime, root, base, gpt, calls = runtime_fixture(tmp_path, monkeypatch, registry_path=registry)
+    # These are two different valid stores, so a mistaken fallback also fails
+    # the test when both contain preferences.
+    configure(coordination, model="other-model", reasoning_effort="low", service_tier="flex")
+    original_coordination = read_machine_configuration(
+        coordination, registry=build_builtin_machine_configuration_registry()
+    )
+    configure(root, codex_profile="codex-gpt", model="gpt-6.1-sol", reasoning_effort="high", service_tier="fast")
+    discovered = []
+
+    def catalog(_binary, *, codex_home):
+        discovered.append(codex_home)
+        return {"options": [{"value": "gpt-6.1-sol", "reasoning_efforts": ["high"]}]}
+
+    monkeypatch.setattr(chat_providers, "codex_model_options", catalog)
+    open_args = dict(goal_id="fixture", agent_id="codex", work_dir=tmp_path, objective="Inspect.")
+    try:
+        assert runtime.coordination_runtime_root == coordination
+        runtime.inspect_agent_model_options("codex", work_dir=tmp_path, goal_id="fixture")
+        selected, reused = runtime.open_session(**open_args, mode="new")
+        assert not reused and discovered == [gpt]
+        assert calls[-1]["codex_home_override"] == gpt
+        assert (selected["agent_model_id"], selected["agent_reasoning_effort"], selected["agent_service_tier"]) == (
+            "gpt-6.1-sol", "high", "fast"
+        )
+        configure(root)
+        runtime.inspect_agent_model_options("codex", work_dir=tmp_path, goal_id="fixture")
+        cleared, _ = runtime.open_session(**open_args, mode="new")
+        assert discovered == [gpt, base]
+        assert cleared["agent_model_id"] == "inherited-model"
+        assert runtime.store.load_session(selected["session_id"])["codex_home"] == str(gpt)
+        assert read_machine_configuration(
+            coordination, registry=build_builtin_machine_configuration_registry()
+        ) == original_coordination
     finally:
         runtime.close()
 

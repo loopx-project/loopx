@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .quota_presentation import (
+    _compose_explicit_turn_context,
     _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
@@ -441,7 +442,11 @@ def _emit_quota_result(
             context.status_payload, args, payload, registry_path=registry_path,
         )
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    scheduler_context = context.scheduler_context if context is not None else None
     try:
+        payload = _compose_explicit_turn_context(payload, args,
+            scheduler_context=scheduler_context,
+            capture_directory=capture_directory, native_context=native_context)
         captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
@@ -474,7 +479,7 @@ def _emit_quota_result(
     captured_payload = payload
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
-        context.scheduler_context if context is not None else None,
+        scheduler_context,
         captured_decision_path=(
             str(capture_directory / "decision.json") if capture_directory is not None else None
         ),

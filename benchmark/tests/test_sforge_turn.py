@@ -18,9 +18,10 @@ from benchmark.runtime.scheduler import worker_command
     ["--worker", "turn-resume", "--validation-command-json", '[""]'],
     ["--worker", "single", "--validation-command-json", '["validator"]'],
     ["--worker", "turn-resume", "--validation-command-json", '["validator"]', "--turn-envelope"],
+    ["--worker", "turn-resume", "--validation-command-json", '["validator"]', "--complete-turn"],
     ["--worker", "turn-resume", "--validation-command-json", '["validator"]', "--context-delivery", "on"],
 ])
-def test_unsupported_arm_rejected_before_trial_reservation(tmp_path, args):
+def test_unsupported_arm_rejected_before_trial_reservation(tmp_path, args, capsys):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.edgebench.run import main
@@ -30,6 +31,8 @@ def test_unsupported_arm_rejected_before_trial_reservation(tmp_path, args):
               "--run-id", "fixture", "--model", "fixture", "--effort", "high",
               "--judge-url", "http://example.invalid", *args])
     assert error.value.code == 2
+    if "--complete-turn" in args:
+        assert "complete_turn requires heartbeat execution" in capsys.readouterr().err
     assert not (tmp_path / "runs").exists()
 
 

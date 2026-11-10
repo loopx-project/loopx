@@ -103,6 +103,30 @@ def _run_git_capture(
     return result
 
 
+def _run_git_paths(
+    workspace: Path,
+    args: list[str],
+    *,
+    timeout: int = 10,
+) -> subprocess.CompletedProcess[bytes]:
+    """Capture path output as bytes; text mode would rewrite CR and CRLF.
+
+    Every caller frames records on NUL, and CPython's text mode translates
+    ``\r`` and ``\r\n`` to ``\n`` before any of that framing happens. A file
+    name carrying CR and one carrying LF would then decode to the same string
+    and collapse in the change list. Bytes keep the name Git wrote until
+    ``_display_git_path`` prepares the public artifact.
+    """
+
+    return subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
 def _validate_branch_name(branch: str, *, field: str) -> str:
     value = str(branch or "").strip()
     if not value:
@@ -153,8 +177,67 @@ def _git_current_branch(workspace: Path) -> str:
 
 
 def _git_status_lines(workspace: Path) -> list[str]:
+    """Report whether the worktree has changes; the names are not consumed."""
+
     result = _run_git_capture(workspace, ["status", "--porcelain"])
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _split_git_paths(output: bytes) -> list[bytes]:
+    """Return one raw pathname per NUL-framed Git record.
+
+    Every caller passes ``-z`` and captures bytes. Splitting before decoding
+    keeps CR, LF, CRLF and non-UTF-8 names distinct; display conversion happens
+    only when the public artifact is built.
+    """
+
+    return [item for item in output.split(b"\0") if item]
+
+
+_GIT_BYTE_PATH_PREFIX = "git-bytes:"
+
+
+def _display_git_path(path: bytes) -> tuple[str, bool]:
+    """Return a display string and whether the bytes are not valid UTF-8.
+
+    Valid UTF-8 is returned literally, including names that happen to begin
+    with ``git-bytes:``. Invalid UTF-8 is represented by ``repr(bytes)`` for
+    diagnostics, but the packet must remain not ready because that marker is
+    not a repo-relative pathname consumers can open. The marker preserves
+    distinct names such as ``lossy-\\xfe.txt`` and ``lossy-\xff.txt``.
+    """
+
+    try:
+        return path.decode("utf-8"), False
+    except UnicodeDecodeError:
+        return f"{_GIT_BYTE_PATH_PREFIX}{path!r}", True
+
+
+def _git_untracked_paths(workspace: Path) -> list[bytes]:
+    """Return every untracked file, not Git's directory summary."""
+
+    result = _run_git_paths(
+        workspace,
+        ["status", "--porcelain", "-z", "--untracked-files=all"],
+    )
+    if result.returncode != 0:
+        raise RuntimeError("git status --porcelain -z failed")
+    entries = result.stdout.split(b"\0")
+    paths: list[bytes] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry or len(entry) < 4:
+            continue
+        status = entry[:2]
+        if status[0:1] in {b"R", b"C"} or status[1:2] in {b"R", b"C"}:
+            # The next record names the rename or copy source.
+            index += 1
+            continue
+        if status == b"??":
+            paths.append(entry[3:])
+    return paths
 
 
 def _git_ref_oid(workspace: Path, ref: str) -> str:
@@ -215,40 +298,42 @@ def _base_snapshot(workspace: Path, base_branch: str) -> dict[str, Any]:
     }
 
 
-def _changed_files(workspace: Path, *, base_branch: str) -> tuple[list[str], bool]:
-    files: list[str] = []
-    truncated = False
+def _changed_files(
+    workspace: Path, *, base_branch: str
+) -> tuple[list[str], bool, int, int]:
+    files: list[bytes] = []
+    seen: set[bytes] = set()
 
-    def add_lines(lines: list[str]) -> None:
-        nonlocal truncated
-        for raw in lines:
-            path = raw.strip()
-            if not path or path.startswith("/"):
+    def add_paths(paths: list[bytes]) -> None:
+        for path in paths:
+            if not path or path.startswith(b"/") or path in seen:
                 continue
-            if path not in files:
-                files.append(path)
-            if len(files) >= 20:
-                truncated = True
-                return
+            seen.add(path)
+            files.append(path)
 
     if _git_branch_exists(workspace, base_branch):
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"{base_branch}...HEAD"],
-            cwd=workspace,
-            text=True, encoding="utf-8", errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10,
+        result = _run_git_paths(
+            workspace, ["diff", "--name-only", "-z", f"{base_branch}...HEAD"]
         )
         if result.returncode == 0:
-            add_lines(result.stdout.splitlines())
-    for args in (["diff", "--name-only"], ["diff", "--cached", "--name-only"]):
-        result = _run_git_capture(workspace, args)
-        add_lines(result.stdout.splitlines())
-    for line in _git_status_lines(workspace):
-        if len(line) >= 4 and line[:2] == "??":
-            add_lines([line[3:]])
-    return files[:20], truncated
+            add_paths(_split_git_paths(result.stdout))
+    for args in (
+        ["diff", "--name-only", "-z"],
+        ["diff", "--cached", "--name-only", "-z"],
+    ):
+        result = _run_git_paths(workspace, args)
+        if result.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed")
+        add_paths(_split_git_paths(result.stdout))
+    add_paths(_git_untracked_paths(workspace))
+    displayed: list[str] = []
+    unrepresentable_count = 0
+    for path in files:
+        display, unrepresentable = _display_git_path(path)
+        if len(displayed) < 20:
+            displayed.append(display)
+        unrepresentable_count += int(unrepresentable)
+    return displayed, len(files) > 20, unrepresentable_count, len(files)
 
 
 # Caller-validation execution (_run_caller_validation / _require_passed) is
@@ -655,6 +740,8 @@ def build_issue_fix_caller_repo_branch_packet(
     }
     changed_files: list[str] = []
     changed_files_truncated = False
+    changed_files_unrepresentable_count = 0
+    changed_file_count = 0
 
     if execute:
         if not workspace.exists() or not workspace.is_dir():
@@ -710,12 +797,18 @@ def build_issue_fix_caller_repo_branch_packet(
             timeout_seconds=timeout_seconds,
         )
         validation_command_result["executed"] = True
-        changed_files, changed_files_truncated = _changed_files(workspace, base_branch=base)
+        (
+            changed_files,
+            changed_files_truncated,
+            changed_files_unrepresentable_count,
+            changed_file_count,
+        ) = _changed_files(workspace, base_branch=base)
 
     review_ready = bool(
         execute
         and validation_command_result.get("passed") is True
         and len(changed_files) > 0
+        and changed_files_unrepresentable_count == 0
     )
     artifact = {
         "schema_version": ISSUE_FIX_CALLER_REPO_BRANCH_ARTIFACT_SCHEMA_VERSION,
@@ -732,7 +825,8 @@ def build_issue_fix_caller_repo_branch_packet(
         "validation": validation_command_result,
         "changed_files": changed_files,
         "changed_files_truncated": changed_files_truncated,
-        "changed_file_count": len(changed_files),
+        "changed_files_unrepresentable_count": changed_files_unrepresentable_count,
+        "changed_file_count": changed_file_count,
     }
     packet: dict[str, Any] = {
         "ok": True,
@@ -762,6 +856,7 @@ def build_issue_fix_caller_repo_branch_packet(
             ),
             "files_changed": changed_files,
             "files_changed_truncated": changed_files_truncated,
+            "files_changed_unrepresentable_count": changed_files_unrepresentable_count,
             "validation_commands": [validation_label],
             "external_issue_comment_performed": False,
             "external_pr_created": False,
@@ -943,6 +1038,39 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
                 errors.append("changed files must be repo-relative public-safe paths")
     else:
         errors.append("changed_files must be a list")
+    changed_file_count = artifact.get("changed_file_count")
+    changed_files_truncated = artifact.get("changed_files_truncated")
+    if not isinstance(changed_files_truncated, bool):
+        errors.append("changed_files_truncated must be a boolean")
+    if (
+        not isinstance(changed_file_count, int)
+        or isinstance(changed_file_count, bool)
+        or changed_file_count < 0
+        or (isinstance(files, list) and changed_file_count < len(files))
+        or (
+            isinstance(files, list)
+            and changed_files_truncated is False
+            and changed_file_count != len(files)
+        )
+        or (
+            isinstance(files, list)
+            and changed_files_truncated is True
+            and changed_file_count <= len(files)
+        )
+    ):
+        errors.append("changed_file_count must cover the exact public list scope")
+    unrepresentable_count = artifact.get("changed_files_unrepresentable_count", 0)
+    if (
+        not isinstance(unrepresentable_count, int)
+        or isinstance(unrepresentable_count, bool)
+        or unrepresentable_count < 0
+        or (
+            isinstance(changed_file_count, int)
+            and not isinstance(changed_file_count, bool)
+            and unrepresentable_count > changed_file_count
+        )
+    ):
+        errors.append("changed_files_unrepresentable_count must be a bounded count")
     review = (
         packet.get("review_packet")
         if isinstance(packet.get("review_packet"), Mapping)
@@ -951,6 +1079,18 @@ def validate_issue_fix_caller_repo_branch_packet(packet: Mapping[str, Any]) -> d
     for key in ("external_issue_comment_performed", "external_pr_created", "merge_performed"):
         if review.get(key) is not False:
             errors.append(f"review packet {key} must be false")
+    review_unrepresentable_count = review.get(
+        "files_changed_unrepresentable_count", 0
+    )
+    if (
+        not isinstance(review_unrepresentable_count, int)
+        or isinstance(review_unrepresentable_count, bool)
+        or review_unrepresentable_count < 0
+        or review_unrepresentable_count != unrepresentable_count
+    ):
+        errors.append("files_changed_unrepresentable_count must match the artifact")
+    if unrepresentable_count and review.get("ready") is True:
+        errors.append("review packet is not ready while changed paths are unrepresentable")
     return {
         "schema_version": "issue_fix_caller_repo_branch_validation_v0",
         "ok": not errors,

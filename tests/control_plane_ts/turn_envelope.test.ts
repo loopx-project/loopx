@@ -411,6 +411,15 @@ test("task text commitment has one selected-Todo carrier without changing legacy
   }
 });
 
+test("complete settlement transport is explicit, typed and never rewrites a saved complete source", () => {
+  const request = {operation: "compose_complete", payload: payload(), scheduler_execution_args: ""};
+  const complete = evaluateTurnEnvelope(request);
+  assert.deepEqual(evaluateTurnEnvelope({...request, composed_settlement: false}), complete);
+  for (const composed_settlement of [null, 0, 1, "true", {}, []])
+    assert.throws(() => evaluateTurnEnvelope({...request, composed_settlement}), /must be a boolean/);
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: complete, composed_settlement: true}), complete);
+});
+
 function payload(): Record<string, unknown> {
   return {
     ok: true,
