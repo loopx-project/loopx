@@ -15,12 +15,10 @@ MAIN_VERSION = re.compile(r"0\.0\.0-main\.(\d+)\.(\d+)")
 # Publish only platforms with a qualified signed update artifact for the
 # channel. Windows NSIS updates ship on the main channel first; the stable
 # channel keeps manual Windows installs until that rollout is approved.
-# Keys follow the pinned updater's `{os}-{arch}-{installer}` lookup in
-# tauri-plugin-updater 2.11.0, whose installer component comes from the
-# bundle-type marker the NSIS install carries. Do not add the bare
-# `windows-x86_64` fallback key until MSI installs are qualified: the updater
-# consults that key for every Windows installer kind, so it would offer the
-# NSIS installer to MSI installs as well.
+# Keys follow the updater's `{os}-{arch}-{installer}` lookup. The installer
+# component comes from the bundle-type marker the NSIS install carries.
+# Publish only the NSIS-specific Windows key until MSI installs are qualified.
+# The `windows-x86_64` fallback matches every Windows installer kind.
 QUALIFIED_PLATFORMS = {
     "main": (
         ("darwin-aarch64", ".app.tar.gz"),

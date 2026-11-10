@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from loopx.cli import main as cli_main
 from loopx.cli_commands import lark_inbox, turn_decision
 from loopx.configure_goal import configure_goal
@@ -23,6 +25,7 @@ from loopx.control_plane.projects.registry_codec import (
     project_registry_transaction,
     source_session_registry_transaction,
 )
+from loopx.control_plane.quota.turn_envelope import turn_host_lineage
 from loopx.control_plane.turn_driver import codex_cli, codex_operation_host
 from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from loopx.control_plane.turn_driver import host_process_transport
@@ -170,7 +173,7 @@ def _cli(registry: Path, runtime: Path, *arguments: str):
             "--registry", str(registry), "--runtime-root", str(runtime),
             "--format", "json", *arguments,
         ])
-    return code, json.loads(output.getvalue())
+    return code, read_cli_policy_payload(output.getvalue(), returncode=code)
 
 
 def _mirror(source: Path, runtime: Path) -> Path:
@@ -255,16 +258,16 @@ def test_operation_cli_observes_verified_stop_at_each_native_boundary(
 
         monkeypatch.setattr(codex_operation_host.CodexChatAgentSession, "start", stopped_start)
     else:
-        prompt = codex_operation_host._prompt
+        prepare_input = codex_operation_host.prepare_codex_cli_input
 
-        def stopped_prompt(request):
+        def stopped_prepare_input(request):
             # App-server/thread initialization already completed, but the
             # request must never cross the native model Turn boundary.
             assert native_start.exists()
             stop()
-            return prompt(request)
+            return prepare_input(request)
 
-        monkeypatch.setattr(codex_operation_host, "_prompt", stopped_prompt)
+        monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", stopped_prepare_input)
     code, payload = _run(registry, runtime, project, host_arguments)
     assert stops and code == 1 and "goal_stopped" in json.dumps(payload), payload
     assert native_start.exists() is (boundary == "turn")
@@ -312,14 +315,14 @@ def test_actual_launch_consumes_current_source_quota_and_health(
 
             monkeypatch.setattr(codex_operation_host.CodexChatAgentSession, "start", missing_state_start)
         else:
-            prompt = codex_cli._prompt
+            prepare_input = codex_cli.prepare_codex_cli_input
 
-            def missing_state_prompt(request):
-                assert request["turn_envelope"]["action"]["selected_todo"]["todo_id"] == "todo_fixture0001"
+            def missing_state_prepare_input(request):
+                assert turn_host_lineage(request)["todo_id"] == "todo_fixture0001"
                 remove_state()
-                return prompt(request)
+                return prepare_input(request)
 
-            monkeypatch.setattr(codex_cli, "_prompt", missing_state_prompt)
+            monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", missing_state_prepare_input)
 
     code, payload = _run(registry, runtime, project, host_arguments)
     assert code == 1 and "goal_launch_not_allowed" in json.dumps(payload), payload
@@ -385,16 +388,16 @@ def test_actual_launch_preserves_same_turn_inbox_read_scope(
     host_arguments, native_start, turn_start = _host(tmp_path, monkeypatch, operation_tools)
     if late_material:
         owner = codex_operation_host if operation_tools else codex_cli
-        prompt = owner._prompt
+        prepare_input = owner.prepare_codex_cli_input
 
-        def changed_inbox_prompt(request):
+        def changed_inbox_prepare_input(request):
             nonlocal pending_count
             # A later message was not in this Turn's initial required read.
             # Operation Host is already open here, before its model Turn.
             pending_count = 2
-            return prompt(request)
+            return prepare_input(request)
 
-        monkeypatch.setattr(owner, "_prompt", changed_inbox_prompt)
+        monkeypatch.setattr(owner, "prepare_codex_cli_input", changed_inbox_prepare_input)
     code, payload = _run(registry, runtime, project, host_arguments)
     assert len(dispatches) == 1
     if late_material:

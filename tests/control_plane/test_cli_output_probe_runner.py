@@ -136,7 +136,7 @@ def test_runner_uses_the_pytest_scenario_alias_without_rewriting_stdout(
     assert rows[0]["row_id"] == "surface/loopx_turn_plan/crowded/json"
     assert rows[0]["chars"] == len(emitted[0])
     assert (
-        "$.turn_envelope.replan_action_packet.writeback_contract.vision_authoring"
+        "$.work_contract.replan_action_packet.writeback_contract.vision_authoring"
         in (rows[0]["json_shape_paths"])
     )
 
@@ -280,3 +280,29 @@ def test_public_quota_reader_preserves_long_goal_and_is_read_only(tmp_path, prov
     with pytest.raises(AssertionError):
         cli_output_fixture.read_cli_context_for_oracle(navigation)
     assert events.read_bytes() == before
+
+
+def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
+    receipt_row = runpy.run_path(str(RUNNER))["_receipt_row"]
+    with probe._stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = probe._write_fixture(root, probe.SCENARIOS[0])
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(registry, probe.GOAL_ID)
+        command = probe._mode_variant_commands(project=project, runtime=runtime,
+            registry_path=registry, state_file=state, output_format="json")["loopx_turn_plan_transaction_detail"]
+        code, text = probe._invoke_cli(command)
+        assert code == 0, text
+        kwargs = dict(semantics=cli_output_semantics,
+            row_id="variant/loopx_turn_plan_transaction_detail/small/json",
+            surface_id="loopx_turn_plan", scenario="small", output_format="json",
+            qualification_policy="explicit_opt_in_cold_path", semantic_json_keys=("work_contract",),
+            markdown_anchor="", text=text)
+        measure = probe.measure_cli_output(text, output_format="json")
+        observation = receipt_row(**kwargs, measurement=measure)
+        assert observation["turn_plan_controls"]["plan_version"] == "loopx_turn_plan_v1"
+        source = measure["payload"]["work_contract"]
+        goal = next(row for row in source["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+                    if row["source"] == "goal_state")
+        goal["content"]["text"] += "\nChanged acceptance or stop condition\n"
+        with pytest.raises(AssertionError):
+            receipt_row(**kwargs, measurement=measure)

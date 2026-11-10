@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {mkdtemp, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
@@ -52,6 +52,8 @@ export const researchFindingReaderScenario = {
     try {
       const fixture = resolve(temporary, "capture.json");
       writeFindingReaderFixture(fixture);
+      const capture = JSON.parse(await readFile(fixture, "utf8"));
+      const eventId = id => capture.events.find(event => event.event_kind === "finding" && event.result_id === id).event_id;
       owner = await startHistoryOwner(fixture);
       page = await browser.newPage({viewport: {width: 1440, height: 900}, hasTouch: true});
       if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
@@ -65,7 +67,7 @@ export const researchFindingReaderScenario = {
       assert.equal(await page.getByText("开启研究模式", {exact: true}).count(), 0, "The read-only capture does not expose a configuration action");
       assert.equal(await picker.locator("option").count(), 20, "Every finding remains directly selectable");
       assert.equal(await article.count(), 1, "A dense question presents one full document, not twenty stacked documents");
-      assert.equal(await picker.inputValue(), "finding-19");
+      assert.equal(await picker.inputValue(), eventId("finding-19"));
       await page.waitForURL(/research_finding=finding-19/);
       assert.match(await reader.locator(".research-finding-exceptions").innerText(), /已反驳 3.*暂定结论 4/);
       assert.equal(await history.locator(".research-history-canvas").isVisible(), false, "The selected text leads; history is available on demand");
@@ -89,19 +91,19 @@ export const researchFindingReaderScenario = {
       await yardstick.locator(":scope > summary").click();
       await page.setViewportSize({width: 1440, height: 900});
 
-      await picker.selectOption("finding-0");
+      await picker.selectOption(eventId("finding-0"));
       assert.match(await article.innerText(), /已反驳/);
       assert.match(await article.innerText(), /观测 1：质量下降而延迟改善/);
       const completeObservation = await article.locator(".research-finding-sections dd").first().innerText();
       assert.equal(completeObservation.split("保留失败候选").length - 1, 3, "Selected long prose is complete");
       await page.reload({waitUntil: "domcontentloaded"});
       await picker.waitFor();
-      assert.equal(await picker.inputValue(), "finding-0", "Reload keeps the exact finding, not the latest one");
+      assert.equal(await picker.inputValue(), eventId("finding-0"), "Reload keeps the exact finding, not the latest one");
       await reader.getByRole("button", {name: "下一条结论", exact: true}).click();
-      assert.equal(await picker.inputValue(), "finding-1");
+      assert.equal(await picker.inputValue(), eventId("finding-1"));
       await page.goBack();
       await page.waitForFunction(() => new URL(location.href).searchParams.get("research_finding") === "finding-0");
-      assert.equal(await picker.inputValue(), "finding-0", "Back restores the prior finding");
+      assert.equal(await picker.inputValue(), eventId("finding-0"), "Back restores the prior finding");
 
       for (const width of [1440, 390]) {
         await page.setViewportSize({width, height: 900});
@@ -119,11 +121,11 @@ export const researchFindingReaderScenario = {
       }
       await reader.getByRole("button", {name: "下一条结论", exact: true}).focus();
       await page.keyboard.press("Enter");
-      assert.equal(await picker.inputValue(), "finding-1", "The complete collection works by keyboard");
+      assert.equal(await picker.inputValue(), eventId("finding-1"), "The complete collection works by keyboard");
       await reader.getByRole("button", {name: "上一条结论", exact: true}).tap();
-      assert.equal(await picker.inputValue(), "finding-0");
+      assert.equal(await picker.inputValue(), eventId("finding-0"));
       await reader.getByRole("button", {name: "下一条结论", exact: true}).tap();
-      assert.equal(await picker.inputValue(), "finding-1", "Narrow touch navigation keeps the selected record identity");
+      assert.equal(await picker.inputValue(), eventId("finding-1"), "Narrow touch navigation keeps the selected record identity");
       await page.screenshot({path: resolve(outputDir, "research-finding-reader-phone.png"), animations: "disabled"});
       await history.locator(".research-history-context > summary").click();
       assert.equal(await history.locator(".research-history-canvas").isVisible(), true);
@@ -150,7 +152,7 @@ export const researchFindingReaderScenario = {
         await older.focus();
         await page.keyboard.press("Enter");
         await picker.waitFor();
-        assert.equal(await picker.inputValue(), "finding-18", "An older decision opens its own finding, not the question's latest one");
+        assert.equal(await picker.inputValue(), eventId("finding-18"), "An older decision opens its own finding, not the question's latest one");
         assert.match(await article.innerText(), /观测 19：/);
         const heading = await article.getByRole("heading").boundingBox();
         const viewport = await page.locator(".personal-channel-scroll").boundingBox();
@@ -159,7 +161,7 @@ export const researchFindingReaderScenario = {
         await page.screenshot({path: resolve(outputDir, `research-decision-reader-${width}.png`), animations: "disabled"});
         await page.reload({waitUntil: "domcontentloaded"});
         await picker.waitFor();
-        assert.equal(await picker.inputValue(), "finding-18", "Reload retains the decision's exact finding");
+        assert.equal(await picker.inputValue(), eventId("finding-18"), "Reload retains the decision's exact finding");
         await reader.press("Escape");
 
         await group.getByRole("button", {name: /显示更早记录/}).click();
@@ -170,7 +172,7 @@ export const researchFindingReaderScenario = {
         await page.screenshot({path: resolve(outputDir, `research-decision-expanded-${width}.png`), animations: "disabled"});
         await earlier.tap();
         await picker.waitFor();
-        assert.equal(await picker.inputValue(), "finding-12");
+        assert.equal(await picker.inputValue(), eventId("finding-12"));
         assert.match(await article.innerText(), /观测 13：/);
         await reader.press("Escape");
         await reader.waitFor({state: "detached"});
@@ -178,7 +180,7 @@ export const researchFindingReaderScenario = {
         assert(await earlier.evaluate(element => element === document.activeElement), "Escape returns keyboard focus to the exact decision");
         await page.goBack();
         await picker.waitFor();
-        assert.equal(await picker.inputValue(), "finding-12", "Back restores the chosen historical decision");
+        assert.equal(await picker.inputValue(), eventId("finding-12"), "Back restores the chosen historical decision");
         await reader.press("Escape");
       }
 
@@ -202,7 +204,7 @@ export const researchFindingReaderScenario = {
       await picker.waitFor();
       assert.equal(await article.count(), 0, "An unknown explicit finding does not silently open a different record");
       assert.match(await reader.innerText(), /找不到所选结论/);
-      await picker.selectOption("finding-4");
+      await picker.selectOption(eventId("finding-4"));
       assert.match(await article.innerText(), /暂定结论/);
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
       await page.reload({waitUntil: "domcontentloaded"});

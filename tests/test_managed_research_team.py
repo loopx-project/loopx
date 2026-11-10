@@ -61,7 +61,9 @@ def test_canonical_delivery_requires_completed_current_dependencies(team, monkey
     # Both choices are available; explicit request must select exactly the second,
     # independently of canonical ordering / the controller's default.
     selected = plan(root, "analyst", "initial")
-    assert selected["turn_envelope"]["action"]["selected_todo"]["todo_id"] == "todo_analyst-initial", selected
+    assert selected["schema_version"] == "loopx_turn_plan_v1"
+    assert "turn_envelope" not in selected
+    assert selected["work_contract"]["selected_todo"]["todo_id"] == "todo_analyst-initial", selected
     assert inspect_goal_acceptance(**route)["provider_revision"] == before["provider_revision"]
     # All artifact hashes and cached accepted files exist, but canonical work is open.
     with pytest.raises(ValueError, match="canonical_dependency_incomplete"):
@@ -106,7 +108,11 @@ def test_canonical_delivery_requires_completed_current_dependencies(team, monkey
         configure_goal_acceptance(**route, document=document, agent_id="lead",
                                   expected_provider_revision=provider_revision, execute=True)
     held = plan(root, "reviewer", "initial")
-    assert not held.get("turn_envelope", {}).get("action", {}).get("delivery_allowed", False), held
+    assert held["error_code"] == "turn_todo_selection_rejected", held
+    assert held["selection_rejection"]["requested_todo_id"] == "todo_reviewer-initial"
+    assert held["selection_rejection"]["state"] == "rejected"
+    assert held["effects"] == {"host_invoked": False, "state_written": False,
+                               "scheduler_acknowledged": False, "quota_spent": False}
     # Explicit owner amendment for this negative fixture, never done by delegate().
     configure_goal_acceptance(**route, document=json.loads((root / "bootstrap.json").read_text())["document"],
                               expected_provider_revision=inspect_goal_acceptance(**route)["provider_revision"], execute=True)
@@ -187,8 +193,9 @@ def test_bootstrap_refuses_existing_state(team):
     root = team
     before = canonical_tasks(root)
     repeated = subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
-                              str(demo.HERE / "bootstrap.ts"), str(root)], capture_output=True)
+                              str(demo.HERE / "bootstrap.ts"), str(root), "file", str(demo.PACKAGE_ROOT)], capture_output=True)
     assert repeated.returncode != 0
+    assert b"EEXIST" in repeated.stderr
     with pytest.raises(ValueError, match="new_disposable"):
         demo.prepare(root)
     assert canonical_tasks(root) == before

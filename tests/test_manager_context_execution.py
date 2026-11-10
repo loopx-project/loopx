@@ -378,12 +378,12 @@ def test_governed_worker_adopts_original_request_and_returns_without_another_mod
         "from loopx.control_plane.collaboration.peers import read_inbox\n"
         "from loopx.capabilities.manager_context.roundtrip import report\n"
         "source_id = delegation['source_request_id']\n"
-        "items = read_inbox(root / 'runtime', root / 'registry.json', envelope['goal_id'], actor)['items']\n"
+        "items = read_inbox(root / 'runtime', root / 'registry.json', identity['goal_id'], actor)['items']\n"
         "assert any(item['request_id'] == source_id for item in items)\n"
         "for item in items:\n"
         "    if item['request_id'] == source_id:\n"
-        "        acknowledge(root / 'runtime', envelope['goal_id'], actor, item['request_id'], 'adopt', 'Receiver independently read the original scope.')\n"
-        "        report(root / 'runtime', envelope['goal_id'], actor, item['request_id'], 'conclusion', 'Independent fixture result returned to the original request.')\n"
+        "        acknowledge(root / 'runtime', identity['goal_id'], actor, item['request_id'], 'adopt', 'Receiver independently read the original scope.')\n"
+        "        report(root / 'runtime', identity['goal_id'], actor, item['request_id'], 'conclusion', 'Independent fixture result returned to the original request.')\n"
     )
     host.write_text(content.replace(anchor, statement + anchor))
     launched = execution.dispatch(service.root, registry, session=session, turn=turn, request=request, receipt=receipt,

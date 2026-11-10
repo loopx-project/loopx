@@ -5,7 +5,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...control_plane.projects.registry_codec import load_project_registry
 from ...agent_registry import load_goal_from_registry
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...control_plane.runtime.time import now_utc_iso
@@ -31,6 +30,7 @@ from .acceptance_loop import (
 from .candidate_evidence import collect_public_github_candidate_preflight_input
 from .correction_settlement import (
     _correction_todo_readback_receipt,
+    _require_origin_registry,
     _resolve_origin_request_identity,
     _settle_maintainer_correction_entries,
 )
@@ -1325,12 +1325,7 @@ def handle_issue_fix_command(
                     raise ValueError("origin_request_conflict")
                 if not origin_registry.is_file() or not origin_runtime.is_dir():
                     raise ValueError("origin registry and runtime root must exist")
-                try:
-                    origin_profile = load_project_registry(origin_registry).get("profile_id")
-                except (ValueError, OSError) as exc:
-                    raise ValueError("origin registry is unreadable") from exc
-                if origin_profile != "source_session_v1":
-                    raise ValueError("origin registry requires source_session_v1")
+                _require_origin_registry(origin_registry)
                 candidate = {"request_id": args.origin_request_id,
                     "registry_path": str(origin_registry), "runtime_root": str(origin_runtime),
                     **_resolve_origin_request_identity(origin_runtime, args.origin_request_id),

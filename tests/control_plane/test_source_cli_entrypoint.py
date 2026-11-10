@@ -60,7 +60,7 @@ raise SystemExit(code)
 
 @pytest.mark.parametrize(
     "argv",
-    [["--version"], [], ["--help"], ["check", "--help"], ["status", "--help"],
+    [["--version"], ["version", "--format", "json"], [], ["--help"], ["check", "--help"], ["status", "--help"],
      ["diagnose", "--help"], ["review-packet", "--help"], ["quota", "--help"],
      ["todo", "--help"], ["delegation", "--help"], ["turn", "--help"],
      ["turn", "run-once", "--help"],
@@ -82,7 +82,7 @@ for owner in {UNRELATED_OWNERS!r}:
 
 @pytest.mark.parametrize(
     "argv",
-    [["version", "--format", "json"], ["status", "--unknown-option"],
+    [["status", "--unknown-option"],
      ["todo", "list"], ["quota", "unknown-command"], ["--format", "unknown", "status"],
      ["delegation", "inspect", "--unknown-option"], ["turn", "run-once", "--exec"],
      ["turn", "unknown-command"],

@@ -167,8 +167,42 @@ def test_managed_identity_rejections_do_not_create_or_resume_a_host(steward, tmp
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_local_managed_session_reuses_native_turn_and_declared_validation(steward, tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("explicit_selection", [False, True], ids=["claim", "ready"])
+def test_local_managed_session_reuses_native_turn_and_declared_validation(
+    steward, tmp_path, monkeypatch, provider, explicit_selection,
+):
     service, session, actor, todo_id, observation, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    import loopx.cli_commands.turn as turn_owner
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.control_plane.quota import turn_envelope
+
+    original_plan = turn_owner.build_loopx_turn_plan
+    original_validation = ManagedSessionTurn.prepare_validation
+    evaluate = turn_envelope._turn_envelope_result
+    prepared_sources = []
+    validation_sources = []
+    legacy_builds = []
+
+    def observe_projection(operation, **kwargs):
+        if operation == "build":
+            legacy_builds.append(operation)
+        return evaluate(operation, **kwargs)
+
+    def checked_validation(self, request, native_request, **kwargs):
+        validation_sources.append((request["turn_instance_id"], native_request))
+        return original_validation(self, request, native_request, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe_projection)
+    monkeypatch.setattr(ManagedSessionTurn, "prepare_validation", checked_validation)
+
+    def checked_plan(source, *args, **kwargs):
+        preparation = source["interaction_contract"]["agent_channel"]["execution_preparation"]
+        assert preparation["state"] == "ready"
+        assert preparation["todo_id"] == todo_id
+        assert preparation["agent_id"] == actor["agent_id"]
+        prepared_sources.append(source["schema_version"])
+        return original_plan(source, *args, **kwargs)
+    monkeypatch.setattr(turn_owner, "build_loopx_turn_plan", checked_plan)
     store, runtime, *_ = steward
     sid = session["session_id"]
     before_sessions = store.list_sessions()
@@ -176,7 +210,8 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(stewar
     before_history = store.messages(sid)
     assert len(before_history) == 2
     assert service.inspect(sid)["available"]
-    accepted, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id=todo_id)
+    requested_todo = todo_id if explicit_selection else None
+    accepted, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id=requested_todo)
     assert created
     completed = finish(runtime, accepted)
     assert completed["status"] == "completed", completed
@@ -184,6 +219,20 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(stewar
     assert result.get("status") == "committed", json.dumps(result)
     assert result["effects"]["host_invoked"] and result["effects"]["quota_spent"]
     assert result["validation"]["status"] == "passed"
+    assert prepared_sources == ["loopx_turn_envelope_v1"]
+    assert legacy_builds == []
+    expected_states = ["ready"] if explicit_selection else ["claim_required", "ready"]
+    assert len(validation_sources) == len(expected_states)
+    for (turn_id, native_request), state in zip(validation_sources, expected_states, strict=True):
+        assert turn_id == accepted["loopx_request"]["turn_instance_id"]
+        assert "turn_envelope" not in native_request
+        source = native_request["work_contract"]
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        assert source["selected_todo"]["todo_id"] == todo_id
+        assert source["agent_identity"]["agent_id"] == actor["agent_id"]
+        assert source["execution_preparation"]["state"] == state
+        if "detail_ref" in native_request:
+            assert native_request["detail_ref"]["captured_decision"]["turn_instance_id"] == turn_id
     assert observation.read_text() == "ready"
     assert store.load_session(sid)["upstream_thread_id"] == thread
     assert {row["session_id"] for row in store.list_sessions()} == {row["session_id"] for row in before_sessions}
@@ -193,7 +242,7 @@ def test_local_managed_session_reuses_native_turn_and_declared_validation(stewar
     assert all(row.get("params", {}).get("sandbox", "read-only") == "read-only" for row in calls)
     assert not [row for row in calls if row["method"] in {"thread/start", "thread/goal/set", "thread/inject_items"}]
     after_calls = capture.read_bytes()
-    replay, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id=todo_id)
+    replay, created = service.submit(sid, agent_id=actor["agent_id"], operation_id="local-native-1", todo_id=requested_todo)
     assert not created and replay["turn_id"] == accepted["turn_id"] and capture.read_bytes() == after_calls
     assert service.inspect(sid, operation_id="local-native-1")["turn"]["turn_id"] == accepted["turn_id"]
     with pytest.raises(ValueError, match="identity conflict"):
@@ -259,6 +308,81 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
         assert not [json.loads(row) for row in capture.read_bytes()[len(calls):].splitlines() if json.loads(row)["method"] == "turn/start"]
     after = capture.read_bytes()
     assert not service.submit(session["session_id"], agent_id=actor["agent_id"], operation_id="unqualified", todo_id=todo_id)[1]
+    assert capture.read_bytes() == after
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["valid", "historical", "missing_complete", "changed_complete", "null_complete"])
+def test_managed_postcondition_checks_complete_source_before_argv(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.control_plane.turn_driver import command_validation
+
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    runtime = steward[1]
+    invoked = []
+    if fault == "historical":
+        from loopx.cli_commands import turn
+        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+        planner = turn.build_loopx_turn_plan
+
+        def recorded_legacy(source, **kwargs):
+            plan = planner(build_turn_envelope(source), **kwargs)
+            assert plan["schema_version"] == "loopx_turn_plan_v0"
+            return plan
+
+        monkeypatch.setattr(turn, "build_loopx_turn_plan", recorded_legacy)
+    build = command_validation.build_loopx_turn_command_validator
+
+    def instrument(*args, **kwargs):
+        validate = build(*args, **kwargs)
+
+        def observed(plan, result):
+            invoked.append(True)
+            return validate(plan, result)  # Keep the real independent argv.
+
+        return observed
+
+    monkeypatch.setattr(command_validation, "build_loopx_turn_command_validator", instrument)
+    create = ManagedSessionTurn.validator
+
+    def interrupted(self, *args, **kwargs):
+        validate = create(self, *args, **kwargs)
+
+        def after_model(plan, result):
+            # Fault only the complete source at the actual post-model boundary;
+            # actor admission, native Host, validation and settlement stay real.
+            assert "work_contract" in plan
+            if fault == "changed_complete":
+                plan["work_contract"] = {**plan["work_contract"], "reason": "changed after model work"}
+            elif fault == "null_complete":
+                plan["work_contract"] = None
+            elif fault in {"historical", "missing_complete"}:
+                plan.pop("work_contract")
+            return validate(plan, result)
+
+        return after_model
+
+    monkeypatch.setattr(ManagedSessionTurn, "validator", interrupted)
+    before = capture.read_bytes()
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="complete-postcondition", todo_id=todo_id)
+    completed = finish(runtime, accepted)
+    calls = [json.loads(row) for row in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(row["method"] == "turn/start" for row in calls) == 1
+    if fault in {"valid", "historical"}:
+        assert invoked == [True]
+        native = completed["response"]["native_loopx"]
+        assert native["status"] == "committed" and native["effects"]["quota_spent"]
+    else:
+        assert invoked == []  # Refuse before even the independent command runs.
+        native = completed["response"]["native_loopx"]
+        assert native["status"] == "failed"
+        assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+    after = capture.read_bytes()
+    replay, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="complete-postcondition", todo_id=todo_id)
+    assert not created and replay["turn_id"] == accepted["turn_id"]
     assert capture.read_bytes() == after
 
 
@@ -413,6 +537,87 @@ def test_native_identity_io_leaves_input_and_binding_publication_available(stewa
     assert len(errors) == 1 and isinstance(errors[0], ValueError), errors
     assert store.turn_for_client(sid, native_steward_client_id(actor, "waiting-identity")) is None
     assert capture.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("phase", ["initial", "after_report_quota"])
+def test_native_submission_history_read_allows_input_and_rejects_changed_binding(steward, tmp_path, monkeypatch, provider, phase):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    sid, actor, _ = prepare(steward, provider, tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, capture, workspace = steward
+    host = StewardTurnHost(runtime)
+    binding_id = binding["binding_id"]
+    operation = "slow-inspection"
+    report = phase == "after_report_quota"
+    entered, release, quota_checked = Event(), Event(), Event()
+    params = {}
+    if report:
+        window = {"window_id": "fixture-window", "subscription_revision": 1}
+        operation = "report." + window["window_id"]
+        params = {"work_kind": "report", "report_window": window}
+    else:
+        quota_checked.set()
+    client = native_steward_client_id(actor, operation)
+    if report:
+        original = store.accept_managed_turn(sid, client_turn_id=client, message="Retain the original report",
+            origin="native_loopx", loopx_execution=True, loopx_request={
+                "operation": "native_turn", "host": "codex-app-server", "actor": actor,
+                "turn_instance_id": operation, "todo_id": None, "work_kind": "report", "validation_command": None,
+                "report_window_id": window["window_id"], "report_subscription_revision": window["subscription_revision"],
+            }).turn
+        store.update_turn(sid, original["turn_id"], status="failed", error_code="fixture_failure")
+        store.update_session(sid, status="ready", active_turn_id=None)
+        observe_quota = host.report_quota_request
+
+        def checked_quota(turn):
+            result = observe_quota(turn)
+            quota_checked.set()
+            return result
+
+        monkeypatch.setattr(host, "report_quota_request", checked_quota)
+    lookup = store.turn_for_client
+
+    def slow_history(session_id, client_turn_id):
+        if session_id == sid and client_turn_id == client and quota_checked.is_set() and not entered.is_set():
+            entered.set()
+            assert release.wait(15), "test did not release history read"
+        return lookup(session_id, client_turn_id)
+
+    def exercise_same_session():
+        queued, created = runtime.enqueue_turn(session_id=sid, client_turn_id="human-during-inspection",
+            message="Keep ordinary input available", work_dir=workspace, objective="Ordinary input", origin="web")
+        assert created
+        if report:
+            transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+        return queued
+
+    workers = []
+    before = capture.read_bytes()
+    monkeypatch.setattr(store, "turn_for_client", slow_history)
+    monkeypatch.setattr(runtime, "_drain_session_queue", lambda **_: None)
+    monkeypatch.setattr(runtime, "_start_accepted_turn_worker", lambda **call: workers.append(call))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        submission = pool.submit(host.submit, binding_id, turn_instance_id=operation, **params)
+        try:
+            assert entered.wait(8)
+            queued = pool.submit(exercise_same_session).result(timeout=5)
+            assert queued["status"] == "queued"
+        finally:
+            release.set()
+        if report:
+            with pytest.raises(ValueError, match="authorization changed during submission inspection"):
+                submission.result(timeout=8)
+            assert store.load_turn(sid, original["turn_id"])["status"] == "failed"
+        else:
+            with pytest.raises(ValueError, match="retaining its current work"):
+                submission.result(timeout=8)
+            assert lookup(sid, client) is None
+    assert not workers and capture.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -603,3 +808,21 @@ def test_inventory_replacement_during_context_read_never_forks_the_original_nati
     calls = [json.loads(line) for line in capture.read_bytes()[len(before):].decode().splitlines()]
     assert not [row for row in calls if row["method"] in {"thread/start", "turn/start", "thread/inject_items"}]
     assert store.load_session(sid)["upstream_thread_id"] == thread
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_managed_host_does_not_borrow_another_execution_lease(steward, tmp_path, monkeypatch, provider):
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    store, runtime, *_ = steward
+    original = cli(runtime, "task-lease", "acquire", "--goal-id", actor["goal_id"],
+        "--todo-id", todo_id, "--owner", actor["agent_id"], "--idempotency-key", "another-execution")["lease"]
+    before_calls = capture.read_bytes()
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="lease-conflict", todo_id=todo_id)
+    failed = finish(runtime, accepted)
+    assert failed["status"] == "failed"
+    calls = [json.loads(row) for row in capture.read_bytes()[len(before_calls):].splitlines()]
+    assert not [row for row in calls if row["method"] == "turn/start"]
+    retained = cli(runtime, "task-lease", "inspect", "--goal-id", actor["goal_id"], "--todo-id", todo_id)
+    assert retained["active"] is True and retained["lease"] == original
+    assert store.load_session(session["session_id"])["upstream_thread_id"] == session["upstream_thread_id"]

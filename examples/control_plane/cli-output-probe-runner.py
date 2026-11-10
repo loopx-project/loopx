@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import hashlib
+import shlex
 import json
 import shutil
 import sys
@@ -43,6 +45,64 @@ def _load_module(name: str, path: Path) -> ModuleType:
     return module
 
 
+def _turn_plan_control_observation(value: Any, *, goal_state: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """Compare current controls across the explicit plan codec migration.
+
+    This fixture observation grants no authority and does not prove full source
+    parity; complete-source and real outcome qualification remain separate.
+    Required reads and authoring clauses are compared as original JSON values.
+    """
+    if not isinstance(value, dict) or value.get("schema_version") not in {
+        "loopx_turn_plan_v0", "loopx_turn_plan_v1",
+    }:
+        return None
+    version = value["schema_version"]
+    work = value["turn_envelope"] if version == "loopx_turn_plan_v0" else value["work_contract"]
+    if version == "loopx_turn_plan_v0":
+        actor, channel, capsule, boundary = work["agent_id"], work["action"], work["contract_capsule"], work["boundary"]
+        reads, actions = work["required_reads"], work["writeback"]["next_cli_actions"]
+        selected = work["action"].get("selected_todo")
+    else:
+        actor, channel = work["agent_identity"]["agent_id"], work["interaction_contract"]["agent_channel"]
+        capsule, boundary = work, work["goal_boundary"]
+        reads, actions = channel["required_reads"], work["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        selected = work.get("selected_todo")
+    # v0 asks for the original Goal file; v1 delivers those exact bytes inline.
+    # Only this known obligation may move from a read command to captured data.
+    # The frozen caller independently verifies the full-file revision first.
+    if goal_state is not None and version == "loopx_turn_plan_v0":
+        goal_read = {"command": goal_state["command"], "source": "goal_state", "ordering": "before_work",
+            "reason": "Read full Goal intent, acceptance, stops. No summaries; failed/changed sources need a fresh guard."}
+        reads = [row for row in reads if row != goal_read]
+    route = value["route"]
+    controls = {
+        "goal_id": work["goal_id"], "agent_id": actor,
+        "decision": work["decision"], "should_run": work["should_run"],
+        "effective_action": work["effective_action"],
+        "selected_todo_id": selected["todo_id"] if isinstance(selected, dict) else None,
+        "route": {key: route[key] for key in (
+            "kind", "effective_action", "would_invoke_host", "host_invocation_allowed")},
+        "execution": {key: channel[key] for key in (
+            "must_attempt", "delivery_allowed", "quiet_noop_allowed")},
+        "boundary": {key: boundary[key] for key in ("write_scope", "stop_condition")},
+        "required_reads": reads, "goal_state_material": goal_state, "next_cli_actions": actions,
+        "work_lane_contract": capsule["work_lane_contract"],
+        "execution_obligation": capsule["execution_obligation"],
+        "replan_action_packet": work.get("replan_action_packet"),
+        "effects": value["effects"],
+    }
+    if route["kind"] == "ready_for_host":
+        controls["execution_profile"] = capsule["execution_profile"]
+        controls["task_scope"] = capsule["task_scope"]
+    assert value["ok"] is True and not any(value["effects"].values())
+    encoded = json.dumps(controls, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {"plan_version": version, "controls_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+            "field_sha256": {key: hashlib.sha256(json.dumps(child, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+                for key, child in controls.items()}}
+
+
+
 def _receipt_row(
     *,
     semantics: ModuleType,
@@ -59,6 +119,27 @@ def _receipt_row(
     output_contract_version: str | None = None,
 ) -> dict:
     payload = measurement.get("resolved_payload", measurement.get("payload"))
+    plan, material, detail_cost = payload, None, None
+    if isinstance(plan, dict) and plan.get("schema_version") == "loopx_turn_plan_v1":
+        if "detail_ref" in plan:
+            from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+            body, calls, reader_bytes = read_pinned_cli_body(plan["detail_ref"]["command"])
+            plan = {**plan, "work_contract": json.loads(body)}
+            detail_cost = {"reader_calls": calls, "reader_stdout_utf8_bytes": reader_bytes,
+                           "body_utf8_bytes": len(body.encode("utf-8"))}
+        sources = plan["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        for row in sources:
+            content = row.get("content", {})
+            if row.get("source") == "goal_state" and content.get("full_source") is True:
+                revision = "sha256:" + hashlib.sha256(content["text"].encode("utf-8")).hexdigest()
+                assert revision == content["revision"] and row["ordering"] == "before_work"
+                material = {"command": row["command"], "revision": revision, "ordering": row["ordering"]}
+    elif isinstance(plan, dict) and plan.get("schema_version") == "loopx_turn_plan_v0":
+        for row in plan["turn_envelope"]["required_reads"]:
+            command = shlex.split(row.get("command", ""))
+            if row.get("source") == "goal_state" and row.get("ordering") == "before_work" and command[:2] == ["cat", "--"] and len(command) == 3:
+                material = {"command": row["command"], "ordering": row["ordering"],
+                    "revision": "sha256:" + hashlib.sha256(Path(command[2]).read_bytes()).hexdigest()}
     return {
         "row_id": row_id,
         "surface_id": surface_id,
@@ -83,6 +164,8 @@ def _receipt_row(
         ),
         "markdown_headings": semantics.markdown_headings(text),
         "markdown_anchor": markdown_anchor,
+        "turn_plan_controls": _turn_plan_control_observation(plan, goal_state=material),
+        **({"inspection_source_read": detail_cost} if detail_cost is not None else {}),
         "action_signature_sha256": (
             semantics.action_signature_semantic_sha256(payload)
             if isinstance(payload, dict)
@@ -323,6 +406,7 @@ def _variant_rows(
                     scenario="small",
                     output_format=output_format,
                     qualification_policy="explicit_opt_in_cold_path",
+                    output_contract_version=getattr(variant, "output_contract_version", None),
                     semantic_json_keys=variant.semantic_json_keys,
                     markdown_anchor=variant.markdown_anchor,
                     measurement=measurement,

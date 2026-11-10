@@ -40,7 +40,7 @@ def test_one_discovery_pass_reuses_queue_history_and_controls(failed_source, mon
             return real_datetime.now(tz) + timedelta(minutes=2)
     monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
     counts = Counter()
-    for owner, name in [(store, "queued_turns"), (store, "messages"), (transport.core, "pending")]:
+    for owner, name in [(store, "queued_turns"), (store, "messages"), (transport.core, "source_controls")]:
         original = getattr(owner, name)
         def counted(*args, _name=name, _read=original, **kwargs):
             counts[_name] += 1
@@ -49,10 +49,10 @@ def test_one_discovery_pass_reuses_queue_history_and_controls(failed_source, mon
     before_calls, before_requests = len(provider.calls), capture.read_bytes()
     observe = transport.core.context_recovery_observer()
     assert [observe(ref) for _ in range(4)] == [True] * 4
-    assert counts == {"queued_turns": 1, "messages": 1, "pending": 1}
+    assert counts == {"queued_turns": 1, "messages": 1, "source_controls": 1}
     # The next pass rereads rather than retaining a negative/positive cache.
     assert transport.core.context_recovery_observer()(ref)
-    assert counts == {"queued_turns": 2, "messages": 2, "pending": 2}
+    assert counts == {"queued_turns": 2, "messages": 2, "source_controls": 2}
     assert len(provider.calls) == before_calls and capture.read_bytes() == before_requests
 
 

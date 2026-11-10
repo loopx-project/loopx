@@ -42,6 +42,20 @@ boundary to adopt it. Do not retain custom launch scripts or editable imports in
 temporary worktree. A missing optional channel or its credentials remains an
 explicit unavailable channel; never reconstruct credentials from chat history.
 
+When an existing macOS `com.loopx.codex-native-accounts` LaunchAgent watches
+the same account root as managed Chat, adopt the qualified Core and its pinned
+provider environment together. Run the installed target's
+`update activate --service all --runtime-executable <target-loopx>`.
+The supported direct `watch` job participates in the same handoff as Chat and
+Status. The handoff waits for accepted Chat and account work, starts the
+observer first, and verifies its lock and both loaded builds from the 0.15.5
+observer heartbeat before committing.
+It restores the previous job routes on failure. Once the watcher has been
+adopted, a Core update without a pinned provider defers before replacing any
+service. Core-only updates still leave unbound standalone watchers in place.
+Run the provider's separate relay reconciliation after the managed processes
+have adopted the same build.
+
 `loopx-native-account-provider` reads this JSON protocol on stdin:
 
 ```json
@@ -53,12 +67,18 @@ request count. `--runtime-root` selects an existing owner; default is `~/.loopx`
 The doctor distinguishes installation readiness from message delivery, and never
 uses a model or checks an API key against an upstream service. An unstarted relay
 is a valid installation state; a healthy legacy or mismatched running daemon is
-not a qualified installation. Keep original-message acceptance as a separate
-end-to-end check.
+not a qualified installation. Since 0.15.4, `consumer_readiness` reports worker
+and steward independently. An unconfigured steward route does not block the
+worker. If a configured route is unavailable, or the two health responses
+identify different relay instances, installation verification fails and each
+route keeps its own status. The legacy `relay` field still reports the worker.
+Keep original-message acceptance as a separate end-to-end check.
 
 For upgrades, install the reviewed target into a new immutable environment and
-invoke its provider with `operation: "reconcile", execute: true`. The model
-transport's ordinary `ensure` also performs this reconciliation. An authenticated
+invoke its provider with `operation: "reconcile", execute: true`. This checks the
+configured steward route as well as the worker, without creating credentials.
+The model transport's ordinary `ensure` also performs reconciliation for its
+own route. An authenticated
 new-protocol daemon with a different loaded build stops new admissions, drains
 already accepted requests and releases its existing owner lock before one new
 daemon starts. The model, route credentials, key policy and message queue stay
@@ -163,7 +183,7 @@ eligible and a subsequent accepted request clears its preference penalty.
 Selection reuses the existing private runtime observations, adds no probes,
 and never retries an admitted stream or overrides the subscription/API role.
 
-Version 0.15.4 treats an API route as ready only while at least one configured
+Version 0.15.6 treats an API route as ready only while at least one configured
 key is currently eligible after authentication, rate-limit and billing
 observations. If the active API pool becomes unavailable, an available
 subscription is selected again; when none is available, status reports

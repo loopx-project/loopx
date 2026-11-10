@@ -369,13 +369,14 @@ def main() -> int:
         )
 
         completed_projection = parse_active_state_todos(state_path.read_text(encoding="utf-8"))
-        completion_warning = completed_todo_archive_warning(
-            completed_projection["agent_todos"]
-        )
-        assert completion_warning is not None, completed_projection
-        assert completion_warning["active_done_count"] == done_before_completion + 1, (
-            completion_warning
-        )
+        auto_archive = completed_with_successor["auto_archive"]
+        assert auto_archive["role"] == "agent", auto_archive
+        assert auto_archive["active_done_before"] == done_before_completion + 1, auto_archive
+        assert auto_archive["active_done_after"] == auto_archive["max_active_done"] == 10, auto_archive
+        assert auto_archive["moved_count"] == done_before_completion + 1 - 10, auto_archive
+        active_done = completed_todo_count(completed_projection["agent_todos"])
+        assert active_done == auto_archive["active_done_after"], completed_projection
+        assert completed_todo_archive_warning(completed_projection["agent_todos"]) is None
 
         archive_completed = run_cli(
             registry_path,
@@ -388,13 +389,9 @@ def main() -> int:
             "0",
             "--execute",
         )
-        assert archive_completed["active_done_before"] == completion_warning["active_done_count"], (
-            archive_completed
-        )
+        assert archive_completed["active_done_before"] == active_done, archive_completed
         assert archive_completed["active_done_after"] == 0, archive_completed
-        assert archive_completed["moved_count"] == completion_warning["active_done_count"], (
-            archive_completed
-        )
+        assert archive_completed["moved_count"] == active_done, archive_completed
 
         archived_lineage = state_path.read_text(encoding="utf-8")
         assert archived_lineage.index("## Completed Work Archive") < archived_lineage.index(

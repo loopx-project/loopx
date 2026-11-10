@@ -96,6 +96,7 @@ loopx turn run-once \
   --host generic-cli \
   --execution-mode isolated-headless \
   --project "$PWD" \
+  --host-adapter-request-schema loopx_turn_host_request_v1 \
   --host-adapter-command-json '["python3", "-m", "loopx.dsh_goal_mode", "--dsh-home", "/path/to/dsh-home", "--cordis", "/path/to/cordis.yml", "--model", "deepseek-flash"]' \
   --validation-command-json '["python3", "/path/to/verify-postcondition.py"]' \
   --execute

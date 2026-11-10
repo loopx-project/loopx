@@ -368,7 +368,7 @@ def _emit_quota_result(
         # Preserve the original validation error when activation itself failed.
         context_delivery_enabled = False
         activation = {"progressive_enabled": False}
-    bind_capture_selection_transport(payload, args)
+    bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
     delivery_request = None
     decision_identity = ("", "")
     if capture_directory is not None and payload.get("replan_action_packet"):

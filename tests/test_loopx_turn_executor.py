@@ -4256,9 +4256,11 @@ def test_real_host_duration_is_observed_but_settlement_replay_is_not(
 
     machine = tmp_path / "machine"
     monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: machine)
-    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
+    for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
+    # Opt in to the existing loopback qualification for temporary state.
+    monkeypatch.setenv("LOOPX_USAGE_PING", "1")
     usage_ping.control("enable")
     plan = _plan()
     host_file = tmp_path / "host.py"

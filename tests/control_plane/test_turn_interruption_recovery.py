@@ -30,6 +30,10 @@ from tests.control_plane.turn_interruption_oracle import (
     assert_host_stopped,
     spend_records,
 )
+from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+    LOOPX_TURN_PLAN_SCHEMA_VERSION,
+)
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
@@ -234,11 +238,11 @@ def test_export_interruption_preserves_requirements_and_original_settlement(
                         ).fetchall()
                     )
                 )
-            capture_path = Path(
-                before["plan"]["turn_envelope"]["detail_ref"]["captured_decision"][
-                    "path"
-                ]
-            )
+            plan = before["plan"]
+            version = plan["schema_version"]
+            assert version in (LOOPX_TURN_PLAN_SCHEMA_VERSION, COMPLETE_TURN_PLAN_SCHEMA_VERSION)
+            source = plan if version == COMPLETE_TURN_PLAN_SCHEMA_VERSION else plan["turn_envelope"]
+            capture_path = Path(source["detail_ref"]["captured_decision"]["path"])
             capture = capture_path.read_bytes()
             assert REQUIREMENT in capture.decode()
             running.kill()

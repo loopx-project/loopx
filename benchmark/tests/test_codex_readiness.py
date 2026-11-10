@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ def native_fixture(tmp_path, mode):
     trace = tmp_path / "requests.jsonl"
     binary = tmp_path / "codex"
     binary.write_text(f"#!{sys.executable}\n" + '''
-import json, os, sys
+import json, os, sys, time
 from pathlib import Path
 counter = Path(os.environ["PROBE_ATTEMPTS"])
 attempt = int(counter.read_text()) + 1 if counter.exists() else 1
@@ -35,6 +36,10 @@ for line in sys.stdin:
     if "id" not in packet:
         continue
     method = packet["method"]
+    blocked = {"account_timeout": "account/read", "account_timeout_once": "account/read",
+               "usage_timeout_once": "account/rateLimits/read", "initialize_timeout": "initialize"}
+    if method == blocked.get(mode) and (not mode.endswith("_once") or attempt == 1):
+        time.sleep(60)  # The real stdio owner must time out and terminate this observer.
     if mode in ("disconnect", "disconnect_once") and method == "initialize":
         if mode == "disconnect" or attempt == 1:
             sys.exit(0)
@@ -298,7 +303,8 @@ def test_unknown_exception_and_local_configuration_fail_closed(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("profile", ["native-goal", "heartbeat-resume", "heartbeat-explore"])
-def test_sforge_rejects_bad_receiver_before_clock_or_scheduler(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize("budget", [False, True])
+def test_sforge_rejects_bad_receiver_before_clock_or_scheduler(tmp_path, monkeypatch, profile, budget):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -306,6 +312,7 @@ def test_sforge_rejects_bad_receiver_before_clock_or_scheduler(tmp_path, monkeyp
     from pathlib import Path
 
     env, trace, home, pending = native_fixture(tmp_path, "account/read")
+    env.update(SFORGE_AGENT_REMAINING_SECONDS="100", SFORGE_AGENT_SEGMENT_STARTED_AT=str(time.time()))
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", str(home / "auth.json"))
 
     async def installed(self, environment):
@@ -313,9 +320,12 @@ def test_sforge_rejects_bad_receiver_before_clock_or_scheduler(tmp_path, monkeyp
 
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-                          profile=profile, cwd=str(tmp_path))
+                          profile=profile, cwd=str(tmp_path),
+                          **({"native_readiness_total_seconds": 75} if budget else {}))
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.prepared = True
+    selected = json.loads((tmp_path / "worker-profile.json").read_text()).get("native_readiness_budget")
+    assert selected == ({"total_seconds": 75, "attempt_seconds": 25} if budget else None)
     command = worker.format_run_cmd("/task.md")
     checkout = str(Path(__file__).resolve().parents[2])
     runtime = tmp_path / "runtime"

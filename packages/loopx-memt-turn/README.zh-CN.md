@@ -14,8 +14,11 @@ MemT 客户端使用 Python，所以此包作为 Python 传输适配器；没有
 
 ## 安装与许可证
 
-需要 Python 3.11+、含受支持 `extensions.turn_host` 接缝的 LoopX 2.1.0+，
-以及独立部署的 Nano SGLang 服务。GPU 部署按上游
+需要 Python 3.11+，并从同一份已集成的 LoopX 2.2 源码安装两个包，源码须包含
+`extensions.turn_host.extract_turn_work_identity` 与
+`assert_turn_host_request_version`。完整来源 Host request v1 与历史 v0 共用此 decoder，
+精确 Goal lifetime 和 memory／effect 门保持。仅满足版本下限不能证明旧 wheel
+已包含此共享契约。另需独立部署的 Nano SGLang 服务。GPU 部署按上游
 [推理指南](https://github.com/MemTensor/MemT-1.0/blob/e75c13d090a6a9d34b29146d901bd84323185f24/inference/README.md)
 操作。本地客户端只加载匹配的 tokenizer 和配置，不加载模型权重；首版仅支持 Nano。
 
@@ -89,6 +92,7 @@ MCP 服务必须自行强制执行当前签名请求的资源与操作范围。�
 ```sh
 loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
   --project /srv/work/project --host generic-cli --iteration-context fresh \
+  --host-adapter-request-schema loopx_turn_host_request_v1 \
   --host-command-json '["loopx-memt-turn","--config","/srv/operator/memt.json"]' \
   --validation-command-json '["python3","/srv/operator/check_artifact.py"]'
 ```

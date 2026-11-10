@@ -5,14 +5,18 @@ Status: implemented in this repository as the optional
 
 The package embeds LoopX into a visible DeepSeek Harness (DSH) Session without
 moving execution authority out of DSH or durable control-plane authority out of
-LoopX. It ships three cooperating surfaces:
+LoopX. It ships four cooperating surfaces:
 
 - `/loopx-init`, which installs or repairs the LoopX CLI and DSH workflow
   skills;
 - a passive same-session Driver, which may queue one LoopX continuation only
   after the exact Session invokes the installed `loopx` skill;
 - a loopback-only GoalBar Host and web Client, which show one exact bound
-  Goal/Agent lane and expose guarded Start and Pause actions.
+  Goal/Agent lane and expose guarded Start and Pause actions;
+- a web-Client personal workspace panel: one global **LoopX** sidebar entry
+  whose central panel embeds the already-running `loopx dashboard` workspace
+  on loopback, presenting LoopX's own UI without reading or duplicating
+  control-plane state.
 
 The older [`deepseek-harness` connector](deepseek-harness-connector.md) remains
 a separate headless Turn adapter. The native plugin uses the
@@ -25,7 +29,7 @@ contract, not as competing implementations to collapse into one transport:
 
 | Path | Primary use | Session and wakeup owner | Frontend |
 | --- | --- | --- | --- |
-| `dsh-loopx-plugin` | Person-driven work in a DSH Session | DSH Session; optional same-session Driver after an exact `loopx` skill invocation | DSH Web/Desktop GoalBar and native skills |
+| `dsh-loopx-plugin` | Person-driven work in a DSH Session | DSH Session; optional same-session Driver after an exact `loopx` skill invocation | DSH Web/Desktop GoalBar, personal workspace panel and native skills |
 | LoopX Turn on DSH | Headless, bounded, quota-governed work selected without a person present | LoopX Turn and the outer scheduler | LoopX App/CLI executor readback, artifacts and Todo settlement |
 
 Do not duplicate the LoopX control plane inside DSH. Both routes must converge

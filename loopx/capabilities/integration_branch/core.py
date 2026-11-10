@@ -9,15 +9,39 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import retire_owned_process
+
 PLAN_SCHEMA_VERSION = "loopx_integration_branch_plan_v0"
 STATUS_SCHEMA_VERSION = "loopx_integration_branch_status_v0"
 SYNC_SCHEMA_VERSION = "loopx_integration_branch_sync_v0"
 DEFAULT_PLAN_PATH = Path(".loopx/integration-branch.json")
 ZERO_SHA = "0" * 40
 
+# A hook or CLI command must not wait forever on a Git helper. A stale
+# index lock, an fsmonitor hook or a checkout on a network mount can
+# otherwise hold the integration-branch operation open.
+GIT_READ_TIMEOUT_SECONDS = 10.0
+
 
 class IntegrationBranchError(ValueError):
     """A fail-closed integration-branch contract error."""
+
+
+def _retire_owned_read(process: subprocess.Popen[str]) -> None:
+    """Retire the read's own process group and drop its pipes within a deadline.
+
+    The shared runtime bounds termination, Windows ``taskkill`` and pipe
+    closure under one budget. Git starts helpers -- fsmonitor hooks, pagers --
+    inside the session it runs in, so killing the leader alone leaves them
+    behind; a pipe a descendant still holds must not extend the caller's wait.
+    """
+
+    try:
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # The answer is already unavailable; cleanup must not replace it with
+        # a traceback. The read's own timeout or cancellation stays the result.
+        pass
 
 
 def _git(
@@ -25,14 +49,46 @@ def _git(
     *args: str,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+    """Run one Git read, or refuse when it cannot answer inside its budget.
+
+    An unanswered read is not an empty repository. Callers resolve refs,
+    inventory worktrees and read remote state through this one entry point;
+    raising here makes those paths fail closed instead of acting on state they
+    never observed.
+    """
+
+    argv = ["git", "-C", str(repo), *args]
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name == "posix",
     )
+    try:
+        stdout, stderr = process.communicate(timeout=GIT_READ_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _retire_owned_read(process)
+        raise IntegrationBranchError(
+            "git "
+            + " ".join(args)
+            + f" did not answer within {GIT_READ_TIMEOUT_SECONDS:g} seconds"
+        ) from None
+    except BaseException:
+        # A terminal cancellation reaches this process, not the session the
+        # read owns. Retire that session before the cancellation propagates.
+        _retire_owned_read(process)
+        raise
+    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        detail = (
+            (result.stderr or "").strip()
+            or (result.stdout or "").strip()
+            or "git command failed"
+        )
         raise IntegrationBranchError(detail)
     return result
 
@@ -546,6 +602,79 @@ def _clean_worktree(path: Path) -> bool:
     ).stdout.strip()
 
 
+def _unregister_candidate(repo: Path, worktree: Path) -> bool:
+    """Drop only this candidate's registration; report whether none is left.
+
+    ``git worktree prune --expire now`` has no path filter: it would also
+    discard stale registrations that belong to unrelated checkouts. Git keeps
+    one admin directory per registration under ``<common>/worktrees``, and its
+    ``gitdir`` file names the checkout it belongs to, so this candidate's own
+    entry is found and removed without touching any other state.
+    """
+
+    common = _git(repo, "rev-parse", "--git-common-dir")
+    root = Path(common.stdout.strip())
+    if not root.is_absolute():
+        root = repo / root
+    target = os.path.normcase(str((worktree / ".git").resolve()))
+    try:
+        admins = list((root / "worktrees").iterdir())
+    except FileNotFoundError:
+        return True
+    removed = True
+    for admin in admins:
+        try:
+            pointer = (admin / "gitdir").read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
+        except OSError:
+            removed = False
+            continue
+        if not pointer:
+            continue
+        if os.path.normcase(str(Path(pointer).resolve())) != target:
+            continue
+        shutil.rmtree(admin, ignore_errors=True)
+        removed = removed and not admin.exists()
+    return removed
+
+
+def _retire_candidate_worktree(repo: Path, worktree: Path) -> bool:
+    """Remove this candidate's checkout and only its registration.
+
+    Runs while an earlier timeout or cancellation is unwinding, so nothing
+    here may replace that result: the removal command is best effort, the
+    directory goes away regardless, and a registration that cannot be dropped
+    stays visible in ``git worktree list`` instead of being repaired by a
+    command that would also touch other worktrees.
+    """
+
+    removed = False
+    try:
+        result = _git(
+            repo,
+            "worktree",
+            "remove",
+            "--force",
+            "--force",
+            str(worktree),
+            check=False,
+        )
+        removed = result.returncode == 0
+    except (IntegrationBranchError, OSError, subprocess.SubprocessError):
+        # The removal command has its own budget; its failure, or a timeout in
+        # that command, must not skip the rest of this cleanup.
+        removed = False
+    finally:
+        shutil.rmtree(worktree, ignore_errors=True)
+    if removed:
+        return True
+    try:
+        return _unregister_candidate(repo, worktree)
+    except (IntegrationBranchError, OSError, subprocess.SubprocessError):
+        return False
+
+
 def _build_candidate(
     repo: Path,
     *,
@@ -554,8 +683,14 @@ def _build_candidate(
 ) -> tuple[str | None, dict[str, Any] | None]:
     temporary_root = Path(tempfile.mkdtemp(prefix="loopx-integration-branch-"))
     worktree = temporary_root / "candidate"
-    added = False
+    # `git worktree add` registers the candidate in the common dir before the
+    # checkout hook runs, so a budget that expires inside that hook has already
+    # written state we own. Track the attempt, not its success: the candidate
+    # must be unregistered even when the command never returned.
+    attempted = False
+    attempt_error: BaseException | None = None
     try:
+        attempted = True
         _git(
             repo,
             "worktree",
@@ -565,7 +700,6 @@ def _build_candidate(
             str(worktree),
             start_sha,
         )
-        added = True
         for source in sources:
             result = _git(
                 worktree,
@@ -587,10 +721,22 @@ def _build_candidate(
                     "error": detail,
                 }
         return _resolve_commit(worktree, "HEAD"), None
+    except BaseException as error:
+        attempt_error = error
+        raise
     finally:
-        if added:
-            _git(repo, "worktree", "remove", "--force", str(worktree), check=False)
+        # Both steps below run while a timeout or cancellation may be
+        # unwinding: neither may replace that result with its own failure, and
+        # the directory must go even when the removal command never answered.
+        registration_dropped = not attempted or _retire_candidate_worktree(
+            repo, worktree
+        )
         shutil.rmtree(temporary_root, ignore_errors=True)
+        if not registration_dropped and attempt_error is not None:
+            attempt_error.add_note(
+                "this candidate's worktree registration could not be removed; "
+                "`git worktree list` reports it as prunable"
+            )
 
 
 def _is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:

@@ -36,13 +36,13 @@ from .executor import (
     HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
-    LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
     MATERIAL_HOST_RESULT_KINDS,
     STOP_HOST_RESULT_KINDS,
 )
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
+from .host_candidate import assert_turn_host_request_version, execution_profile_present
 from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
@@ -197,6 +197,12 @@ def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
 def codex_cli_result_schema(
     request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    return _result_schema(request)
+
+
+def _result_schema(
+    request: Mapping[str, Any] | None, *, checked: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
         "schema_version": {
@@ -279,6 +285,8 @@ def codex_cli_result_schema(
             "enum": ["codex-cli"],
         }
         properties["child_execution_receipts"] = child_receipts
+    if checked is None:
+        execution_profile_present(request or {})
     # Codex strict output requires every property and forbids conditional schemas.
     return {
         "type": "object",
@@ -301,9 +309,7 @@ def normalize_codex_result(
             if normalized.get(field) is None:
                 normalized.pop(field, None)
     elif kind in MATERIAL_HOST_RESULT_KINDS:
-        envelope = _mapping(request.get("turn_envelope"))
-        profile = _mapping(envelope.get("contract_capsule")).get("execution_profile")
-        if isinstance(profile, Mapping) and profile and any(
+        if execution_profile_present(request) and any(
             normalized.get(field) is None for field in HOST_RESULT_EVIDENCE_LIMITS
         ):
             raise BuiltInHostError("codex_material_result_missing_evidence")
@@ -313,13 +319,58 @@ def normalize_codex_result(
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
+    return _render_prompt(request, checked=_checked_prompt_context(request))
+
+
+def _checked_prompt_context(
+    request: Mapping[str, Any], *, include_session_lineage: bool = False,
+) -> dict[str, Any] | None:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
     envelope = _mapping(request.get("turn_envelope"))
-    assert_turn_envelope_consumer_version(envelope)
-    staged = _mapping(_mapping(envelope.get("detail_ref")).get("replan_action_packet")).get("review")
-    model_request = request
-    if staged:
+    from ..quota.turn_envelope import complete_turn_host_source
+
+    # The complete owner checks the adapter version, source and lineage in one
+    # call. Keep the standalone version gate only for historical requests.
+    try:
+        checked = complete_turn_host_source(request, operation="host_dispatch_context",
+                                        include_session_lineage=include_session_lineage)
+    except RuntimeError:
+        # Preserve the historical diagnostic precedence for doubly malformed
+        # input without imposing a second bridge call on valid requests.
+        if "turn_envelope" in request:
+            assert_turn_envelope_consumer_version(envelope)
+        raise
+    return checked
+
+
+def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Prepare one launch's prompt and schema from one complete-source check.
+
+    This value never crosses an attempt/result boundary or enters a cache.
+    Standalone consumers still validate independently; historical requests keep
+    their existing prompt/schema readers. Launch and result authority stay with
+    the original Host and outer executor.
+    """
+    checked = _checked_prompt_context(request)
+    if checked is None:
+        return _prompt(request), codex_cli_result_schema(request)
+    return _render_prompt(request, checked=checked), _result_schema(request, checked=checked)
+
+
+def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | None) -> str:
+    from ..quota.turn_envelope import assert_turn_envelope_consumer_version
+    from ..quota.turn_envelope import captured_turn_host_input
+
+    envelope = _mapping(request.get("turn_envelope"))
+    complete_input = captured_turn_host_input(request) if checked is not None else None
+    complete = complete_input is not None
+    if not complete:
+        assert_turn_envelope_consumer_version(envelope)
+    model_request: Mapping[str, Any] = complete_input if complete_input is not None else request
+    detail = _mapping((complete_input if complete else envelope).get("detail_ref"))
+    staged = _mapping(detail.get("replan_action_packet")).get("review")
+    if staged and not complete:
         from .host_candidate import extract_turn_authority, replan_prompt_instruction
 
         authority = extract_turn_authority(request)
@@ -332,7 +383,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
     )
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
-        ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. ")
+        ("Use work_contract as the complete source of truth. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; its cli_channel describes Core effects owned by the outer adapter. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
         + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
         "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
@@ -343,11 +394,24 @@ def _prompt(request: Mapping[str, Any]) -> str:
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
-    if staged:
+    if complete:
+        from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
+
+        instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
+        acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
+        if acceptance:
+            instructions.insert(2, acceptance)
+    if staged and not complete:
         instructions.append(replan_prompt_instruction(authority))
+    elif staged:
+        from .host_candidate import replan_prompt_instruction
+
+        instructions.append(replan_prompt_instruction(
+            _mapping(model_request.get("detail_ref")), packet_path="detail_ref.replan_action_packet"))
     instructions.extend(request.get("capability_instructions") or ())
-    boundary = _mapping(_mapping(request.get("turn_envelope")).get("boundary"))
-    if boundary.get("checkpointed_boundary_authority"):
+    checkpointed_approval = (checked["checkpointed_write_approval"] if checked is not None
+        else _mapping(envelope.get("boundary")).get("checkpointed_boundary_authority"))
+    if checkpointed_approval:
         instructions.append(
             "The boundary's checkpointed_boundary_authority records existing write approval "
             "only within its active_write_scope. It satisfies the write approval requirement "
@@ -746,8 +810,7 @@ def run_codex_cli_host(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
-        raise ValueError("unsupported LoopX Turn host request schema")
+    assert_turn_host_request_version(request)
     if sandbox not in CODEX_CLI_SANDBOXES:
         raise ValueError(f"Codex CLI sandbox must be one of {CODEX_CLI_SANDBOXES}")
     if reasoning_effort is not None:
@@ -850,9 +913,10 @@ def run_codex_cli_host(
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
+        input_text, result_schema = prepare_codex_cli_input(request)
         schema_path.write_text(
             json.dumps(
-                codex_cli_result_schema(request),
+                result_schema,
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
@@ -898,7 +962,6 @@ def run_codex_cli_host(
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
-        input_text = _prompt(request)
         with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
             observed = run_host_process(command, project=project, input_text=input_text,
                 timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,

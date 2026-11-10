@@ -76,6 +76,28 @@ def test_actual_producer_protects_before_socket_dispatch(monkeypatch):
     assert len(seen)==1 and not Path(seen[0]['response_sink']).exists()
 
 
+def test_readonly_context_capture_protects_without_native_continuity(tmp_path, monkeypatch):
+    from loopx.cli_commands import context_machine
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    def native_unavailable(_runtime):
+        raise AssertionError("read-only recovery must not request native continuity")
+
+    monkeypatch.setattr(context_machine, "_private_transport_root", native_unavailable)
+    runtime = tmp_path / "readonly-runtime"
+    value = {"scope": "synthetic", "acceptance": "complete" * 10000}
+    reference = context_machine.capture_context_recovery(value, runtime_root=runtime)
+    path = Path(reference["path"])
+    for leaf in (path.parent.parent, path.parent, path):
+        assert_private_acl(leaf)
+    assert read_context_capture_file(str(path), reference["sha256"])[2] == value
+    broaden(path.parent.parent)
+    children = list(path.parent.parent.iterdir())
+    rejected = context_machine.capture_context_recovery(value, runtime_root=runtime)
+    assert rejected["available"] is False and "path" not in rejected
+    assert list(path.parent.parent.iterdir()) == children
+
+
 @pytest.mark.parametrize(
     ("broaden_target", "fact_bytes"),
     [(None, er.MAX_LOCAL_SNAPSHOT_BYTES), ("file", 8192), ("parent", 8192)],

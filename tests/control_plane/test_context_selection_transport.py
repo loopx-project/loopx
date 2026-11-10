@@ -48,13 +48,13 @@ def test_explicit_reader_transports_less_prose_and_returns_original_values(tmp_p
     assert len(transported_contexts) == 1
     transported = transported_contexts[0]
     assert len(json.dumps(transported, ensure_ascii=False).encode()) < len(raw) // 2
-    assert transported["rows"][0] == {"text": None, "small": "ab", "empty": {}, "array": []}
-    assert transported["numbers"] == value["numbers"]
+    # The planning transport carries addresses; exact scalar values above come
+    # from the independently verified original, including non-JS-safe numbers.
     assert text not in json.dumps(transported, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("mode", ["initial", "root_index", "nested_index"])
-def test_navigation_keeps_full_scalar_input(tmp_path, transported_contexts, mode):
+def test_navigation_preserves_original_values_and_index_metadata(tmp_path, transported_contexts, mode):
     instruction = "Preserve all current requirements and stop before publication. " * 10
     value = {"ok": True, "goal_id": "synthetic",
         "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
@@ -64,18 +64,37 @@ def test_navigation_keeps_full_scalar_input(tmp_path, transported_contexts, mode
     path, raw, args = captured_reader(tmp_path, value, **options)
     page = read_context_capture(args)
     assert page["ok"] and page["eof"], page
-    assert transported_contexts == [value]
     assert path.read_bytes() == raw
     if mode == "initial":
+        assert transported_contexts == [value]
         assert instruction in page["content"]
+    else:
+        parent = value if mode == "root_index" else value["interaction_contract"]
+        prefix = "" if mode == "root_index" else "/interaction_contract"
+        fields = json.loads(page["content"])["selections"][0]["fields"]
+        expected = {}
+        for key, item in parent.items():
+            pointer = prefix + "/" + key
+            field = {"pointer": pointer,
+                     "type": "object" if isinstance(item, dict) else "boolean" if isinstance(item, bool) else "string",
+                     "bytes": len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode())}
+            if isinstance(item, dict):
+                field["count"] = len(item)
+            expected[pointer] = field
+        assert {field["pointer"]: field for field in fields} == expected
+        if mode == "root_index":
+            assert transported_contexts == [value]
+        else:
+            assert instruction not in json.dumps(transported_contexts, ensure_ascii=False)
 
 
 def test_short_scalar_arrays_do_not_grow_the_planning_payload(tmp_path, transported_contexts):
     value = {"values": [0, 1, False, True, None, "", "a", "ab"] * 60}
-    _, _, args = captured_reader(tmp_path, value, select=["/values"])
+    _, raw, args = captured_reader(tmp_path, value, select=["/values"])
     page = read_context_capture(args)
     assert page["ok"] and page["eof"], page
-    assert transported_contexts == [value]
+    assert len(transported_contexts) == 1
+    assert len(json.dumps(transported_contexts[0], ensure_ascii=False).encode()) <= len(raw)
     assert json.loads(page["content"])["selections"][0]["value"] == value["values"]
 
 
