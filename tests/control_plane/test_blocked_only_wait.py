@@ -46,15 +46,15 @@ def _quota(status):
                                  include_scheduler_detail=True)
 
 
-def _assert_wait(guard):
+def _assert_wait(guard, *, observe=False):
     assert guard["decision"] == guard["effective_action"] == "agent_scope_wait", {
         key: guard[key] for key in ("decision", "effective_action", "should_run")}
     assert guard["should_run"] is False
     assert guard["normal_delivery_allowed"] is False
     assert guard["execution_obligation"]["must_attempt_work"] is False
     channel = guard["interaction_contract"]["agent_channel"]
-    assert channel["must_attempt"] is False
-    assert channel["quiet_noop_allowed"] is True
+    assert channel["must_attempt"] is observe
+    assert channel["quiet_noop_allowed"] is not observe
     assert channel["delivery_allowed"] is False
     hint = guard["scheduler_hint"]
     assert hint["action"] == "backoff_until_reassigned"
@@ -67,8 +67,14 @@ def _assert_wait(guard):
 @pytest.mark.parametrize("claimed_by", [AGENT, None])
 @pytest.mark.parametrize("with_vision", [False, True])
 def test_only_blocked_work_waits(task_class, resume, claimed_by, with_vision):
-    _assert_wait(_quota(_status(task_class, resume=resume, claimed_by=claimed_by,
-                               with_vision=with_vision)))
+    guard = _quota(_status(task_class, resume=resume, claimed_by=claimed_by, with_vision=with_vision))
+    timed_successor = bool(with_vision and resume and task_class == "advancement_task")
+    _assert_wait(guard, observe=timed_successor)
+    if timed_successor:
+        wait = guard["goal_frontier_projection"]["vision_wait_state"]
+        assert wait["reason_code"] == "exact_blocked_successor"
+        assert wait["automatic_resume"] is True
+        assert wait["resume_when"] == resume
 
 
 @pytest.mark.parametrize("task_class", ["blocker", "advancement_task"])
@@ -105,8 +111,10 @@ def test_satisfied_resume_still_requires_an_attempt(task_class, with_vision):
     assert "vision_wait_state" not in guard["goal_frontier_projection"]
 
 
-def test_prior_settlement_preempts_wait(tmp_path, isolated_effect):
-    registry, runtime, state = fixture(tmp_path, with_vision=False)
+@pytest.mark.parametrize("provider", ["file", "sqlite"], ids=["f", "s"])
+@pytest.mark.parametrize("with_vision", [False, True], ids=["plain", "vision"])
+def test_prior_settlement_preempts_wait(tmp_path, isolated_effect, provider, with_vision):
+    registry, runtime, state = fixture(tmp_path, with_vision=with_vision)
     state.write_text(state.read_text(encoding="utf-8").replace("status=deferred", "status=blocked"),
                      encoding="utf-8")
     prior = "prior-turn"
@@ -118,9 +126,9 @@ def test_prior_settlement_preempts_wait(tmp_path, isolated_effect):
                  "closeout_required": True},
     )
     log = runtime / "goals" / GOAL / "rollout-event-log.jsonl"
-    log.parent.mkdir(parents=True)
+    log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(json.dumps(event) + "\n", encoding="utf-8")
-    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="file")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
     status = quota_status_payload(
         goal_id=GOAL, status="active", agent_todo_items=read_fixture_todos(state),
         recommended_action="Wait for external input.",
@@ -134,6 +142,35 @@ def test_prior_settlement_preempts_wait(tmp_path, isolated_effect):
     )
     assert guard["effective_action"] == "unsettled_host_turn_recovery"
     assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"], ids=["f", "s"])
+@pytest.mark.parametrize("resume", ["resume_at:2099-01-01T00:00:00Z", "resume_at:2000-01-01T00:00:00Z"],
+                         ids=["pending", "due"])
+def test_cli_timed_blocked_vision_preserves_resume_proof(tmp_path, isolated_effect, provider, resume):
+    registry, runtime, state = fixture(tmp_path, resume=resume)
+    state.write_text(state.read_text(encoding="utf-8").replace("status=deferred", "status=blocked"),
+                     encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    before = state.read_bytes()
+    for turn in ("first-timed-turn", "next-timed-turn"):
+        rc, guard = cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli",
+                        "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", turn,
+                        "--include-detail", "scheduler")
+        assert rc == 0, guard
+        if "2099" in resume:
+            wait = guard["vision_wait_state"]
+            assert guard["should_run"] is False
+            assert wait["reason_code"] == "exact_blocked_successor"
+            assert wait["automatic_resume"] is True
+            assert wait["resume_when"] == resume
+            assert wait["resume_condition"]["scheduled_for"] == resume.removeprefix("resume_at:")
+            assert guard["scheduler_hint"]["cold_path_detail"]["local_scheduler"]["recommended_interval_minutes"] > 0
+        else:
+            assert guard["should_run"] is True
+            assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
+            assert "vision_wait_state" not in guard["goal_frontier_projection"]
+    assert state.read_bytes() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"], ids=["f", "s"])

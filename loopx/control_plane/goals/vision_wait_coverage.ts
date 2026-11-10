@@ -172,9 +172,12 @@ function projectVisionWaitFromFacts(input: {request: JsonObject; gaps: JsonObjec
   const candidates = Array.isArray(resumePlan.blocked_successor_items) ? resumePlan.blocked_successor_items as JsonObject[] : [];
   const lineageRows = Array.isArray(request.lineage_source_items) ? request.lineage_source_items :
     basis !== null && Array.isArray(basis.lineage_source_items) ? basis.lineage_source_items : candidates;
-  const coverage = projectWaitCoverage(causalIds, candidates, blockers, lineageRows);
+  const automaticCoverage = projectWaitCoverage(causalIds, candidates, [], lineageRows);
+  const coverage = automaticCoverage.covered === true ? automaticCoverage
+    : projectWaitCoverage(causalIds, candidates, blockers, lineageRows);
   if (coverage.covered !== true) return null;
-  const waitSelection = selectedWaitItems(blockers, candidates, new Set(coverage.witness_todo_ids as string[]));
+  const waitSelection = selectedWaitItems(automaticCoverage.covered === true ? [] : blockers,
+    candidates, new Set(coverage.witness_todo_ids as string[]));
   if (!waitSelection.waitItems.length) return null;
   return waitStatePayload({causalIds, gapCount: gaps.length, selectedTodo: waitSelection.waitItems[0],
     waitItems: waitSelection.waitItems, agentId, automatic: waitSelection.automatic});
