@@ -22,6 +22,7 @@ from .effect_runtime import (
     EffectRuntimeStartupError,
     effect_runtime_projection_result,
     effect_runtime_result,
+    source_number_tokens,
 )
 from .coordination.coordination_state_contract_generated import (
     CAPABILITY_HOOK_INTERACTION_RESULT_SCHEMA,
@@ -198,6 +199,17 @@ class PostWritebackHookRegistration:
         }
 
 
+def _quota_context_agent(payload: Mapping[str, Any]) -> Any:
+    agent_id = payload.get("agent_id")
+    identity = payload.get("agent_identity")
+    if isinstance(identity, Mapping):
+        scoped_agent = identity.get("agent_id")
+        if agent_id and scoped_agent and agent_id != scoped_agent:
+            raise ValueError("context source has conflicting Agent identities")
+        agent_id = agent_id or scoped_agent
+    return agent_id
+
+
 def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Use the host envelope or the native quota identity, without new authority."""
     if "work_contract" in payload:
@@ -211,21 +223,8 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if isinstance(envelope, Mapping):
         return envelope
     if "schema_version" in payload or "contract_binding" in payload:
-        from .quota.turn_envelope import quota_capability_automation_source
-
-        # A declared native contract must pass the same complete-source owner
-        # as participation. Never reinterpret a damaged version as raw quota.
-        source = quota_capability_automation_source(payload)
-        if isinstance(payload.get("heartbeat_receipt"), Mapping):
-            return {**payload, "agent_id": source.get("agent_id")}
-        return {"goal_id": source.get("goal_id"), "agent_id": source.get("agent_id")}
-    agent_id = payload.get("agent_id")
-    identity = payload.get("agent_identity")
-    if isinstance(identity, Mapping):
-        scoped_agent = identity.get("agent_id")
-        if agent_id and scoped_agent and agent_id != scoped_agent:
-            raise ValueError("context source has conflicting Agent identities")
-        agent_id = agent_id or scoped_agent
+        raise ValueError("A recorded quota source cannot register a new context contribution")
+    agent_id = _quota_context_agent(payload)
     if isinstance(payload.get("heartbeat_receipt"), Mapping):
         # Keep the native source for the typed quota signature owner. Identity
         # alone cannot invalidate context when the admitted authority changes;
@@ -256,7 +255,10 @@ def _turn_context_binding_source(
 def dispatch_turn_context_hooks(
     payload: dict[str, Any],
     registrations: Sequence[TurnContextHookRegistration],
-) -> None:
+    *,
+    embed_in_complete_source: bool = False,
+) -> list[dict[str, Any]]:
+    """Return native contribution drafts for the same quota composition."""
     contributions: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
     seen_hooks: set[str] = set()
@@ -285,6 +287,11 @@ def dispatch_turn_context_hooks(
             )
             if readback_only:
                 binding: dict[str, Any] = {"readback_only": True}
+            elif embed_in_complete_source:
+                if any(key in payload for key in ("schema_version", "contract_binding", "work_contract", "turn_envelope")):
+                    raise ValueError("Embedded context requires the undecorated quota source")
+                _quota_context_agent(payload)
+                binding = {"embed_in_complete_source": True}
             else:
                 source = _turn_context_binding_source(payload)
                 binding = {"source": source}
@@ -314,10 +321,13 @@ def dispatch_turn_context_hooks(
             failures.append(
                 {"hook_id": registration.hook_id, "error_code": "context_hook_failed"}
             )
-    if contributions:
-        payload["turn_context_contributions"] = contributions
     if failures:
         payload["turn_context_hook_failures"] = failures
+    if embed_in_complete_source:
+        return contributions
+    if contributions:
+        payload["turn_context_contributions"] = contributions
+    return []
 
 
 def project_turn_context(
@@ -326,19 +336,25 @@ def project_turn_context(
     contributions = payload.get("turn_context_contributions")
     if not isinstance(contributions, list) or not contributions:
         return {}
-    readback: dict[str, Any] = {}
-    for item in contributions:
-        if not isinstance(item, Mapping):
-            continue
-        slots = item.get("readback_slots")
-        if isinstance(slots, (list, tuple)):
-            readback.update({key: payload.get(key) for key in slots if isinstance(key, str)})
+    from .quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
+
     try:
-        projected = effect_runtime_projection_result("capability_hook.turn_context.project", {
-            "contributions": contributions,
-            "source": _turn_context_binding_source(payload, from_journal=from_journal),
-            "readback": readback,
-        })
+        if payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION or "contract_binding" in payload:
+            # The reader resolves slots and contributions inside the same
+            # checked source. Send no independently substitutable copies.
+            _quota_context_agent(payload)
+            request = {"source": payload, "source_number_tokens": source_number_tokens(payload)}
+        else:
+            readback: dict[str, Any] = {}
+            for item in contributions:
+                if not isinstance(item, Mapping):
+                    continue
+                slots = item.get("readback_slots")
+                if isinstance(slots, (list, tuple)):
+                    readback.update({key: payload.get(key) for key in slots if isinstance(key, str)})
+            request = {"contributions": contributions,
+                "source": _turn_context_binding_source(payload, from_journal=from_journal), "readback": readback}
+        projected = effect_runtime_projection_result("capability_hook.turn_context.project", request)
     except Exception:  # Optional context transport cannot gate the underlying work.
         return {}
     return projected if isinstance(projected, dict) else {}

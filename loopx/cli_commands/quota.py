@@ -313,8 +313,8 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-) -> tuple[dict[str, object], dict[str, Any]]:
-    """Bind optional Turn context after the capture and settlement route is decided."""
+) -> tuple[dict[str, object], dict[str, Any], list[dict[str, Any]]]:
+    """Stage optional context after the capture and settlement route is decided."""
     try:
         activation = native_context_activation(args)
     except QuotaCommandValidationError:
@@ -346,14 +346,13 @@ def _prepare_quota_result_context(
             payload,
             registry_path=registry_path,
         )
+    capability_context = []
     if args.quota_command == "should-run":
-        # The capture route and optional settlement attachments are already
-        # fixed. Bind the hook to the same typed settlement as the capture.
-        attach_reward_memory_recall_after_should_run(
+        capability_context = attach_reward_memory_recall_after_should_run(
             payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
         )
-    return payload, activation
+    return payload, activation, capability_context
 
 
 def _emit_scheduler_observation_result(
@@ -408,7 +407,7 @@ def _emit_quota_result(
             runtime_root=context.runtime_root if context is not None else None)
     activation = None
     if not budgeted_spend:
-        payload, activation = _prepare_quota_result_context(
+        payload, activation, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
         )
@@ -438,7 +437,7 @@ def _emit_quota_result(
                 payload, raw_envelope, legacy_view = compose_quota_cli_source(
                     payload, args, activation, compose=_export("compose_turn_decision"),
                     scheduler_context=context.scheduler_context if context is not None else None,
-                    capture_directory=capture_directory,
+                    capture_directory=capture_directory, capability_context=capability_context,
                 )
             except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
                 # Preserve the already-decided guard and original receipt. The

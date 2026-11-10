@@ -110,7 +110,7 @@ def attach_reward_memory_recall_after_should_run(
     registry_path: Path,
     goal_id: str,
     agent_id: str,
-) -> None:
+) -> list[dict[str, Any]]:
     heartbeat_receipt = payload.get("heartbeat_receipt")
     if (
         quota_command != "should-run"
@@ -120,14 +120,17 @@ def attach_reward_memory_recall_after_should_run(
         or not isinstance(heartbeat_receipt, Mapping)
         or heartbeat_receipt.get("status") not in {"committed", "replayed"}
     ):
-        return
+        return []
     from ..capabilities.turn_context import attach_turn_context
 
-    attach_turn_context(
+    return attach_turn_context(
         payload,
         registry_path=registry_path,
         goal_id=goal_id,
         agent_id=agent_id,
         decision=payload,
         turn_instance_id=heartbeat_turn_id,
+        # The quota emitter seals these validated contributions with the
+        # governing decision before presenting or saving the complete source.
+        embed_in_complete_source=isinstance(payload.get("interaction_contract"), Mapping),
     )

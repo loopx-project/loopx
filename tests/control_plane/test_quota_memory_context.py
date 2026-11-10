@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 from copy import deepcopy
+from hashlib import sha256
 from io import StringIO
 import json
 from pathlib import Path
@@ -100,6 +101,7 @@ def test_real_app_guard_delivers_scoped_memory_once(
     contributions = {item["hook_id"]: item for item in first["turn_context_contributions"]}
     assert set(contributions) == ({"reward-memory.turn-context", "anti-entropy.turn-context"}
                                  if retire else {"reward-memory.turn-context"})
+    assert all("basis_digest" not in item for item in contributions.values())
     contribution = contributions["reward-memory.turn-context"]
     guidance = contribution["context_fields"]["reward_memory_recall"]["context"]["guidance"]
     assert len(guidance) == 1 and guidance[0]["content_summary"]
@@ -335,23 +337,44 @@ def test_real_guard_complete_memory_rejects_changed_source_without_provider_repl
         "loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
         lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=memory))
     turn = "complete-memory-source-check"
+    capture_root = tmp_path / "native-memory-captures"
+    capture_root.mkdir(mode=0o700)
     if entry == "thin-heartbeat":
         bootstrap = run_cli(route + ["heartbeat-prompt", "--thin", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-            "--available-capability", "filesystem_read"])
+            "--available-capability", "filesystem_read",
+            "--decision-output-root", str(capture_root)])
         command = next(line for line in bootstrap["task_body"].splitlines()
             if line.startswith("loopx ") and "quota should-run" in line)
         args = shlex.split(command.replace('${LOOPX_TURN:?}', turn))[1:]
     else:
         args = route + ["quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--codex-app", "--turn-instance-id", turn,
-            "--available-capability", "filesystem_read"]
-    guard = run_cli(args + ["--context-delivery", "off", "--delta-delivery", "off"])
-    # Main's raw quota and the migrated caller both reach the same complete
-    # source owner. Never reinterpret an already composed Host binding.
-    source = guard if "contract_binding" in guard else compose_turn_decision(guard)
+            "--available-capability", "filesystem_read", "--decision-output-root", str(capture_root)]
+    source = run_cli(args + ["--context-delivery", "off", "--delta-delivery", "off"])
     assert_complete_turn_decision(source)
     assert project_turn_context(source)["reward_memory_recall"]["context"]["guidance"]
+    [capture] = capture_root.glob("decision-*/decision.json")
+    captured = capture.read_bytes()
+    saved = json.loads(captured)
+    assert saved["contract_binding"] == source["contract_binding"]
+    assert saved["heartbeat_receipt"] == source["heartbeat_receipt"]
+    contribution = saved["turn_context_contributions"][0]
+    assert "basis_digest" not in contribution
+
+    page = run_cli(route + ["quota", "context-read", "--capture-file", str(capture),
+        "--capture-sha256", sha256(captured).hexdigest(), "--select", "/turn_context_contributions"])
+    assert page["eof"] is True
+    [delivered] = json.loads(page["content"])["selections"]
+    assert delivered["value"] == [contribution]
+
+    # Even both missing version markers cannot make a captured contribution
+    # reusable as an unsigned quota input or rebind it to a new decision.
+    unsealed = {key: value for key, value in saved.items() if key not in {"schema_version", "contract_binding"}}
+    assert project_turn_context(unsealed) == {}
+    with pytest.raises(RuntimeError, match="requires the original quota composition"):
+        compose_turn_decision(unsealed)
+    assert capture.read_bytes() == captured
     before = json.dumps(source, ensure_ascii=False, sort_keys=True)
     damaged = deepcopy(source)
     damaged["retained_provider_evidence"] = {"revision": 2}

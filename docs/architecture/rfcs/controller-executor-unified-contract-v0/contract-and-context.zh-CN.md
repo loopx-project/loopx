@@ -459,12 +459,17 @@ capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 同源 File／SQLite 与长路径证据支持展示预算重新定标，原失败、全部行数／增长／权限
 限制继续保留。这是接受新增内联成本，不是效率收益、installed 采用或 C1 关闭。
 
-Reward Memory 在原生 quota 与完整 Host 路径注册召回与反思时，只读一次已有类型约束
-的能力事实，不再为判定参与资格读取整份 action signature。交付仍受已验证的 Goal/Agent
-绑定、provider 策略和原 Host 来源约束。`capability_context.ts::contextSource` 仍按当前
-工作和结算为原生 quota 的贡献绑定签名；退役这条活跃路径时须同时保留注册、回读和原版本
-恢复。共享能力命名空间保护将 `work_contract` 与 `source_decision_hash` 保留给核心，
-覆盖注册、上下文及可选结果字段；贡献被拒绝后，原 Host 来源仍可用。
+Reward Memory 从已有类型约束的能力事实判断是否参与召回和反思，并遵守已验证的
+Goal/Agent 绑定及 provider 策略。原生 quota 在组合完整 Turn 前校验可选建议和回读槽位。
+校验后的建议暂存在本次组合中，随同一份原始来源一起封存。读回时先验证完整来源，
+再从中取得建议和对应的槽位。这移除了正常原生 quota 为可选建议单独计算的旧动作签名。
+未封存的草稿无法投影为建议，也无法当作历史建议重新组合。
+
+完整 Host 仍用已验证的 Turn 与来源摘要绑定其工作契约之外的建议。带有 `basis_digest`
+的既有 quota 贡献继续按原版本读回，并核对原绑定。要退役该 reader，需先对清最后一批
+受支持的捕获及其恢复窗口。两条路径复用注册、槽位、大小和命名空间校验，
+`contract_binding` 与 `turn_context_contributions` 由核心保留。可选建议被拒绝后，
+原工作来源仍可用。
 
 可选 Host 投影现已把有序合并、冲突拒绝和逐贡献隔离收敛到该 TypeScript owner。
 Python 只提取一次当前来源并发送一个批次，provider 结果及历史 capture／journal reader
@@ -472,8 +477,8 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 按 File／SQLite 对照零／一／两个 provider、当前／历史来源及接近大小上限的输入，
 投影建议保持一致。在这一有界步骤中，两个 provider 的完整来源 RPC 从四次降为两次。
 大批次复用现有私有快照运输，增加临时 IO，且实测在接近上限时变慢；仅扩展运输可接受
-范围，不提高 provider 预算。这不构成模型 token、整任务成本或已验收成果收益结论。
-原生 quota 签名退役、installed 采用和相对原 quota 的资格验证仍未完成。
+范围，不提高 provider 预算。这组对照覆盖上述投影步骤。installed 采用、相对原 quota
+的成果和完整成本对照仍待验证。
 
 [可选上下文来源的 main 后续修复](https://github.com/loopx-project/loopx/pull/8455)
 让仅状态回读不依赖可执行来源提取，同时使声明了完整版本的 native 来源在参与事实或
@@ -481,7 +486,7 @@ Python 只提取一次当前来源并发送一个批次，provider 结果及历�
 不得回退到 raw quota 签名。召回观察与签名的治理 payload 分开传递，不能仅为附上 provider
 读回而改写来源。注册、命名空间、槽位和大小检查保留；有效指导与记录中的 Host 包装仍用
 原绑定和规范结算，无效来源保留状态观察但不能交付指导。这增加完整 native 来源验证。
-早期仅状态路径的 RPC 减少不证明模型窗口或整任务收益，native 签名退役仍未完成。
+早期的 RPC 对照覆盖仅状态回读路径。
 
 集成 main `5988be01` 保留共享的静默完成规则，没有恢复已退役的另一套 heartbeat
 正文。该检查点的长 scope thin 与完整能力 CLI 夹具超过原 5,100 展示预算，捕获长

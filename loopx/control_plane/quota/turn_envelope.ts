@@ -1920,7 +1920,10 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
+  const embed = request.embed_in_complete_source !== undefined &&
+    requireBoolean(request.embed_in_complete_source, "embed_in_complete_source");
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
+    if (embed) throw new EffectRuntimeRequestError("recorded Turn context cannot be rebound");
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
       throw new EffectRuntimeRequestError("complete Turn decision cannot change its host binding");
@@ -1929,6 +1932,11 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   }
   if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
     throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
+  }
+  const contributions = Array.isArray(payload.turn_context_contributions) ? payload.turn_context_contributions : [];
+  const draftCount = contributions.filter(value => jsonObject(value) && !Object.hasOwn(value, "basis_digest")).length;
+  if (embed ? draftCount === 0 || draftCount !== contributions.length : draftCount !== 0) {
+    throw new EffectRuntimeRequestError("unbound capability context requires the original quota composition");
   }
   requireCompleteDecisionSource(payload);
   const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens ?? []);

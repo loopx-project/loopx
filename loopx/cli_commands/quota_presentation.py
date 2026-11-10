@@ -118,6 +118,7 @@ def compose_quota_cli_source(
     scheduler_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
     capture_directory: Path | None,
     compose: Callable[..., dict[str, object]],
+    capability_context: list[dict[str, object]],
 ) -> tuple[dict[str, object], bool, dict[str, object] | None]:
     """Prepare one decided source and an optional bounded compatibility display."""
     # Current JSON and Markdown readers consume the same complete source.
@@ -130,12 +131,13 @@ def compose_quota_cli_source(
     if not isinstance(payload.get("interaction_contract"), Mapping):
         return payload, raw_envelope, None
     if not raw_envelope:
-        return compose(payload, scheduler_execution_context=scheduler_context), False, None
+        return compose(payload, scheduler_execution_context=scheduler_context,
+            **({"capability_context": capability_context} if capability_context else {})), False, None
 
     from ..control_plane.quota.turn_envelope import compose_turn_decision_with_raw_envelope
 
     source, view = compose_turn_decision_with_raw_envelope(payload,
-        scheduler_execution_context=scheduler_context,
+        scheduler_execution_context=scheduler_context, capability_context=capability_context,
         captured_decision_path=str(capture_directory / "decision.json") if capture_directory else None)
     return source, True, view
 

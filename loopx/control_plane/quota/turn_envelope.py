@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any, cast
 import json
@@ -280,10 +280,11 @@ def compose_turn_decision(
     payload: Mapping[str, Any], *, scheduler_execution_context: (
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
+    capability_context: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     source, _ = _compose_turn_source(payload,
-        scheduler_execution_context=scheduler_execution_context)
+        scheduler_execution_context=scheduler_execution_context, capability_context=capability_context)
     return source
 
 
@@ -292,10 +293,11 @@ def compose_turn_decision_with_raw_envelope(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     captured_decision_path: str | None,
+    capability_context: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Return the complete capture and its bounded compatibility view in one call."""
     return _compose_turn_source(payload,
-        scheduler_execution_context=scheduler_execution_context,
+        scheduler_execution_context=scheduler_execution_context, capability_context=capability_context,
         legacy_output={"include_legacy_envelope": True,
                        **({"captured_decision_path": captured_decision_path}
                           if captured_decision_path is not None else {})})
@@ -306,12 +308,18 @@ def _compose_turn_source(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     legacy_output: Mapping[str, Any] | None = None,
+    capability_context: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
+    if capability_context:
+        if "turn_context_contributions" in source:
+            raise ValueError("New capability context cannot replace recorded contributions")
+        source["turn_context_contributions"] = list(capability_context)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
+        **({"embed_in_complete_source": True} if capability_context else {}),
         **(legacy_output or {}))
     view = result.pop("legacy_envelope", None) if legacy_output is not None else None
     return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
