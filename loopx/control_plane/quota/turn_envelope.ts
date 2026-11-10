@@ -878,12 +878,11 @@ function replanView(request: JsonObject): JsonObject {
     requireCompleteTurnDecision(payload, request.source_number_tokens);
   } else requireVisionAuditReferences(payload);
   const precision = replanReadPrecision(payload, request.source_number_tokens);
-  const view = projectReplanView(request, payload, precision);
+  const view = projectReplanView(request, payload, sourceHash, precision);
   return precision ? contextProjectionChanges(payload, view, precision.values, {}) : view;
 }
 
-function projectReplanView(request: JsonObject, payload: JsonObject, precision?: ReplanReadPrecision): JsonObject {
-  const sourceHash = decisionSourceHash(payload);
+function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash: string, precision?: ReplanReadPrecision): JsonObject {
   const retain = precision?.retain ?? ((view: JsonObject) => view);
   requireVisionAuditReferences(payload);
   const originalContract = replanAuthoringContract(payload, precision);
