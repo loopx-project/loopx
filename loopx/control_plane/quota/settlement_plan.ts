@@ -14,6 +14,7 @@ import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {contextProjectionChanges} from "./diagnostic_projection.ts";
+import {EffectiveAction} from "./effective_action.generated.ts";
 
 export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
 
@@ -51,22 +52,55 @@ export function composedCliSettlementChannel(cli: JsonObject): JsonObject {
 }
 
 /** The heartbeat publisher uses only its current admitted Todo and exact receipt. */
-export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
+function receiptBoundCliSettlement(params: JsonObject, requirePreparation: boolean): JsonObject | null {
   const cli = jsonObject(params.cli), receipt = jsonObject(params.receipt);
   const preparation = jsonObject(cli?.execution_preparation);
   const identity = jsonObject(jsonObject(cli?.settlement_plan)?.identity);
-  if (!cli || cli.selection_required === true || cli.spend_after_validation !== true
-      || preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION || preparation.state !== "ready"
-      || preparation.delivery_allowed !== true || receipt?.closeout_required !== true
+  if (!cli || (Object.hasOwn(cli, "execution_preparation") && !preparation)
+      || cli.selection_required === true || cli.spend_after_validation !== true
+      || ((preparation || requirePreparation) && (preparation?.schema_version !== EXECUTION_PREPARATION_SCHEMA_VERSION
+        || preparation.state !== "ready" || preparation.delivery_allowed !== true))
+      || receipt?.closeout_required !== true
       || receipt.settlement_binding_owed === true
       // Claiming within the original Turn can requalify its receipt.
       || (receipt.status !== "committed" && receipt.status !== "upgraded" && receipt.status !== "replayed")
       || !identity || typeof params.todo_id !== "string" || !params.todo_id || params.todo_id !== identity.todo_id
       || typeof identity.turn_instance_id !== "string" || receipt.turn_instance_id !== identity.turn_instance_id
-      || preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id
-      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return {};
-  const composed = composedCliSettlementChannel(cli);
-  return composed === cli ? {} : contextProjectionChanges(cli, composed);
+      || (preparation && (preparation.todo_id !== identity.todo_id || preparation.agent_id !== identity.agent_id))
+      || !isDeepStrictEqual(identity, receipt.settlement_identity)) return null;
+  return composedCliSettlementChannel(cli);
+}
+
+export function nativeCliSettlementProjection(params: JsonObject): JsonObject {
+  const cli = jsonObject(params.cli);
+  let composed: JsonObject | null;
+  if (Object.hasOwn(params, "complete_scope")) {
+    const scope = jsonObject(params.complete_scope);
+    if (!scope || !cli) return {};
+    composed = completeCliSettlementChannel({...scope,
+      agent_identity: {agent_id: scope.agent_id}, selected_todo: {todo_id: params.todo_id},
+      heartbeat_receipt: params.receipt, interaction_contract: {
+        cli_channel: cli, agent_channel: {delivery_allowed: scope.delivery_allowed}}});
+  } else {
+    composed = receiptBoundCliSettlement(params, true);
+  }
+  return !cli || !composed || composed === cli ? {} : contextProjectionChanges(cli, composed);
+}
+
+/** Explicit complete-contract consumers use the same decided plan and receipt.
+ * A soft claim has no preparation record; an existing non-ready record never
+ * disappears. The later writeback and spend still perform their own checks. */
+export function completeCliSettlementChannel(payload: JsonObject): JsonObject {
+  const cli = jsonObject(jsonObject(payload.interaction_contract)?.cli_channel) ?? {};
+  const identity = jsonObject(jsonObject(cli.settlement_plan)?.identity);
+  if (payload.should_run !== true || payload.effective_action !== EffectiveAction.NORMAL_RUN
+      || payload.normal_delivery_allowed !== true
+      || jsonObject(jsonObject(payload.interaction_contract)?.agent_channel)?.delivery_allowed !== true
+      || !identity || identity.goal_id !== payload.goal_id
+      || identity.agent_id !== jsonObject(payload.agent_identity)?.agent_id) return cli;
+  const composed = receiptBoundCliSettlement({cli, receipt: payload.heartbeat_receipt,
+    todo_id: jsonObject(payload.selected_todo)?.todo_id}, false);
+  return composed ?? cli;
 }
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {

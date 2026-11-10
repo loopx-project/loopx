@@ -158,7 +158,7 @@ def raw_quota_turn_view(
     return view
 
 
-def _project_native_cli_settlement(payload: dict[str, object]) -> dict[str, object]:
+def _project_native_cli_settlement(payload: dict[str, object], *, explicit_complete: bool = False) -> dict[str, object]:
     """Publish one projected plan before capability binding and capture."""
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result
     from ..control_plane.quota.turn_envelope import _apply_context_projection_changes
@@ -168,9 +168,22 @@ def _project_native_cli_settlement(payload: dict[str, object]) -> dict[str, obje
     todo = payload.get("selected_todo")
     if not isinstance(cli, Mapping) or not isinstance(todo, Mapping):
         return payload
+    complete_scope = {}
+    if explicit_complete:
+        agent = payload.get("agent_identity")
+        channel = interaction.get("agent_channel") if isinstance(interaction, Mapping) else None
+        # The typed owner needs eligibility, not another copy of Goal/context.
+        complete_scope = {"complete_scope": {
+            **{key: payload.get(key) for key in (
+                "goal_id", "should_run", "effective_action", "normal_delivery_allowed",
+            )},
+            "agent_id": agent.get("agent_id") if isinstance(agent, Mapping) else None,
+            "delivery_allowed": channel.get("delivery_allowed") if isinstance(channel, Mapping) else None,
+        }}
     try:
         projection = effect_runtime_result("settlement.native_cli_projection", {
             "cli": cli, "receipt": payload.get("heartbeat_receipt"), "todo_id": todo.get("todo_id"),
+            **complete_scope,
         })
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
         # The already admitted Turn still has its canonical manual plan.

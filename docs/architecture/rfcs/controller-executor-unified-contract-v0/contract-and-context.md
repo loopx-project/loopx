@@ -11,19 +11,36 @@ behavior do not supersede the latest audit in the main document.
 The complete single-worker EdgeBench entry and original-wake recovery from
 [#8480](https://github.com/loopx-project/loopx/pull/8480) now have an independent
 main proposal, [#8499](https://github.com/loopx-project/loopx/pull/8499): 23 files,
-+493/−119, with 18 whole files byte-identical to the C1 candidate. After an
++493/−119, with 18 whole files byte-identical at C1 `33a0152376a0`. After an
 accepted main merge, C1 can remove those duplicate diffs by integration. Until
 then retain the working caller and [#8484](https://github.com/loopx-project/loopx/pull/8484)'s
 existing dependency; historical experiment records stay together. This split
 does not qualify the original-quota outcome or complete-cost comparison.
 
 Ordinary guided-start and visible-Goal calls retain their source's agent-owned
-manual settlement. Only the existing qualified native publisher may expose a
-runtime-owned composed recipe. A complete carrier or progressive view cannot
+manual settlement. Qualified native publishers and the explicit complete-Host
+profile may expose a runtime-owned composed recipe. A complete carrier or progressive view cannot
 choose that owner. Five C1 CLI expectations incorrectly demanded composition
 for ordinary calls; current main readback confirms manual ownership. The
 corrected tests preserve the original identity, spend source and command, and
 validate the complete source rather than changing production semantics.
+
+The candidate integrates main `ea67e68972fc` and reconciles the proposed
+[#8489](https://github.com/loopx-project/loopx/pull/8489) and
+[#8494](https://github.com/loopx-project/loopx/pull/8494) slices. The explicit Host
+profile uses the existing typed native CLI settlement projection before capture;
+its adapter sends only six eligibility facts alongside the existing plan and
+receipt. This explicit profile adds one bounded projection request before the
+existing source composition; it establishes no net RPC or model-cost saving.
+Ordinary and checkpoint-preloaded workers share the `Execution` decoder.
+There is one complete-source composer, still rejecting transport flags that
+rewrite settlement ownership. After verified writeback, typed readback also
+projects the original pending-spend closeout for Todo-less replans, preserving historical ACK handling and
+once-only settlement. The existing C1 rule keeps an observed review from binding
+an otherwise unbound selection; integrating the main-specific fallback unchanged
+regressed those cases and was rejected. Explicit raw-off retains its v0 view;
+progressive delivery validates the complete v1 source. Installed/in-flight
+adoption, independent review and original-quota outcomes/full costs remain open.
 
 The current complete-source validator also delegates executable required-read
 checks to the existing interaction owner. Explicit command/order coordinates

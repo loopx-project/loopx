@@ -1006,6 +1006,19 @@ Omit the flag on the next run to disable it. No active experiment is changed by
 installing this code. Inspect wake receipts and the saved decisions before
 claiming adoption; score countability still requires the usual integrity review.
 
+For an explicitly complete v1 Host contract, choose `--complete-turn` instead
+on either heartbeat profile. The shared worker forwards that choice through
+the real heartbeat renderer and guard; it retains the original ready claim,
+receipt and single-command settlement. It cannot be combined with the legacy
+short-envelope option. Context delivery remains independent, and unselected
+runs keep their existing behavior. See the [Host protocol](../../docs/reference/protocols/turn-envelope-v0.md#explicit-complete-v1-host-entry--显式完整-v1-host-入口)
+for source readback, failure recovery and rollback. User task time requirements
+remain readable; private Host deadlines stay outside model context.
+
+中文：heartbeat profile 可显式选择 `--complete-turn` 以消费完整 v1，不能与旧短包
+选项同时启用；共用原 ready claim、回执和单条结算 owner，不改变未选择的运行。
+按原 source reader 核实采用与恢复；该开关不新增模型、子 worker、时钟或权限。
+
 ## Close a managed native attempt
 
 For a native-feedback run with an existing experiment-board row and a fresh

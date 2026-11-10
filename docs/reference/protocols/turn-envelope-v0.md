@@ -9,7 +9,8 @@ This page describes the current versioned representation. The
 [unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
 proposes replacing the live quota/envelope format choice with one complete
 contract, including differential delivery. Historical captures retain their
-original schema and signature; the proposal does not introduce a new CLI switch.
+original schema and signature. The explicit complete-v1 Host entry below does
+not switch existing quota or v0 consumers to the proposed unified default.
 The proposed composition point precedes capture and encoding. Today's action
 signature compares its registered projection; equality alone does not establish
 complete source-clause preservation or qualify the unified contract.
@@ -91,7 +92,8 @@ original source, with no extra validation request or model-facing view.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
-历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+历史捕获保留原 schema 与签名。显式完整 Host 入口见下节；C1 的完整来源默认与
+关闭渐进后的兼容视图仍分别验收。
 
 在 C1 候选中，`quota should-run --context-delivery off --turn-envelope`
 在 Delta 与托管交接均未启用时仍返回有界 v0。现有组合调用从同一份完整决策返回
@@ -151,6 +153,64 @@ Preview it explicitly:
 ```bash
 loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> --turn-envelope
 ```
+
+### Explicit complete-v1 Host entry / 显式完整 v1 Host 入口
+
+A Host that consumes the existing complete contract can select `--complete-turn`
+on JSON `quota should-run`. It composes `loopx_turn_envelope_v1` before capture;
+the saved source retains original work, acceptance, Stop, required-read and
+permission facts. Ordinary progressive/Delta navigation may be returned instead
+of the full document. Follow its pinned reader without rerunning admission.
+
+```bash
+loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
+  --turn-instance-id <turn-id> --complete-turn --decision-output-dir ./complete-001
+```
+
+The flag is mutually exclusive with legacy `--turn-envelope`. In the C1
+candidate, omitting it keeps the existing complete-source default and ordinary
+settlement profile; the explicit raw-off compatibility view remains v0.
+Context delivery is independent: `--context-delivery off` returns the complete v1 document without
+progressive presentation; it does not undo the explicit version choice.
+An older CLI rejects the new flag before guard execution. Omit it to roll back;
+existing complete captures remain readable through their original digest-bound
+`quota context-read`/`context-project` recovery.
+
+For eligible original Todo plans, the same typed settlement owner projects one
+`refresh-state ... --settle-turn --settlement-receipt` command. It retains the
+original effect identity, validation and terminal conditions. A non-ready
+preparation or mismatched receipt never becomes ready; partial failure returns
+the original `settlement_owed` recovery instead of a second debit. Contract
+composition failure preserves the decided receipt and available original
+capture, reports failure, and grants no work or automatic retry. C1 selects this
+explicit Host settlement profile through the existing native CLI projection
+before sealing the source. The composer still preserves its canonical plan and
+rejects transport flags that try to change settlement ownership. The projection
+sends only eligibility facts alongside the existing plan and receipt, without
+copying the full Goal/context to another request or adding a second composer.
+
+`heartbeat-prompt --thin --complete-turn` preserves the selection on its guard
+and same-Turn selection commands. External benchmark heartbeat adapters may
+explicitly select `--complete-turn` on their runner too; other profiles reject
+it. This developer protocol adds no settings owner, model request, child worker,
+permission or execution allowance. User task time requirements remain task
+context; the caller's private current deadline and runtime guidance are not new
+model context. Actual live adoption and efficiency still require separate proof.
+
+中文：`--complete-turn` 为显式完整 v1 Host 入口，与旧 `--turn-envelope` 互斥。
+C1 候选未选择该选项时仍沿现有完整来源默认和普通结算方式；显式关闭渐进交付并
+选择旧 envelope 时仍保留有界 v0。
+渐进/差分交付独立控制；关闭上下文交付时仍返回已显式选择的完整 v1 文档。
+读取按原摘要绑定的分页，不为补读重新准入。原验收、Stop、权限、必要读取与用户
+任务时间要求保留；不会把调用方私有当前倒计时或常驻 runtime 指导新增到模型输入。
+可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，
+不把未 ready 的准备或错误回执转成授权。C1 在封存来源前经既有 native CLI 投影
+选择显式 Host 结算方式，composer 仍只保留已决定的原计划，不接受改结算的传输参数。
+请求只补充必要资格事实，不再复制整份 Goal/上下文，也不增加第二个 composer。
+部分失败只沿原 `settlement_owed` 恢复。
+旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
+这只是 Host 开发协议入口，不新增设置、模型/子 worker、预算或权限，也不证明
+已运行的 Host 采用或效率收益。
 
 For a tool with bounded output, optionally capture the full decided payload before
 its display projection. Choose a **new directory for each invocation**, even when

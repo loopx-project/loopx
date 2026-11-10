@@ -3,7 +3,7 @@ import test from "node:test";
 import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
-import {composedCliSettlementChannel, nativeCliSettlementProjection, turnScopedCliSettlementPlan}
+import {completeCliSettlementChannel, composedCliSettlementChannel, nativeCliSettlementProjection, turnScopedCliSettlementPlan}
   from "../../loopx/control_plane/quota/settlement_plan.ts";
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../../loopx/control_plane/work_items/execution_preparation.ts";
 import {DELIVERY_OUTCOMES, decodeOptionalDeliveryOutcome, isTurnScopedSettlementOutcome}
@@ -46,6 +46,51 @@ test("native settlement only replaces matching executable steps on the original 
     {cli: {...cli, next_cli_actions: ["writeback", "spend", "spend"]}},
   ]) assert.deepEqual(nativeCliSettlementProjection({...request, ...changed}), {});
   assert.deepEqual(cli.next_cli_actions, ["supporting action", "writeback", "spend"]);
+});
+
+test("complete consumers compose the original admitted CLI plan without inventing readiness", () => {
+  const plan = settlementPlanPayload(turnScopedCliSettlementPlan(input));
+  const cli = {settlement_plan: plan, spend_after_validation: true,
+    next_cli_actions: ["writeback", "spend"]};
+  const source = {goal_id: "goal", agent_identity: {agent_id: "agent"}, selected_todo: {todo_id: "todo"},
+    should_run: true, effective_action: "normal_run", normal_delivery_allowed: true,
+    interaction_contract: {agent_channel: {delivery_allowed: true}, cli_channel: cli},
+    heartbeat_receipt: {status: "committed", closeout_required: true, turn_instance_id: "turn",
+      settlement_identity: plan.identity}};
+  const before = structuredClone(source);
+  const scope = {goal_id: "goal", agent_id: "agent", should_run: true,
+    effective_action: "normal_run", normal_delivery_allowed: true, delivery_allowed: true};
+  const request = {cli, receipt: source.heartbeat_receipt, todo_id: "todo", complete_scope: scope};
+  assert.ok(Array.isArray(nativeCliSettlementProjection(request).changes));
+  assert.deepEqual(nativeCliSettlementProjection({cli, receipt: source.heartbeat_receipt, todo_id: "todo"}), {});
+  for (const changed of [{complete_scope: null}, {cli: {...cli, spend_after_validation: false}},
+    {receipt: {...source.heartbeat_receipt, status: "pending"}}, {todo_id: "other"}])
+    assert.deepEqual(nativeCliSettlementProjection({...request, ...changed}), {});
+  for (const changed of [{goal_id: "other"}, {agent_id: "other"}, {delivery_allowed: false}])
+    assert.deepEqual(nativeCliSettlementProjection({...request, complete_scope: {...scope, ...changed}}), {});
+  assert.deepEqual(completeCliSettlementChannel(source).next_cli_actions,
+    ["writeback --settle-turn --settlement-receipt"]);
+  const prepared = {schema_version: EXECUTION_PREPARATION_SCHEMA_VERSION, state: "ready",
+    todo_id: "todo", agent_id: "agent", delivery_allowed: true};
+  for (const execution_preparation of [prepared, undefined]) {
+    const channel = {...cli, ...(execution_preparation ? {execution_preparation} : {})};
+    assert.equal((completeCliSettlementChannel({...source, interaction_contract: {
+      ...source.interaction_contract, cli_channel: channel}}).settlement_plan as typeof plan).schema_version,
+      "quota_settlement_plan_v2");
+  }
+  for (const changed of [{goal_id: "other"}, {agent_identity: {agent_id: "other"}},
+    {selected_todo: {todo_id: "other"}}, {normal_delivery_allowed: false}, {should_run: false},
+    {effective_action: "replan_required"}, {heartbeat_receipt: {...source.heartbeat_receipt, settlement_binding_owed: true}},
+    {heartbeat_receipt: {...source.heartbeat_receipt, settlement_identity: {...plan.identity as object, turn_instance_id: "other"}}}]) {
+    assert.equal(completeCliSettlementChannel({...source, ...changed}), cli);
+  }
+  for (const execution_preparation of [null, "ready", {}, {...prepared, state: "claim_required"},
+    {...prepared, todo_id: "other"}, {...prepared, delivery_allowed: false}]) {
+    const channel = {...cli, execution_preparation};
+    assert.equal(completeCliSettlementChannel({...source, interaction_contract: {
+      ...source.interaction_contract, cli_channel: channel}}), channel);
+  }
+  assert.deepEqual(source, before);
 });
 
 for (const lane of ["ordinary", "in_flight", "autonomous_replan"]) {

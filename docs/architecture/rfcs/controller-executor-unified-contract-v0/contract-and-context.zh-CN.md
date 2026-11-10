@@ -8,15 +8,27 @@
 
 [#8480](https://github.com/loopx-project/loopx/pull/8480) 的完整单 Worker EdgeBench 入口与原轮次恢复，
 现已独立提向 main：[#8499](https://github.com/loopx-project/loopx/pull/8499)，23 文件、+493/−119，
-其中 18 个完整文件与 C1 候选逐字一致。获准合入 main 后，C1 可通过集成消除这些重复差异。
+其中 18 个完整文件在 C1 `33a0152376a0` 时逐字一致。获准合入 main 后，C1 可通过集成消除这些重复差异。
 在此之前保留可用 caller 和 [#8484](https://github.com/loopx-project/loopx/pull/8484) 的既有依赖；
 历史实验记录仍放在一起。这次拆分不证明原 quota 成果或完整成本收益。
 
-普通 guided-start 与 visible-Goal 调用保留原来源中 Agent 负责的手动结算；只有既有、
-具备资格的 native publisher 才可展示 runtime 负责的组合步骤。完整 carrier 或渐进展示
+普通 guided-start 与 visible-Goal 调用保留原来源中 Agent 负责的手动结算；具备资格的
+native publisher 和显式完整 Host profile 可展示 runtime 负责的组合步骤。完整 carrier 或渐进展示
 不能选择这一归属。C1 的 5 项 CLI 预期误要求普通调用也组合结算，当前 main 实际回读
 确认应保留手动归属；修正后的测试核对原身份、spend 来源与命令，并验证完整来源，
 不通过改变生产语义来迎合测试。
+
+候选已集成 main `ea67e68972fc`，并衔接提案
+[#8489](https://github.com/loopx-project/loopx/pull/8489) 和
+[#8494](https://github.com/loopx-project/loopx/pull/8494)。显式 Host profile 在 capture 前
+使用既有 typed native CLI 结算投影；adapter 只补充六项资格事实，不再复制整份来源。
+该显式 profile 在既有来源组合前增加一次有界投影请求，此处不证明 RPC 或模型成本净收益。
+普通与 checkpoint 预载 worker 共用 `Execution` 解码。完整来源仍只有一个 composer，
+并继续拒绝通过传输参数重写结算归属。写回已验证后，typed 读回也为无 Todo 的 replan
+投影原待扣额 closeout，保留历史 ACK 和一次性结算。C1 原规则继续区分观察到的 review 与
+真正绑定的选择；照搬 main 专用 fallback 会使这些用例回归，故未采用该冲突选择。
+显式 raw-off 保留 v0 视图，渐进交付校验完整 v1 来源。安装态／在途采用、独立评审、
+原 quota 成果及完整成本仍待验收。
 
 当前完整来源 validator 也将可执行必读校验交给既有 interaction owner。显式
 command／ordering 不得消失或引入不支持的执行顺序；纯文字和合法待执行义务保持

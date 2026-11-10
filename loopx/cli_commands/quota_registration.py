@@ -193,7 +193,8 @@ def register_quota_command(
         choices=["interactive", "isolated_headless", "hosted_automation"],
         help="Execution mode paired with --host-surface and --scheduler-owner.",
     )
-    quota_parser.add_argument(
+    turn_view = quota_parser.add_mutually_exclusive_group()
+    turn_view.add_argument(
         "--turn-envelope",
         action="store_true",
         help=(
@@ -201,6 +202,9 @@ def register_quota_command(
             "Progressive or Delta delivery and managed handoff use the complete decision."
         ),
     )
+    turn_view.add_argument("--complete-turn", action="store_true",
+        help="For JSON quota should-run, explicitly consume the complete v1 Turn contract and its shared exact-Turn settlement. "
+             "The default complete source and explicit raw-off compatibility view keep their existing behavior. Context/Delta delivery remain independent.")
     capture_group = quota_parser.add_mutually_exclusive_group()
     capture_group.add_argument(
         "--decision-output-dir",

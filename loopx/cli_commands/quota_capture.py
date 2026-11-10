@@ -739,6 +739,9 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch captured reads and native lifecycle IO before quota authority access."""
+    if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
+        print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
+        return 1
     if getattr(args, "scheduler_observation", False):
         from .quota_request import validate_scheduler_observation_request
 

@@ -323,7 +323,9 @@ def _prepare_quota_result_context(
         # Preserve the original validation error when activation itself failed.
         activation = {"progressive_enabled": False, "enabled": False}
     if args.quota_command == "should-run":
-        if (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
+        if getattr(args, "complete_turn", False):
+            payload = _project_native_cli_settlement(payload, explicit_complete=True)
+        elif (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
                 and activation.get("scenario") == "codex_app_heartbeat"
                 and (getenv("CODEX_THREAD_ID") or getattr(args, "prepared_capture_reference", False))
                 and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
@@ -427,16 +429,26 @@ def _emit_quota_result(
     raw_envelope, legacy_view = False, None
     delivery_request = None
     decision_identity = ("", "")
-    if args.quota_command == "should-run":
-        payload, raw_envelope, legacy_view = compose_quota_cli_source(
-            payload, args, activation, compose=_export("compose_turn_decision"),
-            scheduler_context=context.scheduler_context if context is not None else None,
-            capture_directory=capture_directory,
-        )
-        # Validate before capture or handoff; the complete source is unchanged.
-        payload = _project_quota_cli_payload(payload, args, detail_sections)
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
+        if args.quota_command == "should-run":
+            from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+
+            try:
+                payload, raw_envelope, legacy_view = compose_quota_cli_source(
+                    payload, args, activation, compose=_export("compose_turn_decision"),
+                    scheduler_context=context.scheduler_context if context is not None else None,
+                    capture_directory=capture_directory,
+                )
+            except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+                # Preserve the already-decided guard and original receipt. The
+                # complete source has one producer, including explicit Hosts.
+                capture_decision(capture_directory, payload, args=args, native_context=native_context)
+                raise QuotaDecisionTransportError(
+                    "Complete Turn context could not be composed. Read the saved original decision and receipt; do not rerun admission."
+                ) from exc
+            # Validate before capture or handoff; the complete source is unchanged.
+            payload = _project_quota_cli_payload(payload, args, detail_sections)
         captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
