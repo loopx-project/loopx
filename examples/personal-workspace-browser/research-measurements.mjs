@@ -68,6 +68,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
         return page.locator(".research-history-detail");
       };
       let reader = await open("comparison");
+      const findingSelector = reader.getByRole("combobox", {name: "选择问题结论", exact: true});
+      const selectedFinding = await findingSelector.inputValue();
+      assert(selectedFinding, "A recorded finding is selected before opening measurement help");
       const finding = reader.locator(".research-recorded-finding").last();
       const measurements = finding.locator(".explore-measurements");
       assert.deepEqual(await measurements.locator(".explore-measurement-reading strong").allTextContents(), ["7", "10", "0", "未测量"]);
@@ -78,7 +81,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       await help.focus();
       await measurements.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
-      assert.equal(await reader.getByRole("combobox", {name: "选择问题结论", exact: true}).inputValue(), "finding-1", "Help dismissal preserves the selected finding");
+      assert.equal(await findingSelector.inputValue(), selectedFinding, "Help dismissal preserves the selected finding");
       await page.screenshot({path: resolve(outputDir, "research-measurements-desktop.png"), animations: "disabled"});
 
       for (const width of [1440, 390]) {
