@@ -17,17 +17,37 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 
 
 @pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": ""}, {"message": "  "}])
-def test_missing_final_message_preserves_visible_answer_without_promoting_metadata(message_field):
-    from loopx.chat import parse_agent_response
+def test_missing_final_message_preserves_visible_answer_without_promoting_metadata(tmp_path, language_server, message_field):
+    from test_antigravity_steward_adapter import adapter_for
 
-    raw = 'Original [report](/private-volume/report.md).\n<loopx-review-json>' + json.dumps({
+    raw = f'Original [report]({tmp_path}/report.md).\n<loopx-review-json>' + json.dumps({
         **message_field, "decision": "none", "summary": "HIDDEN_NATIVE_SUMMARY", "context_handoff": [],
     }) + '</loopx-review-json>'
-    result = parse_agent_response(raw, protected_paths=["/private-volume"])
+    language_server.update(plain_text=True, answers={0: raw})
+    adapter = adapter_for(tmp_path)
+    result = adapter.start_turn("Return the original result")
     assert result["message"] == "Original report."
     assert result["proposals"] == [] and result["gate"] is None
     assert not result.get("context_handoff") and result["protected_action"] is None
     assert "HIDDEN_NATIVE_SUMMARY" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": " "}])
+@pytest.mark.parametrize("metadata", [
+    {"proposals": [{"kind": "todo", "text": "Preview a task"}]},
+    {"protected_action": {"operation": "merge", "target": "PR #1", "summary": "Review first"}},
+    {"gate": {"kind": "host_tool_gate", "summary": "Check the original gate", "next_action": "Review"}},
+])
+def test_missing_final_message_keeps_the_existing_metadata_contract(tmp_path, language_server, message_field, metadata):
+    from test_antigravity_steward_adapter import adapter_for
+    from loopx.chat import parse_agent_response
+
+    raw = 'Unrelated prefix\n<loopx-review-json>' + json.dumps({**message_field, **metadata}) + '</loopx-review-json>'
+    expected = parse_agent_response(raw, protected_paths=[tmp_path])
+    assert expected["message"] == ""
+    language_server.update(plain_text=True, answers={0: raw})
+    adapter = adapter_for(tmp_path)
+    assert adapter.start_turn("Preserve the existing typed metadata") == expected
 
 
 @pytest.mark.parametrize("fault", [None, "source-changed", "closed", "stop", "native-unavailable", "action", "lost-ack"])

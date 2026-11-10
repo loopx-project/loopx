@@ -905,11 +905,10 @@ def parse_agent_response(
         except json.JSONDecodeError:
             payload = None
         if isinstance(payload, dict):
-            # Missing or empty legacy message fields reuse the visible answer.
+            # An explicitly empty message reuses the already streamed answer.
             # Resolve only inside a complete envelope, then use the same
             # redaction and typed metadata normalization as legacy responses.
-            answer = payload.get("message")
-            if answer is None or isinstance(answer, str) and not answer.strip():
+            if payload.get("message") == "":
                 payload = {**payload, "message": visible}
             try:
                 return normalize_agent_response(
