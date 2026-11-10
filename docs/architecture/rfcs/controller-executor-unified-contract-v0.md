@@ -4,11 +4,11 @@
 
 - **RFC status:** Accepted, existing contract. Router and binding-unit extensions are proposed.
 - **Supersedes / closes:** none
-- **Delivery maturity:** Benchmark single-worker entry implemented in this change. Unified dual-session and product adoption remain proposed.
+- **Delivery maturity:** The single-worker EdgeBench entry is merged. #8484 qualifies a generic dual-role Turn on C1. Cross-admission continuity, multi-case benefit and conversation adoption remain open.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
 - **Last normative revision:** 2026-11-10
-- **Source revisions:** Architecture audit on main `ab1406611809`, benchmark integration on C1 `853eb8f56c1a`. Historical experiments retain their own baselines.
+- **Source revisions:** main `9508f4de93`, C1 `9d283862e3`. Section 11 distinguishes implementation-PR evidence, original controls and open qualification.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
@@ -86,9 +86,9 @@ no runtime, changes no default and starts no experiment.
    qualified hosts**. Keep unread material discoverable from the current capture.
    Controller and executor have separate continuity evidence and cannot borrow
    each other's baseline. Full recovery remains available.
-5. Unification first qualifies the existing single-session path. Two-session
-   execution remains opt-in until matched outcome and complete-cost evidence
-   justifies adoption. This RFC launches no benchmark or privileged operation.
+5. Unify quota, public Turn and benchmark heartbeat first. Compare single worker
+   with standard heartbeat and opt into two roles on the same Turn provider.
+   Qualify outcomes and full costs under §11 before Managed Host, Chat and Steward adoption.
 6. The controller–worker execution loop is primary: assess ordinary results as
    well as blockers, give feedback and continue useful admitted work without a
    new user prompt. While the executor works, the controller also answers users,
@@ -994,36 +994,109 @@ flowchart TB
   P --> R[Steward routes two independently accepted units]
 ```
 
-**Make the benchmark the first caller.** Harbor already provides a Turn mode.
-The EdgeBench adapter now selects `turn-resume` for a trial with an operator-supplied
-independent validator. Both it and `heartbeat-resume` enter through the external
-scheduler's `quota should-run` decision. Heartbeat delivers the thin task body.
-Turn invokes `loopx turn run-once`, validates the workspace result, and settles
-the captured attempt. The native judge owns the score. Compare these paths on the
-same case before changing the contract or session topology. The adapters and
-profile settings are in the [worker guide](../../../benchmark/edgebench/README.md#worker-profiles).
+**First consumer and reference.** Run the public Turn provider through EdgeBench.
+Keep standard `heartbeat-resume` with its ordinary quota decision as the reference.
+At a new admission, select `--turn-topology single-worker` or `controller-worker`
+on the same benchmark entry. The standalone product entry is
+`loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`.
+Single worker remains the default. The capability and its recovery belong to Turn.
+The benchmark adapter supplies the profile, task validator and judge settings.
+[Single-worker integration](https://github.com/loopx-project/loopx/pull/8480) ·
+[Product provider and experiment controls](https://github.com/loopx-project/loopx/pull/8484)
 
-**Then switch topology at new Turn admission.** The target is one profile choice
-for the same captured work on either governed entry. Single worker is the
-compatibility default. In the opt-in profile one Controller consumes Core
-context, delegates task material to one isolated Worker and assesses its
-returned artifact. The journal must pin the selected profile and original
-attempt. After a crash or config change, reconcile that attempt under its
-original profile before applying the new choice to new work. Refuse an
-unavailable role or ambiguous result. Native child capacity alone does not
-qualify a Controller–Worker treatment.
+The C1 control comparison and isolated dual-role qualification may run in parallel. Pin the C1 revision and requalify affected callers after a contract change before production cutover.
 
-Use the implementation of Turn, quota and [C1](https://github.com/loopx-project/loopx/pull/8266)
-as the engineering base. Pin product and runner separately when integrating
-an in-flight C1. Record the contract received at Host dispatch and the journal
-used at recovery. If the two entries disagree on selection, required context or
-settlement, repair their common owner and rerun both callers. Qualification of
-the original quota comparison can proceed alongside the disposable dual-session arm. Before connecting Managed Host,
-Chat and Steward to that profile, run the two topologies through the Turn entry
-with the same task, validator, evaluator, feedback, model and effective work
-budget. Include preparation, both sessions, retries and coordination. Verify
-one settlement on replay, effective Stop, and a worker result that changes
-the Controller's next action and a later independently checked artifact.
+**Same admission and settlement.** Quota selects the work and owns the ordinary
+claim. After a successful claim, reread the very same Todo and verify its lease
+before dispatch. Deliver the canonical Goal requirements and original decision
+under C1. The Host verifies the complete inline decision against the journal
+capture, keeping private Core files outside both role sandboxes. The Controller
+delegates scoped work, assesses the Worker’s return and can change its next
+instruction. Core independently validates the artifact and settles the original
+Turn once. Pin topology, provider configuration and material on that journal.
+An uncertain attempt holds for reconciliation. A rejected receipt can be repaired
+on an authorized retry by the original read-only Controller. Preserve the Worker’s
+completed work, bound automatic corrections and read back a lost reply.
+A later admission can switch topology or roll back to single worker.
+
+**What the roles exchange.** The Controller gives the Worker the original
+objective, the success criteria and relevant task material. The Worker chooses
+its method unless the task prescribes one. The Host delivers the instruction
+verbatim and enforces the filesystem and tool boundary at execution. The
+operator's phase deadline covers the entire exchange. The Controller can
+request another segment while the original admission and budget remain live.
+When the caller supplies a Worker task file, the initial instruction is the
+literal `dispatch`. The Host sends the pinned file verbatim, including its task
+rules. EdgeBench uses this path for the original problem. With Controller-only
+material, the Controller authors the task instruction. Subsequent feedback can
+revise either path. Detailed Core receipt guidance arrives at the Controller
+after the first Worker return. Native sandbox enforcement stays active even
+when its permissions briefing is omitted. The example covers both initial paths.
+
+| Sender → receiver | Message | What happens next |
+| --- | --- | --- |
+| Controller → Host, original task supplied | `{"instruction":"dispatch","result":null}` | The Worker receives the original task text byte for byte. |
+| Controller → Worker, authored task | `{"instruction":"Find a solution with the lowest measured cost. Save the best result under results/.","result":null}` | The Host sends the instruction to the Worker's session. The Worker uses its scoped tools. |
+| Worker → Controller | `{"finding":"Candidate B had the lowest observed cost. Readback found a missing row.","artifacts":["results/best.txt"]}` | The Host resumes the original Controller with the finding and artifact paths. |
+| Controller → Worker, if needed | `{"instruction":"Regenerate the missing row and check the complete file.","result":null}` | The same Worker resumes. Its next return uses the same `finding` and `artifacts` fields. |
+| Controller → Core | `instruction=null`, with a complete typed Turn `result` containing `result_kind`, `work_evidence` and `validation_evidence` | Core checks the receipt, runs the independent validator for a material outcome and settles the original admission. |
+
+A Worker readback is evidence for the Controller's decision. Core's validator
+provides independent acceptance. The private Turn record binds the role steps
+and message digests to their native sessions. An operator can match those
+digests to retained native messages without duplicating transcripts in Core.
+
+**Same effective budget.** Give all three arms the full standard heartbeat
+phase deadline, including preparation, dispatch, work, validation and settlement.
+An expired phase stops new work and interrupts the active Host. Preserve its
+pending identity. Pin task entry, model and effort, sandbox, CPU, feedback and
+judge cadence, cooldown, evaluator, validator and external scheduler. Record
+solver time and end-to-end time, scored rounds, native score and pass rate,
+verifiable artifacts, calls, input/cached/output tokens per distinct thread,
+retries, quota spend and human intervention. Keep unavailable counts unknown.
+Native/plain controls retain their own protocol.
+
+**What the first case establishes.** With a 600-second solver budget on the
+public permutation case, standard heartbeat and unified single worker used
+602.27 and 602.24 seconds. Native tokens were 1,613,614 and 1,624,174. The
+evaluator selected scores of 0.0028922644 and 0.0000000218 respectively.
+Both reached 4/5 checks. The remaining integrity check also failed in the
+unaltered pinned judge with no submission. A separate live native dual-role
+stage selected from four candidates, passed independent cost recomputation
+and settled once. Its constrained workload and the guest's unavailable nested
+sandbox leave the full dual-role score comparison open. Use repeated matched
+cases with independent acceptance and complete costs for a promotion decision.
+
+An earlier matched CLI diagnostic gave each topology 150 seconds to select
+among four measured candidates on that case. Both returned the same permutation,
+passed independent cost recomputation, scored 0.0000000033 on the pinned judge
+(four of five checks), and settled once. Single Worker took 44.07 seconds and
+115,498 tokens. Controller and Worker took 121.53 seconds and 206,253 tokens
+across two distinct sessions. Elapsed time includes independent readback and
+judging. Earlier failed attempts exposed MCP configuration inheritance, shell
+temporary-file restrictions, a provider capacity error and a Controller assigning
+its own read-only grant to the Worker. A separate full-protocol dual launch in
+the standard guest stopped at the native sandbox probe before inference, with
+zero evaluation rounds. This case supports retaining the single-worker default.
+
+Open optimization uses the original public black-box task and gives the solver
+its choice of algorithm. A native diagnostic with a 240-second stage verified
+that the Worker's first received message matched the entire supplied task file.
+The original offline work image ran solver commands on two CPUs. Earlier trials
+also produced independently scorable submissions when the Host reached its
+deadline before returning a receipt. Report the last verified score, black-box
+call count, full tokens, and Core settlement separately. The implementation PR
+records the observed outcomes for each topology and the guest qualification
+boundary. [Experiment readback](https://github.com/loopx-project/loopx/pull/8484)
+
+**Product adoption.** Managed Host, Chat and Steward consume the same admitted
+Turn provider after qualification. Both headless roles use `codex exec`, the same CLI entry as
+standard heartbeat and single-worker Turn. Each role resumes its own explicit
+session ID with `codex exec resume`. The peer handoff uses a scoped instruction
+and a structured return. It requires no MCP registration. The Host interrupts a running CLI on stop or deadline. An attached desktop or Chat connection needs a verified owner,
+role isolation, interruption and result return to its original conversation.
+Each other Host qualifies its own transport. Connect one working unit before
+qualifying a Steward routing several independent units.
 
 | Slice within existing C tasks | Complete reviewable delivery / existing owner to adopt | Exit evidence and concrete simplification |
 | --- | --- | --- |
@@ -1038,16 +1111,15 @@ the Controller's next action and a later independently checked artifact.
 
 ### Controller delivery cadence
 
-1. **Deliver the dual-session benchmark arm.** The runtime and Turn owners
-   should exercise Codex App Server from the same governed benchmark entry. The existing managed-operation adapter
+1. **Qualify the product Turn provider.** The runtime and Turn owners exercise the same two-role Codex CLI provider through standalone Turn and benchmark entry points. The existing managed-operation adapter
    observes authenticated `turn/start` and the Chat host already routes
    `turn/interrupt`. Verify that a durable worker attempt remains observable
    after dispatch returns, including reconnect and an actual interruption.
    Extend the existing adapter at the missing boundary if required. The first
    runnable slice uses one Agent, two native sessions with independent context
    baselines, and one scoped task. The Controller is the sole model-side Core
-   client. It consumes Progressive and Delta state and retains admission,
-   validation and settlement. The Worker receives the task, scoped ordinary
+   client. It consumes Progressive and Delta state and returns a typed result. Core owns admission,
+   independent validation and settlement. The Worker receives the task, scoped ordinary
    tools and artifact references. It returns findings and artifacts through the
    existing request chain. Verify through both session traces that an attempted
    Worker Core call is denied and ordinary scoped tools still work. The slice exits when a worker result causes an
