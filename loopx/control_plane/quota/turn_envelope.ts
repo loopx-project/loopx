@@ -1833,9 +1833,7 @@ function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
   const signature = turnEnvelopeActionSignatureDocument(work);
   signature.action = {...object(signature.action), selected_todo: selected};
   return {
-    ...(decision ? {goal_id: decision.goal_id ?? null,
-      agent_id: object(decision.agent_identity).agent_id ?? null,
-      todo_id: selectedWorkTodoId(decision) ?? ""} : {}),
+    ...(decision ? completeWorkIdentity(decision) : {}),
     route: complete ? admittedTurnRoute(work, () => scopedTurnSettlementIdentity(work))
       : turnEnvelopeRoute(work, historical),
     action_signature: signature,
@@ -2525,17 +2523,23 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "driver_lineage") {
     const completeWire = Object.hasOwn(request, "complete_host_request");
     const checked = Object.hasOwn(request, "payload") || completeWire ? completeHostSource(request) : null;
+    if (completeWire && checked) {
+      // The journal already owns the Turn key. A checked retry needs only
+      // Session binding facts, not a new route or the action hash preimage.
+      const work: JsonObject = {goal_id: checked.decision.goal_id ?? null, ...checked.projection};
+      const scopedIdentity = scopedTurnSettlementIdentity(work);
+      const hasSelectedTodo = scopedIdentity !== null && Object.keys(selectedWorkTodo({
+        selected_todo: object(object(work.action).selected_todo),
+        task_orchestration_contract: work.task_orchestration_contract,
+      })).length > 0;
+      return {...completeWorkIdentity(checked.decision), scoped_settlement_identity: hasSelectedTodo ? null : scopedIdentity};
+    }
     const decision = checked?.decision ?? null;
-    // Recovery consumes the already checked action facts. It does not rebuild
-    // a v0 adapter, cold reader commands or size diagnostics from that source.
-    // Historical carriers keep their signed envelope and version-pinned proof.
-    const work = completeWire && checked ? {goal_id: checked.decision.goal_id ?? null, ...checked.projection}
-      : requireJsonObject(request.envelope, "Turn driver envelope");
+    const work = requireJsonObject(request.envelope, "Turn driver envelope");
     const historical = !decision && request.historical_route_text !== undefined
       ? requireJsonObject(request.historical_route_text, "historical route text") : undefined;
-    // Both planning and recovery use these action/selection/hash facts. Python
-    // retains only its persisted number codec; historical readers keep proof.
-    return admittedDriverLineage(work, decision, completeWire, historical);
+    // Historical carriers retain their signed envelope and version-pinned proof.
+    return admittedDriverLineage(work, decision, false, historical);
   }
   if (operation === "execution_context") {
     // The CLI consumes one checked source for execution, not the historical

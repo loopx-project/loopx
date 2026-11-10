@@ -20,6 +20,7 @@ from .subagent_execution_topology import (
 )
 from ..quota.turn_envelope import (
     COMPLETE_TURN_PLAN_SCHEMA_VERSION as COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+    COMPLETE_TURN_HOST_REQUEST_SCHEMA,
     selected_turn_todo as selected_turn_todo,
     read_turn_plan_work as read_turn_plan_work,
     turn_host_lineage as turn_host_lineage,
@@ -154,6 +155,18 @@ def _receipt_bound_scoped_identity(
     return SettlementIdentity.from_runtime_payload(raw)
 
 
+def _session_work_lineage(
+    identity: Mapping[str, Any], settlement_identity: SettlementIdentity | None,
+) -> dict[str, str]:
+    lineage = {field: str(identity.get(field) or "") for field in ("goal_id", "agent_id", "todo_id")}
+    if settlement_identity is not None:
+        if settlement_identity.request_subject is not None:
+            lineage["request_binding_id"] = settlement_identity.binding_id
+        elif settlement_identity.replan_obligation_id is not None:
+            lineage["replan_obligation_id"] = settlement_identity.replan_obligation_id
+    return lineage
+
+
 def _turn_lineage(
     envelope: Mapping[str, Any],
     *,
@@ -176,17 +189,10 @@ def _turn_lineage(
         identity = resolved
     # Persisted Turn keys depend on Python's JSON number encoding. Keep this
     # transport codec while the TS owner selects and validates identity facts.
-    lineage = {
-        **{field: str(identity.get(field) or "") for field in ("goal_id", "agent_id", "todo_id")},
-        "action_hash": "sha256:" + sha256(json.dumps(
-            signature, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest(),
-    }
-    if settlement_identity is not None:
-        if settlement_identity.request_subject is not None:
-            lineage["request_binding_id"] = settlement_identity.binding_id
-        elif settlement_identity.replan_obligation_id is not None:
-            lineage["replan_obligation_id"] = settlement_identity.replan_obligation_id
+    lineage = _session_work_lineage(identity, settlement_identity)
+    lineage["action_hash"] = "sha256:" + sha256(json.dumps(
+        signature, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
     return lineage
 
 
@@ -219,13 +225,13 @@ def _session_plan(
             "binding_status": "not_applicable",
             "context_policy": context_policy,
         }, None
-    if (not all(lineage.get(field) for field in (*identity_fields, "action_hash"))
+    if (not all(lineage.get(field) for field in identity_fields)
             or not (lineage.get("todo_id") or lineage.get("replan_obligation_id") or lineage.get("request_binding_id"))):
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
             "binding_status": "missing_turn_lineage",
-        }, "host-bound routes require goal, agent, todo, and action-hash lineage"
+        }, "host-bound routes require Goal, Agent, and a work identity"
 
     if iteration_context_policy == "fresh":
         return {
@@ -278,25 +284,35 @@ def reconcile_failed_turn_session_request(
     try:
         from ..quota.turn_envelope import complete_turn_host_source
 
-        projection = complete_turn_host_source(turn_plan_host_source(request), operation="driver_lineage")
-        if projection is None:
-            projection = _turn_envelope_result(
-                "driver_lineage", envelope=envelope,
-                historical_route_text=_historical_route_text(envelope),
+        source = turn_plan_host_source(request)
+        projection = complete_turn_host_source(source, operation="driver_lineage")
+        if source.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
+            # A retry uses the journal's original transaction identity. The
+            # checked source supplies only the scope needed to bind its Session.
+            assert projection is not None
+            raw = projection["scoped_settlement_identity"]
+            lineage = _session_work_lineage(
+                projection, SettlementIdentity.from_runtime_payload(raw) if raw is not None else None,
             )
-        selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
-        settlement_identity = None
-        if not selected_todo:
-            if "work_contract" in request:
-                raw = projection["scoped_settlement_identity"]
-                settlement_identity = None if raw is None else SettlementIdentity.from_runtime_payload(raw)
-            else:
-                settlement_identity = _receipt_bound_scoped_identity(envelope, turn_instance_id=None)
-        lineage = _turn_lineage(
-            envelope, projection=projection,
-            work_contract=request.get("work_contract", _ABSENT_WORK_CONTRACT),
-            settlement_identity=settlement_identity,
-        )
+        else:
+            if projection is None:
+                projection = _turn_envelope_result(
+                    "driver_lineage", envelope=envelope,
+                    historical_route_text=_historical_route_text(envelope),
+                )
+            selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
+            settlement_identity = None
+            if not selected_todo:
+                if "work_contract" in request:
+                    raw = projection["scoped_settlement_identity"]
+                    settlement_identity = None if raw is None else SettlementIdentity.from_runtime_payload(raw)
+                else:
+                    settlement_identity = _receipt_bound_scoped_identity(envelope, turn_instance_id=None)
+            lineage = _turn_lineage(
+                envelope, projection=projection,
+                work_contract=request.get("work_contract", _ABSENT_WORK_CONTRACT),
+                settlement_identity=settlement_identity,
+            )
     except (ValueError, RuntimeError) as exc:
         raise FailedTurnSessionRecoveryError("turn_lineage_missing", str(exc)) from exc
     planned_session = _mapping(request.get("session"))
@@ -471,7 +487,7 @@ def build_loopx_turn_plan(
     contract_error = None
     if not current:
         # Historical inputs retain their version-gate diagnostics. Complete
-        # inputs reach that same gate inside driver_lineage's checked source;
+        # inputs reach that same gate inside planning_facts' checked source;
         # sending the envelope separately would repeat the pure RPC.
         try:
             assert_turn_envelope_consumer_version(envelope)

@@ -870,6 +870,20 @@ bounded result schema under the historical binding. A new Host invocation
 requires the complete binding to deliver that advice. Ordinary quota and
 historical v0 retain their existing decoders.
 
+Failed Turn recovery for the complete Host request now reads only the checked
+Goal, Agent and Todo or scoped settlement binding. It reuses the journaled
+Turn key and no longer returns or hashes the full action to match a Session.
+New planning still uses the persisted number codec and normalizes the adaptive
+primary before deriving a key. Keep the raw and mixed historical readers
+until outstanding work and the supported recovery window are reconciled.
+The upgrade check resumed two original writer formats on File and SQLite.
+Wrong Agent, missing Session and altered capture stopped before the Host or
+spend. A valid retry resumed the original Session, settled once and replayed
+without effects. On the two complete fixtures the Session lookup response
+fell from 10,692 and 10,738 bytes to 130 bytes. These are serialized response
+bytes at this internal boundary; RPC count, model tokens and matched outcome
+costs were not measured by this check.
+
 Modern Codex and structured Host instructions share the existing audit read
 rule: read a declared audit before judging Goal acceptance or proposing
 closeout, including when the Goal stays open. Notification policy does not grant

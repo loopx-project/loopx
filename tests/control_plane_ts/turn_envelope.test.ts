@@ -245,7 +245,7 @@ test("operation preflight optionally shares the existing normalized session line
   assert.deepEqual(complete, before);
 });
 
-test("complete Host recovery preserves the existing driver route and hash preimage", () => {
+test("complete Host recovery returns only checked Session binding facts", () => {
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -253,9 +253,10 @@ test("complete Host recovery preserves the existing driver route and hash preima
   const header = {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`};
   const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete,
     envelope: {}, complete_host_request: header});
-  assert.equal(current.scoped_settlement_identity, null);
-  delete current.scoped_settlement_identity;
-  assert.deepEqual(current, historicalCarrier);
+  const {goal_id, agent_id, todo_id} = historicalCarrier;
+  assert.deepEqual(current, {goal_id, agent_id, todo_id, scoped_settlement_identity: null});
+  assert.equal(historicalCarrier.route, "ready_for_host");
+  assert.ok(historicalCarrier.action_signature);
   for (const changed of [{...header, turn_key: "invalid"}, {...header, source_decision_hash: "wrong"}]) {
     assert.throws(() => evaluateTurnEnvelope({operation: "driver_lineage", payload: complete,
       envelope: {}, complete_host_request: changed}));
@@ -265,7 +266,7 @@ test("complete Host recovery preserves the existing driver route and hash preima
   assert.deepEqual(complete, before);
 });
 
-test("complete recovery and historical readers share all admitted route facts", () => {
+test("complete planning and historical readers share all admitted route facts", () => {
   for (const [effectiveAction, shouldRun, mustAttempt, delivery, quiet, userAction, route] of [
     ["normal_run", true, true, true, false, false, "ready_for_host"],
     ["control_plane_repair", true, true, true, false, false, "repair_required"],
@@ -287,12 +288,9 @@ test("complete recovery and historical readers share all admitted route facts", 
     const before = structuredClone({complete, envelope});
     const historical = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope});
     assert.equal(historical.route, route);
-    const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, complete_host_request: {
-      schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`,
-    }});
-    assert.equal(current.scoped_settlement_identity, null);
-    delete current.scoped_settlement_identity;
-    assert.deepEqual(current, historical);
+    const current = evaluateTurnEnvelope({operation: "planning_facts", payload: complete});
+    assert.equal(current.route, route);
+    assert.deepEqual(current.action_signature, historical.action_signature);
     assert.deepEqual({complete, envelope}, before);
   }
 });
@@ -317,11 +315,11 @@ test("complete recovery keeps request and replan identity qualification with the
     const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
     const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
     const current = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, complete_host_request: header});
-    assert.equal(current.route, requestScope ? "ready_for_host" : "replan_required");
-    assert.deepEqual(current.scoped_settlement_identity, identity);
+    assert.deepEqual(current, {goal_id: scope.goal_id, agent_id: scope.agent_id,
+      todo_id: "", scoped_settlement_identity: identity});
     assert.deepEqual(turnEnvelopeScopedSettlementIdentity(envelope), identity);
-    delete current.scoped_settlement_identity;
-    assert.deepEqual(current, evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope}));
+    const historical = evaluateTurnEnvelope({operation: "driver_lineage", payload: complete, envelope});
+    assert.equal(historical.route, requestScope ? "ready_for_host" : "replan_required");
     for (const changedScope of [{...scope, goal_id: "other-goal"}, {...scope, agent_id: "other-agent"}]) {
       const changed = structuredClone(source);
       const plan = ((changed.interaction_contract as JsonObject).cli_channel as JsonObject).settlement_plan as JsonObject;

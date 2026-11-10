@@ -120,6 +120,8 @@ def test_current_plan_invalid_carrier_cannot_dispatch_or_recover(complete_host_r
                    read_turn_plan_work, turn_lane_agent_id):
         with pytest.raises((ValueError, RuntimeError)):
             reader(plan)
+    with pytest.raises(FailedTurnSessionRecoveryError):
+        reconcile_failed_turn_session_request(plan, session_binding=None)
     assert not (tmp_path / "decisions").exists()  # staging is read-only
 
 
@@ -245,6 +247,7 @@ def test_failed_complete_request_resumes_the_same_native_session(
     recovered = reconcile_failed_turn_session_request(request, session_binding=binding)
     assert recovered["session"]["action"] == "resume"
     assert recovered["session"]["binding_status"] == "failed_turn_recovery"
+    assert recovered["turn_key"] == request["turn_key"]
     assert codex_sessions.select_codex_cli_session(runtime, lineage=turn_host_lineage(recovered),
         session_scope=scope)["session_id"] == "original-session"
     assert "turn_envelope" not in recovered and recovered["work_contract"] == contract
@@ -253,6 +256,9 @@ def test_failed_complete_request_resumes_the_same_native_session(
     assert {p: p.read_bytes() for p in runtime.rglob("*.json")} == stored
     with pytest.raises(FailedTurnSessionRecoveryError):
         reconcile_failed_turn_session_request(request, session_binding={**binding, "agent_id": "other-agent"})
+    if scope == "todo":
+        with pytest.raises(FailedTurnSessionRecoveryError):
+            reconcile_failed_turn_session_request(request, session_binding={**binding, "todo_id": "other-todo"})
     for bad in (None, {**contract, "reason": "source changed before recovery"}):
         with pytest.raises(FailedTurnSessionRecoveryError):
             reconcile_failed_turn_session_request({**request, "work_contract": bad}, session_binding=binding)
@@ -303,22 +309,25 @@ def test_complete_todoless_scoped_recovery_preserves_its_original_identity(
     assert {p: p.read_bytes() for p in runtime.rglob("*.json")} == stored
 
 
-def test_complete_recovery_retains_the_original_number_codec_and_action_hash(complete_host_request):
-    from loopx.control_plane.turn_driver.driver import _turn_lineage
-    from loopx.control_plane.quota.turn_envelope import complete_turn_host_source
-
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_complete_planning_retains_the_original_turn_key_codec(complete_host_request, adaptive):
     _legacy, original = complete_host_request
     source = deepcopy({key: value for key, value in original.items()
                        if key not in {"schema_version", "contract_binding"}})
     source["selected_todo"]["future_numeric_context"] = [1.0, -0.0, 1e-7, 2**60 + 1]
+    source["selected_todo"]["future_text_context"] = "验收"
+    if adaptive:
+        source["task_orchestration_contract"] = {"schema_version": "task_orchestration_contract_v2",
+            "mode": "adaptive", "primary_todo_id": source["selected_todo"]["todo_id"]}
     contract = compose_turn_decision(source)
-    plan = _plan(contract)
-    request = build_loopx_turn_host_request(plan)
-    # The retained v0 codec is an independent numeric/hash oracle; the current
-    # private plan intentionally has no such carrier.
-    expected = _turn_lineage(build_turn_envelope(contract), work_contract=contract)
-    checked = complete_turn_host_source(request, operation="driver_lineage")
-    assert _turn_lineage({}, work_contract=contract, projection=checked) == expected
+    options = dict(host="generic-cli", execution_mode="isolated-headless", session_scope="todo",
+                   turn_instance_id="numeric-codec")
+    # The historical envelope path still supplies the persisted key preimage.
+    original_plan = build_loopx_turn_plan(build_turn_envelope(contract), **options)
+    current_plan = build_loopx_turn_plan(contract, **options)
+    assert original_plan["ok"] and current_plan["ok"]
+    assert current_plan["transaction"] == original_plan["transaction"]
+    assert "turn_envelope" not in current_plan
 
 
 def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_journal_key(

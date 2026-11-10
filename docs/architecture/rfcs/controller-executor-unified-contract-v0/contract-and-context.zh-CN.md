@@ -629,6 +629,16 @@ Host 输入、缓存结果的任务校验和结算都使用日志里的原计划
 历史绑定读取原有受限结果 schema。新调用 Host 时，建议须通过完整绑定校验。
 普通 quota 与历史 v0 继续使用各自已有的 decoder。
 
+完整 Host 请求重试失败 Turn 时，只读取经校验的 Goal、Agent 及 Todo 或带范围的
+结算绑定。重试沿用日志里的 Turn key，匹配 Session 时不再返回或重算完整 action
+的哈希。新计划仍在生成 key 前规整 adaptive primary，并使用原有数字编码。旧格式
+及混合格式 reader 保留到未结工作及受支持的恢复窗口核清。
+升级验证用 File 和 SQLite 各恢复了两种原 writer 格式。Agent 不匹配、Session 缺失
+或 capture 被改动均在调用 Host 或扣额度前拒绝。有效重试续回原 Session，只结算一次；
+再次重放没有新效果。两份完整格式样本的 Session 匹配响应分别由 10,692 和 10,738
+字节降至 130 字节。这仅衡量此内部边界的序列化响应，未衡量 RPC 次数、模型 token
+或匹配任务的完整成本。
+
 现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
 closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
 delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
