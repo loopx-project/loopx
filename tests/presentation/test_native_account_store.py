@@ -99,6 +99,7 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(cfg['forced_login_method'], 'api')
         self.assertEqual(cfg['openai_base_url'], 'http://127.0.0.1:32100/v1')
         self.assertEqual(self.manager.selected()[0]['slot'], 'api')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'openai')
         self.manager.recover(rollback=True)
         self.assertEqual(self.manager.auth.read_bytes(), self.a)
         self.assertEqual(self.manager.config.read_bytes(), original)
@@ -266,6 +267,7 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(cfg['model_catalog_json'], 'models.json')
         self.assertEqual(cfg['forced_login_method'], 'api')
         self.assertNotIn('openai_base_url', cfg)
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'gateway')
         self.manager.switch('a')
         cfg = tomllib.loads(self.manager.config.read_text())
         self.assertEqual(cfg['model_provider'], 'openai')
@@ -273,11 +275,13 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(cfg['forced_login_method'], 'chatgpt')
         self.assertNotIn('openai_base_url', cfg)
         self.assertEqual(cfg['mcp_servers']['demo']['command'], 'demo')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'gateway')
         self.manager.switch('api')
         cfg = tomllib.loads(self.manager.config.read_text())
         self.assertEqual(cfg['model_provider'], 'gateway')
         self.assertEqual(cfg['forced_login_method'], 'api')
         self.assertNotIn('openai_base_url', cfg)
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'gateway')
 
     def test_legacy_api_slot_inherits_a_stale_selected_gateway(self):
         self.current()
@@ -297,6 +301,35 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(bound['loopx_model_provider'], 'gateway')
         self.assertEqual(cfg['model_provider'], 'gateway')
         self.assertEqual(cfg['model_catalog_json'], 'models.json')
+        self.manager.switch('a')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'gateway')
+
+    def test_legacy_api_slot_provider_is_migrated_to_builtin_openai(self):
+        self.current()
+        self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        for legacy_provider, base_url in [
+            ('openai_retry20', 'https://gateway.example/v1'),
+            ('custom_relay', 'http://127.0.0.1:32100/v1'),
+        ]:
+            with self.subTest(legacy_provider=legacy_provider):
+                legacy = json.loads(self.manager.slot('api').read_text())
+                legacy['loopx_model_provider'] = legacy_provider
+                accounts.atomic(self.manager.slot('api'), accounts.encoded(legacy))
+                gateway = (f'model="gateway-model"\nmodel_provider="{legacy_provider}"\n'
+                           'model_catalog_json="models.json"\n'
+                           f'[model_providers.{legacy_provider}]\nname="OpenAI"\n'
+                           f'base_url="{base_url}"\nwire_api="responses"\n')
+                self.manager.config.write_text(gateway)
+                self.manager.switch('api')
+                bound = json.loads(self.manager.slot('api').read_text())
+                cfg = tomllib.loads(self.manager.config.read_text())
+                self.assertEqual(bound['loopx_model_provider'], 'openai')
+                self.assertEqual(cfg['model_provider'], 'openai')
+                self.assertEqual(cfg['openai_base_url'], 'http://127.0.0.1:32100/v1')
+                self.assertEqual(cfg['model_catalog_json'], 'models.json')
+                self.manager.switch('a')
+                self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'openai')
 
     def test_quoted_and_backslash_gateway_providers_survive_switch_and_independent_readback(self):
         host_module = importlib.import_module('loopx_codex_provider_routing.native_host')
@@ -670,6 +703,53 @@ class AccountTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         apps.account_idle(self.home, self.spec, [77])
+
+    def test_managed_fallback_and_custom_gateway_roundtrip_readback(self):
+        config_text = (
+            'model="fixture"\n'
+            'model_provider="openai"\n'
+            'model_catalog_json="models.json"\n'
+            '[model_providers.openai_retry20]\n'
+            'name="OpenAI"\n'
+            'base_url="http://127.0.0.1:32100/v1"\n'
+            'wire_api="responses"\n'
+            '[model_providers.review_gateway]\n'
+            'name="OpenAI"\n'
+            'base_url="https://gateway.example/v1"\n'
+            'wire_api="responses"\n'
+        )
+        # 1. Subscription session continues through managed fallback (legacy relay provider migrated to openai).
+        self.current()
+        self.manager.config.write_text(config_text.replace('model_provider="openai"', 'model_provider="openai_retry20"'))
+        self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        legacy = json.loads(self.manager.slot('api').read_text())
+        legacy['loopx_model_provider'] = 'openai_retry20'
+        accounts.atomic(self.manager.slot('api'), accounts.encoded(legacy))
+        self.manager.switch('api')
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(cfg['model_provider'], 'openai')
+        self.assertEqual(cfg['openai_base_url'], 'http://127.0.0.1:32100/v1')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'openai')
+        self.manager.switch('a')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'openai')
+
+        # 2. Explicit custom gateway session switches away to subscription and back to original gateway.
+        custom = json.loads(self.manager.slot('api').read_text())
+        custom['loopx_model_provider'] = 'review_gateway'
+        accounts.atomic(self.manager.slot('api'), accounts.encoded(custom))
+        self.manager.switch('api')
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(cfg['model_provider'], 'review_gateway')
+        self.assertNotIn('openai_base_url', cfg)
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
+        self.manager.switch('a')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
+        self.manager.switch('api')
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(cfg['model_provider'], 'review_gateway')
+        self.assertNotIn('openai_base_url', cfg)
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
 
 
 

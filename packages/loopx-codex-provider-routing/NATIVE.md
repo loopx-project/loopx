@@ -190,6 +190,15 @@ subscription is selected again; when none is available, status reports
 `all_unavailable` instead of claiming `api_active`. `api_fallback` stays enabled
 through this transition.
 
+Version 0.15.7 keeps subscription and managed API-fallback routes on Codex's
+built-in `openai` provider identity. Managed API fallback changes only
+`openai_base_url` to the loopback relay, migrating legacy relay provider IDs
+(such as `openai_retry20` or definitions whose `base_url` matches the slot's
+loopback relay endpoint) when selected so built-in sessions retain the same
+provider binding across fallback transitions. API slots bound to an explicit
+custom Responses gateway preserve and restore their selected gateway provider
+and model catalog across account switching.
+
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
 It makes no inference call and does not establish spendable quota. Its 401, 403,
@@ -218,9 +227,12 @@ incomplete credential transaction.
 空闲、重启、冷却和恢复边界返回。扩展内置唯一原生账号 owner，dotfiles 只导入并映射
 旧配置；LoopX 不依赖 dotfiles。API 上游 Key 留在扩展私有存储，原生槽位只保存本地
 中转凭据，不绕过原事务或复制会话历史。
-顶层 Responses API 网关可以直接启动并参与账号切换。API 槽位记录所选网关，重新选中时
-恢复该 provider 与模型目录；订阅槽位改用内置 `openai`，并移除受管的 API 地址，避免把
-订阅凭据发往网关。自定义 provider 不得覆盖内置 `openai`，profile 覆写仍不参与账号事务。
+顶层 Responses API 网关可以直接启动并参与账号切换。绑定显式自定义网关的 API 槽位记录
+所选网关，切走并重新选中时恢复该 provider 与模型目录；受管 API 接续（含旧版指向本地
+loopback 中转地址或 `openai_retry20` 等遗留中转 provider 的槽位）与订阅槽位共用内置
+`openai` 标识并仅通过 `openai_base_url` 切换本地中转，使既有会话在账号与受管 fallback
+间恢复时保持同一 provider 绑定。订阅槽位改用内置 `openai` 并移除受管的 API 地址，避免
+把订阅凭据发往网关。自定义 provider 不得覆盖内置 `openai`，profile 覆写仍不参与账号事务。
 Key 轮换依据输出前收到的明确额度、认证、权限或限流错误，每次请求每把 Key 最多
 尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
 后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
