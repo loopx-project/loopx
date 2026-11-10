@@ -62,6 +62,84 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("route", ["stateless", "native", "delta-only", "raw", "pre-session"])
+def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_fallback(
+        tmp_path, monkeypatch, provider, route):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
+    directory = tmp_path / "capture"
+    code, result = _run_cli(registry, runtime, "quota", "should-run", *binding, "--todo-id", TODO_ID,
+        "--complete-turn", "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
+    assert code == 0, result
+    original = directory / "decision.json"
+    raw = original.read_bytes()
+    signed = json.loads(raw)
+    assert signed["schema_version"] == "loopx_turn_envelope_v1"
+    receipt = signed["heartbeat_receipt"]
+
+    options = ["--context-delivery", "off" if route in {"raw", "delta-only"} else "auto"]
+    if route in {"stateless", "native", "pre-session"}:
+        options += ["--initial-read", "--max-page-output-bytes", "12000"]
+    journal = tmp_path / "native"
+    if route in {"native", "delta-only", "pre-session"}:
+        journal.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "source-validation")
+        if route != "pre-session":
+            codex_context_hook(str(journal), {"hook_event_name": "SessionStart", "source": "startup",
+                "session_id": "source-validation", "cwd": str(project)})
+        options += ["--codex-app", "--codex-context-dir", str(journal)]
+    if route == "delta-only":
+        options += ["--delta-delivery", "auto"]
+
+    def project_capture(path):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return _run_cli(registry, runtime, "quota", "context-project", *binding, *options,
+            "--capture-file", str(path), "--capture-sha256", digest, cwd=project)
+
+    code, valid = project_capture(original)
+    assert code == 0 and valid["ok"], valid
+    for version, reason in (
+        ("loopx_turn_envelope_v2", "Unsupported"), ("loopx_turn_envelope_v0", "mixed"),
+        (None, "Unsupported"), ("loopx_turn_envelope_v1", "integrity mismatch"),
+    ):
+        bad = {**signed, "schema_version": version}
+        if version is None:
+            del bad["schema_version"]  # The retained binding cannot become an unversioned packet.
+        elif version == "loopx_turn_envelope_v1":
+            bad["contract_binding"] = {**signed["contract_binding"], "content_hash": "sha256:" + "0" * 64}
+        capture = directory / "rejected.json"
+        capture.write_text(json.dumps(bad))
+        digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+        code, rejected = project_capture(capture)
+        assert code == 1 and rejected["ok"] is False, rejected
+        assert rejected["error_code"] == "quota_decision_transport_failed" and reason in rejected["reason"]
+        assert "content" not in rejected and "first_read_command" not in rejected
+        assert rejected["heartbeat_receipt"] == receipt
+        assert rejected["recovery"]["path"] == str(capture) and rejected["recovery"]["sha256"] == digest
+        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(capture),
+            "--capture-sha256", digest, "--select", "/heartbeat_receipt", cwd=project)
+        assert rc == 0 and page["eof"]
+        assert json.loads(page["content"])["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+    journal_state = journal / "session.json"
+    if route in {"native", "delta-only"}:
+        state = json.loads(journal_state.read_text())
+        assert "recovery" not in state and "pending" not in state
+    else:
+        assert not journal_state.exists()
+    assert original.read_bytes() == raw
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
 @pytest.mark.parametrize(("opening_args", "recovery_limit"), [
     ([], 64000), (["--initial-read"], 64000),

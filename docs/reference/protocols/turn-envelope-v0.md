@@ -56,6 +56,14 @@ An older CLI rejects the new flag before guard execution. Omit it to roll back;
 existing complete captures remain readable through their original digest-bound
 `quota context-read`/`context-project` recovery.
 
+`quota context-project` checks a saved complete decision before presenting it
+as current context, including with Delta alone or with context delivery off.
+An unknown version, mixed legacy and complete binding, or invalid signature
+returns the recorded receipt and a digest-bound `context-read` locator.
+Native recovery publishes the capture as the current session source only
+after the existing typed check succeeds. The original file remains available
+for explicit recovery if that check is interrupted.
+
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
 original effect identity, validation and terminal conditions. A non-ready
@@ -80,6 +88,11 @@ model context. Actual live adoption and efficiency still require separate proof.
 可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，
 不把未 ready 的准备或错误回执转成授权。部分失败只沿原 `settlement_owed` 恢复。
 旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
+
+`quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
+或关闭上下文交付时同样校验。未知版本、混用旧格式和完整绑定或签名损坏时，返回原
+记录回执及绑定摘要的 `context-read` 入口。原生会话仅在现有 typed 校验通过后才
+发布当前恢复来源。校验中断时，可按原文件和摘要显式读取。
 这只是 Host 开发协议入口，不新增设置、模型/子 worker、预算或权限，也不证明
 已运行的 Host 采用或效率收益。
 

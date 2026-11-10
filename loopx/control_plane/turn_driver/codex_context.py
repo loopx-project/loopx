@@ -749,6 +749,49 @@ class NativeContextPreparation:
     initial_read_plan: dict[str, Any] | None = None
 
 
+def _retire_native_recovery_lookup(root: Path, state: dict[str, Any]) -> None:
+    """Remove the moving selector while a supplied signed source is checked."""
+    active = ("recovery", "source_recovery", "pending", "candidate")
+    if any(key in state for key in active):
+        for key in active:
+            state.pop(key, None)
+        _save(root, state)
+
+
+def _commit_native_context_recovery(
+    root: Path, state: dict[str, Any], reference: dict[str, Any], *,
+    scope: Mapping[str, str], source: dict[str, Any],
+    payload: dict[str, Any], capture_id: str, saved_capture: bool,
+    page_budget: tuple[int, int],
+) -> None:
+    """Publish the original source and the active recovery view together."""
+    from ...command_invocation import current_loopx_cli_argv
+
+    preparation = compact_execution_preparation_request(payload)
+    if preparation:
+        session = scope["session_id"]
+        claim_source = None
+        if _original_native_claim_source(root, session, capture_id, bind_unattached=True):
+            claim_source = capture_id
+        elif not saved_capture and preparation.get("turn_instance_id"):
+            claim_source = capture_id if BARE_SHA256_PATTERN.fullmatch(capture_id) else reference["sha256"]
+            write_decision_capture(root / "claim-source.json",
+                {"session_id": session, "sha256": claim_source}, publish=os.replace)
+        if claim_source is not None:
+            preparation = compact_execution_preparation_request(payload, claim_source_sha256=claim_source)
+    page_bytes, output_bytes = page_budget
+    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=current_loopx_cli_argv())
+    state["source_recovery"] = source
+    state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
+        "goal_id": scope["goal_id"], "agent_id": scope["agent_id"],
+        "total_bytes": Path(reference["path"]).stat().st_size,
+        **({"execution_preparation": preparation} if preparation else {})}
+    state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
+        "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
+    _save(root, state)
+
+
 def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None,
@@ -764,13 +807,15 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     Full fallback must recover this capture or refuse lookup, never an older one.
     Saved-file comparison is independent of any complete model-read observation.
     """
-    from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
-    from ..quota.turn_envelope import prepare_context_delivery
-    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..quota.turn_envelope import assert_complete_turn_decision, prepare_context_delivery
+    from ..effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 
+    check_saved_source = saved_capture and surface == "complete_turn"
     if directory is None:
         if not progressive_enabled:
+            if check_saved_source:
+                assert_complete_turn_decision(payload)
             return NativeContextPreparation(payload)
         from .decision_capture import capture_progressive_context
 
@@ -785,6 +830,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
+                    if check_saved_source:
+                        assert_complete_turn_decision(payload)
                     return NativeContextPreparation(payload)  # Do not replace another session's recovery.
                 # Native lifecycle events own workspace identity and epoch.
                 # A shell tool may run in another checkout without changing
@@ -806,53 +853,26 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 request = _native_context_request(state, scope, capture_id)
                 recovery = capture_context_projection(
                     payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
-                state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
+                source_recovery = {key: recovery[key] for key in ("path", "sha256")}
                 state.pop("section_reads", None)  # partial reads of an older source are not current coverage
                 page_bytes, output_bytes = native_context_page_budget()
-                preparation = compact_execution_preparation_request(payload)
-                bound_claim_source = (
-                    capture_id
-                    if preparation and _original_native_claim_source(root, session, capture_id, bind_unattached=True)
-                    else None
-                )
 
                 def publish_recovery(reference: dict[str, Any]) -> None:
-                    claim_source_sha256 = bound_claim_source
-                    if (
-                        preparation
-                        and claim_source_sha256 is None
-                        and not saved_capture
-                        and preparation.get("turn_instance_id")
-                    ):
-                        claim_source_sha256 = (
-                            capture_id
-                            if BARE_SHA256_PATTERN.fullmatch(capture_id) is not None
-                            else reference["sha256"]
-                        )
-                        write_decision_capture(
-                            root / "claim-source.json",
-                            {"session_id": session, "sha256": claim_source_sha256},
-                            publish=os.replace,
-                        )
-                    published_preparation = (
-                        compact_execution_preparation_request(payload, claim_source_sha256=claim_source_sha256)
-                        if preparation and claim_source_sha256 is not None
-                        else preparation
-                    )
-                    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=current_loopx_cli_argv())
-                    state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
-                        "goal_id": goal_id, "agent_id": agent_id,
-                        "total_bytes": Path(reference["path"]).stat().st_size,
-                        **({"execution_preparation": published_preparation} if published_preparation else {})}
-                    state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
-                        "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
-                    _save(root, state)
+                    nonlocal recovery_committed
+                    _commit_native_context_recovery(root, state, reference, scope=scope, source=source_recovery,
+                        payload=payload, capture_id=capture_id, saved_capture=saved_capture,
+                        page_budget=(page_bytes, output_bytes))
+                    recovery_committed = True
 
-                # Publish the current complete source before optional planning
-                # or encoding can be interrupted. Never recover its predecessor.
-                publish_recovery(recovery)
-                recovery_committed = True
+                if check_saved_source:
+                    # A supplied signed capture becomes the active recovery
+                    # only after the typed planner validates it. Retire any
+                    # implicit predecessor lookup while the check is pending.
+                    _retire_native_recovery_lookup(root, state)
+                else:
+                    # Live and historical callers keep their original
+                    # recovery checkpoint before optional planning.
+                    publish_recovery(recovery)
                 # Legacy direct native callers omitted the presentation option.
                 progressive = progressive_enabled is not False
                 presentation = progressive or selection_command_args_template is not None
@@ -874,14 +894,19 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-                    if captured_decision_path is not None and isinstance(payload.get("replan_read_path"), str):
+                    if check_saved_source and isinstance(exc, EffectRuntimeRejected):
+                        raise QuotaDecisionTransportError(str(exc)) from exc
+                    if check_saved_source or (captured_decision_path is not None
+                            and isinstance(payload.get("replan_read_path"), str)):
                         raise QuotaDecisionTransportError(
                             "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."
                         ) from exc
                     return NativeContextPreparation(payload)
-                if presentation and transaction["projected"]:
+                projected = presentation and transaction["projected"]
+                if projected:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                if check_saved_source or projected:
                     publish_recovery(recovery)
                 result: dict[str, Any] = transaction["delivery"] if presentation else transaction
                 read_sections = transaction["read_sections"] if progressive else {}
@@ -913,7 +938,11 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if read_plan is not None:
                     read_plan = {**read_plan, "capture": {key: recovery[key] for key in ("path", "sha256")}}
                 return NativeContextPreparation(result, read_plan)
-            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+            except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+                if check_saved_source:
+                    raise QuotaDecisionTransportError(
+                        "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."
+                    ) from exc
                 if not recovery_committed:
                     _discard_recovery(root)
                 return NativeContextPreparation(payload)
