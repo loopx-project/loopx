@@ -441,7 +441,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
     copied, cleaned = [], []
-    def archive(handle, remote):
+    def archive(remote):
         copied.append(str(remote))
         payload = io.BytesIO()
         event = json.dumps({"type": "event_msg", "payload": {"type": "task_complete",
@@ -451,8 +451,9 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
             member = tarfile.TarInfo("sessions/fixture/session.jsonl")
             member.size = len(event)
             bundle.addfile(member, io.BytesIO(event))
-        return payload.getvalue()
-    monkeypatch.setattr(backend, "copy_from_container", archive)
+        return iter([payload.getvalue()]), {}
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(get_archive=archive))
     monkeypatch.setattr(DockerBackend, "cleanup_container",
                         lambda self, handle, logger: cleaned.append(handle))
     backend.cleanup_container("fixture-container")
@@ -486,7 +487,9 @@ def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monke
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w"):
         pass
-    monkeypatch.setattr(backend, "copy_from_container", lambda *args: payload.getvalue())
+    from types import SimpleNamespace
+    monkeypatch.setattr(backend, "_raw", lambda handle: SimpleNamespace(
+        get_archive=lambda remote: (iter([payload.getvalue()]), {})))
     monkeypatch.setattr("benchmark.runtime.sforge_backend.observe_terminal_provider_failure",
                         lambda *args: (_ for _ in ()).throw(TypeError("unknown event shape")))
     cleaned = []
