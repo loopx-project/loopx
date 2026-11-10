@@ -85,7 +85,7 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
-  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) {
+  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== normalize(options.cwd)) {
     throw new GoalBarSourceRevisionError('project cwd must be absolute and normalized')
   }
   const paths = [resolve(options.cwd, GOALBAR_PROJECT_REGISTRY)]
@@ -716,4 +716,4 @@ export async function readGoalBarModel(
 }
 import { createHash } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
