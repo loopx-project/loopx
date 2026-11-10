@@ -19,10 +19,14 @@ SCOPE_BOUNDED_WORK_RULE = (
     "Local outcomes never replace root continuation, budget or stop criteria."
 )
 
+HEARTBEAT_QUIET_COMPLETION_RULE = (
+    "DONT_NOTIFY: no chat text. Return any required host quiet result in full."
+)
 USER_TODO_FINAL_MESSAGE_RULE = (
     f"{OPERATOR_LANGUAGE_RULE} "
     "`interaction_contract.user_channel.notify` controls output: "
-    "NOTIFY=concrete action; DONT_NOTIFY=quiet. "
+    "NOTIFY=concrete action. "
+    f"{HEARTBEAT_QUIET_COMPLETION_RULE} "
     "`should_run`/due monitor/other-agent todos are not user prompts. "
     "Only under NOTIFY, `action_required` without an action: say the specific "
     "user Todo is not projected and repair LoopX state projection. Under "
@@ -31,7 +35,7 @@ USER_TODO_FINAL_MESSAGE_RULE = (
 HEARTBEAT_NOTIFICATION_RULE_SHORT = (
     f"{OPERATOR_LANGUAGE_RULE_THIN} "
     "`user_channel.notify` controls OUTPUT only: NOTIFY=show; "
-    "DONT_NOTIFY=no output. "
+    f"{HEARTBEAT_QUIET_COMPLETION_RULE} "
     "`heartbeat_recommendation.agent_must_attempt`/"
     "`execution_obligation.must_attempt_work`: true=work+writeback; only "
     "false permits no-op. Due/peer work is not a user prompt. Missing NOTIFY "
