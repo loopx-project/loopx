@@ -7,7 +7,7 @@
 </head><body><a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header"><a class="brand" href="../../"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="Main navigation"><a href="../">Blog</a><a href="../../docs/book/">Docs</a></nav><div class="header-actions"><a class="language" href="../zh/context-delivery/" lang="zh-CN" hreflang="zh-CN">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
 <main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">One voice task, from choosing facts to fitting the first read, preserving exact values, and recovering without replaying work.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time><span>·</span><span>Updated November 8</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#stage-scopes">Read scope before choosing</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#first-read-budget">The first response has to arrive complete</a><a href="#transport-cost">Count the trips and the copies</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#ablation-evidence">Multi-task and layered ablation</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
+<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#stage-scopes">Read scope before choosing</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#first-read-budget">The first response has to arrive complete</a><a href="#transport-cost">Count the trips and the copies</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#ablation-evidence">Multi-task and layered ablation</a><a href="#multitask-context-byte-ratios">8-task context byte ratios</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
 <p>LoopX's context delivery separates these jobs: <strong>preserve complete sources, read the facts needed for the current decision, expand supporting material around questions, and reuse unchanged structures exactly within a valid compaction cycle.</strong></p>
 <p>The core native Codex path ships in <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a>. Supported POSIX Codex App/SSH sessions and new benchmark heartbeat trials default to context delivery; saved off remains effective and explicit off is available. When enabled, complete content is saved first and the Agent receives a reading entrypoint for current facts. See the <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 release notes</a> for publication and validation scope.</p>
 <p>Think of a capture as a complete saved snapshot, like a book whose edition is fixed. An index locates its chapters; a JSON Pointer addresses a place inside it. Progressive reading determines how deeply to open the material now. Differential delivery determines what can be reused on the next continuation.</p>
@@ -301,6 +301,99 @@ loopx --format json quota context-read \
 </table></div>
 <p>This dual-track audit shows why <strong>control-packet byte reduction (−74.25% / −38.54%) must not be equated with whole-episode model token savings (−12.07% uncached, −7.46% total), nor used to hide early-window indexing overhead (4.05× in the first 2 hours) or cross-task counterexamples.</strong> The reported ANN runs contain both lower input totals and later useful experiments. That observation motivates testing whether context delivery helps sustain long research, but does not by itself attribute the outcome to saved attention, separate every interaction with Stride, or establish a gain on another task. The November source changes above were not treatments in these archived runs. See <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench late-stage breakthroughs and five-arm attribution</a> for the original research context.</p>
 <p>2.2.0 ships complete sources, file entrypoints, batch selection, index depth, applicable acceptance layering, exact sharing, cycle deltas and recovery. Broader decision-stage candidate, preference and Explore delivery and consistency across all entrypoints remain unfinished. Disable in Settings → This machine → Capabilities → Differential context → Codex; saved off survives upgrade. A command or new benchmark trial can use <code>--context-delivery off</code>. Trials do not inherit the machine switch, and existing frozen trials are not rewritten. Under the default policy, ordinary CLI, unsupported hosts and non-heartbeat benchmarks retain their full paths; an explicit unsupported on request is rejected. Unavailable hooks use full delivery. Saving configuration, actual installation and model adoption remain separate checks.</p>
+<h3 id="multitask-context-byte-ratios">Multi-task control-plane byte ratios across 8 latest Four-Arm Context ON 18h trajectories (Progressive vs. Delta)</h3>
+<p>This section recalculates the published eight-task Four-Arm Context ON 18h aggregates to distinguish Progressive and in-cycle Delta transport costs. The source reports 213 model-facing wakes: 101 new-session or post-compaction baseline reads and 112 in-cycle continuations. Per-task cells retain the published values; totals are recomputed from those cells. Raw per-wake logs are not included here.</p>
+<figure class="diagram"><p class="diagram-label">8-task Four-Arm Context ON byte ratios (N = 213 wakes, 112 in-cycle Deltas)</p><a href="../images/context-delivery/multitask-byte-ratios-en.svg" target="_blank" rel="noopener" aria-label="Open the 8-task Progressive vs. Delta control-plane byte ratio chart at full size"><img src="../images/context-delivery/multitask-byte-ratios-en.svg" alt="8-Task Four-Arm Context ON 18h Control-Plane Byte Share: Progressive 32.5% (-67.5%), In-Cycle Delta 35.8% (-64.2%), Prog+Delta First-Screen 3.0% / 5.0%" width="1380" height="680" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>A: Per-task shares, with Progressive over all wakes and Delta/first-read over in-cycle wakes only. B: Separate cohort totals: Progressive 7.29 / 22.41 MB over 213 wakes; Delta 4.49 / approximately 12.53 MB over 112 wakes. First-read body / CLI totals are 0.374 / 0.631 MB for the same 112 wakes. The two denominators are not interchangeable. Open image for full size.</figcaption></figure>
+<div class="table-scroll" role="region" tabindex="0" aria-label="8-task Four-Arm Context ON control-plane byte ratio table"><table style="min-width:880px">
+<thead>
+<tr>
+<th>Task (Four-Arm Context ON 18h)</th>
+<th style="text-align:right">Wakes (base / Δ)</th>
+<th style="text-align:right">Full packets</th>
+<th style="text-align:right">Progressive projection (share)</th>
+<th style="text-align:right">In-cycle Delta payload (vs same-wake Full)</th>
+<th style="text-align:right">Prog+Delta first-screen (body / CLI)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Grid Robot (<code>on_stride</code>)</td>
+<td style="text-align:right">29 (15 / 14)</td>
+<td style="text-align:right">4,405,651 B</td>
+<td style="text-align:right">1,166,467 B (<strong>26.5%</strong>, −73.5%)</td>
+<td style="text-align:right">474,016 B (<strong>20.7%</strong>, −79.3%)</td>
+<td style="text-align:right">41,878 / 76,650 B (<strong>1.8% / 3.3%</strong>)</td>
+</tr>
+<tr>
+<td>VLIW Scheduling (<code>on_stride</code>)</td>
+<td style="text-align:right">14 (5 / 9)</td>
+<td style="text-align:right">1,297,500 B</td>
+<td style="text-align:right">505,826 B (<strong>39.0%</strong>, −61.0%)</td>
+<td style="text-align:right">382,664 B (<strong>45.2%</strong>, −54.8%)</td>
+<td style="text-align:right">30,860 / 50,152 B (<strong>3.6% / 5.9%</strong>)</td>
+</tr>
+<tr>
+<td>FFmpeg Encoding (<code>on_stride</code>)</td>
+<td style="text-align:right">26 (12 / 14)</td>
+<td style="text-align:right">2,924,522 B</td>
+<td style="text-align:right">874,104 B (<strong>29.9%</strong>, −70.1%)</td>
+<td style="text-align:right">759,787 B (<strong>47.1%</strong>, −52.9%)</td>
+<td style="text-align:right">43,807 / 75,305 B (<strong>2.7% / 4.7%</strong>)</td>
+</tr>
+<tr>
+<td>OpenTTD Transport (<code>on_stride</code>)</td>
+<td style="text-align:right">31 (19 / 12)</td>
+<td style="text-align:right">3,288,042 B</td>
+<td style="text-align:right">1,050,623 B (<strong>32.0%</strong>, −68.0%)</td>
+<td style="text-align:right">436,053 B (<strong>30.8%</strong>, −69.2%)</td>
+<td style="text-align:right">36,753 / 64,619 B (<strong>2.6% / 4.6%</strong>)</td>
+</tr>
+<tr>
+<td>Ad Placement (<code>on_stride</code>)</td>
+<td style="text-align:right">29 (12 / 17)</td>
+<td style="text-align:right">3,115,820 B</td>
+<td style="text-align:right">1,019,704 B (<strong>32.7%</strong>, −67.3%)</td>
+<td style="text-align:right">708,828 B (<strong>39.4%</strong>, −60.6%)</td>
+<td style="text-align:right">64,174 / 102,437 B (<strong>3.6% / 5.7%</strong>)</td>
+</tr>
+<tr>
+<td>Borden Inversion (<code>on_stride</code>)</td>
+<td style="text-align:right">28 (11 / 17)</td>
+<td style="text-align:right">2,855,664 B</td>
+<td style="text-align:right">1,001,254 B (<strong>35.1%</strong>, −64.9%)</td>
+<td style="text-align:right">625,709 B (<strong>34.4%</strong>, −65.6%)</td>
+<td style="text-align:right">50,602 / 90,024 B (<strong>2.8% / 4.9%</strong>)</td>
+</tr>
+<tr>
+<td>Rust Workspace (<code>on_stride</code>)</td>
+<td style="text-align:right">15 (4 / 11)</td>
+<td style="text-align:right">1,173,832 B</td>
+<td style="text-align:right">439,814 B (<strong>37.5%</strong>, −62.5%)</td>
+<td style="text-align:right">363,310 B (<strong>42.1%</strong>, −57.9%)</td>
+<td style="text-align:right">40,956 / 64,251 B (<strong>4.7% / 7.4%</strong>)</td>
+</tr>
+<tr>
+<td>ANN Vector Search (<code>on_stride</code>)</td>
+<td style="text-align:right">41 (23 / 18)</td>
+<td style="text-align:right">3,347,659 B</td>
+<td style="text-align:right">1,228,159 B (<strong>36.7%</strong>, −63.3%)</td>
+<td style="text-align:right">737,968 B (<strong>38.6%</strong>, −61.4%)</td>
+<td style="text-align:right">65,419 / 107,112 B (<strong>3.4% / 5.6%</strong>)</td>
+</tr>
+<tr>
+<td><strong>8-Run Weighted Total</strong></td>
+<td style="text-align:right"><strong>213 (101 / 112)</strong></td>
+<td style="text-align:right"><strong>22,408,690 B (100%)</strong></td>
+<td style="text-align:right"><strong data-audit-progressive-bytes="7285951">7,285,951 B (32.5%, −67.5%)</strong></td>
+<td style="text-align:right"><strong>4,488,335 B (35.8%, −64.2%)</strong></td>
+<td style="text-align:right"><strong>374,449 / 630,550 B (3.0% / 5.0%)</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>Two orthogonal byte-reduction stages appear consistently across all 8 tasks: (1) <strong>Progressive projection (<code>required-context.json</code>)</strong> reduces full decision packets across all 213 wakes from <code>22.41 MB</code> to <code>7.29 MB</code> (<strong><code>32.5%</code> weighted byte share, <code>−67.5%</code></strong>, per-task range <code>26.5%–39.0%</code>) by folding unselected candidates and historical long-tail detail behind on-demand JSON Pointers; (2) <strong>in-cycle Delta delivery (<code>delivery.json</code>)</strong> reduces the 112 in-cycle wakes from <code>12.53 MB</code> to <code>4.49 MB</code> (<strong><code>35.8%</code> weighted byte share, <code>−64.2%</code></strong>, per-task range <code>20.7%–47.1%</code>); and (3) <strong>their combined <code>--initial-read</code> first-screen entrypoint</strong> carries only <strong><code>3.0%</code> of raw bytes (<code>5.0%</code> including the CLI JSON reader envelope, i.e., <code>−97.0% / −95.0%</code>)</strong>.</p>
+<p>2.2.0 ships complete sources, file entrypoints, batch selection, index depth, applicable acceptance layering, exact sharing, cycle deltas and recovery. Broader decision-stage candidate, preference and Explore delivery and consistency across all entrypoints remain unfinished. Disable in Settings → This machine → Capabilities → Differential context → Codex; saved off survives upgrade. A command or new benchmark trial can use <code>--context-delivery off</code>. Trials do not inherit the machine switch, and existing frozen trials are not rewritten. Under the default policy, ordinary CLI, unsupported hosts and non-heartbeat benchmarks retain their full paths; an explicit unsupported on request is rejected. Unavailable hooks use full delivery. Saving configuration, actual installation and model adoption remain separate checks.</p>
+
+<p class="muted">Basis and source: the published eight task rows sum to 7,285,951 B / 22,408,690 B = 32.5% for Progressive across all 213 wakes. Delta and first-screen shares of approximately 35.8% and 3.0% / 5.0% cover only the 112 in-cycle wakes. Their Full denominator was published rounded as 12.53 MB; it is not the 213-wake total. This is an aggregate recalculation, not a new experiment or an independent audit of per-wake logs. <a href="../data/long-horizon-audit.json">Public aggregate data and provenance</a>.</p><p>Implementation status: <a href="https://github.com/loopx-project/loopx/pull/8266">#8266</a> remains an open C1 proposal. The final merged scope of <a href="https://github.com/loopx-project/loopx/pull/8304">#8304</a> preserves precision while reusing ordering and a verified digest. These cohort bytes do not establish a shipped unified Controller/Worker gain.</p>
 <h2 id="reproduce">Read the same material yourself</h2>
 <p><a href="example.py">example.py</a> generates this complete synthetic voice task and invokes the existing reader, progressive projection and delta owners. It checks selected values, directory addresses, all ten requirements, shared references and complete recovery. It registers no Goal, admits or settles no Turn, and calls no model or speech service.</p>
 <p>Prepare the original measurement checkout, <code>a4a0fad889d91cba0d945ce658788bdb76ba351e</code>, and its compatible dependencies. Run from that checkout’s root, substituting the downloaded program path. The output directory must be empty.</p>

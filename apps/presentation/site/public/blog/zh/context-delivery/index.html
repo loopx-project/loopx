@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
 </head><body><a class="skip-link" href="#main">跳至正文</a>
 <header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../context-delivery/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 8 日更新</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#stage-scopes">范围在影响决定之前读到</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#first-read-budget">首条响应要能完整送达</a><a href="#transport-cost">往返几次，正文搬了几遍</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">沿一个语音任务，讲清选读、完整首读、按阶段补读、精确复用与恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 10 日更新</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#stage-scopes">范围在影响决定之前读到</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#first-read-budget">首条响应要能完整送达</a><a href="#transport-cost">往返几次，正文搬了几遍</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#multitask-context-byte-ratios">八题上下文字节占比</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
 <p>LoopX 的 context delivery 把这件事拆开做：<strong>完整资料保存下来，当前决定需要的事实先读，支持材料沿问题展开；同一个有效 compaction 周期内，再精确复用没有变化的结构。</strong></p>
 <p>核心 Codex 原生路径已随 <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a> 发布。受支持的 POSIX Codex App／SSH 会话与新的 benchmark heartbeat 默认开启 context delivery；已有关闭设置继续生效，也可以显式关闭。开启后完整内容先保存，Agent 收到当前读取入口。具体发布与验证范围见 <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 版本说明</a>。</p>
 <p>可以把它想成查一本厚书：capture 是完整保存的快照，像一本版本固定的书；目录告诉我们章节在哪，JSON Pointer 是书内地址。渐进式读取决定这一刻翻到多深；差分决定下一轮哪些内容可以沿用。</p>
@@ -301,6 +301,99 @@ loopx --format json quota context-read \
 </table></div>
 <p>这组双轨实证说明：<strong>控制包裁剪率（−74.25% / −38.54%）不能直接等同于整轮模型 Token 节省（未缓存 −12.07%、总输入 −7.46%），更不能掩盖前 2 小时早窗的前置建索引开销（4.05×）和跨题反例。</strong> 报告中的 ANN 运行同时出现了较低输入总量和后程有效实验，值得据此继续检验上下文交付能否支撑长程研究。但这些观察本身不能将成果归因于省下的注意力、拆清它与 Stride 的全部交互，也不能证明换一题仍有收益。上文 11 月的源码修复并不是这些归档运行的实验干预。原研究条件见 <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench 后程突破与五臂归因</a>。</p>
 <p>2.2.0 已交付完整来源、文件入口、批量选择、目录深度、适用验收分层、精确共享、周期差分与恢复。更广的候选、偏好、Explore 按决策阶段统一交付及全入口一致性仍有未完成部分。在「设置 → 本机 → 能力 → 差分上下文 → Codex」可以关闭，已有 off 会保留；单次命令或新 benchmark trial 可用 <code>--context-delivery off</code>。Trial 不继承本机开关，已有冻结 trial 不被重写。默认策略下，普通 CLI、不支持的宿主和非 heartbeat benchmark 保留原完整路径；显式请求不支持的 on 会明确拒绝，hooks 不可用时使用完整交付。保存配置、实际安装与模型采用分别核验。</p>
+<h3 id="multitask-context-byte-ratios">八题四臂 Context ON：按唤醒组比较上下文字节</h3>
+<p>本节复算已公开的八题四臂 Context ON 18h 聚合表，以区分 Progressive 与周期内 Delta 的传输开销。原表报告 213 次模型侧唤醒：101 次新会话或压缩后的基线读取，以及 112 次周期内续跑。逐题单元格保留来源原值，合计按表重算；这里不附原始逐 wake 日志。</p>
+<figure class="diagram"><p class="diagram-label">八题四臂 Context ON 控制面字节比例（N = 213 唤醒，112 周期内 Delta）</p><a href="../../images/context-delivery/multitask-byte-ratios-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的八题 Progressive 与 Delta 控制面字节比例图"><img src="../../images/context-delivery/multitask-byte-ratios-zh.svg" alt="八题四臂 Context ON 18h 轨迹控制面字节比例：Progressive 占 32.5% (-67.5%)，同周期 Delta 占 35.8% (-64.2%)，Prog+Delta 首屏占 3.0% / 5.0%" width="1380" height="680" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>A：逐题占比，Progressive 覆盖全部唤醒，Delta／首读仅覆盖周期内唤醒。B：分开汇总：213 次唤醒的 Progressive 为 7.29 / 22.41 MB；112 次周期内唤醒的 Delta 为 4.49 / 约 12.53 MB。同一 112 次的首读正文／CLI 为 0.374 / 0.631 MB。两个分母不可混用。可打开原图查看。</figcaption></figure>
+<div class="table-scroll" role="region" tabindex="0" aria-label="八题四臂 Context ON 控制面字节比例对照表"><table style="min-width:880px">
+<thead>
+<tr>
+<th>题目（四臂 Context ON 18h）</th>
+<th style="text-align:right">唤醒数（基线 / Δ）</th>
+<th style="text-align:right">Full 全量包</th>
+<th style="text-align:right">Progressive 必要视图（占比）</th>
+<th style="text-align:right">同周期 Delta 载荷（占同轮 Full）</th>
+<th style="text-align:right">Prog+Delta 首屏（正文 / 含封装）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Grid 路径优化（<code>on_stride</code>）</td>
+<td style="text-align:right">29（15 / 14）</td>
+<td style="text-align:right">4,405,651 B</td>
+<td style="text-align:right">1,166,467 B（<strong>26.5%</strong>, −73.5%）</td>
+<td style="text-align:right">474,016 B（<strong>20.7%</strong>, −79.3%）</td>
+<td style="text-align:right">41,878 / 76,650 B（<strong>1.8% / 3.3%</strong>）</td>
+</tr>
+<tr>
+<td>VLIW 调度优化（<code>on_stride</code>）</td>
+<td style="text-align:right">14（5 / 9）</td>
+<td style="text-align:right">1,297,500 B</td>
+<td style="text-align:right">505,826 B（<strong>39.0%</strong>, −61.0%）</td>
+<td style="text-align:right">382,664 B（<strong>45.2%</strong>, −54.8%）</td>
+<td style="text-align:right">30,860 / 50,152 B（<strong>3.6% / 5.9%</strong>）</td>
+</tr>
+<tr>
+<td>FFmpeg 编码加速（<code>on_stride</code>）</td>
+<td style="text-align:right">26（12 / 14）</td>
+<td style="text-align:right">2,924,522 B</td>
+<td style="text-align:right">874,104 B（<strong>29.9%</strong>, −70.1%）</td>
+<td style="text-align:right">759,787 B（<strong>47.1%</strong>, −52.9%）</td>
+<td style="text-align:right">43,807 / 75,305 B（<strong>2.7% / 4.7%</strong>）</td>
+</tr>
+<tr>
+<td>OpenTTD 路网规划（<code>on_stride</code>）</td>
+<td style="text-align:right">31（19 / 12）</td>
+<td style="text-align:right">3,288,042 B</td>
+<td style="text-align:right">1,050,623 B（<strong>32.0%</strong>, −68.0%）</td>
+<td style="text-align:right">436,053 B（<strong>30.8%</strong>, −69.2%）</td>
+<td style="text-align:right">36,753 / 64,619 B（<strong>2.6% / 4.6%</strong>）</td>
+</tr>
+<tr>
+<td>Ad Placement 广告拍卖（<code>on_stride</code>）</td>
+<td style="text-align:right">29（12 / 17）</td>
+<td style="text-align:right">3,115,820 B</td>
+<td style="text-align:right">1,019,704 B（<strong>32.7%</strong>, −67.3%）</td>
+<td style="text-align:right">708,828 B（<strong>39.4%</strong>, −60.6%）</td>
+<td style="text-align:right">64,174 / 102,437 B（<strong>3.6% / 5.7%</strong>）</td>
+</tr>
+<tr>
+<td>Borden 震源反演（<code>on_stride</code>）</td>
+<td style="text-align:right">28（11 / 17）</td>
+<td style="text-align:right">2,855,664 B</td>
+<td style="text-align:right">1,001,254 B（<strong>35.1%</strong>, −64.9%）</td>
+<td style="text-align:right">625,709 B（<strong>34.4%</strong>, −65.6%）</td>
+<td style="text-align:right">50,602 / 90,024 B（<strong>2.8% / 4.9%</strong>）</td>
+</tr>
+<tr>
+<td>Rust 工作区重构（<code>on_stride</code>）</td>
+<td style="text-align:right">15（4 / 11）</td>
+<td style="text-align:right">1,173,832 B</td>
+<td style="text-align:right">439,814 B（<strong>37.5%</strong>, −62.5%）</td>
+<td style="text-align:right">363,310 B（<strong>42.1%</strong>, −57.9%）</td>
+<td style="text-align:right">40,956 / 64,251 B（<strong>4.7% / 7.4%</strong>）</td>
+</tr>
+<tr>
+<td>ANN 向量检索（<code>on_stride</code>）</td>
+<td style="text-align:right">41（23 / 18）</td>
+<td style="text-align:right">3,347,659 B</td>
+<td style="text-align:right">1,228,159 B（<strong>36.7%</strong>, −63.3%）</td>
+<td style="text-align:right">737,968 B（<strong>38.6%</strong>, −61.4%）</td>
+<td style="text-align:right">65,419 / 107,112 B（<strong>3.4% / 5.6%</strong>）</td>
+</tr>
+<tr>
+<td><strong>8 题合计（加权总体）</strong></td>
+<td style="text-align:right"><strong>213（101 / 112）</strong></td>
+<td style="text-align:right"><strong>22,408,690 B（100%）</strong></td>
+<td style="text-align:right"><strong data-audit-progressive-bytes="7285951">7,285,951 B（32.5%, −67.5%）</strong></td>
+<td style="text-align:right"><strong>4,488,335 B（35.8%, −64.2%）</strong></td>
+<td style="text-align:right"><strong>374,449 / 630,550 B（3.0% / 5.0%）</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>可以看到两层正交且稳定的字节压缩效应：（1）<strong>Progressive 渐进式投影（<code>required-context.json</code>）</strong>在全部 213 次唤醒上将完整决策包从 <code>22.41 MB</code> 压至 <code>7.29 MB</code>（均值 <strong><code>32.5%</code>，净减 <code>−67.5%</code></strong>，各题稳定在 <code>26.5%–39.0%</code>），折叠掉未选中候选与历史长尾详情；（2）<strong>Delta 周期内差分（<code>delivery.json</code>）</strong>在 112 次同周期续跑唤醒上，将对应的 <code>12.53 MB</code> 全量包压至 <code>4.49 MB</code>（均值 <strong><code>35.8%</code>，净减 <code>−64.2%</code></strong>，各题 <code>20.7%–47.1%</code>）；（3）<strong>两者叠加的 <code>--initial-read</code> 首屏入口</strong>仅占原包的 <strong><code>3.0%</code>（含 CLI JSON 封装为 <code>5.0%</code>，即净减 <code>−97.0% / −95.0%</code>）</strong>。</p>
+<p>2.2.0 已交付完整来源、文件入口、批量选择、目录深度、适用验收分层、精确共享、周期差分与恢复。更广的候选、偏好、Explore 按决策阶段统一交付及全入口一致性仍有未完成部分。在「设置 → 本机 → 能力 → 差分上下文 → Codex」可以关闭，已有 off 会保留；单次命令或新 benchmark trial 可用 <code>--context-delivery off</code>。Trial 不继承本机开关，已有冻结 trial 不被重写。默认策略下，普通 CLI、不支持的宿主和非 heartbeat benchmark 保留原完整路径；显式请求不支持的 on 会明确拒绝，hooks 不可用时使用完整交付。保存配置、实际安装与模型采用分别核验。</p>
+
+<p class="muted">口径与来源：上表逐题数据复算自已公开的八题表，Progressive 合计为 7,285,951 B / 22,408,690 B = 32.5%，覆盖全部 213 次唤醒。Delta 与首屏的 35.8%、3.0% / 5.0% 仅对应 112 次周期内唤醒；其 Full 分母原文仅报告约 12.53 MB，不能与 213 次总量混用。这里没有新增实验，也未独立核对逐 wake 原始记录。<a href="../../data/long-horizon-audit.json">公开聚合数据与来源</a>。</p><p>实现状态：<a href="https://github.com/loopx-project/loopx/pull/8266">#8266</a> 仍是开放的 C1 提案；<a href="https://github.com/loopx-project/loopx/pull/8304">#8304</a> 的最终合入范围是保留精度的排序与摘要复用。上述字节数据不归因为统一 Controller/Worker 已上线的收益。</p>
 <h2 id="reproduce">用同一份材料动手读一遍</h2>
 <p><a href="../../context-delivery/example.py">example.py</a> 完整生成这个合成语音任务，调用现有 reader、渐进投影与差分 owner，逐项核对选择值、目录地址、全部 10 条要求、共享引用与完整恢复。程序不注册 Goal，不做准入或结算，也不调用模型或语音服务。</p>
 <p>先准备原测量的源码 <code>a4a0fad889d91cba0d945ce658788bdb76ba351e</code> 及其兼容依赖，在该 checkout 根目录运行。将下载的程序路径填入下方；输出目录必须为空。</p>
