@@ -143,6 +143,8 @@ def output_format(args: argparse.Namespace, *local_dests: str) -> str:
 def resolve_global_output_format(args: argparse.Namespace) -> str:
 	if getattr(args, "format", None):
 		return str(args.format)
+	if args.command == "manager-inbox":
+		return "json"
 	if args.command == "quota" and getattr(args, "quota_command", None) == "should-run":
 		return "json"
 	return "markdown"
