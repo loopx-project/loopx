@@ -223,6 +223,22 @@ def test_explicit_initial_cursor_rejects_changed_selection_profile(tmp_path, mon
     assert "content" not in rejected
 
 
+def test_pinned_initial_reference_rejects_changed_selection_addresses(tmp_path):
+    _, machine, model = fixture(tmp_path)
+    first = read(model["first_read_command"], max_page_output_bytes=3000, page_bytes=3000)
+    assert first["ok"] and not first["eof"]
+    _, descriptor = read_context_read_reference(first["reference_file"])
+    assert descriptor["selection_paths"] != [["criterion"]]
+    # Matching pointer and path metadata is insufficient: the immutable
+    # reference also pins the digest of the original, ordered selection.
+    changed = write_context_read_reference(Path(machine["path"]), machine["sha256"],
+        selection={**descriptor["selection"], "select": ["/criterion"]},
+        selection_paths=[["criterion"]])
+    rejected = read(first["next_command"], reference_file=str(changed))
+    assert rejected["ok"] is False and "digest changed" in rejected["reason"]
+    assert "content" not in rejected
+
+
 @pytest.mark.parametrize("legacy", [False, True], ids=["pinned-addresses", "historical-profile"])
 def test_initial_reference_navigation_change_preserves_original_read_boundary(tmp_path, monkeypatch, legacy):
     payload, machine, model = fixture(tmp_path)
@@ -361,7 +377,7 @@ def test_resolved_initial_addresses_replay_without_replanning_the_initial_profil
     assert {f: f.read_bytes() for f in before} == before
 
 
-@pytest.mark.parametrize("kind", ["initial", "historical_initial", "pinned"])
+@pytest.mark.parametrize("kind", ["initial", "historical_initial", "pinned", "fallback_initial", "fallback_presented_initial"])
 def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_path, monkeypatch, kind):
     from loopx.control_plane.turn_driver import codex_context as context
     from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
@@ -375,6 +391,14 @@ def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_p
     original["selected_todo"] = {"todo_id": "todo_work", "claimed_by": "agent",
         "text": "Read the complete original requirement. " * 400}
     outcome(original)["requirements"][0]["description"] += " Keep the original Stop." * 400
+    narrative_pointer = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    if kind == "fallback_presented_initial":
+        objective = "Preserve the accepted outcome and original Stop. " * 40
+        narrative = (f"---\nobjective: {json.dumps(objective)}\n---\n\n# Active Goal State\n\n"
+                     f"## Objective\n\n> {objective}\n\n## Stop\n\nKeep the original permission boundary.\n")
+        original["interaction_contract"]["agent_channel"]["work_context"]["sources"] = [{
+            "source": "goal_state", "content": {"state_file": "goal.md", "full_source": True,
+                "text": narrative, "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest()}}]
     project(tmp_path, payload=original)
     source = context._state(tmp_path)["source_recovery"]
     path, digest = Path(source["path"]), source["sha256"]
@@ -389,6 +413,19 @@ def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_p
             "initial_read": False, "list_fields": False, "list_depth": None,
             "sha256": hashlib.sha256(expected).hexdigest()})
         page = read(command, reference_file=str(reference), page_bytes=3000, max_page_output_bytes=3500)
+    elif kind in {"fallback_initial", "fallback_presented_initial"}:
+        from loopx.cli_commands import quota_context_reader
+
+        def unavailable(*args, **kwargs):
+            raise OSError("synthetic metadata write failure")
+
+        # Exercise the real reader fallback. It carries a selection digest
+        # without the explicit pointer list or a reader reference.
+        with monkeypatch.context() as blocked:
+            blocked.setattr(quota_context_reader, "write_context_read_reference", unavailable)
+            page = read(command, initial_read=True, page_bytes=3000, max_page_output_bytes=3500)
+        assert page.get("selection_sha256") and "selected_pointers" not in page
+        assert "reference_file" not in page and "--initial-read" in page["next_command"]
     else:
         page = read(command, initial_read=True, page_bytes=3000, max_page_output_bytes=3500)
         if kind == "historical_initial":
@@ -407,11 +444,27 @@ def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_p
     before = path.read_bytes()
     deliver(tmp_path, event, pages[1:])
     assert not context._state(tmp_path).get("confirmed_read_sections"), "EOF cannot hide unread earlier pages"
+    if kind in {"fallback_initial", "fallback_presented_initial"}:
+        first = pages[0]
+        deliver(tmp_path, event, [{**first, "selection_sha256": "0" * 64},
+            {**first, "content": "!" + first["content"][1:]}])
+        assert not context._state(tmp_path).get("confirmed_read_sections")
     deliver(tmp_path, event, pages[:1])
     state = context._state(tmp_path)
     assert state["confirmed_read_sections"]
     assert state["consumed_pointers"]
     assert "candidate" not in state, "section coverage cannot establish full model-input retention"
+    if kind == "fallback_presented_initial":
+        selected = json.loads("".join(page["content"] for page in pages))["selections"]
+        narrative_row, = (row for row in selected if row["pointer"] == narrative_pointer)
+        assert narrative_row["presentation"] and narrative_row["value"] != narrative
+        assert narrative_pointer not in state["consumed_pointers"], "display edits cannot certify literal source text"
+        literal = read(command, select=[narrative_pointer], page_bytes=64000, max_page_output_bytes=64000)
+        assert literal["ok"] and literal["eof"]
+        assert json.loads(literal["content"])["selections"][0]["value"] == narrative
+        deliver(tmp_path, event, [literal])
+        state = context._state(tmp_path)
+        assert narrative_pointer in state["consumed_pointers"]
     assert path.read_bytes() == before
     _, warm = project(tmp_path, "after-selected-read", payload=original)
     current = json.loads(Path(warm["recovery"]["path"]).read_bytes())
@@ -421,7 +474,56 @@ def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_p
     assert "candidate" not in context._state(tmp_path)
 
 
-@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_inline_initial_reader_of_real_authority_preserves_original_effect(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver import codex_context as context
+    from test_codex_context_lifecycle import setup, project, deliver
+    from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+
+    call, _, history = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the original source.", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "reader-source-verification")
+    decision = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--turn-instance-id", "inline-initial-source", "--todo-id", added["todo_id"])
+    assert decision["effective_action"] == "normal_run"
+    effect = decision["heartbeat_receipt"]["settlement_identity"]
+    history_before = history.read_bytes()
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = setup(native, monkeypatch)
+    project(native, payload=decision)
+    source = context._state(native)["source_recovery"]
+    path = Path(source["path"])
+    before = path.read_bytes()
+    arguments = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", source["sha256"], "--initial-read",
+        "--page-bytes", "4500", "--max-page-output-bytes", "5500"]
+    pages = []
+    while True:
+        page = call(*arguments)
+        assert page["ok"] and page.get("selection_sha256"), page
+        assert "selected_pointers" not in page and "reference_file" not in page
+        pages.append(page)
+        if page["eof"]:
+            break
+        words = shlex.split(page["next_command"])
+        arguments = words[words.index("quota"):]
+    assert len(pages) > 1
+    facts = {row["pointer"]: row["value"] for row in json.loads(
+        "".join(page["content"] for page in pages))["selections"]}
+    assert facts["/heartbeat_receipt"]["settlement_identity"] == effect
+    assert facts["/selected_todo"] == decision["selected_todo"]
+    deliver(native, event, pages[:-1])
+    assert not context._state(native).get("consumed_pointers")
+    deliver(native, event, pages[-1:])
+    state = context._state(native)
+    assert state["consumed_pointers"] and state["confirmed_read_sections"]
+    assert "candidate" not in state and "retained" not in state
+    assert path.read_bytes() == before and history.read_bytes() == history_before
+
+
+@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index", "null_pointers"])
 def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tmp_path, damage):
     _, machine, model = fixture(tmp_path)
     reference = {"path": machine["path"], "sha256": machine["sha256"]}
@@ -436,8 +538,12 @@ def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tm
         other.mkdir(mode=0o700)
         _, _, foreign = fixture(other)
         page = read(foreign["command"], select=["/criterion"])
-    else:
+    elif damage == "index":
         page = read(model["command"], select=[""], list_fields=True)
+    else:
+        page = read(model["command"], initial_read=True)
+        page.pop("reference_file", None)
+        page["selected_pointers"] = None
     assert _verified_context_pages(state, _context_pages(page)) == []
 
 

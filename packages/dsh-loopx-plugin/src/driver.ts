@@ -419,8 +419,8 @@ function exactHeartbeat(
     || payload.agent_id !== binding.agentId
     || payload.turn_instance_id !== turnInstanceId) return undefined
   const taskBody = typeof payload.task_body === 'string' ? payload.task_body : ''
-  const assignments = [...taskBody.matchAll(/\bLOOPX_TURN=([^\s`'";]+)/gu)]
-    .map(match => match[1])
+  const assignments = [...taskBody.matchAll(/\bLOOPX_TURN=([^\s`'";]+)|\$LOOPX_TURN\s*=\s*"([^\s`'";]+)"/gu)]
+    .map(match => match[1] ?? match[2])
   return taskBody.length > 0
     && taskBody.length <= 32_000
     && assignments.length === 1

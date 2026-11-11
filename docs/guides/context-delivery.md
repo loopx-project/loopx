@@ -81,10 +81,13 @@ canonical read must still establish the selected Todo and its source. The
 note binds to its Goal, Agent, Todo, reader and authority source; changing only
 evidence or other Todo metadata does not make the same literal note new. Current
 task text and controls remain fresh, and metadata keeps its current source and
-existing reader. Partial delivery, changed text, incompatible identity or
-compaction returns the full note; explicit recovery reads the same capture.
-This uses observed field coverage, not file existence as retention proof, and
-does not establish model comprehension or net workflow savings.
+existing reader. If the new note starts with the exact observed note, the reader
+can present only the added text. In an `append_to_observed_text` selection,
+`value` is the suffix after `prefix_bytes` UTF-8 bytes. The next read can use the
+longer note as its prefix only after the Host observes the complete suffix view.
+A partial prior read, rewrite, incompatible identity, or compaction calls for the
+full note. Explicit recovery reads the same capture. Observed delivery does not
+establish model comprehension or net workflow savings.
 
 Replan authoring uses the same-response form: CLI display can reference the
 complete `vision_authoring` in a durable-writeback step. The existing TypeScript
