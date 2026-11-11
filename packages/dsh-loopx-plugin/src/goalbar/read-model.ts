@@ -8,6 +8,7 @@ import type {
   LoopXCommand,
 } from '../cli.ts'
 import {
+  GOALBAR_ADMISSION_CLEAR,
   isGoalBarAgentId,
   isGoalBarGoalId,
   isGoalBarSessionId,
@@ -276,6 +277,9 @@ export async function readStableGoalBarModel(
           goalActivation: activation.goalActivation,
           agentStatus: options.agentStatus,
           progress: progress.progress,
+          // Driver admission state is process-local; the service publishes the
+          // live value at read time, exactly as it refreshes agentStatus.
+          continuationAdmission: GOALBAR_ADMISSION_CLEAR,
         },
       },
       sourceRevision: sourceAfter,
@@ -711,6 +715,7 @@ export async function readGoalBarModel(
       goalActivation: activation.goalActivation,
       agentStatus: options.agentStatus,
       progress: progress.progress,
+      continuationAdmission: GOALBAR_ADMISSION_CLEAR,
     },
   }
 }

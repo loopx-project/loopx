@@ -85,6 +85,7 @@ function snapshot(
     goalActivation: 'active',
     agentStatus: 'idle',
     progress: { processed: 2, remaining: 3, total: 5 },
+    continuationAdmission: { state: 'clear' },
     ...overrides,
   }
 }
@@ -241,6 +242,46 @@ describe('LoopXGoalBar presentation', () => {
     expect(view.container.textContent).toContain('0 / 0')
     expect(view.container.querySelector('progress')?.getAttribute('aria-label'))
       .toBe('No agent-lane todos')
+  })
+
+  it('surfaces an unadmitted continuation with its category and recovery action', async () => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({
+          sessionId,
+          continuationAdmission: { state: 'failed', category: 'invalid_response' },
+        }),
+        baseSessionEventSeq: 7,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+
+    const status = view.container.querySelector('[role="status"]')
+    expect(status?.textContent).toContain('Automatic continuation is not admitted.')
+    expect(status?.textContent).toContain('LoopX returned an incompatible response.')
+    expect(status?.textContent).toContain('Pause, then Start, to retry automatic continuation.')
+    // The failure is not an idle, paused, or completed state: the Goal keeps
+    // its own status text and the Pause recovery action stays available.
+    expect(view.container.textContent).toContain('Active')
+    expect(button(view.container, 'Pause').disabled).toBe(false)
+    expect(view.container.querySelector('button.refresh')).toBeNull()
+  })
+
+  it('renders no continuation failure line for a clear admission state', async () => {
+    const rpc = fakeRpc({
+      read: sessionId => Promise.resolve(readOutcome(sessionId, {
+        kind: 'present',
+        snapshot: snapshot({ sessionId }),
+        baseSessionEventSeq: 7,
+      })),
+    })
+    const view = mount({ rpcSessionId: 'session-one', rpc })
+    await flush()
+
+    expect(view.container.textContent).not.toContain('not admitted')
+    expect(view.container.querySelector('[role="status"]')).toBeNull()
   })
 
   it.each(['binding_missing', 'binding_ambiguous'] as const)(

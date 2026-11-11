@@ -1188,6 +1188,171 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
+  it('projects a schema or identity admission failure with one safe category', async () => {
+    const fixture = runnerFixture({ quotaTurnInstanceId: 'turn-other' })
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const changes: Array<Agent['session']> = []
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      warn: message => warnings.push(message),
+      onAdmissionChange: session => { changes.push(session) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => warnings.length === 1)
+
+    expect(host.nextTurn).toHaveLength(0)
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'failed', category: 'invalid_response' })
+    expect(changes).toEqual([host.agent.session])
+    // The projection carries no raw warning text or command output.
+    expect(JSON.stringify(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    }))).not.toContain('invalid_schema')
+    await driver.dispose()
+  })
+
+  it('projects typed authority rejections and untyped CLI exits distinctly', async () => {
+    const typed = runnerFixture({ typedQuotaFailure: true })
+    const typedHost = fakeAgent()
+    const typedDriver = new LoopXContinuationDriver({
+      runner: typed.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+    })
+    observeActivated(typedDriver, typedHost)
+    await waitFor(() => typed.quotaCalls.length === 1)
+    expect(typedDriver.readContinuationAdmission({
+      agent: typedHost.agent,
+      session: typedHost.agent.session,
+    })).toEqual({ state: 'failed', category: 'admission_rejected' })
+    await typedDriver.dispose()
+
+    const unreachable = runnerFixture({ quotaExitFailures: 3 })
+    const unreachableHost = fakeAgent()
+    const unreachableDriver = new LoopXContinuationDriver({
+      runner: unreachable.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+    })
+    observeActivated(unreachableDriver, unreachableHost)
+    await waitFor(() => unreachable.quotaCalls.length === 3)
+    expect(unreachableDriver.readContinuationAdmission({
+      agent: unreachableHost.agent,
+      session: unreachableHost.agent.session,
+    })).toEqual({ state: 'failed', category: 'cli_unreachable' })
+    await unreachableDriver.dispose()
+  })
+
+  it('keeps the projection clear for admitted, waiting, and exact-session reads', async () => {
+    const fixture = runnerFixture({ shouldRun: false, waitMinutes: 3 })
+    const host = fakeAgent()
+    const changes: Array<Agent['session']> = []
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: session => { changes.push(session) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => fixture.quotaCalls.length === 1)
+
+    // A scheduler wait is an admitted outcome, not a failure.
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(changes).toEqual([])
+
+    const admittedHost = fakeAgent('another-session')
+    const admittedDriver = makeDriver(runnerFixture())
+    observeActivated(admittedDriver, admittedHost)
+    await waitFor(() => admittedHost.nextTurn.length === 1)
+    expect(admittedDriver.readContinuationAdmission({
+      agent: admittedHost.agent,
+      session: admittedHost.agent.session,
+    })).toEqual({ state: 'clear' })
+    await admittedDriver.dispose()
+
+    // A stale capture for a replaced Session never reports the latch.
+    host.replaceSession(undefined, [])
+    expect(driver.readContinuationAdmission({
+      agent: host.agent,
+      session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    await driver.dispose()
+  })
+
+  it('clears the projected failure when admission succeeds again or Pause takes over', async () => {
+    const inner = runnerFixture()
+    let quotaFailures = 3
+    const runner: FileRunner = async (file, args, options) => {
+      if (args.includes('should-run') && quotaFailures > 0) {
+        quotaFailures -= 1
+        return { exitCode: 1, stdout: '', stderr: 'transient diagnostic' }
+      }
+      return inner.runner(file, args, options)
+    }
+    const host = fakeAgent()
+    const changes: number[] = []
+    const driver = new LoopXContinuationDriver({
+      runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: () => { changes.push(changes.length) },
+    })
+    observeActivated(driver, host)
+    await waitFor(() => driver.readContinuationAdmission({
+      agent: host.agent, session: host.agent.session,
+    }).state === 'failed')
+
+    // The GoalBar Start bridge re-runs admission; success clears the latch.
+    const receipt = await driver.evaluateActivatedSession({
+      agent: host.agent,
+      session: host.agent.session,
+    })
+    expect(receipt).toEqual({ kind: 'applied' })
+    await waitFor(() => host.nextTurn.length === 1)
+    expect(driver.readContinuationAdmission({
+      agent: host.agent, session: host.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(changes).toHaveLength(2)
+    await driver.dispose()
+
+    // Pause retires the latch together with the Goal's continuation authority.
+    const pausedFixture = runnerFixture({ heartbeatTurnInstanceId: 'turn-other' })
+    const pausedHost = fakeAgent()
+    const pausedChanges: number[] = []
+    const pausedDriver = new LoopXContinuationDriver({
+      runner: pausedFixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      onAdmissionChange: () => { pausedChanges.push(pausedChanges.length) },
+    })
+    observeActivated(pausedDriver, pausedHost)
+    await waitFor(() => pausedDriver.readContinuationAdmission({
+      agent: pausedHost.agent, session: pausedHost.agent.session,
+    }).state === 'failed')
+    const pauseReceipt = await pausedDriver.cancelQueued({
+      agent: pausedHost.agent,
+      session: pausedHost.agent.session,
+    })
+    expect(pauseReceipt).toEqual({ kind: 'applied' })
+    expect(pausedDriver.readContinuationAdmission({
+      agent: pausedHost.agent, session: pausedHost.agent.session,
+    })).toEqual({ state: 'clear' })
+    expect(pausedChanges).toHaveLength(2)
+    await pausedDriver.dispose()
+  })
+
   it('fails closed when the canonical task body contains a conflicting turn id', async () => {
     const fixture = runnerFixture({
       heartbeatTaskBody: [
@@ -1785,6 +1950,7 @@ describe('GoalBar exact-Session Driver bridge', () => {
     const unregisterThrowing = coordinator.registerDriverBridge({
       async evaluateActivatedSession() { throw new Error('private driver failure') },
       async cancelQueued() { throw new Error('private driver failure') },
+      readContinuationAdmission() { throw new Error('private driver failure') },
     })
     await expect(coordinator.evaluateActivatedSession(capture)).resolves.toEqual({
       kind: 'unavailable',
@@ -1801,6 +1967,10 @@ describe('GoalBar exact-Session Driver bridge', () => {
       async cancelQueued() {
         calls += 1
         return { kind: 'applied' }
+      },
+      readContinuationAdmission() {
+        calls += 1
+        return { state: 'clear' }
       },
     })
     host.replaceSession(undefined, [])

@@ -1,11 +1,16 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import type { GoalBarAgentStatusV1 } from './protocol.ts'
+import type {
+  GoalBarAgentStatusV1,
+  GoalBarContinuationAdmissionV1,
+} from './protocol.ts'
+import { GOALBAR_ADMISSION_CLEAR } from './protocol.ts'
 
 export interface GoalBarSessionCapture { readonly agent: Agent; readonly session: Session }
 export type GoalBarSessionNotification =
   | { readonly kind: 'candidate'; readonly sessionId: string; readonly sessionEventSeq: number }
   | { readonly kind: 'runtime_changed'; readonly sessionId: string; readonly agentStatus: GoalBarAgentStatusV1 }
+  | { readonly kind: 'admission_changed'; readonly sessionId: string }
 export type GoalBarSessionWaitReceipt = GoalBarSessionNotification
   | { readonly kind: 'timeout'; readonly sessionEventSeq: number | null }
   | { readonly kind: 'session_unavailable' }
@@ -18,6 +23,9 @@ export type GoalBarDriverActionReceipt = { readonly kind: 'applied' } | {
 export interface GoalBarDriverBridge {
   evaluateActivatedSession(capture: GoalBarSessionCapture): Promise<GoalBarDriverActionReceipt>
   cancelQueued(capture: GoalBarSessionCapture): Promise<GoalBarDriverActionReceipt>
+  readContinuationAdmission(
+    capture: GoalBarSessionCapture,
+  ): GoalBarContinuationAdmissionV1
 }
 export interface GoalBarSessionWaitOptions {
   readonly signal: AbortSignal
@@ -128,6 +136,16 @@ export class GoalBarCoordinator {
     }
   }
 
+  /** Driver admission state is process-local and carries no event sequence. */
+  publishAdmissionChange(session: Session): void {
+    for (const waiter of [...this.waiters]) {
+      if (waiter.session !== session) continue
+      this.settle(waiter, isCurrent(waiter.options.isSessionCurrent)
+        ? { kind: 'admission_changed', sessionId: String(session.id) }
+        : { kind: 'session_unavailable' })
+    }
+  }
+
   invalidateSession(session: Session): void {
     for (const waiter of [...this.waiters]) {
       if (waiter.session === session) this.settle(waiter, { kind: 'session_unavailable' })
@@ -147,6 +165,18 @@ export class GoalBarCoordinator {
   }
   cancelQueued(capture: GoalBarSessionCapture): Promise<GoalBarDriverActionReceipt> {
     return this.invokeDriver('cancelQueued', capture)
+  }
+  readContinuationAdmission(
+    capture: GoalBarSessionCapture,
+  ): GoalBarContinuationAdmissionV1 {
+    if (capture.agent.session !== capture.session) return GOALBAR_ADMISSION_CLEAR
+    const bridge = this.driverBridge
+    if (bridge === undefined) return GOALBAR_ADMISSION_CLEAR
+    try {
+      return bridge.readContinuationAdmission(capture)
+    } catch {
+      return GOALBAR_ADMISSION_CLEAR
+    }
   }
 
   private waitForSessionChange(
@@ -197,7 +227,7 @@ export class GoalBarCoordinator {
     waiter.resolve(receipt)
   }
   private async invokeDriver(
-    operation: keyof GoalBarDriverBridge,
+    operation: 'evaluateActivatedSession' | 'cancelQueued',
     capture: GoalBarSessionCapture,
   ): Promise<GoalBarDriverActionReceipt> {
     if (capture.agent.session !== capture.session) return { kind: 'unavailable', reason: 'session_unavailable' }
