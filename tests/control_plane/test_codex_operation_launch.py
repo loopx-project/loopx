@@ -337,11 +337,20 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
     ("operation", "peer-add"), ("ordinary", "peer-add"),
     ("operation", "peer-remove"), ("ordinary", "peer-remove"),
     ("operation", "mirror-peer-add"),
+    ("operation", "title"), ("ordinary", "title"), ("operation", "mirror-title"),
+    ("ordinary", "display_name"),
 ])
 def test_running_codex_turn_survives_non_authority_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, transport: str, change: str,
 ) -> None:
     runtime, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
+    presentation_field = change.removeprefix("mirror-")
+    edits_presentation = presentation_field in {"title", "display_name"}
+    if edits_presentation:
+        with project_registry_transaction(registry, operation="fixture_initial_title") as transaction:
+            initial = transaction.payload_copy()
+            initial["goals"][0][presentation_field] = "Original display title"
+            assert transaction.commit(initial)
     if change == "peer-add":
         # Earlier registries can omit the default peer model marker.
         with project_registry_transaction(registry, operation="fixture_implicit_peer_model") as transaction:
@@ -409,6 +418,11 @@ def test_running_codex_turn_survives_non_authority_change(
                                         "--registered-agent", "other-agent")
             elif change == "peer-remove":
                 _configure_fixture_goal(registry, runtime, "--registered-agent", "codex-fixture")
+            elif edits_presentation:
+                with project_registry_transaction(registry, operation="fixture_rename_goal") as transaction:
+                    changed = transaction.payload_copy()
+                    changed["goals"][0][presentation_field] = "Updated display title"
+                    assert transaction.commit(changed)
             else:
                 with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
                     registry_payload = transaction.payload_copy()
@@ -422,6 +436,8 @@ def test_running_codex_turn_survives_non_authority_change(
                 projected = json.loads(mirror.read_text())["goals"][0]
                 assert projected["synced_at"] != original_sync_stamp
                 assert projected["source_registry"] == str(registry.resolve())
+                if edits_presentation:
+                    assert projected[presentation_field] == "Updated display title"
         finally:
             proceed.touch()
         code, payload = host.result(timeout=12)

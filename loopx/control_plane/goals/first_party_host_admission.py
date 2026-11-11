@@ -240,8 +240,9 @@ def capture_first_party_host_goal_ref(
 
 
 def _legacy_running_authority(goal: dict[str, Any], agent_id: str | None) -> dict[str, Any]:
-    # A mirror refresh stamps this row even when the source and grant are unchanged.
-    authority = {key: value for key, value in goal.items() if key != "synced_at"}
+    # Display labels and mirror freshness carry no authority to run a tool.
+    # Keep other legacy fields conservative until their runtime owners are typed.
+    authority = {key: value for key, value in goal.items() if key not in {"title", "display_name", "synced_at"}}
     control_plane = authority.get("control_plane")
     if isinstance(control_plane, dict):
         core_policy = compact_control_plane_policy(control_plane)
