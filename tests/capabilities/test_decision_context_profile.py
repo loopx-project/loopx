@@ -411,6 +411,78 @@ def test_local_file_read_enforces_limit_after_stale_preflight(tmp_path, monkeypa
     assert grew
 
 
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("descriptor_change", [False, True])
+def test_local_file_ctime_skew(tmp_path, monkeypatch, platform, descriptor_change):
+    import os
+    from types import SimpleNamespace
+
+    from loopx import materials
+
+    authority = tmp_path / "authority.txt"
+    authority.write_text("stable source", encoding="utf-8")
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    calls = 0
+
+    def descriptor_stat(fd):
+        nonlocal calls
+        observed = original_fstat(fd)
+        calls += 1
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = authority.stat().st_ctime_ns + 499_700
+        if descriptor_change and calls == 2:
+            fields["st_ctime_ns"] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(materials, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    args = dict(source=profile.sources[0], after_cursor=None,
+        before="2100-01-01T00:00:00+00:00", limit=8,
+        timeout_seconds=2, observed_at=OBSERVED_AT)
+    if platform == "posix":
+        with pytest.raises(ValueError, match="changed during bounded read"):
+            provider.scan(**args)
+    else:
+        scan = provider.scan(**args)
+        exact = provider.exact_read(source=profile.sources[0], item=scan.items[0],
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+        assert scan.status == "completed"
+        assert exact.content == "stable source"
+
+
+@pytest.mark.parametrize("change", ["mtime", "size"])
+def test_local_file_path_change_after_descriptor_snapshot(tmp_path, monkeypatch, change):
+    import os
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"before")
+    profile = normalize_decision_context_profile(profile_payload(authority))
+    provider = build_decision_source_provider(profile.provider_binding_map()["local-authority"])
+    original_fstat = os.fstat
+    calls = 0
+
+    def change_after_snapshot(fd):
+        nonlocal calls
+        observed = original_fstat(fd)
+        calls += 1
+        if calls == 2:
+            if change == "size":
+                authority.write_bytes(b"longer source")
+            os.utime(authority, ns=(observed.st_atime_ns,
+                observed.st_mtime_ns + (1_000_000_000 if change == "mtime" else 0)))
+        return observed
+
+    monkeypatch.setattr(os, "fstat", change_after_snapshot)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        provider.scan(source=profile.sources[0], after_cursor=None,
+            before="2100-01-01T00:00:00+00:00", limit=8,
+            timeout_seconds=2, observed_at=OBSERVED_AT)
+    assert calls == 2
+
+
 def test_local_file_growth_during_read_is_bounded(tmp_path, monkeypatch):
     import os
 
