@@ -387,7 +387,7 @@ export async function projectSourceTodoFields(input: JsonObject): Promise<JsonOb
 
 export async function readTodo(value: unknown, observedAt = new Date().toISOString()): Promise<JsonObject> {
   const input = requireJsonObject(value, "Todo read request");
-  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence", "quota_projection"].includes(text(input.kind))) {
+  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence", "quota_projection", "execution_preparation_source"].includes(text(input.kind))) {
     throw new EffectRuntimeRequestError("Todo read request schema mismatch");
   }
   if (input.kind === "quota_projection") {
@@ -397,6 +397,10 @@ export async function readTodo(value: unknown, observedAt = new Date().toISOStri
   if (input.kind === "completion_evidence") {
     const {readCompletionEvidence} = await import("./read_transaction.ts");
     return readCompletionEvidence(input);
+  }
+  if (input.kind === "execution_preparation_source") {
+    const {readExecutionPreparationSource} = await import("./read_transaction.ts");
+    return readExecutionPreparationSource(input);
   }
   if (input.kind === "canonical_fields" || input.kind === "query") {
     const {readCanonicalTodoProjection} = await import("./read_transaction.ts");

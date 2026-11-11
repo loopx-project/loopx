@@ -4,10 +4,12 @@
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="LoopX — #1 on GitHub Trending, tracked by Trendshift" width="220" height="48"></a>
 
-**Turn long-horizon goals into verifiable results.**
+**Start with one goal. Keep long-running agent work verifiable.**
 
-A local-first [semantic control plane](https://loopx-project.github.io/loopx/blog/from-one-shot-agents-to-long-horizon-control/#control-plane) and [research workbench](#research-workbench) for long-running agent teams, across sessions and runtimes.<br>
-<sub>Keep goals, decisions, ownership and evidence durable. Work with Codex, Claude Code, DeepSeek Harness and other runtimes you already use.</sub>
+Tell the Agent you already use what you want done. LoopX keeps the goal,
+work, approvals and evidence durable behind the scenes, so the next session can
+continue without making you learn LoopX internals first.<br>
+<sub>Work with Codex, Claude Code, DeepSeek Harness and other runtimes. Advanced docs still expose the local-first semantic kernel, ownership model and research workbench.</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -21,9 +23,9 @@ A local-first [semantic control plane](https://loopx-project.github.io/loopx/blo
 
 <a id="quick-start"></a>
 
-## Start in two steps
+## Start with one goal
 
-**1. Install LoopX and its Agent skills.** Requires Python 3.11+ and
+**1. Install LoopX once.** Requires Python 3.11+ and
 Node.js 22.22.3+ (24 LTS recommended).
 
 ```bash
@@ -32,15 +34,16 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 
 [Install options and upgrades](docs/guides/installing-loopx.md)
 
-**2. Give your Agent a concrete task.** Restart your Agent host, open your
-project, then send this in Codex:
+**2. Tell your Agent the outcome.** Restart your Agent host, open your project,
+then send one natural-language goal:
 
 ```text
 $loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
-Claude Code uses `/loopx <complex task>`; see [host setup](#start-from-your-agent)
-for other runtimes. Prefer a guided first run? [Choose a task below](#try-loopx).
+LoopX turns that into visible tasks, gates and evidence as needed. Claude Code
+uses `/loopx <complex task>`; see [host setup](#start-from-your-agent) for other
+runtimes. Prefer a guided first run? [Choose a task below](#try-loopx).
 
 ## 📰 News
 
@@ -63,6 +66,11 @@ for other runtimes. Prefer a guided first run? [Choose a task below](#try-loopx)
 <a id="how-it-works"></a>
 
 ## Why LoopX
+
+You should not have to learn LoopX internals before the first useful action.
+The default path is goal-first: describe the outcome, let the Agent prepare the
+plan, and inspect the machinery only when a decision or debugging need calls
+for it.
 
 An agent can finish a task in one session. Long-running work is harder:
 objectives change, owner decisions appear, evidence goes stale, and agents

@@ -63,8 +63,8 @@ class NativeCodexProcessObservation:
             self._data["persistence_error_type"] = type(exc).__name__
             snapshot["persistence_error_type"] = type(exc).__name__
 
-    def started(self, process: subprocess.Popen[str]) -> None:
-        self._data.update(pid=process.pid, started_at_unix=time.time())
+    def started(self, process: subprocess.Popen[str], *, launch_started_at_unix: float) -> None:
+        self._data.update(pid=process.pid, started_at_unix=launch_started_at_unix)
         try:
             # A missing /proc (or a child that already exited) is unknown. The
             # parent timestamp is not a substitute for a native start identity.
