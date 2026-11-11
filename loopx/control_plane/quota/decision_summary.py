@@ -151,6 +151,7 @@ class QuotaRunDecision:
     quota: dict[str, Any]
     replan_decision_allowed: bool
     goal_route_hint_override: dict[str, Any] | None = None
+    agent_scope_frontier: dict[str, Any] | None = None
 
 
 def refine_quota_recommended_action(
@@ -263,6 +264,7 @@ def resolve_quota_run_decision(
     registered_agent_ids: list[str],
     goal_frontier_projection: dict[str, Any] | None,
     task_orchestration_contract: dict[str, Any] | None,
+    vision_initialization_context: dict[str, Any] | None = None,
 ) -> QuotaRunDecision:
     """Apply the ordered final guards for one quota run decision."""
 
@@ -294,6 +296,7 @@ def resolve_quota_run_decision(
         "automation_prompt_upgrade_required": automation_prompt_upgrade_required,
         "replan_required": replan_required,
         "replan_applies": bool(scope.get("applies")),
+        "vision_initialization_context": vision_initialization_context,
         "goal_health_ok": goal_health_ok,
         "inbox_reply_due": inbox_reply_due,
         "inbox_material_review_due": inbox_material_review_due,

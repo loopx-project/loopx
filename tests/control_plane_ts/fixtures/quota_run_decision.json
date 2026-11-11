@@ -33,7 +33,8 @@
     "state": "eligible",
     "quota_patch": {},
     "replan_decision_allowed": false,
-    "goal_route_hint_override": null
+    "goal_route_hint_override": null,
+    "agent_scope_frontier": null
   },
   "cases": [
     {

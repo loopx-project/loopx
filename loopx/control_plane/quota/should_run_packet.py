@@ -935,6 +935,7 @@ def _resolve_quota_should_run_route(
         registered_agent_ids=prepared.registered_agent_ids,
         goal_frontier_projection=prepared.goal_frontier_projection,
         task_orchestration_contract=prepared.task_orchestration_contract,
+        vision_initialization_context=prepared.vision_initialization_context,
     )
     if prepared.receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLED:
         fields = settled_replay_fields()
@@ -1179,7 +1180,8 @@ def _resolve_quota_should_run_route(
             agent_lane_next_action=agent_lane_next_action,
         )
         agent_scope_frontier = (
-            _selected_deferred_replan_frontier(prepared)
+            run_decision.agent_scope_frontier
+            or _selected_deferred_replan_frontier(prepared)
             or _agent_scope_no_candidate_frontier(
                 agent_identity=prepared.agent_identity,
                 agent_todo_summary=prepared.agent_todo_summary,

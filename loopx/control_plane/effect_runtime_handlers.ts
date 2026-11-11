@@ -385,7 +385,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({reduceUnsettledHostTurnRecovery}) => reduceUnsettledHostTurnRecovery),
     ],
     ["quota.turn_envelope.evaluate", lazyHandler(() => import("./quota/turn_envelope.ts"), ({evaluateTurnEnvelope}) => evaluateTurnEnvelope)],
-    ["quota.run_decision", lazyHandler(() => import("./quota/run_decision.ts"), ({resolveQuotaRunDecision}) => resolveQuotaRunDecision)],
+    ["quota.run_decision", lazyHandler(() => import("./quota/run_decision.ts"), ({admitQuotaRunDecision}) => admitQuotaRunDecision)],
     ["quota.scoped_override.project", lazyHandler(() => import("./quota/scoped_override.ts"), ({projectScopedOverride}) => projectScopedOverride)],
     ["task_lease.acquire.native", lazyHandler(() => import("./work_items/task_lease_acquire.ts"), ({executeTaskLeaseAcquire}) => executeTaskLeaseAcquire)],
     ["task_lease.inspect.native", lazyHandler(() => import("./work_items/task_lease_inspection.ts"), ({inspectTaskLease}) => inspectTaskLease)],

@@ -670,6 +670,16 @@ def build_quota_should_run(
             receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
             receipt_bound_replan_review=receipt_bound_replan_review,
         )
+        if runtime_root is not None and turn_instance_id and prepared.agent_frontier_id:
+            prepared.vision_initialization_context = {
+                "runtime_root": str(runtime_root), "goal_id": safe_goal_id,
+                "agent_id": prepared.agent_frontier_id, "turn_instance_id": turn_instance_id,
+                "receipt_bound": bool(receipt_bound_todo_id or receipt_bound_replan_obligation_id),
+                "todo_summary": prepared.agent_todo_summary,
+                "todo_items": prepared.agent_todo_planning_source_items,
+                "replan_obligation": prepared.replan_obligation,
+                "acceptance_gaps": prepared.goal_frontier_projection.get("acceptance_gaps"),
+            }
         route = _resolve_quota_should_run_route(prepared)
         route = _apply_selected_todo_guards(
             prepared,
