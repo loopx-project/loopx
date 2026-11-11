@@ -555,8 +555,11 @@ eight-failure breaker or plugin-owned durable activation state. The small
 process-local activation projection is bound to one exact Session and is
 reconstructed only from its typed event history. Exhausting the three attempts
 stops that evaluation; it does not create a periodic error-retry loop. Only a
-typed LoopX local-scheduler plan can schedule another wakeup, and its limit on
-unchanged polls is enforced.
+typed LoopX local-scheduler plan can schedule another wakeup. The Driver reads
+cadence from `scheduler_hint.cold_path_detail.local_scheduler` with
+`--include-detail scheduler`, caps the wait by `recheck_after_seconds` when
+present, and enforces `unchanged_poll.limits.local_scheduler`. A changed
+`reset_policy.reset_token` resets the unchanged-poll streak.
 
 If DSH refuses the maintenance slot before admission starts, the Driver waits
 for `Agent.whenIdle()` and re-requests evaluation for that same Session. This
