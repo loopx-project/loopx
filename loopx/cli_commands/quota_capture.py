@@ -1059,7 +1059,8 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(read_turn_observation_text(path))
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
                                  captured_decision_path=str(path), reader_argv=current_loopx_cli_argv(),
-                                 stage=args.replan_stage, outcome_ref=args.outcome_ref)
+                                 stage=args.replan_stage, outcome_ref=args.outcome_ref,
+                                 progressive=getattr(args, "context_delivery", None) == "on")
 
 
 def handle_replan_view(

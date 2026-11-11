@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from "node:util";
 import {settlementIdentityPayload, type JsonObject, type SettlementIdentity} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {jsonObject} from "../runtime_decode.ts";
@@ -139,6 +140,34 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
         "and never infer completion or invent work/pivots/successors from submission or unused budget alone.",
     }),
   };
+}
+
+/** A staged Stride review authors one packet under the ordinary Vision budget. */
+export function stagedStrideVisionAuthoring(authoring: JsonObject, strideExample: unknown,
+    goalId: unknown, agentId: unknown): JsonObject | undefined {
+  const stride = jsonObject(strideExample);
+  if (!stride || stride.schema_version !== STRIDE_DECISION_SCHEMA ||
+      typeof goalId !== "string" || typeof agentId !== "string" ||
+      !isDeepStrictEqual(authoring, visionAuthoringContract(true))) return undefined;
+  const example = {...jsonObject(authoring.minimal_example), stride_decision: stride};
+  let prepared: JsonObject;
+  try {
+    prepared = prepareVisionRefresh({
+      phase: "prepare", goal_id: goalId, agent_id: agentId,
+      agent_vision_packet: example, existing_agent_vision: null, merge_patch: false,
+      require_path_delta_for_durable_change: false, allow_terminal_stride_path: false,
+    });
+  } catch (error) {
+    if (error instanceof EffectRuntimeRequestError) return undefined;
+    throw error;
+  }
+  const vision = requiredObject(prepared.agent_vision, "prepared Vision");
+  const budget = requiredObject(vision.vision_budget, "prepared Vision budget");
+  return {...authoring, minimal_example: example,
+    authoring_hint: `${authoring.authoring_hint} The ${budget.total_limit}-character limit is shared by ` +
+      "vision_patch, path_delta, stride_decision and fallback_declarations. " +
+      `This combined example uses ${budget.total_usage} counted characters. ` +
+      "Use short, distinct decisions in the packet and cite detailed evidence at its existing reference."};
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
 // declared direction cannot disappear behind later read-model compaction.

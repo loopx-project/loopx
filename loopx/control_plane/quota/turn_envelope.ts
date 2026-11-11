@@ -16,6 +16,7 @@ import {contextProjectionChanges, contextProjectionIdentity, contextProjectionRe
   contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
+import {stagedStrideVisionAuthoring} from "../goals/vision_checkpoint.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -251,14 +252,18 @@ function replanReadPrecision(source: JsonObject, supplied: unknown): ReplanReadP
     equalProjection: (left, right) => projectedIdentity(left) === projectedIdentity(right)};
 }
 
+function replanAuthoringStepIndex(reference: unknown): number | null {
+  const match = typeof reference === "string"
+    ? /^\$\.interaction_contract\.cli_channel\.settlement_plan\.ordered_steps\[(0|[1-9]\d*)\]\.vision_authoring$/.exec(reference) : null;
+  return match ? Number(match[1]) : null;
+}
+
 function replanAuthoringContract(payload: JsonObject, precision?: ReplanReadPrecision): JsonObject {
   const contract = jsonObject(jsonObject(payload.replan_action_packet)?.writeback_contract) ?? {};
   if (!Object.hasOwn(contract, "vision_authoring_ref")) return contract;
-  const reference = contract.vision_authoring_ref;
-  const match = typeof reference === "string"
-    ? /^\$\.interaction_contract\.cli_channel\.settlement_plan\.ordered_steps\[(0|[1-9]\d*)\]\.vision_authoring$/.exec(reference) : null;
+  const index = replanAuthoringStepIndex(contract.vision_authoring_ref);
   const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
-  const step = object(match && Array.isArray(steps) ? steps[Number(match[1])] : null);
+  const step = object(index !== null && Array.isArray(steps) ? steps[index] : null);
   if (Object.hasOwn(contract, "vision_authoring") || step.kind !== "durable_writeback" ||
       Object.hasOwn(step, "vision_authoring_ref") || !Object.keys(object(step.vision_authoring)).length) {
     throw new EffectRuntimeRequestError("Replan authoring reference must resolve to one complete inline durable-writeback owner");
@@ -266,6 +271,33 @@ function replanAuthoringContract(payload: JsonObject, precision?: ReplanReadPrec
   const {vision_authoring_ref: _reference, ...fields} = contract;
   const resolved = {...fields, vision_authoring: step.vision_authoring};
   return precision?.retain(resolved, contract) ?? resolved;
+}
+
+/** The staged view points to the same validated step as the complete capture. */
+function shareStagedStrideAuthoring(payload: JsonObject, stride: JsonObject, plan: JsonObject,
+    precision?: ReplanReadPrecision): {plan: JsonObject; reference: string} | undefined {
+  if (payload.schema_version !== COMPLETE_TURN_DECISION_VERSION ||
+      stride.required_on_periodic_review !== true || !Array.isArray(plan.ordered_steps)) return undefined;
+  const packet = object(payload.replan_action_packet);
+  const review = object(object(payload.autonomous_replan_obligation).replan_context);
+  const example = jsonObject(stride.minimal_example);
+  const index = replanAuthoringStepIndex(object(packet.writeback_contract).vision_authoring_ref);
+  if (index === null || !example || example.reference_context_id !== review.context_id ||
+      example.reference_obligation_id !== packet.obligation_id) return undefined;
+  const step = jsonObject(plan.ordered_steps[index]);
+  const authoring = jsonObject(step?.vision_authoring);
+  if (step?.kind !== "durable_writeback" || !authoring) return undefined;
+  const combined = stagedStrideVisionAuthoring(authoring, example, payload.goal_id,
+    payload.agent_id ?? object(payload.agent_identity).agent_id);
+  if (!combined) return undefined;
+  const retain = precision?.retain ?? ((view: JsonObject) => view);
+  const updated = retain({...step, vision_authoring: combined}, step,
+    Object.keys(step).filter(key => key !== "vision_authoring"));
+  return {
+    plan: retain({...plan, ordered_steps: plan.ordered_steps.map((item, i) => i === index ? updated : item)},
+      plan, Object.keys(plan).filter(key => key !== "ordered_steps")),
+    reference: `$.writeback.settlement_plan.ordered_steps[${index}].vision_authoring`,
+  };
 }
 
 
@@ -678,7 +710,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
+  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string, progressive = false): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -689,8 +721,10 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
   if (!Array.isArray(argv) || !argv.length || argv.some(arg => typeof arg !== "string" || !arg || /[\x00-\x1f]/.test(arg))) {
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
+  const mode = progressive && payload.schema_version === COMPLETE_TURN_DECISION_VERSION &&
+    object(packet.stride_control).required_on_periodic_review === true ? " --context-delivery on" : "";
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}${mode}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -892,7 +926,9 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
+  const progressive = request.progressive === true;
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"],
+    sourceHash, progressive);
   const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes, ambiguous} = replanGoalContext(payload, reads, undefined, precision);
@@ -914,14 +950,20 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
     // decision evidence. Top-level required_fields cannot describe that shape.
     for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
     const contract = {...originalContract};
-    if (contract.vision_authoring) {
+    const writeback = object(actionProjection(payload, false, precision, sourceHash).writeback);
+    const plan = object(writeback.settlement_plan);
+    const shared = progressive ? shareStagedStrideAuthoring(payload, stride, plan, precision) : undefined;
+    if (shared) {
+      writeback.settlement_plan = shared.plan;
+      contract.vision_authoring_ref = shared.reference;
+      delete contract.vision_authoring;
+      delete stride.minimal_example;
+    } else if (contract.vision_authoring) {
       const originalAuthoring = jsonObject(contract.vision_authoring) ?? {};
       const authoring = retain({...originalAuthoring}, originalAuthoring);
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
-    const writeback = object(actionProjection(payload, false, precision, sourceHash).writeback);
-    const plan = object(writeback.settlement_plan);
     const boundContract = payload.schema_version === COMPLETE_TURN_DECISION_VERSION
       ? contract : bindReplanSuccessorContract(contract, plan);
     if (typeof boundContract.successor_command === "string" && typeof object(plan.identity).turn_instance_id === "string") {
@@ -2409,7 +2451,7 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const precision = replanReadPrecision(request, request.source_number_tokens);
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
-    replanReadCommands(source, path), precision);
+    replanReadCommands(source, path, undefined, undefined, true), precision);
   return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
 }
 
