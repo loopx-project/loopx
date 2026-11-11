@@ -94,10 +94,13 @@ def test_cli_preserves_projection_failure_and_original_reason(wide_goal):
     advance_canonical_fixture_authority(
         runtime, "goal-a", projection, operation_id="unsupported-manifest"
     )
-    with pytest.raises(LocalCoordinationAuthorityUnavailable) as failure:
-        native_read(runtime)
-    assert failure.value.code == "canonical_snapshot_projection_invalid"
-    assert "field contract mismatch" in str(failure.value)
+    for selection in (None, {"todo_000"}):
+        with pytest.raises(LocalCoordinationAuthorityUnavailable) as failure:
+            local_authority.read_canonical_todos_if_promoted(
+                runtime_root=runtime, goal_id="goal-a", include_leases=True, lease_todo_ids=selection
+            )
+        assert failure.value.code == "canonical_snapshot_projection_invalid"
+        assert "field contract mismatch" in str(failure.value)
     process = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
          "--format", "json", "todo", "list", "--goal-id", "goal-a"],

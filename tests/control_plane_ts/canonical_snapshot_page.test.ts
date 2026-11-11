@@ -31,6 +31,34 @@ async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
 }
 const qualifiedSqlite = sqliteRuntimeIdentity().sqlite_authority_qualified;
 for (const provider of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
+  test(`${provider}: lease selection preserves matching lease records and binds continuation scope`, async t => {
+    const {store} = await fixture(t, provider);
+    const {projection} = productionScaleCoordinationFixture("goal-a", "native");
+    await seedSnapshot(store, projection);
+    const before = await store.loadAuthority();
+    const full = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+    const leases = projection.leases as JsonObject[];
+    const selected = [leases.find(lease => lease.status === "active")!, leases.find(lease => lease.status === "released")!];
+    const ids = [...selected.map(lease => lease.todo_id), "todo_without_lease"];
+    const request = snapshotRequest({lease_todo_ids: ids});
+    const page = await readCanonicalSnapshotFromStore(request, store);
+    assert.equal(page.status, "page");
+    assert.deepEqual(page.todos, []);
+    assert.deepEqual(page.leases, (full.leases as JsonObject[]).filter(lease => ids.includes(lease.todo_id)));
+    assert.equal((page.leases as JsonObject[]).length, 2);
+    const snapshot = page.snapshot as JsonObject;
+    assert.equal(snapshot.provider_revision, (full.snapshot as JsonObject).provider_revision);
+    assert.equal(snapshot.store_identity, (full.snapshot as JsonObject).store_identity);
+    assert.notEqual(snapshot.query_sha256, (full.snapshot as JsonObject).query_sha256);
+    const after = {snapshot, todo_offset: 0, lease_offset: 1};
+    const last = await readCanonicalSnapshotFromStore({...request, lease_todo_ids: ids.toReversed(), after}, store);
+    assert.deepEqual(last.leases, (page.leases as JsonObject[]).slice(1));
+    await assert.rejects(readCanonicalSnapshotFromStore({...request,
+      lease_todo_ids: [...ids.slice(0, 2), "todo_different_missing_lease"], after}, store), /canonical snapshot changed/);
+    await assert.rejects(readCanonicalSnapshotFromStore({...request, include_leases: false}, store),
+      /lease selection requires/);
+    assert.deepEqual(await store.loadAuthority(), before);
+  });
   for (const defect of ["manifest", "digest"] as const) {
     test(`${provider}: invalid projection is distinct from an invalid snapshot request (${defect})`, async t => {
       const root = await mkdtemp(join(tmpdir(), "snapshot-invalid-projection-"));
