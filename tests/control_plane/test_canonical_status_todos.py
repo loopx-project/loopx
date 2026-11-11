@@ -364,7 +364,9 @@ def test_canonical_todo_semantics_without_display(tmp_path, provider, record_for
                               "--format", "json", "status", "--goal-id", goal["id"]],
                              capture_output=True, text=True, timeout=60)
     assert process.returncode == (1 if expected_code else 0), process.stdout + process.stderr
-    assert json.loads(process.stdout)["contract"]["ok"] is (expected_code is None)
+    status_contract = json.loads(process.stdout)["contract"]
+    assert status_contract["ok"] is (expected_code is None)
+    assert status_contract.get("error_diagnostics", []) == result["error_diagnostics"]
     assert not state.exists()
 
 
@@ -434,6 +436,12 @@ def test_whole_status_reuses_the_contract_snapshot_and_refreshes_next_request(
                      limit=5, goal_id=goal['id'])
     payload = status_module.collect_status(**arguments)
     assert len(reads) == 1
+    snapshot = reads[0]
+    assert "todos" not in snapshot and "todo_ids" not in snapshot
+    rows = snapshot["todo_contract_rows"]
+    assert {row["todo_id"] for row in rows} == {"todo_canonical", "todo_gate"}
+    assert all("text" not in row and "decision_scope" not in row for row in rows)
+    assert next(row for row in rows if row["todo_id"] == "todo_gate")["global_gate"] is True
     queue = next(item for item in payload['attention_queue']['items'] if item['goal_id'] == goal['id'])
     assert queue['agent_todos']['items'][0]['todo_id'] == 'todo_canonical'
     assert queue['standing_decision_authority']['entries'][0]['outcome'] == 'reject'

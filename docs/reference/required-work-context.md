@@ -484,6 +484,11 @@ The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
 
+For a selected Todo, preparation reads the canonical Todo and leases at one
+checked provider revision. The internal read returns only that Todo's status,
+assignment and lease facts. Unrelated Todo bodies stay with the provider
+reader. Quota still checks ownership and lease expiry before reporting readiness.
+
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
 及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
@@ -496,12 +501,20 @@ Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，
 原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
 领取回执都不会触发自动领取。
 
+准备阶段从同一已校验的权威版本读取 Todo 和租约，只传回所选 Todo 的状态、归属和租约
+事实。其他任务正文留在读取端。额度检查仍核对归属和租约到期时间，再报告是否就绪。
+
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
 internal context-projection bridge, preserving the complete progressive read
 without an unused body copy. Explicitly owned sources send the complete
-non-generated narrative and region lineage to the typed consumer. Missing files
-and invalid UTF-8 still block dependent delivery. Byte reduction alone does not
+non-generated narrative and region lineage to the typed consumer. Whole-line
+SQLite archive summaries from the current writer and the older unscoped writer
+are recorded as archive ranges when they appear outside marked Todo blocks.
+The full file revision still covers these lines. The canonical Todo query owns
+archived and omitted work. Unrecognized forms, foreign Goal bindings and
+examples inside code fences remain in the narrative. Missing files and invalid
+UTF-8 still block dependent delivery. Byte reduction alone does not
 establish model-token, latency or outcome gains.
 
 Already delivered sources disappear from `required_reads`; unresolved provider
@@ -1012,8 +1025,11 @@ Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 
 布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
 模型补读或 runtime 往返；不同来源事实保留完整指引。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
-显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
-任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间
+显式标记时，`work_context.sources` 原样携带完整非生成正文，保留目标、frontmatter、
+任意章节、注释、历史和末尾停止条件。当前 writer 和旧版无 Goal 参数的 writer 生成的
+独立整行 SQLite 归档索引即使位于已标记区域之外，也按 archive 区间记录。原文件修订
+覆盖这些行，归档及省略任务由 canonical Todo 查询读取。外 Goal 标记、未知格式及
+代码块中的示例仍保留在正文。`excluded_todo_regions` 保留每段的角色、行区间
 和 SHA-256，`revision` 仍覆盖完整原文件；任务要求与权限由 canonical 精确 Todo 和
 scoped User 读取保留。默认 Goal 必读对象改为完整非生成正文，不摘要要求、不删除历史，
 不重写原文件或权威记录。未标记或混合归属仍须渐进式读取全文；错误标记、标记内非生成

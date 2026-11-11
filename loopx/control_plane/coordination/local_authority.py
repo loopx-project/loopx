@@ -261,13 +261,22 @@ def read_canonical_todos_if_promoted(
     *, runtime_root: Path, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
     include_summary: bool = False, rollout_events: Any = None, available_capabilities: Any = None,
+    include_contract_rows: bool = False,
 ) -> dict[str, Any]:
     """Read canonical Todos or fail with the native migration/recovery cause.
 
     The historical import name no longer permits pre-cutover Markdown reads.
     Explicit migration captures use the dedicated source inspection owner.
+    Status may request diagnostic facts in place of complete records.
     """
 
+    contract_fields = None
+    if include_contract_rows:
+        if not include_summary or include_leases or projection_readback is not None:
+            raise ValueError("compact Todo contract rows require a read-only canonical summary")
+        from ..todos.authoring_scope import TODO_CONTRACT_DIAGNOSTIC_FIELDS
+
+        contract_fields = TODO_CONTRACT_DIAGNOSTIC_FIELDS
     projected = None
     if include_summary:
         from ..todos.goal_todo_projection import project_todo_read
@@ -275,6 +284,7 @@ def read_canonical_todos_if_promoted(
 
         now = now_utc()
         projected = project_todo_read({"kind": "canonical_fields",
+            **({"canonical_contract_fields": list(contract_fields)} if contract_fields is not None else {}),
             "source": {"runtime_root": str(runtime_root.expanduser().resolve(strict=False)), "goal_id": goal_id,
                 "include_leases": include_leases, "projection_readback": dict(projection_readback) if projection_readback is not None else None},
             "rollout_events": list(rollout_events or []),
@@ -291,7 +301,7 @@ def read_canonical_todos_if_promoted(
             timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
         )
     payload = validate_canonical_todo_read(result, goal_id=goal_id, include_leases=include_leases,
-        projection_readback=projection_readback)
+        projection_readback=projection_readback, contract_fields=contract_fields)
     if projected is not None and "fields" in projected:
         from ..todos.goal_todo_projection import restore_todo_field_evaluations
         payload["_todo_fields"] = restore_todo_field_evaluations(projected)
@@ -299,7 +309,7 @@ def read_canonical_todos_if_promoted(
 
 
 class CanonicalTodoSnapshot:
-    """One read-only request's complete Todo inputs, isolated from its consumers.
+    """One status request's summary and contract facts, isolated from its consumers.
 
     Only identical no-lease, no-writeback reads participate. This is not a TTL
     cache or a transaction spanning Goals, registry, Markdown or rollout events.
@@ -336,6 +346,7 @@ class CanonicalTodoSnapshot:
                 from ..todos.resume_condition import TodoResumeRolloutEvents
                 self._reads[key] = read_canonical_todos_if_promoted(
                     runtime_root=key[0], goal_id=goal_id, include_summary=True,
+                    include_contract_rows=True,
                     rollout_events=TodoResumeRolloutEvents([], runtime_root=key[0], goal_id=goal_id),
                 )
             except LocalCoordinationAuthorityUnavailable as error:
@@ -357,6 +368,7 @@ class CanonicalTodoSnapshot:
 def validate_canonical_todo_read(
     result: Any, *, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
+    contract_fields: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Decode a native source result without adding another provider read."""
     if not isinstance(result, Mapping):
@@ -370,7 +382,9 @@ def validate_canonical_todo_read(
         raise CanonicalAuthorityRequired(
             goal_id=goal_id, operation="todo_read", payload=payload,
         )
-    todos = payload.get("todos")
+    rows_key = "todo_contract_rows" if contract_fields is not None else "todos"
+    expected_fields = set(contract_fields) if contract_fields is not None else None
+    todos = payload.get(rows_key)
     todo_read_model = payload.get("todo_read_model")
     if (
         payload.get("status") != "loaded"
@@ -379,6 +393,11 @@ def validate_canonical_todo_read(
         or payload.get("legacy_fallback_used") is not False
         or not isinstance(todos, list)
         or any(not isinstance(item, Mapping) for item in todos)
+        or (
+            expected_fields is not None
+            and ("todos" in payload or "todo_ids" in payload
+                 or any(item.keys() != expected_fields for item in todos))
+        )
         or not isinstance(todo_read_model, Mapping)
         or todo_read_model.get("schema_version")
         not in {
@@ -394,7 +413,7 @@ def validate_canonical_todo_read(
             ),
             payload=payload,
         )
-    payload["todos"] = [dict(item) for item in todos]
+    payload[rows_key] = [dict(item) for item in todos]
     if include_leases and (
         not isinstance(payload.get("leases"), list)
         or any(not isinstance(item, Mapping) for item in payload["leases"])
