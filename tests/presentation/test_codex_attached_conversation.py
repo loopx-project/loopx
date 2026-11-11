@@ -1,5 +1,6 @@
 """Real HTTP + SQLite/JSONL + a disposable Desktop-owner Unix protocol peer."""
 
+from contextlib import closing
 import importlib.util
 import json
 from pathlib import Path
@@ -397,10 +398,11 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
         )  # This id already caused an effect.
 
 
-def test_model_readback_is_bound_to_the_same_open_original_turn(tmp_path, monkeypatch):
+@pytest.mark.parametrize("change", ["finish", "replace_rollout", "archive"])
+def test_model_readback_is_bound_to_the_same_open_original_turn(tmp_path, monkeypatch, change):
     from loopx.control_plane import effect_runtime
 
-    with fixture(tmp_path) as (request, rollout, methods, inputs, _, _home):
+    with fixture(tmp_path) as (request, rollout, methods, inputs, _, home):
         _, query = target(request)
 
         def append(kind, **payload):
@@ -468,19 +470,39 @@ def test_model_readback_is_bound_to_the_same_open_original_turn(tmp_path, monkey
         }
         assert request(query=query + "&turn_model=1")[0] == 409
 
-        context("second", "before-a-concurrent-finish", "medium")
-        _, before_finish = request(query=query)
+        context("second", "before-a-concurrent-source-change", "medium")
+        _, before_change = request(query=query)
         underlying = effect_runtime.effect_runtime_result
 
-        def finish_during_read(method, params, **options):
+        def change_during_read(method, params, **options):
             result = underlying(method, params, **options)
             if method == "runtime.execution_identity.codex":
-                append("event_msg", type="task_complete", turn_id="second")
+                if change == "finish":
+                    append("event_msg", type="task_complete", turn_id="second")
+                else:
+                    with closing(sqlite3.connect(home / "state_5.sqlite")) as database, database:
+                        if change == "replace_rollout":
+                            replacement = rollout.with_name("replacement.jsonl")
+                            replacement.write_bytes(rollout.read_bytes())
+                            database.execute(
+                                "UPDATE threads SET rollout_path = ? WHERE id = ?",
+                                (str(replacement), THREAD),
+                            )
+                        else:
+                            database.execute("UPDATE threads SET archived = 1 WHERE id = ?", (THREAD,))
             return result
 
-        monkeypatch.setattr(effect_runtime, "effect_runtime_result", finish_during_read)
-        assert read_model(before_finish)[1]["turn_model"] is None
-        assert request(query=query)[1]["activity"]["state"] == "idle"
+        monkeypatch.setattr(effect_runtime, "effect_runtime_result", change_during_read)
+        status, model = read_model(before_change)
+        assert status == 200 and model["turn_model"] is None
+        history_status, latest = request(query=query)
+        if change == "archive":
+            assert history_status == 503
+        else:
+            assert history_status == 200 and latest["revision"] != before_change["revision"]
+            assert latest["activity"]["state"] == ("idle" if change == "finish" else "turn_open")
+        if change != "finish":
+            assert rollout.is_file()  # The stale file itself was never retired.
         assert not inputs and "thread-follower-start-turn" not in methods
 
 

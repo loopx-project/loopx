@@ -148,14 +148,26 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   useEffect(() => {
     if (modelQuery === null || bindingReadRejected) return;
     const controller = new AbortController();
-    void request<TurnModelReadback>(`/api/chat/codex-attached?${modelQuery}`, {signal: controller.signal})
-      .then(result => {
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const read = async (attempt: number) => {
+      try {
+        const result = await request<TurnModelReadback>(
+          `/api/chat/codex-attached?${modelQuery}`, {signal: controller.signal},
+        );
         if (!controller.signal.aborted && result.revision === activeRevision) {
           setTurnModelReadback({query: modelQuery, model: result.turn_model});
         }
-      })
-      .catch(() => {}); // Optional readback; the existing history and reply state remain independent.
-    return () => controller.abort();
+      } catch (failure) {
+        if (!controller.signal.aborted && attempt < 3 && retryableRead(failure)) {
+          retry = setTimeout(() => void read(attempt + 1), 1_000);
+        }
+      }
+    };
+    void read(1);
+    return () => {
+      controller.abort();
+      clearTimeout(retry);
+    };
   }, [modelQuery, activeRevision, bindingReadRejected]);
 
   function stopOnRejectedRead(failure: unknown): boolean {

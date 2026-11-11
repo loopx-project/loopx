@@ -313,9 +313,14 @@ def observed_turn_model(
     revision = _rollout_revision(stamp)
     try:
         result = _read_turn_model(home, path, thread_id, revision)
-        # The file may have advanced after the HTTP handler read its stamp,
-        # including on a cache hit. Let the next snapshot observe the new Turn.
-        return result if _rollout_revision(path.stat()) == revision else None
+        if result is None:
+            return None
+        # The thread index can replace or archive a rollout without changing
+        # the previous file. Re-resolve the same source even on a cache hit.
+        current_home, current_path = locate_thread(thread_id)
+        if (current_home, current_path) != (home, path) or _rollout_revision(current_path.stat()) != revision:
+            return None
+        return result
     except (OSError, RuntimeError, ValueError):
         return None
 
