@@ -107,6 +107,21 @@ export async function validateBilingualBlog(blogDir) {
       assertIncludes(article, `data-audit-progressive-bytes="${sum("progressive_bytes")}"`,
         "Both published editions must use the recomputed total");
       assertIncludes(article, "32.5%", "The weighted share matches the public rows");
+      const langSuffix = locale === "zh/" ? "zh" : "en";
+      assertIncludes(article, `context-cascade-${langSuffix}.svg`,
+        "Both published editions must embed the 100% four-stage cascade chart");
+      const cascadeSvg = await readFile(
+        resolve(blogDir, `images/context-delivery/context-cascade-${langSuffix}.svg`),
+        "utf8",
+      );
+      for (const token of ["100.0%", "−61.0%", "−74.25%"]) {
+        assertIncludes(cascadeSvg, token, `Cascade chart must retain verified step-down figure: ${langSuffix} ${token}`);
+      }
+      const multitaskSvg = await readFile(
+        resolve(blogDir, `images/context-delivery/multitask-byte-ratios-${langSuffix}.svg`),
+        "utf8",
+      );
+      assertIncludes(multitaskSvg, "100.0%", `Eight-task byte audit chart must anchor at 100% Full: ${langSuffix}`);
       if (/7,479,469|33\.4%|69\.9 KB|57\.1ms/.test(article))
         throw new Error("Unreconciled totals or unsupported C1 attribution reappeared");
     }
