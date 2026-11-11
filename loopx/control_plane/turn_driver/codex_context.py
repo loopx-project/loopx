@@ -749,13 +749,43 @@ class NativeContextPreparation:
     initial_read_plan: dict[str, Any] | None = None
 
 
-def _retire_native_recovery_lookup(root: Path, state: dict[str, Any]) -> None:
-    """Remove the moving selector while a supplied signed source is checked."""
-    active = ("recovery", "source_recovery", "pending", "candidate")
-    if any(key in state for key in active):
-        for key in active:
-            state.pop(key, None)
+def _retire_native_recovery_lookup(root: Path, state: dict[str, Any], *, goal_id: str, agent_id: str) -> None:
+    """Retire the current lookup for this work scope while its journal is locked."""
+    recovery = state.get("recovery")
+    if (not isinstance(recovery, dict) or recovery.get("goal_id") != goal_id
+            or recovery.get("agent_id") != agent_id):
+        return
+    for key in ("recovery", "source_recovery", "pending", "candidate"):
+        state.pop(key, None)
+    try:
         _save(root, state)
+    except (OSError, ValueError, TypeError, RecursionError):
+        _discard_recovery(root)
+        raise
+
+
+def retire_rejected_saved_context(*, directory: str | None, context_root: str | None,
+                                  goal_id: str, agent_id: str, hook_session: str | None) -> None:
+    """Retire the lookup after the saved file and identity have been checked."""
+    from ..quota.error_codes import QuotaDecisionTransportError
+
+    session = hook_session or os.environ.get("CODEX_THREAD_ID")
+    if not session:
+        return
+    try:
+        location = codex_context_directory(directory=directory, root=context_root, session=session)
+        if location is None:
+            return
+        with _locked(location) as root:
+            state = _state(root)
+            if state.get("session_id") == session and isinstance(state.get("cwd"), str) and state["cwd"]:
+                _retire_native_recovery_lookup(root, state, goal_id=goal_id, agent_id=agent_id)
+    except FileNotFoundError:
+        return  # There is no initialized journal at this location.
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
+        raise QuotaDecisionTransportError(
+            "The saved source was rejected and its native recovery lookup could not be safely retired."
+        ) from exc
 
 
 def _commit_native_context_recovery(
@@ -868,7 +898,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     # A supplied signed capture becomes the active recovery
                     # only after the typed planner validates it. Retire any
                     # implicit predecessor lookup while the check is pending.
-                    _retire_native_recovery_lookup(root, state)
+                    _retire_native_recovery_lookup(root, state, goal_id=goal_id, agent_id=agent_id)
                 else:
                     # Live and historical callers keep their original
                     # recovery checkpoint before optional planning.
@@ -906,6 +936,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if projected:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                if check_saved_source:
+                    state.pop("candidate", None)
                 if check_saved_source or projected:
                     publish_recovery(recovery)
                 result: dict[str, Any] = transaction["delivery"] if presentation else transaction

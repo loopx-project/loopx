@@ -63,7 +63,9 @@ If the saved source cannot be verified, the returned digest-bound
 diagnosis. Restore the intact, supported source and retry `context-project`
 with the original Goal, Agent, Turn and digest before using it for work.
 Native recovery publishes the current session source after the same typed
-check succeeds. Optional presentation failures after verification can still
+check succeeds. Rejection retires the implicit lookup for the same native
+session, Goal and Agent. The original captures remain available by their
+explicit digest-bound references. Optional presentation failures after verification can still
 refer to the verified capture.
 
 For eligible original Todo plans, the same typed settlement owner projects one
@@ -95,7 +97,8 @@ model context. Actual live adoption and efficiency still require separate proof.
 或关闭上下文交付时同样校验。来源校验失败或中断时，返回的摘要绑定
 `context-read` 命令只选取原记录的 `heartbeat_receipt` 用于诊断。恢复完整且受支持
 的来源后，以原 Goal、Agent、Turn 和摘要重试 `context-project`，通过后再作为工作
-上下文。原生会话通过同一校验后发布当前来源。校验成功后如遇可选呈现失败，仍可
+上下文。原生会话通过同一校验后发布当前来源。拒绝来源时撤下同一会话、Goal 和 Agent
+的隐式读回入口。原捕获仍可通过显式摘要引用读取。校验成功后如遇可选呈现失败，仍可
 读取已验证的捕获。
 这只是 Host 开发协议入口，不新增设置、模型/子 worker、预算或权限，也不证明
 已运行的 Host 采用或效率收益。

@@ -91,20 +91,39 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
     if route in {"stateless", "native", "pre-session"}:
         options += ["--initial-read", "--max-page-output-bytes", "12000"]
     journal = tmp_path / "native"
+    session = "source-validation"
+    event = {"hook_event_name": "SessionStart", "session_id": session, "cwd": str(project)}
+    active_native = route in {"native", "delta-only"}
     if route in {"native", "delta-only", "pre-session"}:
         journal.mkdir(mode=0o700)
-        monkeypatch.setenv("CODEX_THREAD_ID", "source-validation")
-        if route != "pre-session":
-            codex_context_hook(str(journal), {"hook_event_name": "SessionStart", "source": "startup",
-                "session_id": "source-validation", "cwd": str(project)})
+        monkeypatch.setenv("CODEX_THREAD_ID", session)
+        if active_native:
+            codex_context_hook(str(journal), {**event, "source": "startup"})
         options += ["--codex-app", "--codex-context-dir", str(journal)]
     if route == "delta-only":
         options += ["--delta-delivery", "auto"]
 
-    def project_capture(path):
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        return _run_cli(registry, runtime, "quota", "context-project", *binding, *options,
-            "--capture-file", str(path), "--capture-sha256", digest, cwd=project)
+    def project_capture(path, *, turn=TURN_ID, goal=GOAL_ID, agent=AGENT_ID, digest=None, delivery=options):
+        return _run_cli(registry, runtime, "quota", "context-project", "--goal-id", goal, "--agent-id", agent,
+            "--turn-instance-id", turn, *delivery, "--capture-file", str(path),
+            "--capture-sha256", digest or hashlib.sha256(path.read_bytes()).hexdigest(), cwd=project)
+
+    lookup = ("quota", "context-read", "--codex-context-dir", str(journal),
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--select", "/heartbeat_receipt")
+    prior_turn = "preceding-turn"
+    prior_receipt = {"turn_instance_id": prior_turn}
+    prior = directory / "preceding.json"
+    prior_bytes = json.dumps({"ok": True, "goal_id": GOAL_ID, "agent_identity": {"agent_id": AGENT_ID},
+        "heartbeat_receipt": prior_receipt, "requirement": "This requirement belongs to the preceding Turn."}).encode()
+    if active_native:
+        prior.write_bytes(prior_bytes)
+
+    def assert_preceding_recovery():
+        code, page = _run_cli(registry, runtime, *lookup, cwd=project)
+        assert code == 0 and page["eof"], page
+        assert json.loads(page["content"])["selections"] == [
+            {"pointer": "/heartbeat_receipt", "value": prior_receipt},
+        ]
 
     code, valid = project_capture(original)
     assert code == 0 and valid["ok"], valid
@@ -120,6 +139,27 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
         capture = directory / "rejected.json"
         capture.write_text(json.dumps(bad))
         digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+        if active_native:
+            code, preceding = project_capture(prior, turn=prior_turn,
+                delivery=[arg for arg in options if arg != "--initial-read"])
+            assert code == 0 and preceding["ok"], preceding
+            assert_preceding_recovery()
+            if version == "loopx_turn_envelope_v2":
+                assert project_capture(capture, digest="0" * 64)[0] == 1
+                assert project_capture(capture, turn=prior_turn)[0] == 1
+                disabled = ["--context-delivery", "off", "--delta-delivery", "off",
+                    "--codex-app", "--codex-context-dir", str(journal)]
+                assert project_capture(capture, delivery=disabled)[0] == 1
+                with monkeypatch.context() as other:
+                    other.setenv("CODEX_THREAD_ID", "different-session")
+                    assert project_capture(capture)[0] == 1
+            if version in {"loopx_turn_envelope_v2", "loopx_turn_envelope_v1"}:
+                foreign = directory / "foreign.json"
+                foreign.write_text(json.dumps({**bad, "goal_id": "different-goal"}))
+                assert project_capture(foreign, goal="different-goal")[0] == 1
+                foreign.write_text(json.dumps({**bad, "agent_identity": {"agent_id": "different-agent"}}))
+                assert project_capture(foreign, agent="different-agent")[0] == 1
+                assert_preceding_recovery()
         code, rejected = project_capture(capture)
         assert code == 1 and rejected["ok"] is False, rejected
         assert rejected["error_code"] == "quota_decision_transport_failed" and reason in rejected["reason"]
@@ -132,10 +172,18 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
         rc, page = _run_cli(registry, runtime, *recovery[recovery.index("quota"):], cwd=project)
         assert rc == 0 and page["eof"]
         assert json.loads(page["content"])["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+        if active_native:
+            code, implicit = _run_cli(registry, runtime, *lookup, cwd=project)
+            assert code == 1 and implicit["ok"] is False, implicit
+            assert not codex_context_hook(str(journal), {**event, "source": "compact"})
     journal_state = journal / "session.json"
-    if route in {"native", "delta-only"}:
+    if active_native:
         state = json.loads(journal_state.read_text())
         assert "recovery" not in state and "pending" not in state
+        code, explicit = _run_cli(registry, runtime, "quota", "context-read",
+            "--capture-file", str(prior), "--capture-sha256", hashlib.sha256(prior_bytes).hexdigest(), cwd=project)
+        assert code == 0 and explicit["content"].encode() == prior_bytes
+        assert project_capture(original)[0] == 0
     else:
         assert not journal_state.exists()
     assert original.read_bytes() == raw

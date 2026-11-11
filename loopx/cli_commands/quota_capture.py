@@ -367,6 +367,11 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     complete = version == COMPLETE_TURN_DECISION_VERSION
     try:
         if not complete and not is_legacy_saved_quota_decision(payload):
+            if activation["enabled"]:
+                from ..control_plane.turn_driver.codex_context import retire_rejected_saved_context
+
+                retire_rejected_saved_context(directory=args.codex_context_dir, context_root=args.codex_context_root,
+                    goal_id=args.goal_id, agent_id=args.agent_id, hook_session=hook_session)
             raise QuotaDecisionTransportError("Unsupported saved quota decision version or mixed Turn binding.")
         if complete and not activation["enabled"] and not activation["progressive_enabled"]:
             assert_complete_turn_decision(payload)
