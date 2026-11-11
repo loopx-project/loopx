@@ -478,6 +478,7 @@ export function createEffectRuntimeHandlers(
     ["capabilities.pr_review.conclusion.select", lazyHandler(() => import("./capabilities/pr_review_approval_closeout.ts"), ({selectPrReviewConclusion}) => selectPrReviewConclusion)],
     ["capabilities.pr_review.configuration", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({prReviewConfiguration}) => prReviewConfiguration)],
     ["capabilities.pr_review.order", lazyHandler(() => import("./capabilities/pr_review_order.ts"), ({orderPrReviewQueue}) => orderPrReviewQueue)],
+    ["material_lifecycle.plan_wave_rerank", lazyHandler(() => import("./capabilities/material_wave_ranking.ts"), ({planMaterialWaveRerank}) => planMaterialWaveRerank)],
     ["coordination.runtime_shadow.outbox_read", lazyHandler(() => import("./coordination/local_authority_shadow.ts"), ({readLocalAuthorityShadow}) => readLocalAuthorityShadow)],
     ["coordination.runtime_shadow.drain", lazyHandler(() => import("./coordination/shadow_drain.ts"), ({drainShadowOutbox}) => drainShadowOutbox)],
     ["coordination.cold_source.import", lazyHandler(() => Promise.all([import("./coordination/cold_source_import.ts"), import("./coordination/source_transfer.ts")]), ([{executeColdSourceImport}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.cold_source.import", executeColdSourceImport))],
