@@ -5,7 +5,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..coordination.local_authority import read_canonical_todos_if_promoted
+from ..coordination.local_authority import (
+    LOCAL_AUTHORITY_SOURCES,
+    LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
+)
 from ..effect_runtime import effect_runtime_result
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id
 from ..work_items.action_selection_contract import (
@@ -45,23 +48,36 @@ def project_selected_todo_execution_preparation(
     if not todo_id or not safe_agent_id or runtime_root is None:
         return None
     try:
-        snapshot = read_canonical_todos_if_promoted(
-            runtime_root=Path(runtime_root), goal_id=goal_id, include_leases=True,
+        response = effect_runtime_result(
+            "todo.read",
+            {"schema_version": "todo_read_request_v0", "kind": "execution_preparation_source",
+             "source": {"runtime_root": str(Path(runtime_root).expanduser().resolve(strict=False)),
+                        "goal_id": goal_id},
+             "todo_id": todo_id},
+            timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
         )
-        authoritative = [
-            row for row in snapshot["todos"]
-            if normalize_todo_id(row.get("todo_id")) == todo_id
-        ]
-        if len(authoritative) != 1:
+        snapshot = (
+            response.get("execution_preparation_source") if isinstance(response, dict)
+            and response.get("schema_version") == "todo_read_result_v0" else None
+        )
+        if (
+            not isinstance(snapshot, dict) or snapshot.get("goal_id") != goal_id
+            or snapshot.get("todo_id") != todo_id or snapshot.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
+            or snapshot.get("decision_read_from_provider") is not True
+            or snapshot.get("legacy_fallback_used") is not False
+            or not isinstance(snapshot.get("provider_revision"), str) or not snapshot["provider_revision"]
+            or not isinstance(snapshot.get("todo"), dict) or snapshot["todo"].get("todo_id") != todo_id
+            or not isinstance(snapshot.get("leases"), list)
+        ):
             facts = _unavailable_facts(
                 goal_id=goal_id, todo_id=todo_id, agent_id=safe_agent_id,
             )
         else:
-            todo = authoritative[0]
+            todo = snapshot["todo"]
             leases = []
             for lease in snapshot["leases"]:
-                if normalize_todo_id(lease.get("todo_id")) != todo_id:
-                    continue
+                if not isinstance(lease, dict) or lease.get("todo_id") != todo_id:
+                    raise ValueError("execution preparation returned a lease for a different Todo")
                 status = str(lease.get("status") or "unknown").strip().lower()
                 leases.append({
                     "status": status if status in {"active", "released"} else "unknown",
