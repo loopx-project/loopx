@@ -294,25 +294,35 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
 
 def _saved_context_transport_failure(
     error: Exception, *, args: argparse.Namespace, receipt: dict[str, Any],
-    recovery: dict[str, Any], reader_argv: list[str],
+    recovery: dict[str, Any], reader_argv: list[str], source_unverified: bool = False,
 ) -> dict[str, Any]:
     page_bytes, output_bytes = native_context_page_budget()
     limit = getattr(args, "max_page_output_bytes", None)
     if isinstance(limit, int) and limit > 0:
         output_bytes = min(output_bytes, limit)
         page_bytes = min(page_bytes, output_bytes)
+    if source_unverified:
+        instruction = (
+            "The saved source could not be verified. Use recovery.command for diagnostic receipt readback. "
+            "Restore an intact, supported capture and retry context-project with its original Goal, Agent, Turn "
+            "and digest before using it as work context. Preserve the original receipt and do not rerun admission."
+        )
+    else:
+        instruction = (
+            "Context presentation was not published. Discover current fields with recovery.command, then select "
+            "only the facts the current decision needs from the original capture; do not drain unrelated optional "
+            "material or rerun admission. Preserve its Turn receipt. If a selected value spans pages, follow "
+            "next_command only for that selection and verify contiguous offsets, total_bytes and sha256. "
+            "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
+        )
     return {"ok": False, "error_code": QuotaDecisionTransportError.error_code,
         "reason": " ".join(str(error).split())[:500],
         "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
         "recovery": {**recovery, "command": context_capture_read_command(
             Path(recovery["path"]), recovery["sha256"], page_bytes=page_bytes,
-            max_page_output_bytes=output_bytes, list_fields=True, reader_argv=reader_argv)},
-        "instruction": "Context presentation was not published. Discover current fields with "
-            "recovery.command, then select only the facts the current decision needs from the original "
-            "capture; do not drain unrelated optional material or rerun admission. Preserve its Turn "
-            "receipt. If a selected value spans pages, follow next_command only for that selection and "
-            "verify contiguous offsets, total_bytes and sha256. Authority and freshness are unchanged. "
-            + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE}
+            max_page_output_bytes=output_bytes, list_fields=not source_unverified,
+            select=["/heartbeat_receipt"] if source_unverified else None, reader_argv=reader_argv)},
+        "instruction": instruction}
 
 
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
@@ -326,6 +336,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     Invalid run-mode opt-ins fail before that optional transport path.
     """
     from ..command_invocation import current_loopx_cli_argv
+    from ..control_plane.quota.turn_envelope import (
+        COMPLETE_TURN_DECISION_VERSION, assert_complete_turn_decision, is_legacy_saved_quota_decision,
+    )
 
     reader_argv = current_loopx_cli_argv()
     try:
@@ -364,15 +377,23 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     reference = {"path": str(path), "sha256": args.capture_sha256,
         "command": context_capture_read_command(path, args.capture_sha256, reader_argv=reader_argv)}
     full_reference = dict(reference)
+    version = payload.get("schema_version")
+    complete = version == COMPLETE_TURN_DECISION_VERSION
     try:
-        surface = quota_context_surface(payload, args)
-        if surface == "complete_turn" and not activation["enabled"] and not activation["progressive_enabled"]:
-            from ..control_plane.quota.turn_envelope import assert_complete_turn_decision
+        if not complete and not is_legacy_saved_quota_decision(payload):
+            if activation["enabled"]:
+                from ..control_plane.turn_driver.codex_context import retire_rejected_saved_context
 
+                retire_rejected_saved_context(directory=args.codex_context_dir, context_root=args.codex_context_root,
+                    goal_id=args.goal_id, agent_id=args.agent_id, capture_sha256=args.capture_sha256,
+                    hook_session=hook_session)
+            raise QuotaDecisionTransportError("Unsupported saved quota decision version or mixed Turn binding.")
+        if complete and not activation["enabled"] and not activation["progressive_enabled"]:
             assert_complete_turn_decision(payload)
     except (QuotaDecisionTransportError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         return _saved_context_transport_failure(exc, args=args, receipt=receipt,
-            recovery=full_reference, reader_argv=reader_argv)
+            recovery=full_reference, reader_argv=reader_argv, source_unverified=True)
+
     mode = "full"
     target = None
     native_prepared = False
@@ -388,14 +409,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
-                    initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
+                    initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
             return navigation
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-            if surface == "complete_turn":
-                # An exact file digest authenticates bytes, not their contract.
+            if complete:
                 return _saved_context_transport_failure(exc, args=args, receipt=receipt,
-                    recovery=full_reference, reader_argv=reader_argv)
-            # Historical readers keep their exact original fallback below.
+                    recovery=full_reference, reader_argv=reader_argv, source_unverified=True)
+            # Historical readers keep their original fallback below.
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, prepare_codex_context
 
@@ -432,7 +452,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # still owns when the following full/delta view can be published.
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         presentation = payload
-        if args.initial_read and activation["progressive_enabled"] and surface != "complete_turn":
+        if args.initial_read and activation["progressive_enabled"] and not complete:
             from ..control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
             from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
 
@@ -444,7 +464,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             if "host_poll_receipt" in payload:
                 presentation["host_poll_receipt"] = payload["host_poll_receipt"]
         prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface=surface,
+            goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
@@ -475,11 +495,12 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         mode, target = native_view["mode"], native_view.get("target")
         initial_reference = native_view.get("first_read_reference")
         native_view = model_context_reference(native_view, reader_argv=reader_argv)
-    except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError,
-            EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-        if surface == "complete_turn" and isinstance(exc, EffectRuntimeRejected):
-            return _saved_context_transport_failure(exc, args=args, receipt=receipt,
-                recovery=full_reference, reader_argv=reader_argv)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+        if not complete:
+            raise
+        return _saved_context_transport_failure(exc, args=args, receipt=receipt,
+            recovery=full_reference, reader_argv=reader_argv, source_unverified=not native_prepared)
+    except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
         if native_view is not None and not isinstance(exc, QuotaDecisionTransportError):
             # The native view and journal are already valid. Publishing the
             # shorter reader metadata is optional; retain their exact legacy
@@ -487,12 +508,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             pass
         elif isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
             if not isinstance(exc, QuotaDecisionTransportError):
-                exc = QuotaDecisionTransportError(
-                    "Current context recovery could not be prepared. Read the saved "
-                    "original decision and receipt; do not rerun admission."
-                )
+                exc = QuotaDecisionTransportError("Current context recovery could not be prepared.")
             return _saved_context_transport_failure(exc, args=args, receipt=receipt,
-                recovery=full_reference, reader_argv=reader_argv)
+                recovery=full_reference, reader_argv=reader_argv, source_unverified=complete and not native_prepared)
         # Off is inert; after native preparation an optional wire write can fall
         # back to the committed required view without leaving an older selector live.
     result: dict[str, Any] = {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
@@ -957,11 +975,16 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 "goal_id": request["goal_id"], "agent_id": request["agent_id"],
                                 "turn_instance_id": request["turn_instance_id"],
                             }), hook_session=event["session_id"])
-                            if receipt["context"].get("ok") is False:
-                                from ..command_invocation import current_loopx_cli_argv
+                            context = receipt["context"]
+                            if context.get("ok") is False:
+                                recovery = context.get("recovery")
+                                if isinstance(recovery, dict) and isinstance(recovery.get("command"), str):
+                                    context["recovery_command"] = recovery["command"]
+                                else:
+                                    from ..command_invocation import current_loopx_cli_argv
 
-                                receipt["context"]["recovery_command"] = context_capture_read_command(
-                                    source, digest, reader_argv=current_loopx_cli_argv())
+                                    context["recovery_command"] = context_capture_read_command(
+                                        source, digest, reader_argv=current_loopx_cli_argv())
                             additional = codex_execution_preparation_context(receipt)
                 except LegacyNativePreparationCapture as error:
                     additional = str(error)
