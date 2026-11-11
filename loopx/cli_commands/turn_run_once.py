@@ -111,7 +111,15 @@ def execute_turn_run_once(
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
         if args.execute and args.host == "codex-cli" and selected_todo:
-            if not args.resume_turn_key:
+            from ..control_plane.turn_driver.journal_store import (
+                load_turn_journal, turn_journal_path,
+            )
+
+            original = load_turn_journal(turn_journal_path(runtime_root,
+                goal_id=args.goal_id, turn_key=payload["transaction"]["turn_key"]))
+            if original is not None:
+                payload["completion_lease_proof"] = dict(original["plan"].get("completion_lease_proof") or {})
+            elif not args.resume_turn_key:
                 from ..control_plane.work_items.task_lease import inspect_task_lease
 
                 inspected = inspect_task_lease(
@@ -494,6 +502,14 @@ def execute_turn_run_once(
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.TERMINAL_CLOSEOUT)
             return todo_completion(result, effect_ref=effect_ref)
+
+        def settlement_writeback(
+            result: dict[str, object], *, effect_ref: str,
+        ) -> dict[str, object]:
+            # Even predeclared no-followup work owes durable validation before
+            # refresh. The executor retains its separate post-spend closeout.
+            callback = completion_writeback if result.get("result_kind") == "validated_completion" else writeback
+            return callback(result, effect_ref=effect_ref)
 
         def current_status() -> dict[str, object]:
             return collect_turn_status_payload(
@@ -919,7 +935,7 @@ def execute_turn_run_once(
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
             settlement_admission=settlement_admission,
-            writeback=writeback if args.execute else None,
+            writeback=settlement_writeback if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
             terminal_closeout=terminal_closeout if args.execute else None,

@@ -25,13 +25,15 @@ def _cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("failure", [None, "independent_validation", "declared_validation", "stale_lease"])
+@pytest.mark.parametrize("failure", [None, "terminal", "independent_validation", "declared_validation", "stale_lease"])
 def test_builtin_codex_completes_before_accountable_writeback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, failure: str | None,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease")
-    added = add_goal_todo(
+    terminal = failure == "terminal"
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider, handoff_mode="hard_lease",
+        todo_metadata_extra="no_followup=true" if terminal else "")
+    added = {"todo_id": "todo_fixture0001"} if terminal else add_goal_todo(
         registry_path=registry, goal_id="loopx-turn-fixture", role="agent",
         text="Deliver the independently checked artifact.", task_class="advancement_task",
         action_kind="fixture", claimed_by="codex-fixture", agent_id="codex-fixture",
@@ -42,6 +44,14 @@ def test_builtin_codex_completes_before_accountable_writeback(
     claim_code, claim = _cli(registry, runtime, "todo", "claim", "--goal-id", "loopx-turn-fixture",
         "--todo-id", todo_id, "--agent-id", "codex-fixture", "--claimed-by", "codex-fixture")
     assert claim_code == 0, claim
+    if terminal:
+        code, current = _cli(registry, runtime, "todo", "list", "--goal-id", "loopx-turn-fixture")
+        assert code == 0, current
+        code, declaration = _cli(registry, runtime, "todo", "update", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", todo_id, "--agent-id", "codex-fixture", "--claim-operation-id", claim["claim_operation_id"],
+            "--validation-command-json", json.dumps([sys.executable, "-c", "raise SystemExit(0)"]),
+            "--update-operation-id", "declare-terminal-validation", "--update-expected-provider-revision", current["authority_read"]["provider_revision"])
+        assert code == 0, declaration
     host_calls = []
 
     def host(request, **_kwargs):
@@ -72,13 +82,21 @@ def test_builtin_codex_completes_before_accountable_writeback(
     assert len(journals) == 1
     journal = json.loads(journals[0].read_text())
     assert len(host_calls) == 1
-    if failure:
+    if failure and not terminal:
         assert result["status"] != "committed", result
         assert "quota_spend" not in journal["completed_phases"]
         assert "durable_writeback" not in journal["completed_phases"]
+        if failure == "stale_lease":
+            recovery_args = argv[:-1]
+            todo_option = recovery_args.index("--todo-id")
+            del recovery_args[todo_option:todo_option + 2]
+            code, retried = _cli(registry, runtime, *recovery_args,
+                "--resume-turn-key", journal["turn_key"], "--execute")
+            assert retried.get("status") != "committed", retried
+            assert len(host_calls) == 1
         return
     assert code == 0 and result["status"] == "committed", result
-    assert journal["writeback"]["completion"] == {"todo_id": todo_id, "continuation": "active_goal"}
+    assert journal["writeback"]["completion"] == {"todo_id": todo_id, "continuation": "no_followup" if terminal else "active_goal"}
     events = [json.loads(line) for line in (runtime / "goals" / "loopx-turn-fixture" / "rollout-event-log.jsonl").read_text().splitlines()]
     identity = journal["plan"]["transaction"]
     kinds = [event["event_kind"] for event in events if event.get("run_id") == identity.get("turn_instance_id", journal["turn_key"])]
