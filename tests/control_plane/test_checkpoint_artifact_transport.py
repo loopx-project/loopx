@@ -119,3 +119,48 @@ def test_large_rpc_allowance_cannot_extend_artifact_capture_deadline(tmp_path):
     assert rejected.value.diagnostic_code == "checkpoint_capture_window_closed"
     assert str(rejected.value) == "checkpoint capture window has closed"
     assert not unit.exists()
+
+
+def test_wrong_reviewed_digest_is_rejected_across_the_runtime(tmp_path, capsys):
+    source = tmp_path / "candidate"
+    source.write_bytes(b"reviewed candidate\n")
+    components = [{"id": "code", "source_path": str(source)}]
+    point = tmp_path / "point"
+    destination = tmp_path / "receiver"
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "probe", "components": components})
+    captured = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "capture", "components": components, "destination": str(point),
+        "point_metadata": {"experiment": "digest control"},
+        "expected_source_sha256": observed["source_sha256"]}, retry_safe=False)
+    manifest = (point / "checkpoint.json").read_bytes()
+    actual = captured["sha256"]
+    foreign = "0" * 64 if actual != "0" * 64 else "1" * 64
+    wrong = {"root": str(point), "expected_sha256": foreign}
+    message = "checkpoint reviewed digest mismatch"
+    for action in ("verify", "read_basis", "materialize"):
+        payload = {"action": action, **wrong}
+        if action == "materialize":
+            payload["destination"] = str(destination)
+        with pytest.raises(EffectRuntimeRejected) as rejected:
+            effect_runtime_result("runtime.checkpoint_artifacts", payload, retry_safe=False,
+                                  large_local_snapshot=True)
+        assert rejected.value.error_kind == "request_rejected"
+        assert rejected.value.diagnostic_code == "invalid_request"
+        assert str(rejected.value) == message
+
+    cli = ["--format", "json", "research-checkpoint", "verify", "--root", str(point)]
+    assert main([*cli, "--expected-sha256", foreign]) == 1
+    failure = json.loads(capsys.readouterr().out)
+    assert failure["ok"] is False and failure["error"] == message
+    assert failure["execution_authority_granted"] is False
+    assert not destination.exists() and not list(tmp_path.glob(".loopx-checkpoint-*"))
+    assert (point / "checkpoint.json").read_bytes() == manifest
+
+    assert main([*cli, "--expected-sha256", actual]) == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified["integrity_verified"] and not verified["execution_authority_granted"]
+    basis = effect_runtime_result("runtime.checkpoint_artifacts", {
+        "action": "read_basis", "root": str(point), "expected_sha256": actual})
+    assert basis["point_metadata"] == {"experiment": "digest control"}
+    assert not basis["integrity_verified"] and not basis["execution_authority_granted"]

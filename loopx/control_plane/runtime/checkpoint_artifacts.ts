@@ -210,11 +210,16 @@ function manifestBody(raw: unknown): JsonObject {
   requireJsonObject(value.artifact_witness, "checkpoint artifact witness");
   return value;
 }
+async function readReviewedManifest(root: string, expected: unknown): Promise<JsonObject> {
+  const path = join(root, "checkpoint.json");
+  await physical(path);
+  const manifest = manifestBody(JSON.parse(await readFile(path, "utf8")));
+  if (manifest.sha256 !== expected) throw new EffectRuntimeRequestError("checkpoint reviewed digest mismatch");
+  return manifest;
+}
 async function verify(root: string, expected: unknown): Promise<JsonObject> {
   await physical(root);
-  await physical(join(root, "checkpoint.json"));
-  const value = manifestBody(JSON.parse(await readFile(join(root, "checkpoint.json"), "utf8")));
-  if (value.sha256 !== expected) throw new Error("checkpoint reviewed digest mismatch");
+  const value = await readReviewedManifest(root, expected);
   const entries = components(value.components);
   const actual = await witness(entries.map(c => ({id: c.id, source_path: join(root, "components", c.id)})), false);
   unchanged(value.artifact_witness, actual, "checkpoint artifact members differ from the reviewed capture");
@@ -386,9 +391,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   if (request.action === "read_basis") {
     if (!hasExactAuthorityKeys(request, ["action", "root", "expected_sha256"])) throw new Error("checkpoint basis fields are invalid");
     const root = absolute(request.root, "checkpoint root");
-    await physical(join(root, "checkpoint.json"));
-    const manifest = manifestBody(JSON.parse(await readFile(join(root, "checkpoint.json"), "utf8")));
-    if (manifest.sha256 !== request.expected_sha256) throw new Error("checkpoint reviewed digest mismatch");
+    const manifest = await readReviewedManifest(root, request.expected_sha256);
     // This reads a digest-bound declaration after admission's full member
     // verification. It does not claim current integrity of every component.
     return {point_metadata: manifest.point_metadata, components: manifest.components,
