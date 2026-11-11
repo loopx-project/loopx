@@ -93,85 +93,68 @@ L 374.277959 109.296
      </g>
     </g>
     <g id="text_6">
-     <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="344.253326" y="423.368" transform="rotate(-0 344.253326 423.368)">Share of complete source bytes (%)</text>
+     <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="344.253326" y="423.368" transform="rotate(-0 344.253326 423.368)">Share of each row's own baseline bytes (%)</text>
     </g>
    </g>
    <g id="matplotlib.axis_2">
     <g id="ytick_1">
      <g id="line2d_11"/>
      <g id="text_7">
-      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="145.490104" transform="rotate(-0 183.124 145.490104)">1. All · Full source</text>
+      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="152.974364" transform="rotate(-0 183.124 152.974364)">Progressive view / original capture</text>
      </g>
     </g>
     <g id="ytick_2">
      <g id="line2d_12"/>
      <g id="text_8">
-      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="220.332701" transform="rotate(-0 183.124 220.332701)">2. Progressive · Fold tail</text>
+      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="257.754" transform="rotate(-0 183.124 257.754)">In-cycle Delta / full delivery</text>
      </g>
     </g>
     <g id="ytick_3">
      <g id="line2d_13"/>
      <g id="text_9">
-      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="295.175299" transform="rotate(-0 183.124 295.175299)">3. Prog + In-cycle Delta</text>
-     </g>
-    </g>
-    <g id="ytick_4">
-     <g id="line2d_14"/>
-     <g id="text_10">
-      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="370.017896" transform="rotate(-0 183.124 370.017896)">4. Prog + Delta First read</text>
+      <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="183.124" y="362.533636" transform="rotate(-0 183.124 362.533636)">Manual selection / tutorial capture</text>
      </g>
     </g>
    </g>
    <g id="patch_3">
     <path d="M 186.624 122.393455
-L 374.277959 122.393455
-L 374.277959 159.814753
-L 186.624 159.814753
-z
-" clip-path="url(#pe7effab465)" style="fill: #334155"/>
-   </g>
-   <g id="patch_4">
-    <path d="M 186.624 197.236052
-L 204.868043 197.236052
-L 204.868043 234.657351
-L 186.624 234.657351
+L 203.433008 122.393455
+L 203.433008 174.783273
+L 186.624 174.783273
 z
 " clip-path="url(#pe7effab465)" style="fill: #2563eb"/>
    </g>
-   <g id="patch_5">
-    <path d="M 186.624 272.078649
-L 193.746517 272.078649
-L 193.746517 309.499948
-L 186.624 309.499948
+   <g id="patch_4">
+    <path d="M 186.624 227.173091
+L 259.884539 227.173091
+L 259.884539 279.562909
+L 186.624 279.562909
 z
 " clip-path="url(#pe7effab465)" style="fill: #0f766e"/>
    </g>
-   <g id="patch_6">
-    <path d="M 186.624 346.921247
-L 188.842381 346.921247
-L 188.842381 384.342545
+   <g id="patch_5">
+    <path d="M 186.624 331.952727
+L 189.077659 331.952727
+L 189.077659 384.342545
 L 186.624 384.342545
 z
 " clip-path="url(#pe7effab465)" style="fill: #7c3aed"/>
    </g>
+   <g id="text_10">
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="207.561395" y="151.943864" transform="rotate(-0 207.561395 151.943864)">9.0% (5,107 / 57,014 B)</text>
+   </g>
    <g id="text_11">
-    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="378.406346" y="144.459604" transform="rotate(-0 378.406346 144.459604)">100.0% (57,014 B)</text>
+    <text style="font-weight: 700; font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="264.012926" y="256.59375" transform="rotate(-0 264.012926 256.59375)">39.0% (2,164 / 5,543 B)</text>
    </g>
    <g id="text_12">
-    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="208.996431" y="219.056951" transform="rotate(-0 208.996431 219.056951)">9.7% (5,543 B · fold long tail)</text>
+    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="193.206046" y="361.503136" transform="rotate(-0 193.206046 361.503136)">1.3% (674 / 51,547 B · 2.6% CLI)</text>
    </g>
    <g id="text_13">
-    <text style="font-weight: 700; font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="197.874904" y="293.899549" transform="rotate(-0 197.874904 293.899549)">3.8% (2,164 B · −61.0% vs Prog)</text>
-   </g>
-   <g id="text_14">
-    <text style="font-size: 9.6px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="192.970768" y="368.809646" transform="rotate(-0 192.970768 368.809646)">1.2% (674 B body / 2.4% CLI)</text>
-   </g>
-   <g id="text_15">
-    <text style="font-weight: 700; font-size: 11.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="186.624" y="95.296" transform="rotate(-0 186.624 95.296)">A. Same-source 4-stage cascade</text>
+    <text style="font-weight: 700; font-size: 11.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="186.624" y="95.296" transform="rotate(-0 186.624 95.296)">A. Three independent archived tutorial comparisons</text>
    </g>
   </g>
   <g id="axes_2">
-   <g id="patch_7">
+   <g id="patch_6">
     <path d="M 660.412716 220.979721
 L 1005.696 220.979721
 L 1005.696 109.296
@@ -181,85 +164,85 @@ z
    </g>
    <g id="matplotlib.axis_3">
     <g id="xtick_6">
-     <g id="line2d_15">
+     <g id="line2d_14">
       <path d="M 660.412716 220.979721
 L 660.412716 109.296
 " clip-path="url(#p4c93b6cf08)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_16"/>
-     <g id="text_16">
+     <g id="line2d_15"/>
+     <g id="text_14">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="660.412716" y="233.079721" transform="rotate(-0 660.412716 233.079721)">0</text>
      </g>
     </g>
     <g id="xtick_7">
-     <g id="line2d_17">
+     <g id="line2d_16">
       <path d="M 706.328046 220.979721
 L 706.328046 109.296
 " clip-path="url(#p4c93b6cf08)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_18"/>
-     <g id="text_17">
+     <g id="line2d_17"/>
+     <g id="text_15">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="706.328046" y="233.079721" transform="rotate(-0 706.328046 233.079721)">25</text>
      </g>
     </g>
     <g id="xtick_8">
-     <g id="line2d_19">
+     <g id="line2d_18">
       <path d="M 752.243376 220.979721
 L 752.243376 109.296
 " clip-path="url(#p4c93b6cf08)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_20"/>
-     <g id="text_18">
+     <g id="line2d_19"/>
+     <g id="text_16">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="752.243376" y="233.079721" transform="rotate(-0 752.243376 233.079721)">50</text>
      </g>
     </g>
     <g id="xtick_9">
-     <g id="line2d_21">
+     <g id="line2d_20">
       <path d="M 798.158707 220.979721
 L 798.158707 109.296
 " clip-path="url(#p4c93b6cf08)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_22"/>
-     <g id="text_19">
+     <g id="line2d_21"/>
+     <g id="text_17">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="798.158707" y="233.079721" transform="rotate(-0 798.158707 233.079721)">75</text>
      </g>
     </g>
     <g id="xtick_10">
-     <g id="line2d_23">
+     <g id="line2d_22">
       <path d="M 844.074037 220.979721
 L 844.074037 109.296
 " clip-path="url(#p4c93b6cf08)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_24"/>
-     <g id="text_20">
+     <g id="line2d_23"/>
+     <g id="text_18">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="844.074037" y="233.079721" transform="rotate(-0 844.074037 233.079721)">100</text>
      </g>
     </g>
-    <g id="text_21">
+    <g id="text_19">
      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="833.054358" y="246.649721" transform="rotate(-0 833.054358 246.649721)">Share of Progressive selected bytes (%)</text>
     </g>
    </g>
    <g id="matplotlib.axis_4">
+    <g id="ytick_4">
+     <g id="line2d_24"/>
+     <g id="text_20">
+      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="129.061918" transform="rotate(-0 656.912716 129.061918)">Progressive selected (46)</text>
+     </g>
+    </g>
     <g id="ytick_5">
      <g id="line2d_25"/>
-     <g id="text_22">
-      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="129.061918" transform="rotate(-0 656.912716 129.061918)">Progressive selected (46)</text>
+     <g id="text_21">
+      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="169.35186" transform="rotate(-0 656.912716 169.35186)">+ In-cycle Delta (all 46)</text>
      </g>
     </g>
     <g id="ytick_6">
      <g id="line2d_26"/>
-     <g id="text_23">
-      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="169.35186" transform="rotate(-0 656.912716 169.35186)">+ In-cycle Delta (all 46)</text>
-     </g>
-    </g>
-    <g id="ytick_7">
-     <g id="line2d_27"/>
-     <g id="text_24">
+     <g id="text_22">
       <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="209.641803" transform="rotate(-0 656.912716 209.641803)">+ In-cycle Delta (24 delta)</text>
      </g>
     </g>
    </g>
-   <g id="patch_8">
+   <g id="patch_7">
     <path d="M 660.412716 114.372533
 L 844.074037 114.372533
 L 844.074037 135.323303
@@ -267,7 +250,7 @@ L 660.412716 135.323303
 z
 " clip-path="url(#p4c93b6cf08)" style="fill: #2563eb"/>
    </g>
-   <g id="patch_9">
+   <g id="patch_8">
     <path d="M 660.412716 154.662475
 L 773.283398 154.662475
 L 773.283398 175.613246
@@ -275,7 +258,7 @@ L 660.412716 175.613246
 z
 " clip-path="url(#p4c93b6cf08)" style="fill: #0f766e"/>
    </g>
-   <g id="patch_10">
+   <g id="patch_9">
     <path d="M 660.412716 194.952418
 L 707.705506 194.952418
 L 707.705506 215.903188
@@ -283,21 +266,21 @@ L 660.412716 215.903188
 z
 " clip-path="url(#p4c93b6cf08)" style="fill: #059669"/>
    </g>
-   <g id="text_25">
+   <g id="text_23">
     <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="848.481909" y="128.231918" transform="rotate(-0 848.481909 128.231918)">100.0% (3.09 MB selected base)</text>
    </g>
-   <g id="text_26">
+   <g id="text_24">
     <text style="font-weight: 700; font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="777.69127" y="168.52186" transform="rotate(-0 777.69127 168.52186)">61.5% (1.90 MB · −38.54%)</text>
    </g>
-   <g id="text_27">
+   <g id="text_25">
     <text style="font-weight: 700; font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f766e" x="712.113378" y="208.53935" transform="rotate(-0 712.113378 208.53935)">25.75% (in-cycle −74.25%)</text>
    </g>
-   <g id="text_28">
+   <g id="text_26">
     <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="660.412716" y="97.296" transform="rotate(-0 660.412716 97.296)">B1. 18h core layer: stacking compaction-cycle Delta (ANN)</text>
    </g>
   </g>
   <g id="axes_3">
-   <g id="patch_11">
+   <g id="patch_10">
     <path d="M 660.412716 397.44
 L 1005.696 397.44
 L 1005.696 285.756279
@@ -307,85 +290,85 @@ z
    </g>
    <g id="matplotlib.axis_5">
     <g id="xtick_11">
-     <g id="line2d_28">
+     <g id="line2d_27">
       <path d="M 660.412716 397.44
 L 660.412716 285.756279
 " clip-path="url(#p3d4a0dd954)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_29"/>
-     <g id="text_29">
+     <g id="line2d_28"/>
+     <g id="text_27">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="660.412716" y="409.54" transform="rotate(-0 660.412716 409.54)">0</text>
      </g>
     </g>
     <g id="xtick_12">
-     <g id="line2d_30">
+     <g id="line2d_29">
       <path d="M 706.328046 397.44
 L 706.328046 285.756279
 " clip-path="url(#p3d4a0dd954)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_31"/>
-     <g id="text_30">
+     <g id="line2d_30"/>
+     <g id="text_28">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="706.328046" y="409.54" transform="rotate(-0 706.328046 409.54)">25</text>
      </g>
     </g>
     <g id="xtick_13">
-     <g id="line2d_32">
+     <g id="line2d_31">
       <path d="M 752.243376 397.44
 L 752.243376 285.756279
 " clip-path="url(#p3d4a0dd954)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_33"/>
-     <g id="text_31">
+     <g id="line2d_32"/>
+     <g id="text_29">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="752.243376" y="409.54" transform="rotate(-0 752.243376 409.54)">50</text>
      </g>
     </g>
     <g id="xtick_14">
-     <g id="line2d_34">
+     <g id="line2d_33">
       <path d="M 798.158707 397.44
 L 798.158707 285.756279
 " clip-path="url(#p3d4a0dd954)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_35"/>
-     <g id="text_32">
+     <g id="line2d_34"/>
+     <g id="text_30">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="798.158707" y="409.54" transform="rotate(-0 798.158707 409.54)">75</text>
      </g>
     </g>
     <g id="xtick_15">
-     <g id="line2d_36">
+     <g id="line2d_35">
       <path d="M 844.074037 397.44
 L 844.074037 285.756279
 " clip-path="url(#p3d4a0dd954)" style="fill: none; stroke: #e2e8f0; stroke-width: 0.7; stroke-linecap: square"/>
      </g>
-     <g id="line2d_37"/>
-     <g id="text_33">
+     <g id="line2d_36"/>
+     <g id="text_31">
       <text style="font-size: 10px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle" x="844.074037" y="409.54" transform="rotate(-0 844.074037 409.54)">100</text>
      </g>
     </g>
-    <g id="text_34">
+    <g id="text_32">
      <text style="font-size: 9.5px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #334155" x="833.054358" y="423.11" transform="rotate(-0 833.054358 423.11)">Share of cohort Full bytes (%)</text>
     </g>
    </g>
    <g id="matplotlib.axis_6">
+    <g id="ytick_7">
+     <g id="line2d_37"/>
+     <g id="text_33">
+      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="305.522197" transform="rotate(-0 656.912716 305.522197)">All · Full packets</text>
+     </g>
+    </g>
     <g id="ytick_8">
      <g id="line2d_38"/>
-     <g id="text_35">
-      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="305.522197" transform="rotate(-0 656.912716 305.522197)">All · Full packets</text>
+     <g id="text_34">
+      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="345.81214" transform="rotate(-0 656.912716 345.81214)">Progressive · 213 wakes</text>
      </g>
     </g>
     <g id="ytick_9">
      <g id="line2d_39"/>
-     <g id="text_36">
-      <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="345.81214" transform="rotate(-0 656.912716 345.81214)">Progressive · 213 wakes</text>
-     </g>
-    </g>
-    <g id="ytick_10">
-     <g id="line2d_40"/>
-     <g id="text_37">
+     <g id="text_35">
       <text style="font-size: 9.8px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: end" x="656.912716" y="386.102082" transform="rotate(-0 656.912716 386.102082)">Prog+Delta First read · 112</text>
      </g>
     </g>
    </g>
-   <g id="patch_12">
+   <g id="patch_11">
     <path d="M 660.412716 290.832812
 L 844.074037 290.832812
 L 844.074037 311.783582
@@ -393,7 +376,7 @@ L 660.412716 311.783582
 z
 " clip-path="url(#p3d4a0dd954)" style="fill: #334155"/>
    </g>
-   <g id="patch_13">
+   <g id="patch_12">
     <path d="M 660.412716 331.122754
 L 720.128272 331.122754
 L 720.128272 352.073525
@@ -401,7 +384,7 @@ L 660.412716 352.073525
 z
 " clip-path="url(#p3d4a0dd954)" style="fill: #2563eb"/>
    </g>
-   <g id="patch_14">
+   <g id="patch_13">
     <path d="M 660.412716 371.412697
 L 665.901287 371.412697
 L 665.901287 392.363467
@@ -409,27 +392,27 @@ L 660.412716 392.363467
 z
 " clip-path="url(#p3d4a0dd954)" style="fill: #7c3aed"/>
    </g>
-   <g id="text_38">
+   <g id="text_36">
     <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="848.481909" y="304.419744" transform="rotate(-0 848.481909 304.419744)">100.0% (22.41 MB / in-cycle ≈12.53 MB)</text>
    </g>
-   <g id="text_39">
+   <g id="text_37">
     <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="724.536144" y="344.98214" transform="rotate(-0 724.536144 344.98214)">32.5% (7.29 MB · −67.5%)</text>
    </g>
-   <g id="text_40">
+   <g id="text_38">
     <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="670.309159" y="384.999629" transform="rotate(-0 670.309159 384.999629)">≈ 3.0% body / ≈ 5.0% CLI (−97% / −95%)</text>
    </g>
-   <g id="text_41">
+   <g id="text_39">
     <text style="font-weight: 700; font-size: 11px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="660.412716" y="273.756279" transform="rotate(-0 660.412716 273.756279)">B2. 8-task 18h cohorts: 100% Full to Prog+Delta entry</text>
    </g>
   </g>
+  <g id="text_40">
+   <text style="font-weight: 700; font-size: 15px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="518.4" y="35.256" transform="rotate(-0 518.4 35.256)">Layered context: separate tutorial comparisons and 18h in-cycle Delta observations</text>
+  </g>
+  <g id="text_41">
+   <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #475569" x="518.4" y="64.584" transform="rotate(-0 518.4 64.584)">Progressive views retain necessary facts; in-cycle Delta reuses verified subtrees. Compaction or mismatch restores the complete baseline.</text>
+  </g>
   <g id="text_42">
-   <text style="font-weight: 700; font-size: 15px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="518.4" y="35.256" transform="rotate(-0 518.4 35.256)">Step-Down from 100%: All → Progressive → Compaction-Cycle Structured Delta → First Read</text>
-  </g>
-  <g id="text_43">
-   <text style="font-size: 10.2px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #475569" x="518.4" y="64.584" transform="rotate(-0 518.4 64.584)">Progressive lookup folds long-tail history; the core mechanism reuses verified subtrees within a compaction epoch and resets on compaction.</text>
-  </g>
-  <g id="text_44">
-   <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #475569" transform="translate(31.104 467.796)">A: exact same-source pipeline (measurements.json, single 57,014 B denominator). B1: ANN 18h paired trajectory stacking compaction-cycle Delta on selected packets.</text>
+   <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #475569" transform="translate(31.104 467.3965)">A: independent archived comparisons in measurements.json; 674 B is a manual three-path selection, not a measured stacked --initial-read.</text>
    <text style="font-size: 9.4px; font-family: 'PingFang SC', 'Noto Sans CJK SC', 'DejaVu Sans', sans-serif; fill: #475569" transform="translate(31.104 481.896)">B2: 8-task shares over 213 wakes (Progressive) and 112 in-cycle continuations (Prog+Delta first-read); each cohort keeps its own denominator.</text>
   </g>
  </g>

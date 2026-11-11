@@ -32,11 +32,14 @@ def save(fig, relative):
 
 for language in ("en", "zh"):
     zh = language == "zh"
-    # 1. Four-stage monotonic step-down cascade:
-    #    All (100%) -> Progressive -> Progressive + Compaction-Cycle Structured Delta -> First Read
+    # 1. Independent archived tutorial comparisons, not one measured cascade.
+    # Each numerator is paired with its own recorded baseline. In particular,
+    # a manual --select response is not a native --initial-read measurement.
     orig_b = LESSON["native_projection"]["original_bytes"]
+    required_b = LESSON["native_projection"]["required_bytes"]
     prog_b = LESSON["cycle_codec"]["current_full_bytes"]
     pdelta_b = LESSON["cycle_codec"]["delta_bytes"]
+    manual_source_b = next(r for r in LESSON["reader_rows"] if r["case"] == "complete_capture")["body_bytes"]
     batch_row = next(r for r in LESSON["reader_rows"] if r["case"] == "one_batched_select")
     first_body_lesson = batch_row["body_bytes"]
     first_cli_lesson = batch_row["output_bytes"]
@@ -50,49 +53,38 @@ for language in ("en", "zh"):
     right_top = fig.add_subplot(gs[0, 1])
     right_bot = fig.add_subplot(gs[1, 1])
 
-    cascade_vals = [100.0, 100 * prog_b / orig_b, 100 * pdelta_b / orig_b, 100 * first_body_lesson / orig_b]
+    cascade_vals = [100 * required_b / orig_b, 100 * pdelta_b / prog_b,
+                    100 * first_body_lesson / manual_source_b]
     cascade_labels = (
         [
-            "1. All · 完整上下文",
-            "2. Progressive · 渐进折叠",
-            "3. Prog + 周期内结构化 Delta",
-            "4. Prog + Delta First Read",
+            "Progressive 必要视图 / 原捕获",
+            "周期内 Delta / 本轮完整交付",
+            "手工批量选读 / 教程捕获",
         ]
         if zh else
         [
-            "1. All · Full source",
-            "2. Progressive · Fold tail",
-            "3. Prog + In-cycle Delta",
-            "4. Prog + Delta First read",
+            "Progressive view / original capture",
+            "In-cycle Delta / full delivery",
+            "Manual selection / tutorial capture",
         ]
     )
-    cascade_notes = (
-        [
-            f"100.0% ({orig_b:,} B)",
-            f"{cascade_vals[1]:.1f}% ({prog_b:,} B · 按需折叠长尾)",
-            f"{cascade_vals[2]:.1f}% ({pdelta_b:,} B · 较 Prog 再减 −61.0%)",
-            f"{cascade_vals[3]:.1f}% ({first_body_lesson:,} B 正文 / {100*first_cli_lesson/orig_b:.1f}% CLI)",
-        ]
-        if zh else
-        [
-            f"100.0% ({orig_b:,} B)",
-            f"{cascade_vals[1]:.1f}% ({prog_b:,} B · fold long tail)",
-            f"{cascade_vals[2]:.1f}% ({pdelta_b:,} B · −61.0% vs Prog)",
-            f"{cascade_vals[3]:.1f}% ({first_body_lesson:,} B body / {100*first_cli_lesson/orig_b:.1f}% CLI)",
-        ]
-    )
-    left.barh(range(4), cascade_vals, color=[SLATE, BLUE, TEAL, PURPLE], height=.50)
-    left.set_yticks(range(4), cascade_labels, fontsize=10.2)
+    cascade_notes = [
+        f"{cascade_vals[0]:.1f}% ({required_b:,} / {orig_b:,} B)",
+        f"{cascade_vals[1]:.1f}% ({pdelta_b:,} / {prog_b:,} B)",
+        f"{cascade_vals[2]:.1f}% ({first_body_lesson:,} / {manual_source_b:,} B · {100*first_cli_lesson/manual_source_b:.1f}% CLI)",
+    ]
+    left.barh(range(3), cascade_vals, color=[BLUE, TEAL, PURPLE], height=.50)
+    left.set_yticks(range(3), cascade_labels, fontsize=10.2)
     left.invert_yaxis()
     left.set_xlim(0, 168)
-    left.set_xlabel("占完整原始捕获字节 (%)" if zh else "Share of complete source bytes (%)", fontsize=9.8)
+    left.set_xlabel("占各行自身对照基线的字节 (%)" if zh else "Share of each row's own baseline bytes (%)", fontsize=9.8)
     left.set_title(
-        "A. 同源流水线四阶叠加削减（固定基准）" if zh else "A. Same-source 4-stage cascade",
+        "A. 归档教程的三组独立对照" if zh else "A. Three independent archived tutorial comparisons",
         loc="left", pad=14, fontsize=11.5, fontweight="bold",
     )
     for idx, (val, note) in enumerate(zip(cascade_vals, cascade_notes)):
-        weight = "bold" if idx == 2 else "normal"
-        color = "#0f766e" if idx == 2 else "#0f172a"
+        weight = "bold" if idx == 1 else "normal"
+        color = "#0f766e" if idx == 1 else "#0f172a"
         left.text(val + 2.2, idx, note, va="center", fontsize=9.6, fontweight=weight, color=color)
 
     # Panel B1: Real 18h ANN paired audit — stacking Compaction-Cycle Structured Delta on top of Progressive
@@ -195,22 +187,22 @@ for language in ("en", "zh"):
         axis.set_xticks([0, 25, 50, 75, 100])
 
     fig.suptitle(
-        "从 100% 逐层削减：All → Progressive → 压缩周期内结构化 Delta → First Read"
+        "分层上下文：独立教程对照与 18h 周期内差分观测"
         if zh else
-        "Step-Down from 100%: All → Progressive → Compaction-Cycle Structured Delta → First Read",
+        "Layered context: separate tutorial comparisons and 18h in-cycle Delta observations",
         fontsize=15.0, fontweight="bold", y=.955,
     )
     sub = (
-        "渐进选读仅按需折叠历史长尾；核心机制是在有效 Compaction 周期内精确复用不变结构子树，并在压缩或失配时原子恢复完整基线。"
+        "渐进视图保留必要事实；周期内结构化 Delta 复用已验证子树。压缩或失配恢复完整基线，不保证任意输入逐级变小。"
         if zh else
-        "Progressive lookup folds long-tail history; the core mechanism reuses verified subtrees within a compaction epoch and resets on compaction."
+        "Progressive views retain necessary facts; in-cycle Delta reuses verified subtrees. Compaction or mismatch restores the complete baseline."
     )
     fig.text(.5, .87, sub, ha="center", fontsize=10.2, color="#475569")
     footer_cascade = (
-        "A：同源固定流水线（measurements.json，同一 57,014 B 分母）。B1：ANN 18h 配对轨迹在选中包（3.09 MB）上叠加周期内结构化 Delta 的进一步削减。\n"
+        "A：measurements.json 的独立归档对照，各行分母不同；674 B 为三个 --select 的手工选读，未测同源四阶段的 --initial-read。\n"
         "B2：八题 213 次唤醒（Progressive）与 112 次同周期续跑（Prog+Delta 首读）各自相对原分母的比例；跨队列分母分开列出，不做混乘。"
         if zh else
-        "A: exact same-source pipeline (measurements.json, single 57,014 B denominator). B1: ANN 18h paired trajectory stacking compaction-cycle Delta on selected packets.\n"
+        "A: independent archived comparisons in measurements.json; 674 B is a manual three-path selection, not a measured stacked --initial-read.\n"
         "B2: 8-task shares over 213 wakes (Progressive) and 112 in-cycle continuations (Prog+Delta first-read); each cohort keeps its own denominator."
     )
     fig.text(.03, .03, footer_cascade, fontsize=9.4, color="#475569", linespacing=1.5)
