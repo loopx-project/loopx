@@ -307,7 +307,45 @@ async function runConversation(browser, uncertain) {
       await composer.fill('');
       assert.equal(await inputCount(),0,'Reading and switching never start or replay host work');
       const live = panel.getByLabel('原宿主实时记录',{exact:true});
+      const fixtureModel = 'codex-synthetic-attached-workspace-verification-model';
+      const recordedModel = panel.getByText(`本轮模型 ${fixtureModel} · max`, {exact:true});
+      const modelReads = [];
+      const modelUrl = url => url.pathname === '/api/chat/codex-attached' && url.searchParams.get('turn_model') === '1';
+      let releaseModelRead;
+      const modelReadAllowed = new Promise(resolve => {releaseModelRead = resolve;});
+      const transientModelFailure = async route => {
+        modelReads.push(new URL(route.request().url()).search);
+        if (modelReads.length === 1) {
+          await route.fulfill({status:503, json:{ok:false,error:'Temporary model observation outage'}});
+          return;
+        }
+        await modelReadAllowed;
+        const response = await route.fetch();
+        assert.equal(response.status(),200);
+        const result = await response.json();
+        assert.deepEqual(result.turn_model,{model:fixtureModel,reasoning_effort:'max'});
+        await route.fulfill({response});
+      };
+      await page.route(modelUrl, transientModelFailure);
       await page.request.post(new URL('/fixture/live-start',url).href);
+      const desktopViewport = page.viewportSize();
+      try {
+        await panel.getByText('本轮模型未读取',{exact:true}).waitFor();
+        await panel.getByText('Original result',{exact:true}).waitFor();
+        await page.setViewportSize({width:390,height:844});
+        await page.screenshot({path:resolve(outputDir,'attached-codex-model-unavailable-narrow.png'),animations:'disabled'});
+        releaseModelRead();
+        await recordedModel.waitFor({timeout:10_000});
+        assert.equal(modelReads.length,2,'A single temporary error retries once and then stops');
+        assert.equal(new Set(modelReads).size,1,'The retry reads the same binding and rollout revision');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+        await page.screenshot({path:resolve(outputDir,'attached-codex-model-recovered-narrow.png'),animations:'disabled'});
+        await page.setViewportSize(desktopViewport);
+        await page.screenshot({path:resolve(outputDir,'attached-codex-model-recovered-desktop.png'),animations:'disabled'});
+      } finally {
+        releaseModelRead();
+        await page.unroute(modelUrl, transientModelFailure);
+      }
       await live.getByText('原宿主实时草稿',{exact:true}).waitFor();
       const activeMarks = panel.getByRole('img',{name:'原宿主执行中',exact:true});
       assert.equal(await activeMarks.count(),2,'Only the observed current message and tool show activity');
@@ -332,6 +370,7 @@ async function runConversation(browser, uncertain) {
       await panel.getByRole('button',{name:'会话来源未接入',exact:true}).click();
       await panel.getByText('来源：cursor。此宿主的工作记录与回复尚未接入。',{exact:true}).waitFor();
       assert.equal(await live.count(),0,'Changing the Agent removes the old live records');
+      assert.equal(await recordedModel.count(),0,'Changing the Agent removes the old model observation');
       await page.waitForFunction(async () => (await (await fetch('/fixture/following')).json()).events.at(-1) === false);
       await panel.getByRole('combobox',{name:'查看 Agent'}).selectOption('worker');
       await live.getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
@@ -356,6 +395,7 @@ async function runConversation(browser, uncertain) {
       assert.equal(await activeMarks.count(),0,'Completed work is never left animating');
       await panel.locator('.attached-conversation-messages').getByText('原宿主实时草稿，已持续更新。',{exact:true}).waitFor();
       await panel.getByText('原会话可回复',{exact:true}).waitFor();
+      assert.equal(await recordedModel.count(),0,'A finished Turn no longer has an active model label');
       assert.equal(await inputCount(),0);
     }
     const sentOperations = [];

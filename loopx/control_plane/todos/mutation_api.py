@@ -503,6 +503,7 @@ def supersede_goal_todo(
     authority_reason: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    claim_operation_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
     dry_run: bool = False,

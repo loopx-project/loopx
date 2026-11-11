@@ -189,6 +189,24 @@ def test_expired_claim_packet_recovers_without_help_or_list(expired_managed_clai
     }))
 
 
+def test_supersede_rejects_expired_and_replaced_claim(expired_managed_claim):
+    cli, selected, snapshot, _, _ = expired_managed_claim
+    attempt = ["todo", "supersede", *selected, "--agent-id", "agent-a",
+               "--claim-operation-id", "expired-original-claim", "--reason", "Replace obsolete work",
+               "--next-agent-todo", "Deliver replacement work"]
+    before = snapshot()
+    rejected = cli(attempt, expected_exit=1)
+    assert rejected["error_code"] == "claim_execution_unavailable"
+    assert snapshot() == before
+    prepared = cli(["todo", "claim", *selected, "--agent-id", "agent-a", "--claimed-by", "agent-a",
+                    "--claim-operation-id", "replacement-claim"])
+    assert prepared["ok"] and prepared["execution_managed"]
+    current = snapshot()
+    rejected = cli(attempt, expected_exit=1)
+    assert rejected["error_code"] == "claim_execution_unavailable"
+    assert snapshot() == current
+
+
 @pytest.mark.parametrize("change", [
     {"owner": "agent-b"}, {"lease_epoch": 2, "version": 2},
     {"write_repository": "git:github.com/example/other"},

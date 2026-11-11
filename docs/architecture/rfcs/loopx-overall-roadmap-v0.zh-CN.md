@@ -5,7 +5,9 @@
 - 范围基线：架构审计使用 2026-09-16 的 `0aa6179de`；RFC inventory 依据
   `5c62c5c03` 更新至 2026-10-11；controller/契约修订使用 2026-10-27 的
   `08e290fb5`。管家故障复现基线单独保留在第 8 节。历史工作集 RFC 的清单新增
-  使用 2026-11-09 的 `701795db2`，不代表对整个路线重新审计。
+  使用 2026-11-09 的 `701795db2`；面向终局目标的切片选择、零仪式感渐进式入口、
+  结构性护城河及所选当前优先级／RFC 边界依据 2026-11-11 的 `bf8a66eb9c` 核对更新，
+  不代表对所有历史子系统重新审计。
 - 责任：总纲拥有产品目标、跨领域依赖、优先级和组合验收；领域 RFC/稳定协议拥有具体规则；运行 Todo 拥有执行状态。
 - 语言：[English](loopx-overall-roadmap-v0.md) 与本文互为语义镜像。
 
@@ -18,6 +20,7 @@
 存储持续证据或长程收益。
 
 **S2/S12 启动诊断检查点（2026-10-04）** 已移至[执行账本](ledger/loopx-overall-roadmap-v0/2026-10-04-s2-s12-startup-diagnostic.zh-CN.md)。
+**目标导向聚焦与渐进式治理检查点（2026-11-11）** 记录于[`ledger/loopx-overall-roadmap-v0/2026-11-11-goal-oriented-focus-and-progressive-governance.zh-CN.md`](ledger/loopx-overall-roadmap-v0/2026-11-11-goal-oriented-focus-and-progressive-governance.zh-CN.md)。
 
 [PR #4376](https://github.com/loopx-project/loopx/pull/4376) 的对话式准备已在 R1/GQ01
 下整合到既有 Chat draft 与已审阅 Goal 创建路径，见
@@ -62,6 +65,38 @@ LoopX 的目标是让人用本地前端或 Lark 提出、修订和验收复杂�
 
 两条采用路线共用工程资产但分别验收：**原生 LoopX 长程协调**优先完成 G1/G2；**observer-first 可靠性诊断**可并行证明价值，不等待百 Agent 或 shared service。收费部署、企业功能和托管服务仍是产品假设，不能把架构规划写成已有市场验证或运营承诺。
 
+### 内核重、入口零仪式感与渐进式治理披露
+
+LoopX 内部保持严格、唯一 owner 的类型化内核（`AuthorityStore`、CAS、`claim/lease`、
+`receipt`、`Turn` 围栏与 `Stride/Yardstick` 决策记录），同时要求外部用户上手与
+日常无竞争单 Agent 轮次保持**零前置治理仪式感**：
+
+- **极简入口：** 启动工作应像 `git init` 一样轻量——一句自然语言目标、日常无竞争任务上的
+  静默单 owner claim/lease 处理、直接推进到可检查产物，不要求用户或执行模型先学完
+  Goal/Todo/Turn 概念体系。
+- **触发驱动的渐进式披露：** 受治理控制项（`Vision` 修订、`Quota` 门禁、多 lane 团队计划、
+  `Yardstick/Stride` 附件、跨主机租约）**只在真实触发条件命中时才浮出水面**：中断或跨会话恢复、
+  端云交接、多 Agent 并发争用、显式 owner 审批门、多轮证据空转，或代理指标与权威评测发生排序反转。
+- **控制面税计入完整成本：** 控制 token、工具调用、额外 RPC 往返与人工打断都消耗任务总预算。
+  在事实未发生实质变化时强加每 Turn 必填表单、额外 RPC 往返或冗长治理提示词，会降低净长程效率，
+  应当拒绝。
+
+### 三大复利结构性护城河
+
+随着前沿基座模型快速升级，LoopX 避免投入会被更强基模原生吸收的脆弱手写提示词微操
+（预设工具调用顺序、每 Turn 机械清单、冗长战术提醒），把工程与研究重心集中在单次模型前向推理之外的
+三项复利结构能力：
+
+1. **端云异构连续性与权限围栏（`S2/S4/S9`、`R5/R6`）：** 在唯一 owner 事务租约、旧执行器
+   围栏与可撤销授权下，把本地个人上下文、交互登录态和 owner 确认门禁安全桥接到无人值守或云端
+   执行 worker。
+2. **确定性静默 Checkpoint 与同状态反事实接续底座（`S4/S10/S11`、`R5`、`T01/T03`）：**
+   在已消耗预算 $t_0$ 处精确恢复任务、会话、权限、已验收 incumbent 与评测冷却状态，使候选策略与
+   harness 机制通过匹配的同状态接续（$\tau_B(s; a, a_0, \pi)$）评估，而非混淆了起点状态的观察动作日志。
+3. **闭环轨迹归因记忆与预算内计算选择飞轮（`S6/S7/S11`、`T01–T04`）：** 将已验证终局成果、
+   邻域范围化的 yardstick 保真度与同 checkpoint 反事实证据转化为可复用的过程召回，以及经校准的
+   `Target/Yardstick/Stride` 预算内接续选择（`当前模型试验 -> 校准预期 -> 学习预算分配`）。
+
 ### 总纲与现有文档的关系
 
 - 本页是跨产品、工程、研究和采用的路线总纲；第 2 节定义 S1–S13 工作流，第 3 节定义 G0–G5 组合里程碑，第 4 节映射全部 RFC，第 5–6 节细化多 Agent 核心路径，第 8 节保存可复核审计。
@@ -98,7 +133,7 @@ managed 与 attached 的工作对话都应能持续在 LoopX 中进行：沿用�
 | **S4 runtime/host/daemon · P0/P1** | attached/managed、Turn、broker、runtime connector 和 Desktop 修复存在；“registered”不等于可执行 | 选择一个真实合格组合完成多 Turn supervision；restart/cancel/drain/stop 不丢工作且旧 executor 被 fence。之后扩 host parity、service-profile 唯一 owner、干净安装与版本升级；按 adapter 能力显示不支持项 |
 | **S5 前端、Lark 与人机交互 · P0/P1** | 本地对话、settings、proposal 和部分 Goal Channel vertical 已有；Goal 概览、任务、W1 工作地图、用量、验收回读与生命周期停止作为分散区域已交付，但没有统一页面 owner；统一受众/会话/工作回读仍需资格 | 用一个团队旅程贯穿设置、工作图、handoff、阻塞、成本、修订、产物和回报。**页面：**[Goal 工作区](goal-workspace-surface-v0.zh-CN.md)在共享 typed projection 之上按 Goal 组合这条旅程：带限定范围停止的常驻页头、每个数字只有一种含义的指标（标明窗口与覆盖度，未知不是零）、按负责人分组的工作、成果与全部工作侧栏；先做 M1–M2，将具体首屏放入 PR description；获准方向内的细化不重复确认。**场景：**验证重连/重复点击/stale/原路反馈。**实时 IM** 复用 Chat/Turn：先让同一 listener 下的独立会话互不阻塞，再按[共享运行契约](capable-manager-semantic-handoff-v0.zh-CN.md#10-运行契约)验收普通私聊开通、显式角色选择、忙碌会话准入、临时进度、媒体和精确权限回调。**团队：**[团队实时工作区](live-team-workspace-v0.zh-CN.md)让交换、修订与原协调员继续推进可见；其[工作尺度地图分线](live-team-workspace-v0.zh-CN.md#11-交付顺序与激进推进-r2-的关系)先画出每个 Goal 的类型化 Todo 关系（W1，即 Goal 工作区的地图镜头），再在同一节点叠加实时状态与产出。再做 intelligent review、无障碍键盘流程与只作启动器的命令面板、中英术语、错误可恢复和离线降级；只在真实决策处打断人 |
 | **S6 材料、证据、记忆与学习 · P1** | authority registry、material lifecycle/frontier、decision context、reward memory、turn recall 已有；方向基线和部分归因仍是提案 | 先打通“材料 revision→同 Agent 阅读→决策引用→产物/结果”；失效、撤销、来源消失与遗忘策略可回读。handoff 保存影响决策的摘要与授权 artifact；OpenViking/Obelisk 按可选 provider 资格化。utility 的因果收益另以对照证明，不把相关性当提升 |
-| **S7 预算、调度与 fleet 规模 · P0 观测/P1–P2 扩展** | quota/scheduler 与部分 usage aggregate 存在；全 provider 成本、分布式资源预留及百 Agent 并发尚需证据 | 先区分配置预算、准入、消耗与估算；未知成本不记零、重复事件不双记。R7 分页/有界摘要及[完整历史传输](typescript-control-plane-migration-v0.zh-CN.md)，验收超出 RPC 上限后的写回/重放/单次扣记；provider/host 限流、公平性、背压、事件唤醒与失败隔离；分别报告注册数/活跃数/吞吐量和每个验收成果成本 回执支持的语义进展已能关闭原 host Turn，保留未完成/等待中的 Todo；file/SQLite guard 回放覆盖 frontier 改变，边界见[quota 结算契约](../../quota-allocation.md#receipt-backed-settlement-progress)。external-wait authoring 现复用 resume owner 从锁定 Todo 快照重算后继，以完成依赖/monitor 代际证明恢复，不再相信展示字段；源证据续接与真实 Host backoff/readback 仍须分别验收。这项有界修复不证明 fleet 规模或宿主延迟。 当前连续计数有界修复让 status 与 Goal-frontier 调用方共用一个 typed Monitor 过期规则。File/SQLite Codex CLI 回读保留计数及等待中的工作：过期及恰好到期的 Monitor 不再引起当前计数重规划；活跃但未来 due 的监控及独立历史触发保持。源码行为、安装采用与完整 Goal/CI 资格分别验收。 |
+| **S7 预算、调度与 fleet 规模 · P0 观测/P1–P2 扩展** | quota/scheduler 与部分 usage aggregate 存在；全 provider 成本、分布式资源预留及百 Agent 并发尚需证据 | 先区分配置预算、准入、消耗与估算；未知成本不记零、重复事件不双记。R7 分页/有界摘要及[完整历史传输](typescript-control-plane-migration-v0.zh-CN.md)，验收超出 RPC 上限后的写回/重放/单次扣记；provider/host 限流、公平性、背压、事件唤醒与失败隔离；分别报告注册数/活跃数/吞吐量和每个验收成果成本 回执支持的语义进展已能关闭原 host Turn，保留未完成/等待中的 Todo；file/SQLite guard 回放覆盖 frontier 改变，边界见[quota 结算契约](../../quota-allocation.md#receipt-backed-settlement-progress)。external-wait authoring 现复用 resume owner 从锁定 Todo 快照重算后继，以完成依赖/monitor 代际证明恢复，不再相信展示字段；[#8491](https://github.com/loopx-project/loopx/pull/8491) 也在 File/SQLite CLI 上将受因果前置阻塞的任务归入同一 resume owner 下的静默等待（quiet pending wait）；源证据续接与真实 Host backoff/readback 仍须分别验收。这项有界修复不证明 fleet 规模或宿主延迟。 当前连续计数有界修复让 status 与 Goal-frontier 调用方共用一个 typed Monitor 过期规则。File/SQLite Codex CLI 回读保留计数及等待中的工作：过期及恰好到期的 Monitor 不再引起当前计数重规划；活跃但未来 due 的监控及独立历史触发保持。源码行为、安装采用与完整 Goal/CI 资格分别验收。 |
 | **S8 能力、扩展与领域集成 · P1/P2** | 已有 capability catalog、extension 生命周期、hook、工程/研究/content/office 能力及 computer-use 合同 | 优先用现有 issue-fix/PR-review 和材料/研究 caller 检验共享控制面；每个 provider 带 readiness、版本、权限、默认关闭、卸载/回滚、失败隔离与真实入口证据。新 domain effect 从模拟单操作闭环开始，不先建市场或通用工作流 DSL |
 | **S9 身份、权限、隐私与信任 · P0 持续/P1–P2 远端** | public/private 边界、作用域、capability gate、fence 与确认合同分布在已有 owner | 随 R1/R3 验 sender/audience/artifact scope 和 stale authority；远端 R6 必须认证 tenant/Goal/actor/host、轮换撤销与最小权限。凭据保管、非可信工具/文档输入、依赖供应链、审计留存/删除及漏洞响应纳入真实路径；角色、消息或 memory 不铸造写权限 |
 | **S10 可靠性、诊断与运行运营 · P0/P1** | recovery/canary、read-only diagnostics 原型及 DSH event adapter 已有；C0/C1、开销和完整运营资格仍未闭合 | 故障分类→可观察状态→恢复演练→防复发；覆盖进程/存储/网络/投递故障和数据增长。Chat 上下文或 provider 读取晚于停止等待返回时，按持久 Turn 和精确 Session claim 判断：即使新请求已完成，也不得再启动旧请求或交接迟到结果。迟到的队列恢复只能释放它观察到的 Turn claim；必须保留新 Turn 的活动声明，并保持已关闭 Session 的关闭状态。这项有界 GQ08 修复不证明上游 interrupt 保真，也不取消其他 owner 已准入的效果；完整恢复仍遵循[共享对话运行契约](capable-manager-semantic-handoff-v0.md#10-operational-contract)。定义并冻结 SLO、RPO/RTO、容量/保留边界，实测后标 qualified；Lark 传输背压与 drain 保留 App consumer lease；未持久化的缓冲消息不算已受理工作或完成回执。运行手册含升级、备份恢复、停止与人工接管，不以测试数代替恢复结果 |
@@ -212,14 +247,17 @@ Worker 长操作不能阻塞 controller 处理用户/router 输入；既有 Core
 
 ### 研究与验收集成后的当前优先级
 
-本检查点固定在 main `5550e91bab`（2026-10-23），核对公共源码交付，不公布私有实验
-结果，也不认证整体规模资格。优先完成以下既有路径，而非再增加 controller 或统计存储：
+本检查点保留 `5550e91bab`（2026-10-23）基线，并核对公共源码交付至 main
+`bf8a66eb9c`（2026-11-11），不公布私有实验结果，也不认证整体规模资格。优先完成以下
+既有路径，而非再增加 controller、提示词仪式层或统计存储：
 
 | 路径 | 已集成边界 | 下一决定性成果与既有 owner |
 | --- | --- | --- |
-| 保留意图 · S3/R4、S5 | 重复复核保留声明来源；声明／复核容量及恢复分离；完整 Goal 叙述避免生成 Todo 重复。 [#7035](https://github.com/loopx-project/loopx/pull/7035)、[#7056](https://github.com/loopx-project/loopx/pull/7056)、[#7057](https://github.com/loopx-project/loopx/pull/7057)、[#7069](https://github.com/loopx-project/loopx/pull/7069) | Goal/acceptance 与产品 owner 验证：纠正到达负责 Agent，改变或有依据地保留后续工作，并满足累计要求。复核证据不是新的声明来源或独立验收。 |
-| 证据进入决策 · S6/S11 | 当前任务证据排序、版本化比较及分页结论／完整关联任务恢复已集成。 [#7053](https://github.com/loopx-project/loopx/pull/7053)、[#7077](https://github.com/loopx-project/loopx/pull/7077)、[#7084](https://github.com/loopx-project/loopx/pull/7084) | Explore/研究及产品 owner 验证“来源 → 交付证据 → 实际下一探针 → 可归属产物／结果”。先影子观察；考虑可选强制前保留合理接续、负证据和未知。 |
-| 可解释结果与成本 · S7/S11 | 未完成 Turn 用量须显式选择观测模式；部分 native 分数不证明完成。 [#7054](https://github.com/loopx-project/loopx/pull/7054)、[#7072](https://github.com/loopx-project/loopx/pull/7072) | Benchmark/usage owner 验证请求、压缩与重试覆盖，再按既有测量模型比较匹配结果和完整边际成本。[#7087](https://github.com/loopx-project/loopx/pull/7087) 在本检查点仍是提案，不代表覆盖已集成或计费已验收。 |
+| 保留意图 · S3/R4、S5 | 重复复核保留声明来源；声明／复核容量及恢复分离；完整 Goal 叙述避免生成 Todo 重复；语义重规划恢复保留 Todo 绑定并由精确后续 ACK 结算旧回执。 [#7035](https://github.com/loopx-project/loopx/pull/7035)、[#7056](https://github.com/loopx-project/loopx/pull/7056)、[#7057](https://github.com/loopx-project/loopx/pull/7057)、[#7069](https://github.com/loopx-project/loopx/pull/7069)、[#8495](https://github.com/loopx-project/loopx/pull/8495) | Goal/acceptance 与产品 owner 验证：纠正到达负责 Agent，改变或有依据地保留后续工作，并满足累计要求。复核证据不是新的声明来源或独立验收。 |
+| 证据进入决策 · S6/S11 | 当前任务证据排序、版本化比较、分页结论／完整关联任务恢复、Yardstick 比较中的 canonical 前缀引用测量复用，以及 Stride 中的有界 Explore 测量／排序反转提示已集成。 [#7053](https://github.com/loopx-project/loopx/pull/7053)、[#7077](https://github.com/loopx-project/loopx/pull/7077)、[#7084](https://github.com/loopx-project/loopx/pull/7084)、[#8382](https://github.com/loopx-project/loopx/pull/8382)、[#8385](https://github.com/loopx-project/loopx/pull/8385) | Explore/研究及产品 owner 验证“来源 → 交付证据 → 实际下一探针 → 可归属产物／结果”。先影子观察；考虑可选强制前保留合理接续、负证据和未知。证据可达不等于数值 fidelity、模型采用或策略收益成立。 |
+| 预算内规划与反事实比较 · S6/S11 | [预算内研究规划说明](../../research/budgeted-research-planning.zh-CN.md)、三阶段策略演进边界（`当前模型试验 -> 校准预期 -> 学习预算分配`）、§8.7 EdgeBench pilot 协议，以及 `main` 上带受信 `--validation-command-json` 与原唤醒恢复的 EdgeBench 单 worker `--worker turn-resume` 入口（[#8499](https://github.com/loopx-project/loopx/pull/8499)；C1 集成分支验证见 [#8480](https://github.com/loopx-project/loopx/pull/8480)）已在源码／协议层集成。 [#8441](https://github.com/loopx-project/loopx/pull/8441)、[#8461](https://github.com/loopx-project/loopx/pull/8461)、[#8480](https://github.com/loopx-project/loopx/pull/8480)、[#8499](https://github.com/loopx-project/loopx/pull/8499) | 研究/benchmark 与 Stride/Yardstick owner 验证静默同状态 checkpoint 恢复（$\tau_B(s; a, a_0, \pi)$）及计入完整控制／评测开销后的净收益（$\Delta J(B \mid s_0) > 0$）。`#8499`（主干）与 `#8480`（C1 分支）仅验证 E1/E2 单 worker 唤醒接缝，不代表 checkpoint 分叉等价、E3/C2 收益或 C1 schema 切换。 |
+| 静默渐进式接续 · S2/S4/S7 | 受因果前置阻塞的任务已在 File/SQLite CLI 上作为静默等待通过验证（[#8491](https://github.com/loopx-project/loopx/pull/8491)）；有界 M1 `backup-state verify` 与打包 Settings/Capability Center 的只读 File/SQLite 审计已存在（`execution_authority_granted=false`）；T02 可回读历史工作集（[#8450](https://github.com/loopx-project/loopx/issues/8450)）仍为提案，尚未交付策略或插件端口 | 控制面、宿主与恢复 owner 保持无变化日常轮次零仪式感，将 T02 与 C1 及同 capture 的 M2/M3 恢复对齐，并在推广任何上下文或节拍策略前实测完整调用／控制税。源码等待与只读审计不代表真实宿主节拍、M3 重新激活或百 Agent 规模通过。 |
+| 可解释结果与成本 · S7/S11 | 未完成 Turn 用量须显式选择观测模式；部分 native 分数不证明完成。 [#7054](https://github.com/loopx-project/loopx/pull/7054)、[#7072](https://github.com/loopx-project/loopx/pull/7072) | Benchmark/usage owner 验证请求、压缩与重试覆盖，再按既有测量模型比较匹配结果和含控制面税在内的完整边际成本。[#7087](https://github.com/loopx-project/loopx/pull/7087) 在 `5550e91bab` 仍是未合并提案，不代表覆盖已集成或计费已验收。 |
 | 可信验证 · S10/S12 | 普通读取要求 canonical authority；显式导入／恢复仍可用。 [#7032](https://github.com/loopx-project/loopx/pull/7032) | 通过既有真实 provider fixture 修复过期的合成消费者，保留原行为断言及未迁移拒绝。同负载做 base/head 归因；完整必需测试失败仍保持 hold。不恢复 fallback、不放宽预算、不复跑健康矩阵制造就绪。 |
 
 先恢复阻断所选交付的实际验证路径；由既有 owner 推进来源到决策的旅程，不等待无关
@@ -420,11 +458,11 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 
 | RFC | 工作流 | 当前边界 | 下一切片 / 验收要求 |
 | --- | --- | --- | --- |
-| [完整状态恢复与受控重新激活 v0](complete-state-recovery-v0.zh-CN.md) | S2/S10 | 已接受设计；备份创建与仅配置的隔离恢复已存在，完整状态验证／重新激活尚不存在 | M1：在 Settings/Capability Center 提供可读 inert audit，显示 owner／next action 且无 live authority；M3：恢复一个 packaged local 文件／SQLite Goal、继续未完成工作，并记录找回／丢失工作、人工成本、hold、owner 复用及零受保护重复 operation |
+| [完整状态恢复与受控重新激活 v0](complete-state-recovery-v0.zh-CN.md) | S2/S10 | 已接受；备份创建、仅配置的隔离恢复，以及有界 M1 `backup-state verify` + 打包 Settings/Capability Center 只读 File/SQLite 审计（`execution_authority_granted=false`，v0 仍保持 hold）已存在；M2 捕获一致性与 M3 受控重新激活尚不存在 | M2：捕获一致性及字节流／静默 checkpoint 不变量；M3：恢复一个 packaged local 文件／SQLite Goal、继续未完成工作，并记录找回／丢失工作、人工成本、hold、owner 复用及零受保护重复 operation |
 | [可组合状态机与恢复验证 v0](composable-state-machines-recovery-verification-v0.zh-CN.md) | S2/S3/S10 | 仅设计；复用局部 conformance 证据 | P1：一条 typed 边界，再验 ownership/writeback/settlement 故障序列与有条件推进；真实入口及后端证据 |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.zh-CN.md) | S2 | Accepted；核心已实现，继续采用 | P0：复用 effect/recovery，先补 R1 部分提交反例，保持 replan ACK domain-local |
 | [Controller / Executor 与统一工作契约](controller-executor-unified-contract-v0.zh-CN.md) | S2/S4/S6/S7/S11 | 仅设计；schema cutover 与双会话未实现 | P1：C1–C9 收敛统一契约、精确差分、角色绑定、共享生命周期与 benchmark/App 采用；独立成果和完整成本先于默认提升 |
-| [可回读历史工作集与上下文策略扩展 v0](history-working-set-context-policy-v0.zh-CN.md) | S2/S4/S6/S8/S11 | 仅提案；#8450 细化 T02，尚未交付历史策略或插件端口 | 与在审 C1 协调；先验证一个最终模型输入消费者与同 capture 恢复，再验证来源绑定的可选历史视图、扩展生命周期及可比成果/完整成本，之后才评审推广 |
+| [可回读历史工作集与上下文策略扩展 v0](history-working-set-context-policy-v0.zh-CN.md) | S2/S4/S6/S8/S11 | 仅提案；#8450 细化 T02，尚未交付历史策略或插件端口 | 与在审 C1 协调；先验证一个最终模型输入消费者与同 capture 恢复，再验证来源绑定的可选历史视图、扩展生命周期及含控制面税在内的可比成果/完整成本，之后才评审推广 |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.zh-CN.md) | S2 | Accepted；整笔事务迁移中 | P0/P1：R1–R4 热事务优先；T0–T4 caller/删除/成本证据；不是百 Agent 前全量重写 |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.zh-CN.md) | S2 | 已接受；registry/inventory/drift 与后续 typed 切片存在 | P1：按语义角色收敛 vocabulary；盘点真实 producer/consumer；不凭枚举同名合并，schema 改动单独审阅 |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.zh-CN.md) | S2/S3/S7 | 已接受；store、局部事务和 service admission 基础已存在 | P1→P2：R5 本地 D1–D3；R6 认证跨 host；真实 backend/soak/恢复资格后才晋升 |
@@ -437,6 +475,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.zh-CN.md) | S3/S6 | Stage A 已交付；文件名不代表通用 memory substrate | P1：R3 复用 prepare/inspect/adopt；同机无 lease 限制保留至新接续路径验收 |
 | [Agent Session Execution Modes (v0)](agent-session-execution-modes-v0.zh-CN.md) | S4 | 已接受；attached binding/broker/fence 局部实现 | P0→P2：一个 binding 一个 executor，managed supervision，再做跨 host admission；禁止静默模式切换 |
 | [Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | S4/S10 | 已接受；现有 Desktop ownership repair 不等于 loopxd | P1：按 service-profile 唯一 owner/readiness/drain/restart 验最小组合；无第二 scheduler |
+| [回滚全程保留所选运行目录 v0](self-update-explicit-runtime-route-v0.zh-CN.md) | S4/S12 | 已接受；#8470 有界回滚路由传递与失败子检查有界 CLI 输出已实现 | P1：安装态回滚验收与隔离回滚、生产存储恢复分开验证 |
 | [LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.zh-CN.md) | S4/S5 | 已接受；attached/managed/UI 基础存在，统一旅程未完整验收 | P0→P1：本地设置→绑定→团队→修订→恢复→回报，packaged frontend 实测；保留直接 worker 对话 |
 | [Goal Channel Collaboration v0](goal-channel-collaboration-v0.zh-CN.md) | S5 | 已接受；Lark vertical 局部已交付 | P1：team card/回报/幂等/受众实测；Goal channel 与 Agent session binding 不混同 |
 | [Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | S3/S8 | 显式配置下已实现 | P0 硬化：有界读→语义 triage→ACK/replay；默认关闭与 provider 私有 cursor 保持 |
@@ -453,12 +492,12 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现；§11.5 result/adoption 修订为提案 | P1：一条真实 provider result -> 有范围 interpretation -> adopted step/successor，精确 lineage/shared write gate 与 packaged readback；shadow 资格先于 opt-in，保留 composition gap；推断与 M4 portfolio 排序继续 defer |
 | [LoopX × LayerFS 复杂工程探索与效果评测 v0](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | S4/S8/S11 | 提案；无集成或收益声明 | 有界实验：真实环境 fork/handoff/干净导出，然后匹配预热 worktree 与控制策略进行比较；保留现有研究状态/权限 owner，计入完整成本和负结果；不新增优先级或默认值 |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 观测及源码层面的 replan 决策接续；自适应策略/恢复接续未资格化 | P2：§7.6 机制/证据范围复盘 -> 真实探针/采用/完整成本；§7.7 同起点接续及恢复验证先于自适应 promotion。保留每 Turn 结算与权限，不按固定小时强制转向、不改变默认 cadence |
-| [Target、Yardstick 与 Stride 联合决策 v0](target-yardstick-stride-decisions-v0.zh-CN.md) | S3/S6/S11 | M1 源码路径已存在；预算规划为提案；数值 fidelity 与匹配收益未资格化 | P1：复用 Stride/Yardstick owner 做[预算内 EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)，再验完整预算收益；校准/学习型分配随后依证据推进。M2/M3 保留范围化 fidelity、采用和完整效果/成本资格化，先于推广 |
+| [Target、Yardstick 与 Stride 联合决策 v0](target-yardstick-stride-decisions-v0.zh-CN.md) | S3/S6/S11 | M1 源码路径、#8382 引用测量 canonical 前缀复用与 #8385 有界 Stride Explore/反转投影已存在；#8441/#8461 预算内规划与三阶段学习边界为提案；数值 fidelity、实际采用与匹配收益（$\Delta J(B \mid s_0) > 0$）未资格化 | P1：保持无变化普通 Turn 零仪式感；复用 Stride/Yardstick owner 做[预算内 EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)，再验完整预算收益；校准/学习型分配随后依证据推进。M2/M3 保留邻域范围化 fidelity、采用和完整效果/成本资格化，先于推广 |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | S6/S11 | 已接受；Stage 1 verified-outcome 绑定 | P1 只读 reducer→P2 pilot：区分 recalled/applied/utility，归因不自动改 ranking |
 | [Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | S6/S8 | 已接受；可选只读评估 | P2：显式 gap recall、来源与权限可解析、关闭不影响主流程；不当 work authority |
 | [Frontier Science Research Program v0](frontier-science-research-program-v0.zh-CN.md) | S11 | 已接受；十轨研究提案 | P2：优先 sequential evidence/continuation/stride；T01–T10 按现有 owner、冻结实验与升降级门槛 |
-| [Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | S11 | 已接受；active research program | P1 持续：ALE/LHTB/DeepSWE 原生结果、matched arms、成本/恢复，研究环境不进入产品运行面 |
+| [Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | S11 | 已接受；活跃六基准研究计划；#8441/#8461 §8.7 预算内规划协议与 #8499 `main` EdgeBench `--worker turn-resume` 单 worker 原唤醒恢复接缝已集成（#8480 为 C1 分支验证；仅 E1/E2 工程接缝，E3/C2 收益未证） | P1 持续：ALE/LHTB/DeepSWE/StartupBench/LoopsBench/WideSearch 原生结果、静默同状态 checkpoint 反事实接续（$\tau_B(s; a, a_0, \pi)$）与全成本 $\Delta J(B \mid s_0)$ 比较；研究环境不进入产品运行面 |
 | [Benchmark Study Upload and Dashboard Projection v0](benchmark-study-upload-dashboard-v0.md) | S11/S5 | 已接受；manifest/upload projection 提案 | P2：紧凑 public-safe study→readback，保留 benchmark-native score authority；显式 opt-in upload |
 | [Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | S10/S13 | 已接受；L1 default-off 原型与 DSH event adapter 存在，P0 未验收 | P1：C0 adapter fidelity/C1 non-interference/overhead；再讨论 L2 advice/L3 governed seams/L4 adoption |
 
@@ -933,20 +972,20 @@ lifecycle。
 
 ## 7. 执行与审阅合同
 
-每次只选择一个已满足前置条件的、完整可验收切片。先查最新 main 与 canonical Todo，已有工作补验证，已有任务更新并保留 supersedes 关系，不能凭本文件创建重复任务。执行卡是静态路线，实际负责人、状态、PR 和阻塞保存在 LoopX Todo。
+每次只选择一个已满足前置条件的、完整可验收切片。每个切片必须锚定**可比完整预算下的净终局已验收成果提升（$\Delta J(B \mid s_0) > 0$），或同等验收质量下更低的人工注意力与控制面开销**：新增字段、已读回执、图边、重规划次数、逐叶 RPC 迁移和追加带日期状态段落都是过程产物，不是成果。先查最新 main 与 canonical Todo，已有工作补验证，已有任务更新并保留 supersedes 关系，不能凭本文件创建重复任务。日常无竞争轮次保持零仪式感：没有命中真实治理触发条件时，不增加每 Turn 必填表单、额外 RPC 往返或手写提示词微操。执行卡是静态路线，实际负责人、状态、PR 和阻塞保存在 LoopX Todo。
 
 实施 Todo/PR 必须回答：
 
-1. **结果：** 用户做什么、前后行为是什么、属于 R 卡及原 RFC 哪个验收 ID。
+1. **结果：** 用户做什么、前后行为是什么、属于 R 卡及原 RFC 哪个验收 ID，以及该切片如何推进终局已验收成果或降低人工注意力／控制面税（且不给静默普通轮次增加仪式负担）。
 2. **事实：** baseline/head、已交付依赖、未闭合字段/状态；不以 PR 标题代替代码。
 3. **归属：** 一个 semantic owner、provider/profile、真实 caller；哪些旧 decision/writer 被删除，哪些因真实兼容调用保留。
 4. **不变量：** 先写独立 expected outcomes，再做 characterization/负例；现状有错先修规则，不刷新 golden 掩盖。
 5. **故障：** 无副作用拒绝、并发、超时、部分完成、crash/replay、stale basis、default-off parity；按涉及边界选取。
 6. **产品：** CLI/managed、packaged frontend、Lark 的入口、状态回读和反馈；不需要 companion 修改时给出已核实原因，未测就写未测。
 7. **交付：** 精确路径 staging、DCO、相关 canary、公开边界扫描、PR；保留真实权限门和首屏 PR 证据。
-8. **接续：** 一个可执行后继、依赖/阻塞变化、回滚办法；禁止“字段存在/测试通过/有回执”直接推出完整里程碑通过。
+8. **接续：** 一个可执行后继、依赖/阻塞变化、回滚办法；禁止“字段存在/已读回执/图边/重规划计数/测试通过/有回执”直接推出完整里程碑通过或实测收益成立。
 
-能力较弱的执行 Agent 可以在这套合同内修复已定义反例和进行机械迁移。新增 authority、状态机、跨 host 身份、schema 不兼容变化必须由相应 owner 审阅；审阅的是精确 diff、规则及证据，不是 Agent 自评或模型等级。bounded future-facing pass 优先删除重复知识；较大的邻接重构只登记有范围后继。
+能力较弱的执行 Agent 可以在这套合同内修复已定义反例和进行机械迁移。新增 authority、状态机、跨 host 身份、schema 不兼容变化必须由相应 owner 审阅；审阅的是精确 diff、规则及证据，不是 Agent 自评或模型等级。bounded future-facing pass 优先删除重复知识——把重复校验、摘要／截断辅助、决策与研究阶段编解码及碎片化说明收敛到共享类型化 owner，而非继续平铺复制模块；较大的邻接重构只登记有范围后继。
 
 推荐首批：R1 的语义与回读修复作为一个内聚批次；随后完成同路径的持久恢复与源基线约束，再验 R2 小团队闭环。R3 的既有结果投递修复和 R5 已选 profile 资格准备可由不同任务同期执行，不能用它们掩盖 R1 阻塞。
 

@@ -214,12 +214,14 @@ revision and advisory authority. This captured pre-work view does not replace th
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
 The initial read includes the bounded `unfinished_delegations` projection and
-`read_complete` flag. For an admitted normal work Turn with a large, complete
-agenda and a matching required Manager Inbox read, the initial view keeps the
-incoming and outgoing request counts, scan status and required command. The
-required read delivers the rows and their guidance. The original rows remain
-available from the same capture. Adoption and
-queued returns are intermediate states. Read the full current request before
+`read_complete` flag. For an admitted normal work Turn with a large
+agenda, a complete scan and a matching required Manager Inbox read, the initial
+view keeps the incoming and outgoing request counts, scan status and required
+command. A complete scan can still hit the summary's display limit. The initial
+view then also keeps the exact omitted count and reconciliation guidance. The
+required read and its existing cursor deliver the scoped request rows. The
+captured summary remains available at its original address. An incomplete scan, unavailable scan records or an unmatched read keeps the whole summary inline.
+Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.
 It also exposes existing outcome material addresses and the current settlement
@@ -275,6 +277,16 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+For an exact complete Turn bound to a Todo whose dated resume condition has
+fired, the starting selection puts the existing reopen and same-Turn guard
+commands and the current plan's obligations before the longer work context.
+Required and unknown step fields stay visible. After reopening, run the
+continuation guard for a fresh execution decision. For an alternative that
+settles before reopening,
+read the complete original plan at `/interaction_contract/cli_channel/settlement_plan`
+from the original recovery reference before acting. Delivery and spend require
+their existing separate authorization.
+
 The generated `first_read_command` and its paging cursor default to a 12,000-byte
 serialized UTF-8 output limit when the caller supplied no tool budget. This
 applies after explicit Todo selection as well. An explicit output limit still
@@ -325,6 +337,14 @@ entries. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
+When the guard requires an independent worktree before delivery, the opening
+keeps the relocation instructions and the current decision controls. Large
+Goal and selected Todo write scope lists are available from the same capture
+at `/goal_boundary/write_scope` and `/selected_todo/required_write_scopes`.
+Select them if the relocation needs them. Once relocated, rerun the guard for
+the same Turn and read its complete current scopes before editing. This
+presentation changes neither admission nor the explicit off view.
+
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
 已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
@@ -350,6 +370,12 @@ observation is lost, its same-capture fallback restores the full remainder.
 续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
 数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
+
+准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
+如迁移需要较长的 Goal 或选中 Todo 写入范围，可从同一捕获按
+`/goal_boundary/write_scope` 和 `/selected_todo/required_write_scopes` 读取。
+切换后以原 Turn 重新准入，编辑前读取其完整的当前范围。该展示调整不改变准入判定
+或显式关闭渐进读取时的视图。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
@@ -403,10 +429,12 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
 首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
-工作 Turn 若有完整的大型委派摘要，且必读列表中有同一条管家收件箱命令，首读保留
-收发请求计数、扫描状态和必读命令，逐条记录及其说明由必做的收件箱读取交付。原记录仍可从
-同一捕获回读。采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，
-并沿已有范围约束和消费入口办理。
+工作 Turn 若有大型委派摘要、扫描完整，且必读列表中有同一条管家收件箱命令，首读保留
+收发请求计数、扫描状态和必读命令。扫描完整但摘要达到展示上限时，首读同时保留精确的
+省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。原摘要仍可从同一
+捕获取回。扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
+采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，并沿已有范围约束和
+消费入口办理。
 
 既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
 Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
@@ -484,6 +512,11 @@ The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
 
+For a selected Todo, preparation reads the canonical Todo and leases at one
+checked provider revision. The internal read returns only that Todo's status,
+assignment and lease facts. Unrelated Todo bodies stay with the provider
+reader. Quota still checks ownership and lease expiry before reporting readiness.
+
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
 及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
@@ -495,6 +528,9 @@ Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，
 结果准备。已退役的租约需要新的合格 capture。
 原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
 领取回执都不会触发自动领取。
+
+准备阶段从同一已校验的权威版本读取 Todo 和租约，只传回所选 Todo 的状态、归属和租约
+事实。其他任务正文留在读取端。额度检查仍核对归属和租约到期时间，再报告是否就绪。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
@@ -945,7 +981,7 @@ first reader and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile is qualified on Codex 0.162.1 paginated rollouts. It streams only the
+profile is qualified on Codex 0.162.1 and 0.167.0-alpha.3.2 paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
@@ -956,6 +992,12 @@ back to full. One decoded record remains bounded; this is not a history-size
 limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
+For a complete one-page selection from the current capture, the adapter can
+verify that exact selected output across an ordinary resume. The source and
+read scope must still match. Only the replayed literal sections remain
+eligible for reuse in the next progressive view. Partial or inherited
+selections still need their ordinary recovery, and a selected read cannot
+establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
@@ -1242,7 +1284,7 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 的分页
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 和 0.167.0-alpha.3.2 的分页
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。

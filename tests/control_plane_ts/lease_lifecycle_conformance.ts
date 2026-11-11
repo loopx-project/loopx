@@ -65,7 +65,8 @@ export function registerLeaseLifecycleConformance(provider: string, factory: Aut
       assert.deepEqual((final.head.leases as JsonObject[]).filter(l => l.todo_id !== request.todo_id),
         (seed.leases as JsonObject[]).filter(l => l.todo_id !== request.todo_id));
       for (const [command, result] of [[request, first], [renew, second], [release, third]] as const) {
-        const replay = await execute(contender, {...command, now: new Date("2030-01-01Z"), registered_agents: []});
+        const replay = await execute(contender, {...command, required_handoff_mode: "hard_lease",
+          now: new Date("2030-01-01Z"), registered_agents: []});
         assert.equal(replay.status, "replayed"); assert.equal(replay.changed, false);
         assert.deepEqual(replay.original_receipt, result.original_receipt);
         assert.deepEqual(replay.lease, result.lease);
@@ -120,7 +121,7 @@ export function registerLeaseLifecycleConformance(provider: string, factory: Aut
     assert.equal(first.missing, true); assert.equal(first.released, false);
     const after = await loaded(store);
     assert.equal(after.cursor, "2");
-    const replay = await execute(store, release);
+    const replay = await execute(store, {...release, required_handoff_mode: "hard_lease"});
     assert.equal(replay.status, "replayed"); assert.deepEqual(replay.original_receipt, first.original_receipt);
     assert.deepEqual(await loaded(store), after);
     const retired = (after.head.leases as JsonObject[]).find(l => l.status === "released")!;
@@ -129,6 +130,26 @@ export function registerLeaseLifecycleConformance(provider: string, factory: Aut
     assert.equal(noChange.status, "no_change"); assert.equal(noChange.released, true);
     assert.deepEqual((await loaded(store)).head, after.head);
   });
+
+  for (const mode of ["soft_claim", "legacy"] as const) {
+    test(`${provider} ${mode} cleanup remains local and cannot replay as a hard-lease command`, async t => {
+      const {store, request} = await setup(t, "native", projection => { projection.handoff_mode = mode; });
+      const release: CanonicalTaskLeaseLifecycleInput = {...request, operation: "release", new_owner: null,
+        new_idempotency_key: null, ttl_seconds: null, todo_id: "todo_missing", expected_version: 0};
+      const before = await loaded(store);
+      const constrained = {...release, required_handoff_mode: "hard_lease" as const};
+      assert.equal((await execute(store, constrained)).reason_code, "lease_handoff_mode_mismatch");
+      assert.deepEqual(await loaded(store), before);
+      const local = await execute(store, release);
+      assert.equal(local.status, "no_change"); assert.equal(local.missing, true);
+      assert.equal(local.handoff_mode, mode);
+      const after = await loaded(store);
+      assert.equal((await execute(store, constrained)).reason_code, "invalid_coordination_command_receipt");
+      const replay = await execute(store, release);
+      assert.equal(replay.status, "replayed"); assert.deepEqual(replay.original_receipt, local.original_receipt);
+      assert.deepEqual(await loaded(store), after);
+    });
+  }
 
   test(`${provider} lost lease responses recover once and competing intents cannot overwrite`, async t => {
     const {store, contender, request} = await setup(t);

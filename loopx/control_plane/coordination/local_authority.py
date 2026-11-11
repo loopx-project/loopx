@@ -262,13 +262,20 @@ def read_canonical_todos_if_promoted(
     projection_readback: Mapping[str, Any] | None = None,
     include_summary: bool = False, rollout_events: Any = None, available_capabilities: Any = None,
     include_contract_rows: bool = False,
+    lease_todo_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Read canonical Todos or fail with the native migration/recovery cause.
 
     The historical import name no longer permits pre-cutover Markdown reads.
     Explicit migration captures use the dedicated source inspection owner.
     Status may request diagnostic facts in place of complete records.
+    A lease selection validates the same provider snapshot and returns only
+    matching leases. It cannot supply a Todo summary or confirm a writeback.
     """
+    if lease_todo_ids is not None and (
+        not include_leases or include_summary or projection_readback is not None
+    ):
+        raise ValueError("lease selection requires leases without a Todo summary or projection readback")
 
     contract_fields = None
     if include_contract_rows:
@@ -299,9 +306,11 @@ def read_canonical_todos_if_promoted(
             goal_id=goal_id, include_leases=include_leases,
             projection_readback=projection_readback,
             timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
+            lease_todo_ids=lease_todo_ids,
         )
     payload = validate_canonical_todo_read(result, goal_id=goal_id, include_leases=include_leases,
-        projection_readback=projection_readback, contract_fields=contract_fields)
+        projection_readback=projection_readback, contract_fields=contract_fields,
+        lease_only=lease_todo_ids is not None)
     if projected is not None and "fields" in projected:
         from ..todos.goal_todo_projection import restore_todo_field_evaluations
         payload["_todo_fields"] = restore_todo_field_evaluations(projected)
@@ -369,8 +378,13 @@ def validate_canonical_todo_read(
     result: Any, *, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
     contract_fields: tuple[str, ...] | None = None,
+    lease_only: bool = False,
 ) -> dict[str, Any]:
-    """Decode a native source result without adding another provider read."""
+    """Decode a native source result without adding another provider read.
+
+    A lease-only response still describes the validated full Todo source in
+    its read model. Its transport population contains zero Todo rows.
+    """
     if not isinstance(result, Mapping):
         raise LocalCoordinationAuthorityUnavailable(
             "local coordination authority returned an invalid Todo list",
@@ -404,7 +418,7 @@ def validate_canonical_todo_read(
             TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
             TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
         }
-        or todo_read_model.get("todo_count") != len(todos)
+        or (bool(todos) if lease_only else todo_read_model.get("todo_count") != len(todos))
     ):
         raise LocalCoordinationAuthorityUnavailable(
             str(payload.get("reason") or "canonical Todo authority is unavailable"),

@@ -62,6 +62,28 @@ A read-only quota guard never claims or renews. Long-running delegated Hosts ret
 their existing supervision; this CLI path does not supervise an idle external
 process. The App's manual completion boundary described above is unchanged.
 
+To retire obsolete work after a managed self-claim, pass the same returned
+reference to `todo supersede` and name its replacement. For example, after the
+claim above, use this **instead of** completing `todo_example`:
+
+```bash
+loopx --format json todo supersede --goal-id example-goal --todo-id todo_example \
+  --agent-id worker-a --claim-operation-id work-a \
+  --reason 'Replace obsolete work' --next-agent-todo 'Deliver replacement work'
+```
+
+Use `--successor-todo-id <existing-todo-id>` instead of `--next-agent-todo` when
+the replacement already exists. Supersede retains the terminal owner's lease,
+acceptance and successor checks, retires the original execution atomically, and
+recovers the accepted receipt on an unchanged retry. An expired or replaced
+reference is rejected; inspect the current Todo and reconcile ownership before
+explicitly claiming again. Do not reuse the stale reference or copy lease counters.
+
+废弃已认领的任务时，可将自认领返回的 `claim_operation_id` 传给 `todo supersede`，
+并用 `--next-agent-todo` 创建替代任务，或用 `--successor-todo-id` 关联已有任务。
+租约、验收和后继检查仍由原终态 owner 执行；重试恢复原回执，不重复创建后继。
+过期或已换代的引用会拒绝，须先查看当前任务、核对归属，再显式重新认领。
+
 For a selected `hard_lease` Todo, the quota settlement plan now gives the ordinary
 claim command before task execution and carries its returned reference in the
 completion template. Quota and TurnEnvelope share that plan. The policy comes

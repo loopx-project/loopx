@@ -259,6 +259,15 @@ frozen terminal rule. Do not manufacture extra evaluation opportunities.
 
 ## 6. Why action logs are not causal labels
 
+"At state s, switch was selected; two hours later the next Native result improved
+by one point" is useful evidence, but not "switch added one point over continuing
+grow." If a matched grow branch improved by two points, switch made +1 progress
+but had a −1 contrast. Without executing or credibly identifying the comparator,
+that contrast remains unknown. Two hours may only be the interval to the next
+measurement, not the remaining research horizon. Earlier implementation,
+calibration and exploration may also contribute; the last action does not own
+the whole observed gain.
+
 The observed fraction of gains after grow, verify or switch mixes different
 starting states. Grow may be selected after promising evidence; switch after a
 route stalls. Their raw frequencies cannot rank the actions at one shared state.
@@ -319,6 +328,13 @@ and cost → observation → revised continuation → accepted terminal outcome*
 Keep failed/cancelled work, delayed results and unknowns. Attribute dependencies
 across the sequence instead of giving all terminal gain to its last action.
 
+The most useful feedback explains **why the action seemed worthwhile then,
+which key forecast was supported or refuted, and how that changed the next
+choice**. A tail counterexample can refute the premise for a wider tuning sweep;
+subsequent work should address that question. Evidence-backed continuation also
+counts as adoption when new evidence supports the original route; switching is
+not mandatory.
+
 <a id="current-and-next"></a>
 
 ## 8. Existing owners and the smallest useful next experiment
@@ -362,9 +378,83 @@ supported by trajectories showing what decision changed and why. More complete
 forms, extra Native calls or a plausibly intelligent explanation are insufficient.
 Detailed task choice and run authorization remain in the pilot, not this essay.
 
+<a id="action-value-evidence"></a>
+
 ## 9. From useful feedback to a learned research policy
 
-Use the existing decision/evidence owners through three stages:
+### 9.1 Learning target: the current action and remaining continuation
+
+A Meta Model used to allocate research budget should estimate value conditional
+on state, remaining budget and the subsequent policy, not assign grow/verify/switch
+one fixed success rate each. Let Y_b be the terminal outcome selected under the
+frozen rule within budget b, a the concrete first action, and π the continuation:
+
+$$
+Q^\pi(s,b,a)=\mathbb E[Y_b^{a,\pi}\mid S_0=s],\qquad
+A^\pi(s,b;a,a_0)=Q^\pi(s,b,a)-Q^\pi(s,b,a_0).
+$$
+
+The first quantity forecasts the terminal result after starting this way and
+continuing with π; the second compares another feasible first route. Both include
+the first action's resource use. Specify a by method, candidate and verification
+choice; a coarse action name does not define a treatment. A changed π revision,
+remaining budget or acceptance rule changes the prediction target. One completed
+trajectory supplies a noisy outcome for the executed route, not the true Q or a
+complete label for A.
+
+Start with checkable subpredictions: what a probe will show, implementation
+duration, or whether confirmation can meet the deadline. Then test whether they
+help choices. Better forecasts need not change action ranking, and better local
+ranking need not improve the terminal result. Stride chooses how far to pursue
+a direction, Yardstick identifies measurement scope and confirmation gaps, and
+the Meta Model estimates conditional value for those choices. Estimates do not
+replace the existing owners' authority, budget or acceptance checks.
+
+### 9.2 A reconstructable decision episode
+
+Link the following at meaningful decision boundaries; do not require a form per
+tool call or a full-trajectory reread every Turn. Reconstruct from existing
+decision, finding, execution and measurement references. These are semantic
+requirements, not a new wire schema.
+
+| Time | What must be recoverable | Why it matters |
+| --- | --- | --- |
+| Before selection | Visible candidates/incumbent, directions, premises/counterevidence, verification gaps, pending results and remaining resources; source revisions and availability times | Forecast from information available then, not a later rewritten summary |
+| Forecast and choice | A few feasible alternatives, selected concrete method, key result and duration predictions/ranges, basis, and what would change the next choice | Separate the prior reason, uncertainty and retrospective explanation; do not invent precise probabilities |
+| Execution | Actual method versus plan and reason for changes, artifact revision, complete resources, failure/cancellation and waiting | Proposal is not adoption, adoption is not success; do not double-count overlapping wall time |
+| Feedback and next decision | Candidate/workload/evaluator of the observation, when feedback became available, forecast supported/refuted, and actual continuation/revision | Late results belong to the originating experiment; a decision uses only evidence then available; pending is not zero |
+| After the episode | Continuation revision, relevant prerequisite/subsequent work, terminal result at the frozen horizon and selection rule | Preserve delayed value and multi-step dependencies instead of crediting only the last action |
+
+Record a source-backed forecast revision before the result is visible. Retain
+old predictions and new evidence when revising, rather than overwriting the
+forecast. A two-hour measurement checks the corresponding horizon; an eighteen-hour
+terminal forecast needs that endpoint or the predeclared missing/cancelled-outcome
+treatment. Do not relabel a local gain or pending result as terminal success/failure.
+
+### 9.3 Four data sources with different evidential roles
+
+| Data | What it can test | What it does not establish |
+| --- | --- | --- |
+| Pre-action forecasts and corresponding realized outcomes | Probability, gain-range and duration calibration on covered states; report missing/cancelled outcomes separately | Unchosen outcomes, or that accurate prediction makes allocation better |
+| Same-candidate Proxy–Native pairs | Measurement bias, ordering and scope | Proxy improvement as a causal policy gain |
+| Different continuations from the same checkpoint | Local contrasts and uncertainty under equivalent restoration, isolation and aligned budgets | One pair as an exact expectation, or the policy's from-start effect |
+| Complete new-task runs with a frozen policy | Matched-budget terminal benefit and transfer | Repeated same-task tuning as independent generalization evidence |
+
+Specify the forecast target, horizon, scope and missing-outcome treatment before
+choosing calibration metrics. Retain all prospectively selected episodes, not
+only successful forecasts. Calibration data follows the actions actually chosen
+and usually does not cover every alternative. Off-policy evaluation separately
+needs coverage and comparability assumptions; unchosen actions are not zero-reward
+labels. Adjacent episodes from one task and branches sharing a prefix are
+dependent: hold out tasks/source runs or whole branch families rather than
+randomly splitting Turns. Shared parent trajectories can cross the training/evaluation
+split; future peaks, later test answers and post-hoc explanations must not enter
+decision-time features either.
+
+### 9.4 Validate progressively through existing owners
+
+First test whether the current model uses this feedback chain to improve
+EdgeBench continuation; then decide whether a separate learned model is useful:
 
 | Stage | Learn or demonstrate | Evidence that can support it |
 | --- | --- | --- |
@@ -372,18 +462,11 @@ Use the existing decision/evidence owners through three stages:
 | Calibrated prediction | More reliable gain, duration and failure forecasts | Predictions recorded before outcomes, evaluated on held-out episodes |
 | Learned allocation | Better policies for state and remaining budget | Prospective policy comparisons and frozen new-task tests |
 
-Each training example should connect what was visible at decision time,
-considered alternatives and predictions, the selected action and actual work,
-resource use, successor evidence and later terminal outcome. These are semantic
-requirements on useful data, not additional unsupported fields on current v0.
-Keep task/source permissions and candidate/version lineage.
-
-Selected-action logs can train predictors but do not reveal every unchosen
-outcome. Proxy/Native pairs can calibrate measurement relationships, and paired
-forks can estimate local treatment differences; neither automatically supplies
-all action values. Offline policy evaluation needs its own coverage and
-identification assumptions. Future peaks, later test answers and post-hoc
-interpretations must not leak into decision-time features.
+The pilot's [episode readback and separate acceptance levels](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#action-value-episode)
+use the existing experimental budget and feedback protocol. Preserve task/source
+permissions and candidate/version lineage; diagnostic records do not authorize
+training. A more complete model or full trajectory warehouse is not a prerequisite
+for the first useful comparison.
 
 For an implementation or document handoff, preserve the chain:
 **objective and comparator → theoretical reason → existing owner → proposed

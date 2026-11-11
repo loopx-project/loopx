@@ -304,9 +304,11 @@ feasible, and do not interpret nominal significance as a lifetime guarantee.
 | Effects | Existing admitted task, same lease and settlement. A local probe may change within its declared scope. | Existing Todo/Goal/authority operations; newly selected work starts after original settlement and its own admission. |
 | Recovery | Original Turn and work identity. | Original obligation, Turn and replan context/recovery owner. |
 
-Per-Turn **availability** does not mean per-Turn mandatory deliberation. No new
-evidence and no reached decision boundary means continue the current authorized
-slice with no extra decision payload. Existing settlement and periodic-review
+Per-Turn **availability** does not mean per-Turn mandatory deliberation: control-plane
+token, RPC and deliberation overhead counts against budget $B$. No new
+decision-relevant evidence and no reached decision boundary means continue the
+current authorized slice with zero extra decision payload, zero repeated prompt
+ceremony and zero extra RPC round trips. Existing settlement and periodic-review
 duties still apply. The new record is optional on ordinary Turns; when supplied,
 identity, evidence and scope validation are mandatory. Do not describe a rejected
 write as advisory guidance.
@@ -528,21 +530,44 @@ score differences telescope to final improvement; process reward for a future
 learner must preserve that objective rather than reward activity or repeatedly
 repairing the same defect.
 
-Local evidence has both noise and possible systematic bias. More local samples
-cannot by themselves fix workload mismatch or missed hard correctness/tail-time
-constraints. Qualify a yardstick where choices happen: same-parent candidates,
+Local evidence has both noise and possible systematic bias (see
+[measurement quality in budgeted planning](../../research/budgeted-research-planning.md#measurement)).
+More local samples cannot by themselves fix workload mismatch or missed hard
+correctness/tail-time constraints. Qualify a yardstick on the decision-local
+neighborhood where choices happen: matched parent/child and sibling candidates,
 exact evaluator/input scope, nearby alternatives and native counterexamples.
 Across-time rank agreement may merely reflect common search progress. Include a
 bounded audit of uncertain/proxy-rejected candidates when it can expose missed
 opportunities; do not let the proxy alone veto informative authorized evaluation.
-A conflict revisits the scoped method, not a global blacklist of its whole type.
+A proxy-versus-native reversal triggers scoped recalibration, audit or replacement
+for that workload/horizon, not a permanent global blacklist of the whole evaluator
+type.
 
 Evaluator cooldown, queue availability and pending feedback are planning inputs,
 not permission to change the benchmark. Reuse immutable candidate/result links
 when feedback arrives late. A pending result can support independent work while
-it runs; it is not a measured gain. Confirmation must fit the frozen terminal
-protocol, and adaptively used native feedback is development evidence, not an
-untouched holdout.
+it runs; it is not a measured gain. Schedule backward from horizon $B$ under
+native cooldown and queue latency so candidate confirmation completes inside the
+frozen terminal selection rule rather than stranding unconfirmed local gains at
+deadline, and treat adaptively used native feedback as development evidence rather
+than an untouched holdout.
+
+As quantitative decision and search methodologies accumulate (`Yardstick`,
+`Stride`, multi-point scoped fidelity against frontier bias cliffs,
+confirmation-reserve back-scheduling, paired same-checkpoint counterfactuals,
+and mechanism-island evolutionary candidate selection for long-horizon tasks),
+consolidate their shared invariants—silent admission when disabled or unchanged,
+bounded context compilation with canonical replay-prefix isolation and
+single-owner digest/truncation codecs, exact scope-tuple execution/verification
+with `null` preservation rather than zero substitution, durable writeback, and
+advisory feedback—onto one composable typed stage kernel rather than duplicating
+per-feature validation or sorting boilerplate (proposed companion consolidation:
+[#8516](https://github.com/loopx-project/loopx/pull/8516)). Analytical and
+population-selection operators remain `advisory_only`
+(`execution_authority_granted=false`) until matched-budget evidence qualifies
+promotion.
+
+<a id="policy-evolution"></a>
 
 ### 5.9 Policy evolution through the same owner
 
@@ -559,6 +584,33 @@ they do not reveal unchosen outcomes. Use prospective matched continuations or
 explicitly justified off-policy assumptions for policy-value claims. Preserve
 failed, cancelled and unknown results. Raw task data stays within the research
 boundary and cannot become a production memory or training corpus by default.
+
+When consuming these records for later learning, use the
+[action-value evidence model](../../research/budgeted-research-planning.md#action-value-evidence)
+to separate observed progress, value predicted under a continuation and remaining
+budget, and the causal contrast against a feasible alternative. A gain after
+`switch` directly supports only the first. An action name does not replace a
+concrete method, and an unchosen route is not a zero-score label.
+
+For selected decision episodes, existing provenance/followthrough should recover:
+
+- State/evidence visible at selection and remaining budget, compared routes,
+  concrete selected method, continuation revision and forecast horizon.
+- Key predictions, their basis or unknowns, and observations supporting continuation
+  or revision, recorded before outcomes are visible; keep original forecasts on revision.
+- Actual method, revision, resources and deviations; the observation's original
+  candidate/evaluator, availability time, and resulting next decision.
+- Related prerequisite and subsequent work, and the terminal outcome under the
+  frozen horizon/selection rule; preserve failure, cancellation, pending and missing coverage.
+
+These are proposed training-example semantics, not new mandatory fields on every
+Turn. Mark facts unrecoverable from existing references as missing; do not backfill
+them from later summaries or trigger evaluations to complete a form. Test forecast
+calibration, actual adoption, local paired contrasts and frozen-policy new-task
+benefit separately. Hold out shared tasks/source runs or whole branch families,
+not randomly mixed adjacent Turns. Continuing a route supported by evidence also
+counts as adoption; cue delivery, complete labels or a direction change alone
+do not establish policy benefit.
 
 No new policy registry, plan database, scheduler or universal scalar rank is
 needed for the first caller. Before any later schema change, demonstrate the
@@ -652,6 +704,8 @@ These are implementation acceptance requirements, not tests already passed.
 | C14 | Same evidence, different remaining horizons | Compare feasible terminal outcomes, including confirmation; do not require the same route or use a fixed per-candidate score. |
 | C15 | A prerequisite has no immediate gain but enables a plausible later improvement | Consider the conditional sequence and a bounded discriminating first slice; count dependent milestones once as state evidence, not independent rewards. |
 | C16 | Confirmation is pending or cannot finish under the terminal protocol | Retain immutable result attribution and honest unknowns; consider independent work or a feasible validated route without resetting cooldown or inventing gain. |
+| C17 | The next measurement improves, but the alternative is unobserved and earlier work also contributed | Record observed progress only; qualify predicted action value by continuation/budget, leave the causal contrast unknown, and link prerequisites instead of labeling the last action with all gain. |
+| C18 | A forecast is revised after the outcome, feedback arrives late, or related episodes cross training/evaluation | Recover forecasts/evidence from before result visibility; revisions preserve originals, local measurements do not stand for terminal outcomes, and evaluation isolates tasks/source runs or branch families. |
 
 Replay typed scenarios with synthetic evidence against real File/SQLite owners
 where persistence is touched. Use actual host/CLI settlement and packaged

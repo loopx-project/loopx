@@ -222,6 +222,43 @@ def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
     assert snapshot() == before
 
 
+def test_managed_claim_supersede_preserves_fences_and_replays_once(claim_cli):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    accepted = run([*prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", "managed-claim"])
+    reference = ["--claim-operation-id", accepted["claim_operation_id"]]
+    supersede = [*prefix, "todo", "supersede", "--goal-id", GOAL, "--todo-id", TODO,
+                 "--reason", "Replace obsolete work", "--next-agent-todo", "Deliver replacement work"]
+    before = snapshot()
+    for actor, proof, code in (
+        ("peer-a", [], "lease_fence_required"),
+        ("peer-b", reference, "claim_execution_unavailable"),
+        ("peer-a", ["--claim-operation-id", "unrelated-claim"], "claim_execution_unavailable"),
+    ):
+        rejected = run([*supersede, "--agent-id", actor, *proof], expected_exit=1)
+        assert rejected["error_code"] == code
+        assert snapshot() == before
+    attempt = [*supersede, "--agent-id", "peer-a", *reference]
+    mixed = run([*attempt, "--task-lease-idempotency-key", "unrelated-lease",
+                 "--task-lease-expected-version", "1"], expected_exit=1)
+    assert mixed["ok"] is False and snapshot() == before
+    preview = run([*attempt, "--dry-run"])
+    assert preview["ok"] and preview["status"] == "planned"
+    assert snapshot() == before
+    applied = run(attempt)
+    assert applied["ok"] and applied["superseded"] and applied["provider_status"] == "applied"
+    final = snapshot()
+    todos = {todo["todo_id"]: todo for todo in final[0]}
+    assert len(todos) == 2
+    assert todos[TODO]["status"] == "done"
+    assert todos[todos[TODO]["superseded_by"]]["text"] == "Deliver replacement work"
+    lease = run([*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO])
+    assert lease["lease"]["status"] == "released"
+    replay = run(attempt)
+    assert replay["ok"] and replay["idempotent_replay"]
+    assert snapshot() == final
+    assert run([*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO]) == lease
+
+
 @pytest.fixture
 def selected_runtime(claim_cli, tmp_path, monkeypatch):
     _, _, _, _, _, _, project, _ = claim_cli

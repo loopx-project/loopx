@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatQueue, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
@@ -80,6 +80,50 @@ try {
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
   const routedRead = globalThis.fetch;
   if (!fallback) {
+    // The original idle queue gets one bounded recovery from a temporary
+    // read failure; no Turn, fallback Session or permission retry is involved.
+    const queuePath = `/api/chat/sessions/${sessionId}/queue`;
+    const queueReads: string[] = [];
+    const unavailable = () => Response.json({ok: false, error: "Queued messages are temporarily unavailable"}, {status: 503});
+    const queueInterruption = new Error("Synthetic queue transport interrupted");
+    const replies: (Response | Error)[] = [unavailable()];
+    globalThis.fetch = async (input, init) => {
+      if (String(input) !== queuePath) return routedRead(input, init);
+      queueReads.push(init?.method ?? "GET");
+      const reply = replies.shift();
+      if (reply instanceof Error) throw reply;
+      return reply ?? routedRead(input, init);
+    };
+    const observedQueue = await fetchChatQueue(sessionId, AbortSignal.timeout(5000));
+    assert.deepEqual([observedQueue.session_id, observedQueue.active_turn_id, observedQueue.turns], [sessionId, null, []]);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"]);
+    replies.push(queueInterruption);
+    assert.equal((await fetchChatQueue(sessionId, AbortSignal.timeout(5000))).session_id, sessionId);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"]);
+
+    replies.push(unavailable(), unavailable());
+    await assert.rejects(() => fetchChatQueue(sessionId, AbortSignal.timeout(5000)), /temporarily unavailable/);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"], "A continued failure must remain unknown after one retry");
+    replies.push(Response.json({ok: false, error: "Original scope revoked"}, {status: 403}));
+    await assert.rejects(() => fetchChatQueue(sessionId), /scope revoked/);
+    assert.deepEqual(queueReads.splice(0), ["GET"], "Never retry a denial");
+    replies.push(Response.json({ok: true, schema_version: "loopx_chat_store_v1",
+      session_id: "different-source", active_turn_id: null, turns: []}));
+    await assert.rejects(() => fetchChatQueue(sessionId), /original Session queue/);
+    assert.deepEqual(queueReads.splice(0), ["GET"], "Never accept or retry another Session's queue");
+
+    const controller = new AbortController();
+    globalThis.fetch = async (input, init) => {
+      assert.equal(String(input), queuePath);
+      queueReads.push(init?.method ?? "GET");
+      controller.abort();
+      return unavailable();
+    };
+    await assert.rejects(() => fetchChatQueue(sessionId, controller.signal), /temporarily unavailable/);
+    assert.deepEqual(queueReads, ["GET"], "Leaving this read prevents another request");
+    globalThis.fetch = routedRead;
+    console.log("bound idle queue: one same-Session retry, denial and cancellation remain failures");
+
     // Repeated transport loss at later pages must advance one original prefix
     // through the existing retry caller, without ever publishing partial text.
     child.stdin.write("history\n");
@@ -115,10 +159,31 @@ try {
     assert.equal(recovered.pendingReads?.size, 0);
     assert.ok(calls.every(row => row.method === "GET"), "Recovery never starts work");
     globalThis.fetch = routedRead;
+    // If the fresh post-history source read loses its connection, keep the
+    // verified pages private until a later source check succeeds.
+    const isBoundDiscovery = (input: RequestInfo | URL) =>
+      new URL(String(input), origin).searchParams.get("conversation_binding_id") === bindingId;
+    let sourceChecks = 0;
+    globalThis.fetch = (input, init) => {
+      if (isBoundDiscovery(input) && ++sourceChecks === 2) throw new Error("Lost post-history source connection");
+      return routedRead(input, init);
+    };
+    const awaitingSource = await fetchChatHistory(options);
+    assert.deepEqual(awaitingSource.unavailableSessionIds, [sessionId]);
+    assert.deepEqual(awaitingSource.snapshots, []);
+    assert.deepEqual(awaitingSource.messages, []);
+    globalThis.fetch = routedRead;
+    calls.length = 0;
+    const sourceRecovered = await fetchChatHistory(options, awaitingSource);
+    assert.deepEqual(sourceRecovered.snapshots[0].messages, complete.messages);
+    assert.deepEqual(calls, [{path: `/api/chat/sessions?conversation_binding_id=${bindingId}`, method: "GET"}],
+      "A fresh check of the same unchanged binding reuses the complete verified history");
+
     // Current source revocation blocks recovery before another history page.
     child.stdin.write("deny\n"); assert.equal((await next()).source_verified, false);
     calls.length = 0;
     await assert.rejects(() => fetchChatHistory(options, interrupted));
+    await assert.rejects(() => fetchChatHistory(options, awaitingSource));
     assert.ok(calls.every(row => new URL(row.path, origin).pathname === "/api/chat/sessions"));
     child.stdin.write("recover\n"); assert.equal((await next()).source_verified, true);
     // Permanent denial, a changed source or malformed prefix cannot be retained
@@ -179,6 +244,10 @@ try {
     assert.equal(resumed.messages.at(-1)?.text, "A full new original result. ".repeat(150));
     assert.equal(calls.filter(row => new URL(row.path, origin).pathname === "/api/chat/sessions").length, 2,
       "The original source is verified again after a suffix read");
+    calls.length = 0;
+    const changedWhileWaiting = await fetchChatHistory(options, awaitingSource);
+    assert.deepEqual(changedWhileWaiting.messages, resumed.messages);
+    assert.ok(readRequests().length > 2, "A changed transcript cannot publish the pending history");
 
     child.stdin.write("history-rewrite\n");
     assert.equal((await next()).history_rows, added.history_rows);

@@ -164,6 +164,13 @@ export type AuthorityStoreReceiptResult =
   | { status: "missing" }
   | AuthorityStoreReadFailure;
 
+/** Receipt presence or absence and incarnation observed in one read snapshot.
+ * A separate storeIdentity() call cannot bind negative receipt evidence. */
+export type AuthorityStoreReceiptSnapshotResult =
+  | {status: "snapshot"; store_identity: string;
+      receipt: Extract<AuthorityStoreReceiptResult, {status: "found" | "missing"}>}
+  | AuthorityStoreReadFailure;
+
 /** Results retain caller order, including duplicate IDs and missing receipts.
  * Each item has exactly the same proof contract as readReceipt. No global
  * snapshot promise is made by the fallback; native providers may strengthen it. */
@@ -195,6 +202,8 @@ export interface AuthorityStore {
   readAuthoritySnapshot?(): Promise<AuthorityStoreSnapshotResult>;
   commitAuthority(commit: AuthorityStoreCommit): Promise<AuthorityStoreCommitResult>;
   readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult>;
+  /** Optional atomic observation for callers pinned to an admitted incarnation. */
+  readReceiptSnapshot?(operationId: string): Promise<AuthorityStoreReceiptSnapshotResult>;
   /** Optional bounded acceleration; never a weaker receipt verification path. */
   readReceipts?(operationIds: readonly string[]): Promise<AuthorityStoreReceiptBatchResult>;
   scanCommitted(afterCursor: string | null, limit: number): Promise<AuthorityStoreScanResult>;

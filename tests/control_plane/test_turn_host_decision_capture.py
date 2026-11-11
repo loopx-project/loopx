@@ -83,6 +83,62 @@ def _pending_goal_contract(original):
     return contract, build_turn_envelope(contract)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_codex_workspace_write_consumes_original_decision_inline(tmp_path, monkeypatch, provider):
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = _fixture_module()
+    project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    summary = parse_active_state_todos(state.read_text(encoding="utf-8"), state_path=state, item_limit=None)
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, handoff_mode="soft_claim",
+            todos=summary["agent_todos"]["items"]), state_path=state, provider=provider)
+    executable = fixture._write_fake_codex(tmp_path)
+    script = executable.with_suffix(".py") if os.name == "nt" else executable
+    source = script.read_text(encoding="utf-8").replace("prompt = sys.stdin.read()", '''prompt = sys.stdin.read()
+assert args[args.index("--sandbox") + 1] == "workspace-write"
+request = json.loads(prompt.split("Turn request:\\n", 1)[1])
+contract = request["work_contract"]
+capture = request["detail_ref"]["captured_decision"]
+assert capture["turn_key"] == request["turn_key"]
+assert capture["goal_id"] == contract["goal_id"]
+assert capture["agent_id"] == contract["agent_identity"]["agent_id"]
+assert capture["source_hash_ref"] == "$.source_decision_hash"
+assert request["source_decision_hash"] == contract["contract_binding"]["content_hash"]
+# Model the tool filesystem boundary independently of the stdin transport.
+original_open = pathlib.Path.open
+def sandbox_open(path, *args, **kwargs):
+    if path == pathlib.Path(capture["path"]):
+        raise PermissionError("sandbox cannot read the private original capture")
+    return original_open(path, *args, **kwargs)
+pathlib.Path.open = sandbox_open
+try:
+    pathlib.Path(capture["path"]).read_text()
+except PermissionError:
+    pass
+else:
+    raise AssertionError("capture read unexpectedly allowed")
+assert "Read the original captured decision inline in work_contract" in prompt
+assert "not a prerequisite filesystem read" in prompt
+assert contract["interaction_contract"]["agent_channel"]["work_context"]
+pathlib.Path("received.json").write_text(json.dumps(request), encoding="utf-8")
+''')
+    executable = write_python_host_fixture(script.with_suffix(""), source)
+    argv = fixture._base_argv(registry=registry, runtime=runtime, workspace=workspace,
+        codex_bin=executable, model=None, timeout_seconds=20,
+        expected_marker=fixture._marker_value(1), turn_instance_id="inline-original")
+    code, result = fixture._run_cli([*argv, "--execute"])
+    assert code == 0 and result["status"] == "committed", result
+    assert result["validation"]["status"] == "passed"
+    assert (workspace / fixture.MARKER_NAME).read_text() == fixture._marker_value(1)
+    received = json.loads((workspace / "received.json").read_text(encoding="utf-8"))
+    capture = Path(received["detail_ref"]["captured_decision"]["path"])
+    assert received["work_contract"] == json.loads(capture.read_text(encoding="utf-8"))
+    assert fixture._quota_spend_count(runtime) == 1
+
+
 @pytest.mark.parametrize("launch", ["runner", "argv"])
 @pytest.mark.parametrize("mode,capture", [
     ("current", False), ("pending_goal", False), ("historical", False),

@@ -122,6 +122,45 @@ test('unfinished requests retain explicit partial admission; forks and malformed
   ]){const rows=fixture();mutate(rows);assert.throws(()=>run(rows,true));}
 });
 
+test('an identified interruption keeps observed requests across resume without completing the aborted Turn', () => {
+  const rows = fixture();
+  rows[6].payload = {type: 'turn_aborted', turn_id: 'a'};
+  assert.throws(() => run(rows), /aborted Turn/);
+  const resumed = run(rows, true);
+  assert.deepEqual(resumed.turns.map(turn => turn.turn_id), ['b']);
+  assert.equal(resumed.completed_turns, 1);
+  assert.equal(resumed.incomplete_turn, null);
+  assert.equal(resumed.input_tokens, 140);
+  assert.equal(resumed.turn_elapsed_seconds, 8);
+  assert.deepEqual(resumed.interrupted_turns, [{
+    turn_id: 'a', start: rows[1].timestamp, observed_through: rows[6].timestamp,
+    first_line: 2, last_line: 7, counter_observations: 1,
+    usage: {input_tokens: 100, cached_input_tokens: 60, uncached_input_tokens: 40, output_tokens: 10},
+  }]);
+  const coverage = resumed.request_coverage!;
+  assert.equal(coverage.status, 'verified');
+  if (coverage.status === 'verified') {
+    assert.equal(coverage.unique_requests, 3);
+    assert.equal(coverage.compaction_requests, 1);
+    assert.deepEqual(coverage.all_requests, tokens(160, 90, 22));
+  }
+  const wrong = structuredClone(rows);
+  wrong[6].payload.turn_id = 'b';
+  assert.throws(() => run(wrong, true), /unmatched aborted Turn/);
+  const anonymous = structuredClone(rows);
+  delete anonymous[6].payload.turn_id;
+  assert.throws(() => run(anonymous, true), /overlapping Turn/);
+  const duplicate = structuredClone(rows);
+  duplicate[7].payload.turn_id = 'a';
+  assert.throws(() => run(duplicate, true), /overlapping Turn/);
+  const interruptedOnly = run(renumber([...rows.slice(0, 7), {
+    ...event('token_count'), timestamp: rows[7].timestamp,
+  }]), true);
+  assert.equal(interruptedOnly.completed_turns, 0);
+  assert.equal(interruptedOnly.interrupted_turns?.length, 1);
+  assert.equal(interruptedOnly.end, rows[6].timestamp);
+});
+
 test('a host without request records is unknown, while verified zero compactions is an observed zero', () => {
   const es=fixture().filter(e=>e.type!=='compacted' && e.payload.response_id!=='compact');
   es.find(e=>e.payload.response_id==='two').payload.thread_token_usage=tokens(140,80,15);
