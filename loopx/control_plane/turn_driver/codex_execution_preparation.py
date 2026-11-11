@@ -193,16 +193,26 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
             and isinstance(ready_sha256, str)
             and BARE_SHA256_PATTERN.fullmatch(ready_sha256) is not None
         ):
+            from ..quota.turn_envelope import is_legacy_saved_quota_decision
             from .decision_capture import context_capture_read_command, read_context_capture_file
 
             try:
-                read_context_capture_file(ready_path, ready_sha256, private=True)
+                path, _, saved = read_context_capture_file(ready_path, ready_sha256, private=True)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 pass
             else:
-                recovery_command = context_capture_read_command(
-                    Path(ready_path), ready_sha256, reader_argv=current_loopx_cli_argv(),
-                )
+                if is_legacy_saved_quota_decision(saved):
+                    recovery_command = context_capture_read_command(
+                        path, ready_sha256, reader_argv=current_loopx_cli_argv(),
+                    )
+                else:
+                    # Re-open the exact ready source through its checked path.
+                    # An outer digest alone does not validate a complete Turn.
+                    recovery_command = shlex.join([
+                        *base, "quota", "context-project", "--capture-file", str(path),
+                        "--capture-sha256", ready_sha256, "--goal-id", goal, "--agent-id", agent,
+                        "--turn-instance-id", turn, "--context-delivery", "off", "--delta-delivery", "off",
+                    ])
                 facts["capture_sha256"] = ready_sha256
                 facts["context"] = {
                     "capture_sha256": ready_sha256,
@@ -212,6 +222,7 @@ def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> 
         "Automatic preparation started for this captured Turn and may still be finishing. "
         "Read the original claim receipt and current lease before deciding how to recover. "
         "With the matching active lease, follow the current captured same-Todo and same-Turn readiness check before work. "
+        "If the recovery command returns a projection, follow its reader after the projection succeeds. "
         "For an authorized retry of this claim, pass the original --claim-operation-id. "
         "A retired lease requires a fresh eligible capture. "
         "Receipt: " + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
@@ -360,8 +371,8 @@ def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
     guidance = ""
     if isinstance(context, Mapping):
         if context.get("ok") is False:
-            guidance = ("Ready context delivery failed. Restore the private original capture and use its "
-                        "recovery command before work. Retain the original claim reference. ")
+            guidance = ("Ready context delivery failed. Follow the recovery instructions in this receipt. "
+                        "Use verified context for this Turn before work. Retain the original claim reference. ")
         else:
             guidance = ("Read the ready context in this receipt for current work and settlement, "
                         "replacing the earlier pre-claim view. Retain its original claim reference "

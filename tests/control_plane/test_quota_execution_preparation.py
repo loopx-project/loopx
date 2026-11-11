@@ -248,6 +248,75 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     assert after["normal_delivery_allowed"] is True
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("projection_available", [True, False])
+def test_model_claim_keeps_receipt_without_unrelated_projection_details(
+    tmp_path, monkeypatch, provider, projection_available,
+):
+    other_todos = [
+        {**_todo(), "todo_id": f"todo_other_{index:03d}", "index": index + 2,
+         "claimed_by": "agent-b", "text": f"[P1] Unrelated work {index}",
+         "note": ("Supporting details for unrelated work. " * 30).strip()}
+        for index in range(72)
+    ]
+    selected = {**_todo(), "text": "[P1] Deliver one validated synthetic change"}
+    before = _run(tmp_path, monkeypatch, provider, [], todos=[selected, *other_todos],
+                  goal_suffix="\n## Agent Todo\n")
+    preparation = before["execution_preparation"]
+    assert preparation["state"] == "claim_required"
+    action = shlex.split(before["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+    assert action[0] == "loopx"
+    assert "--thin" not in preparation["claim"]["cli_args"]  # Exact Host action.
+    operation = ["--claim-operation-id", "synthetic-thin-claim"]
+
+    def invoke(*args):
+        rc, result = run_json_cli_result(
+            *args, registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        )
+        assert rc == 0 and result["ok"] is True, result
+        return result
+
+    state = tmp_path / "state.md"
+    if not projection_available:
+        state.unlink()
+        state.mkdir()  # The authority is available; only the display write fails.
+    claim = invoke(*action[1:], *operation)
+    assert claim["status"] == "applied" and claim["claim_operation_id"] == operation[1]
+    assert claim["todo_id"] == TODO and claim["claimed_by"] == AGENT
+    initial = invoke("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert initial["active"] is True and initial["lease"]["owner"] == AGENT
+    outbox = claim["projection_outbox"]
+    if not projection_available:
+        assert claim["projection_delivery"] == outbox["status"] == "pending"
+        assert outbox["reason_code"] and outbox["recommended_action"]
+        assert outbox["retryable"] is True and outbox["retry_business_mutation"] is False
+        assert "detail_command" not in outbox
+        return
+
+    assert claim["projection_delivery"] == outbox["status"] == "delivered", outbox
+    assert claim["next_cli_actions"] and outbox["next_action"] == "finish"
+    if provider == "sqlite":
+        assert outbox["active_fields_omitted"] == len(other_todos)
+        assert "omitted_active_records" not in outbox
+        before_read = state.read_bytes()
+        diagnostic_args = shlex.split(outbox["detail_command"])
+        detail = invoke(*diagnostic_args[diagnostic_args.index("todo"):])
+        assert detail["dry_run"] is True and detail["provider_revision"] == outbox["provider_revision"]
+        assert state.read_bytes() == before_read
+        rows = detail["omitted_active_records"]
+        assert {row["todo_id"] for row in rows} == {row["todo_id"] for row in other_todos}
+    else:
+        rows = []
+        assert outbox["active_fields_omitted"] == 0 and outbox["omitted_active_records"] == rows
+        assert "detail_command" not in outbox
+    assert "--thin" in action
+    replay = invoke(*preparation["claim"]["cli_args"], *operation)
+    assert replay["claim_operation_id"] == claim["claim_operation_id"]
+    assert replay["projection_outbox"]["omitted_active_records"] == rows
+    current = invoke("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert current["lease"] == initial["lease"]
+
+
 @pytest.mark.parametrize("provider,scenario,location,ambient", [
     (provider, scenario, "directory", "preparation-session")
     for provider in ("file", "sqlite")
@@ -404,7 +473,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("replace_stage", ["guard", "record"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record", "version"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
@@ -435,11 +504,22 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
         source.write_bytes(verified["bytes"] + b" ")
 
     def observe_guard(command, **kwargs):
+        prepared = "--prepared-capture-reference" in command
+        if prepared and replace_stage == "version":
+            command = [*command, "--complete-turn"]
         result = run(command, **kwargs)
-        if "--prepared-capture-reference" in command:
+        if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
                 replace_capture()
+            elif replace_stage == "version":
+                source, = native.glob("prepared-*/ready/decision.json")
+                payload = json.loads(source.read_bytes())
+                assert payload["schema_version"] == "loopx_turn_envelope_v1"
+                payload["schema_version"] = "loopx_turn_envelope_v999"
+                source.write_text(json.dumps(payload))
+                verified["writer"]["capture_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+                result.stdout = json.dumps(verified["writer"])
         return result
 
     monkeypatch.setattr(codex_execution_preparation, "_default_runner", observe_guard)
@@ -466,8 +546,41 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     assert receipt["claim_operation_id"].startswith("todo-claim:")
     context = receipt["context"]
     assert context["ok"] is False
-    assert "digest mismatch" in context["reason"]
     recovery = shlex.split(context["recovery_command"])
+    if replace_stage == "version":
+        assert "Unsupported" in context["reason"]
+        assert context["recovery_command"] == context["recovery"]["command"]
+        assert [recovery[index + 1] for index, word in enumerate(recovery) if word == "--select"] == ["/heartbeat_receipt"]
+        log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
+        after_claim = log.read_bytes()
+        diagnostic = subprocess.run(recovery, cwd=tmp_path, check=True, text=True, capture_output=True)
+        diagnostic_page = json.loads(diagnostic.stdout)
+        assert json.loads(diagnostic_page["content"])["selections"] == [
+            {"pointer": "/heartbeat_receipt", "value": context["heartbeat_receipt"]},
+        ]
+        # Even reading the rejected file explicitly does not observe ready work context.
+        select_at = recovery.index("--select")
+        raw_reader = recovery[:select_at] + recovery[select_at + 2:]
+        raw = subprocess.run(raw_reader, cwd=tmp_path, check=True, text=True, capture_output=True)
+        raw_page = json.loads(raw.stdout)
+        assert raw_page["sha256"] == context["capture_sha256"]
+        for page in (diagnostic_page, raw_page):
+            response = hook(page)
+            readback = json.loads(response["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+            assert readback["event"] == "host_execution_preparation_readback_required"
+            assert readback["claim_operation_id"] == receipt["claim_operation_id"]
+        implicit = subprocess.run([*raw_reader[:raw_reader.index("quota")], "quota", "context-read",
+            "--codex-context-dir", str(native), "--goal-id", GOAL, "--agent-id", AGENT],
+            cwd=tmp_path, text=True, capture_output=True)
+        assert implicit.returncode == 1 and json.loads(implicit.stdout)["ok"] is False
+        retry = shlex.split(readback["context"]["recovery_command"])
+        assert "context-project" in retry and "--turn-instance-id" in retry
+        refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
+        error = json.loads(refusal.stdout)
+        assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
+        assert "content" not in error and log.read_bytes() == after_claim
+        return
+    assert "digest mismatch" in context["reason"]
     digest = hashlib.sha256(verified["bytes"]).hexdigest()
     writer = verified["writer"]
     assert writer["capture_sha256"] == digest and writer["execution_preparation"] == receipt["execution_preparation"]
@@ -747,7 +860,7 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         read_model_view(before, "claim", deferred=True)
 
     claim_code, claim = run_json_cli_result(
-        *before["execution_preparation"]["claim"]["cli_args"],
+        *shlex.split(contract["cli_channel"]["next_cli_actions"][0])[1:],
         registry_path=tmp_path / "registry.json",
         runtime_root=tmp_path / "runtime",
     )

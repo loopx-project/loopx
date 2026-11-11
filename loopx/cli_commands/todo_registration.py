@@ -75,10 +75,12 @@ def register_todo_command(
     todo_parser.add_argument(
         "--claim-operation-id",
         help=(
-            "For claim/update/complete on canonical authority, reuse this public-safe "
-            "operation id across retries. Changed intent with the same id is rejected; "
+            "For canonical claim, name the managed claim with this public-safe id "
+            "and reuse it across retries (omit for a fresh claim id). For "
+            "update/complete/supersede, pass the claim_operation_id returned by "
+            "your self-claim. Changed intent with the same id is rejected; "
             "receipt replay proves historical acceptance, not current lease ownership. "
-            "Omit to retain a fresh operation id per invocation."
+            "Do not combine a retained reference with explicit task-lease proof."
         ),
     )
     todo_parser.add_argument(
@@ -463,7 +465,9 @@ def register_todo_command(
         help=(
             "For todo list, return the explicit field-only projection and omit "
             "detail lanes; returns at most two items per role, and --limit can "
-            "lower but not expand that bound."
+            "lower but not expand that bound. In a managed todo claim JSON receipt, omit "
+            "per-Todo display diagnostics from a successful projection and "
+            "return a read-only detail command."
         ),
     )
     todo_parser.add_argument(

@@ -1038,9 +1038,10 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    # Exact-readback guidance is useful common content in both projections;
-    # retain the duplicate-content checks below rather than remove that guidance.
-    assert len(compact_json) <= int(len(detailed_json) * 0.66)
+    # Both views carry one copy of the declaration/link recipe. Its roughly
+    # 700 common characters contribute about 240 characters to the ratio
+    # difference (34% of the added content). Keep the duplicate limits below.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66) + 240
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
@@ -1988,6 +1989,47 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
     ]
 
 
+def test_guided_start_uses_one_registry_version_for_goal_selection(tmp_path: Path, monkeypatch) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    single_goal = registry_path.read_bytes()
+    initial = json.loads(single_goal)
+    second_goal_id = "guided-projection-second-goal"
+    initial["goals"].append({**initial["goals"][0], "id": second_goal_id})
+    registry_path.write_text(json.dumps(initial), encoding="utf-8")
+    replacement = registry_path.with_name("registry.next")
+    replacement.write_bytes(single_goal)
+    load_registry = command_pack_module.load_registry
+
+    def replace_after_first_read(path, **kwargs):
+        document = load_registry(path, **kwargs)
+        if path == registry_path and replacement.exists():
+            replacement.replace(registry_path)
+        return document
+
+    monkeypatch.setattr(command_pack_module, "load_registry", replace_after_first_read)
+
+    def preview():
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            assert cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(tmp_path / "runtime"),
+                "--format", "json", "start-goal", "--guided", "--project", str(project),
+                "--host-surface", "codex-app", "--thread-id", "snapshot-thread", "--goal-text", GOAL_TEXT,
+            ]) == 0
+        return json.loads(stdout.getvalue())
+
+    first = preview()
+    assert first["guided_transaction"]["blocked_by"] == "goal_selection"
+    assert [choice["goal_id"] for choice in first["goal_selection_gate"]["choices"]] == [GOAL_ID, second_goal_id]
+    assert first["agent_id"] is None
+    assert registry_path.read_bytes() == single_goal
+
+    next_preview = preview()
+    assert next_preview["goal_id"] == GOAL_ID
+    assert "goal_selection_gate" not in next_preview["guided_transaction"]
+
+
 def test_start_goal_keeps_the_requested_linked_worktree(
     tmp_path: Path,
     monkeypatch,
@@ -2085,33 +2127,58 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
+    base_args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--goal-text",
+        GOAL_TEXT,
+        "--capability-route",
+        "issue-fix",
+    ]
+
+    compact_output = io.StringIO()
+    with contextlib.redirect_stdout(compact_output):
         exit_code = cli_main(
-            [
-                "--format",
-                "json",
-                "start-goal",
-                "--guided",
-                "--project",
-                str(project),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--goal-text",
-                GOAL_TEXT,
-                "--capability-route",
-                "issue-fix",
-            ]
+            base_args
         )
 
     assert exit_code == 0
-    payload = json.loads(output.getvalue())
+    payload = json.loads(compact_output.getvalue())
     assert payload["guided_transaction"]["blocked_by"] == "host_surface_selection"
     assert payload["safety_contract"]["writes_registry"] is False
     choices = payload["host_surface_selection_gate"]["choices"]
     assert [choice["host_surface"] for choice in choices] == [
+        "codex-app",
+        "trae_app",
+        "codex-app-ssh",
+        "codex-cli-tui",
+        "claude-code",
+        "shell",
+        "other-agent",
+    ]
+    gate = payload["host_surface_selection_gate"]
+    assert gate["choice_projection"] == "compact"
+    assert gate["omitted_choice_count"] == 14
+    assert "--include-command-pack-detail" in gate["full_choices_detail_command"]
+    assert payload["packet_summary"]["compatibility"]["compact_projection_default"] is True
+    assert "Choose Where This Agent Runs" in payload["message"]
+    assert "Need another host (14 more)?" in payload["message"]
+
+    detailed_output = io.StringIO()
+    with contextlib.redirect_stdout(detailed_output):
+        detailed_exit = cli_main([*base_args, "--include-command-pack-detail"])
+    assert detailed_exit == 0
+    detailed = json.loads(detailed_output.getvalue())
+    full_choices = detailed["host_surface_selection_gate"]["choices"]
+    assert [choice["host_surface"] for choice in full_choices] == [
         "codex-app",
         "trae_app",
         "codex-app-ssh",
@@ -2134,7 +2201,13 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "shell",
         "other-agent",
     ]
-    ide = next(choice for choice in choices if choice["host_surface"] == "codex-ide-plugin")
+    assert detailed["host_surface_selection_gate"]["choice_projection"] == "complete"
+    assert detailed["host_surface_selection_gate"]["omitted_choice_count"] == 0
+    ide = next(
+        choice
+        for choice in full_choices
+        if choice["host_surface"] == "codex-ide-plugin"
+    )
     assert "--host-surface codex-ide-plugin" in ide["rerun_command"]
     assert "--capability-route issue-fix" in ide["rerun_command"]
 

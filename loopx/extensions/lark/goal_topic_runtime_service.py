@@ -197,11 +197,20 @@ class LarkGoalTopicRuntimeService:
                     # full. Attempts retain fairness within each class. This
                     # local hint never admits/replays a request or skips its
                     # original grant and provider-attempt checks.
-                    for path in sorted(ready, key=lambda path: (recovery_path(path), attempted.get(path, 0))):
-                        if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
-                                + int(ingress is not None or ingress_ready) + int(discovery is not None) >= 4 or self._closed.is_set()):
+                    recovering = {path: recovery_path(path) for path in ready}
+                    active_background = sum(job is not None for job in (feedback, reports, attention, ingress, discovery))
+                    due_background = sum((reports_ready, attention_ready, ingress_ready))
+                    scheduled_body = False
+                    for path in sorted(ready, key=lambda path: (recovering[path], attempted.get(path, 0))):
+                        occupied = len(pending) + active_background
+                        if occupied >= 4 or self._closed.is_set():
+                            break
+                        # Give an unsent body the next available slot when due
+                        # checks would otherwise reserve every free slot.
+                        if occupied + due_background >= 4 and (recovering[path] or scheduled_body):
                             break
                         pending[path] = pool.submit(transport.reconcile_request, path)
+                        scheduled_body = scheduled_body or not recovering[path]
                         del ready[path]
                         attempted[path] = attempted.get(path, 0) + 1
                     if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) + int(discovery is not None) < 4 and not self._closed.is_set():

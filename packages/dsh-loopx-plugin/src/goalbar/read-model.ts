@@ -85,7 +85,8 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 function validatedSourcePaths(options: GoalBarSourceRevisionOptions): string[] {
-  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd) {
+  // Only the separator spelling may differ; dot segments and repeated separators stay rejected.
+  if (!isAbsolute(options.cwd) || resolve(options.cwd) !== options.cwd.split('/').join(sep)) {
     throw new GoalBarSourceRevisionError('project cwd must be absolute and normalized')
   }
   const paths = [resolve(options.cwd, GOALBAR_PROJECT_REGISTRY)]

@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -27,7 +27,7 @@ import type { GoalBarRequestV1 } from '../src/goalbar/protocol.ts'
 const sessionId = 'session-fixture'
 const goalId = 'goal-fixture'
 const loopxAgentId = 'agent-fixture'
-const defaultCwd = '/fixture/project'
+const defaultCwd = resolve('fixture/project')
 const defaultSourceRevision = await computeGoalBarSourceRevision({ cwd: defaultCwd })
 const strictRegistryFixture = new URL('./fixtures/project-registry-strict-v1.json', import.meta.url)
 const command: LoopXCommand = {

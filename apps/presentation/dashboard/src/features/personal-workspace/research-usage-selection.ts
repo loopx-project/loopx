@@ -2,14 +2,14 @@ import type {TrajectorySolverUsage} from "../../../../../../loopx/control_plane/
 
 /** Presentation arithmetic over one already-qualified capture, not a ledger. */
 export function researchUsageRows(usage: TrajectorySolverUsage) {
-  const rows: Array<Omit<TrajectorySolverUsage["turns"][number], "usage"> & {
-    usage: TrajectorySolverUsage["turns"][number]["usage"] | null; ordinal: number; incomplete: boolean;
-  }> = usage.turns.map((turn, index) => ({...turn, ordinal: index + 1, incomplete: false}));
-  const tail = usage.incomplete_turn;
-  if (tail) rows.push({...tail, end: tail.observed_through,
-    elapsed_seconds: Math.max(0, (Date.parse(tail.observed_through) - Date.parse(tail.start)) / 1000),
-    ordinal: rows.length + 1, incomplete: true, usage: tail.usage});
-  return rows;
+  const complete = usage.turns.map(turn => ({...turn, incomplete: false}));
+  const partial = [...(usage.interrupted_turns ?? [])];
+  if (usage.incomplete_turn) partial.push(usage.incomplete_turn);
+  return [...complete, ...partial.map(turn => ({...turn, end: turn.observed_through,
+    elapsed_seconds: Math.max(0, (Date.parse(turn.observed_through) - Date.parse(turn.start)) / 1000),
+    incomplete: true}))]
+    .sort((left, right) => left.first_line - right.first_line)
+    .map((turn, index) => ({...turn, ordinal: index + 1}));
 }
 
 export function selectResearchUsage(usage: TrajectorySolverUsage, first: number, last: number) {
