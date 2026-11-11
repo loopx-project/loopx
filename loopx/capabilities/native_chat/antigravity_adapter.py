@@ -101,6 +101,45 @@ def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list
     return current, base + len(steps)
 
 
+_RUNNING_STEP_BODIES = {
+    "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
+    "CORTEX_STEP_TYPE_RUN_COMMAND": "runCommand",
+    "CORTEX_STEP_TYPE_VIEW_FILE": "viewFile",
+    "CORTEX_STEP_TYPE_CODE_ACTION": "codeAction",
+    "CORTEX_STEP_TYPE_ERROR_MESSAGE": "errorMessage",
+}
+
+
+def _running_snapshot_steps(snapshot: dict[str, Any], *, cascade_id: str, start: int,
+                            total: int, sent_prompt: str) -> list[tuple[int, dict[str, Any]]] | None:
+    """Reuse a complete running snapshot only for the input this adapter sent."""
+    trajectory = snapshot.get("trajectory")
+    if (snapshot.get("status") != "CASCADE_RUN_STATUS_RUNNING" or not isinstance(trajectory, dict)
+            or trajectory.get("cascadeId") != cascade_id):
+        return None
+    raw = trajectory.get("steps")
+    if not isinstance(raw, list) or len(raw) != total:
+        return None
+    try:
+        indexed, covered = _observed_turn_steps(raw, start, total)
+        if covered != total or not indexed:
+            return None
+        first = indexed[0][1]
+        if (first.get("type") != "CORTEX_STEP_TYPE_USER_INPUT"
+                or _native_user_input_text(first) != sent_prompt):
+            return None
+        for _, step in indexed:
+            kind = step.get("type")
+            if not isinstance(kind, str) or not isinstance(step.get("status"), str):
+                return None
+            body = _RUNNING_STEP_BODIES.get(kind)
+            if body and (not isinstance(step.get(body), dict) or not step[body]):
+                return None
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return indexed
+
+
 def _check_hard_timeout(value: float | None) -> None:
     if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
         raise ValueError("Antigravity hard timeout must be finite and positive")
@@ -1099,30 +1138,39 @@ class AntigravityAdapter:
             observed_total = total_steps
             if total_steps > start_step_index:
                 self._check_interrupted()
-                try:
-                    steps_resp = _rpc_post(
-                        self.ls_url,
-                        self.csrf_token,
-                        "GetCascadeTrajectorySteps",
-                        {
-                            "cascadeId": self.cascade_id,
-                            "startIndex": start_step_index,
-                            "endIndex": total_steps,
-                        },
-                        timeout=10.0,
-                    )
-                except CodexChatAgentError as exc:
-                    if exc.error_code != "antigravity_transport_error":
-                        raise
-                    self._interrupted.wait(1.0)
-                    continue
-                steps = steps_resp.get("steps")
-                try:
-                    if not isinstance(steps, list):
-                        raise ValueError("Antigravity returned no trajectory coverage")
-                    current_steps, observed_total = _observed_turn_steps(steps, start_step_index, total_steps)
-                except (AttributeError, TypeError, ValueError) as exc:
-                    raise CodexChatAgentError(str(exc), gate=None, error_code="antigravity_rpc_error") from exc
+                snapshot_steps = _running_snapshot_steps(
+                    traj, cascade_id=self.cascade_id, start=start_step_index,
+                    total=total_steps, sent_prompt=full_prompt,
+                )
+                if snapshot_steps is not None:
+                    current_steps = snapshot_steps
+                else:
+                    # Older servers and incomplete snapshots still require
+                    # the detailed read. It also remains the final-answer proof.
+                    try:
+                        steps_resp = _rpc_post(
+                            self.ls_url,
+                            self.csrf_token,
+                            "GetCascadeTrajectorySteps",
+                            {
+                                "cascadeId": self.cascade_id,
+                                "startIndex": start_step_index,
+                                "endIndex": total_steps,
+                            },
+                            timeout=10.0,
+                        )
+                    except CodexChatAgentError as exc:
+                        if exc.error_code != "antigravity_transport_error":
+                            raise
+                        self._interrupted.wait(1.0)
+                        continue
+                    steps = steps_resp.get("steps")
+                    try:
+                        if not isinstance(steps, list):
+                            raise ValueError("Antigravity returned no trajectory coverage")
+                        current_steps, observed_total = _observed_turn_steps(steps, start_step_index, total_steps)
+                    except (AttributeError, TypeError, ValueError) as exc:
+                        raise CodexChatAgentError(str(exc), gate=None, error_code="antigravity_rpc_error") from exc
                 if current_steps:
                     if sum(step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT" for _, step in current_steps) > 1:
                         # Another native input is not this invocation's result or

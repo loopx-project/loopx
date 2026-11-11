@@ -244,6 +244,61 @@ def test_original_native_code_action_result_survives_later_timeout_without_repla
     assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
 
 
+@pytest.mark.parametrize("embedded", ["complete", "short", "foreign", "wrong_input", "missing_payload"])
+def test_native_running_poll_reuses_only_complete_steps_for_the_current_input(
+    tmp_path, language_server, monkeypatch, embedded,
+):
+    from test_antigravity_steward_adapter import adapter_for, _native_clock, _native_frames
+
+    adapter = adapter_for(tmp_path)
+    older_input = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+        "userInput": {"items": [{"text": "An earlier request"}]}}
+    frames = _native_frames()
+    for frame in frames:
+        for index, step in enumerate(frame["steps"], start=1):
+            step["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = index
+        frame["steps"].insert(0, deepcopy(older_input))
+    _native_clock(monkeypatch, language_server, frames)
+    rpc = native._rpc_post
+    detail_reads = []
+
+    def read(url, csrf, method, payload, timeout):
+        result = rpc(url, csrf, method, payload, timeout=timeout)
+        if method == "GetCascadeTrajectorySteps":
+            detail_reads.append(language_server["frame"]["status"])
+        if method != "GetCascadeTrajectory":
+            return result
+        if not language_server["sent_count"]:
+            return {**result, "numTotalSteps": 1}
+        steps = deepcopy(language_server["frame"]["steps"])
+        steps[1]["userInput"] = {"items": [{"text": language_server["inputs"][0]["text"]}]}
+        trajectory = {**result["trajectory"], "steps": steps}
+        if result["status"] == "CASCADE_RUN_STATUS_IDLE":
+            steps[-1]["plannerResponse"]["response"] = "Stale embedded final"
+        elif embedded == "short":
+            steps.pop(0)
+        elif embedded == "foreign":
+            trajectory["cascadeId"] = "unrelated-cascade"
+        elif embedded == "wrong_input":
+            steps[1]["userInput"]["items"][0]["text"] = "Another invocation"
+        elif embedded == "missing_payload":
+            steps[-1].pop("plannerResponse")
+        return {**result, "trajectory": trajectory}
+
+    monkeypatch.setattr(native, "_rpc_post", read)
+    events = []
+    result = adapter.start_turn("Return the original result", event_sink=lambda kind, data: events.append((kind, data)))
+    assert result["message"] == "native final"
+    assert any(kind == "answer.delta" and "progress" in data["text"] for kind, data in events)
+    assert "Stale embedded final" not in json.dumps(events)
+    assert detail_reads.count("CASCADE_RUN_STATUS_IDLE") == 1
+    assert detail_reads.count("CASCADE_RUN_STATUS_RUNNING") == (0 if embedded == "complete" else 4)
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert "CancelCascadeInvocation" not in methods
+
+
 @pytest.mark.parametrize("hard_limit, native_error", [(None, True), (150.0, True), (None, False)])
 def test_native_timeout_reports_its_clock_without_extending_native_retry(
     tmp_path, language_server, monkeypatch, hard_limit, native_error,
