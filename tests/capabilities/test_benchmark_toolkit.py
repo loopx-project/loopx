@@ -756,6 +756,15 @@ def test_mixed_background_and_declared_feedback_qualifies(
             "evaluation_protocol_background_evaluations_invalid",
         ),
         (
+            lambda runtime: runtime["evaluation_protocol"][
+                "background_evaluations"
+            ][1].update(
+                evaluation_started_at_ms=310,
+                evaluation_completed_at_ms=320,
+            ),
+            "evaluation_protocol_background_evaluations_invalid",
+        ),
+        (
             lambda runtime: runtime.update(background_feedback_blinded=False),
             "runtime_attestation_background_feedback_blinded_missing",
         ),
@@ -797,6 +806,25 @@ def test_plain_declared_feedback_rejects_undeclared_background_log() -> None:
 
     assert receipt["integrity_qualified"] is False
     assert "evaluation_protocol_background_evaluations_invalid" in receipt["blockers"]
+
+
+def test_default_blind_policy_rejects_undeclared_evaluation_log() -> None:
+    trajectory = _trajectory()
+    declared_policy = _mixed_feedback_policy()
+    attestation = _mixed_feedback_attestation(
+        trajectory,
+        declared_policy,
+        active_submission=False,
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=_loopback_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_policy_mismatch" in receipt["blockers"]
 
 
 def test_declared_feedback_evidence_digest_binds_transport() -> None:

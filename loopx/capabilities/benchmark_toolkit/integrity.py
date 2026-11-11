@@ -1227,6 +1227,8 @@ def _validated_declared_feedback_runtime(
                         <= solver_end_ms
                         and captured_at
                         <= evaluation_started_at
+                        <= solver_end_ms
+                        and evaluation_started_at
                         <= evaluation_completed_at
                     )
                     or (
@@ -1526,6 +1528,10 @@ def build_benchmark_integrity_qualification(
             protocol=evaluation_protocol,
         )
         attestation_failures.extend(evaluation_protocol_failures)
+    elif runtime_attestation.get("evaluation_protocol") is not None:
+        # The default blind policy cannot silently ignore runner evidence for
+        # an undeclared during-solving or background evaluation protocol.
+        attestation_failures.append("evaluation_protocol_policy_mismatch")
 
     counts = {
         category: int(evidence_counts.get(category, 0))

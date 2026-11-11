@@ -563,12 +563,14 @@ adding `background_evaluation={"feedback":"blinded","timing":"during_solving"}`
 to the same protocol. This mixed mode additionally requires
 `verifier_started_after_agent`, `background_evaluation_log_complete`, and
 `background_feedback_blinded`. Its private log binds ordered snapshot and evaluation
-digests and timestamps; the compact receipt exposes only their count. Background
-results never enter declared deliveries. If the solver never uses an active feedback
-channel, explicit empty submissions, deliveries, transport counters, and record
-digests remain valid only when at least one complete blinded background evaluation is
-present. Missing background records, an undeclared background log, or a background
-result delivered to the solver fails closed.
+digests and timestamps: each snapshot and evaluation must start while the solver is
+still running, although an evaluation that already started may finish afterward. The
+compact receipt exposes only their count. Background results never enter declared
+deliveries. If the solver never uses an active feedback channel, explicit empty
+submissions, deliveries, transport counters, and record digests remain valid only when
+at least one complete blinded background evaluation is present. Missing background
+records, any evaluation log under the default blind policy, an undeclared background
+log, or a background result delivered to the solver fails closed.
 
 Qualification rejects a run when it detects any of the following:
 
