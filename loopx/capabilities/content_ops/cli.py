@@ -307,8 +307,7 @@ def register_content_ops_commands(
     )
     aggregate_parser.add_argument(
         "--generated-at",
-        default="2026-06-23T00:00:00Z",
-        help="Public-safe generated_at timestamp for the aggregate surface.",
+        help="Public-safe generated_at timestamp for the aggregate surface (default: current UTC).",
     )
     chatview_parser = content_ops_sub.add_parser(
         "project-chatview-report",
