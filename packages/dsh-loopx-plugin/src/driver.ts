@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { dirname, isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentStatus, PreStepDecision } from '@deepseek-ai/dsh-agent'
@@ -10,8 +11,9 @@ import {
   LoopXCliError,
   resolveLoopXCommand,
   runJsonCommand,
+  supportedLoopXVersion,
 } from './cli.ts'
-import type { FileRunner, LoopXCommand } from './cli.ts'
+import type { FileRunner, JsonCommandOptions, LoopXCommand } from './cli.ts'
 import { resolvePluginLoopXCommand } from './managed-runtime.ts'
 import { goalBarCoordinator } from './goalbar/events.ts'
 import type {
@@ -330,6 +332,139 @@ function exactBinding(
     && match.agent_id === agentId
     ? { goalId, agentId }
     : undefined
+}
+
+const QUOTA_NAVIGATION_SCHEMA = 'context_capture_navigation_v1'
+const QUOTA_SELECTION_PAGE_SCHEMA = 'context_capture_selection_page_v1'
+const QUOTA_INLINE_PAGE_SCHEMA = 'context_capture_page_v1'
+const QUOTA_INDEX_SCHEMA = 'context_capture_index_v1'
+const QUOTA_SELECTION_SCHEMA = 'context_capture_selection_v1'
+const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/agent_identity']
+const QUOTA_RECEIPT_POINTER = '/heartbeat_receipt'
+const QUOTA_OPTIONAL_POINTERS = [QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall']
+
+type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal'>
+
+function quotaNavigationReference(payload: Record<string, unknown>): string | undefined {
+  if (payload.schema_version !== QUOTA_NAVIGATION_SCHEMA || payload.ok !== true) return undefined
+  const path = record(payload.recovery)?.reference_file
+  return typeof path === 'string' && isAbsolute(path) && !path.includes('\0') ? path : undefined
+}
+
+async function readQuotaSelections(
+  command: LoopXCommand,
+  reference: string,
+  selectionArgs: readonly string[],
+  schema: string,
+  options: QuotaReadOptions,
+): Promise<unknown[]> {
+  let cursor = reference
+  let offset = 0
+  let total: number | undefined
+  let inlineDigests: { source: string; selection: string } | undefined
+  const parts: string[] = []
+  const isListing = schema === QUOTA_INDEX_SCHEMA
+  const pointers = isListing ? [''] : selectionArgs.filter((_, index) => index % 2 === 1)
+  for (;;) {
+    const page = await runJsonCommand(command, [
+      '--format', 'json', 'quota', 'context-read', '--reference-file', cursor,
+      '--offset', String(offset), '--page-bytes', '64000', '--max-page-output-bytes', '64000',
+      ...(offset === 0 || inlineDigests !== undefined ? selectionArgs : []),
+      ...(inlineDigests === undefined ? [] : ['--selection-sha256', inlineDigests.selection]),
+    ], options)
+    if (page.ok !== true
+      || (page.schema_version !== QUOTA_SELECTION_PAGE_SCHEMA && page.schema_version !== QUOTA_INLINE_PAGE_SCHEMA)
+      || typeof page.content !== 'string' || page.offset !== offset
+      || typeof page.total_bytes !== 'number' || !Number.isSafeInteger(page.total_bytes)
+      || page.total_bytes <= 0
+      || (total !== undefined && page.total_bytes !== total)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid page', false)
+    }
+    if (page.schema_version === QUOTA_INLINE_PAGE_SCHEMA) {
+      const { sha256: source, selection_sha256: selection, selected_pointers: selected } = page
+      if (typeof source !== 'string' || !/^[a-f0-9]{64}$/u.test(source)
+        || typeof selection !== 'string' || !/^[a-f0-9]{64}$/u.test(selection)
+        || (page.list_fields === true) !== isListing
+        || !Array.isArray(selected) || selected.length !== pointers.length
+        || !pointers.every(pointer => selected.includes(pointer))
+        || (inlineDigests === undefined && offset !== 0)
+        || (inlineDigests !== undefined && (source !== inlineDigests.source || selection !== inlineDigests.selection))) {
+        throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid inline selection', false)
+      }
+      // A read-only capture may have no derived reader descriptor. Continue
+      // through the original reference with the same selector and view hash.
+      inlineDigests = { source, selection }
+    }
+    total = page.total_bytes
+    const next = offset + Buffer.byteLength(page.content, 'utf8')
+    parts.push(page.content)
+    if (page.eof === true && next === total && page.next_offset === null) break
+    const nextReference = inlineDigests === undefined ? page.reference_file : reference
+    if (page.eof !== false || next <= offset || next >= total || page.next_offset !== next
+      || typeof nextReference !== 'string' || !isAbsolute(nextReference)
+      || nextReference.includes('\0') || dirname(nextReference) !== dirname(reference)
+      || (offset !== 0 && nextReference !== cursor)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid continuation', false)
+    }
+    cursor = nextReference
+    offset = next
+  }
+  const selectedBody = parts.join('')
+  if (inlineDigests !== undefined
+    && createHash('sha256').update(selectedBody, 'utf8').digest('hex') !== inlineDigests.selection) {
+    throw new LoopXCliError('invalid_schema', 'LoopX quota capture selection digest did not match its bytes', false)
+  }
+  let body: Record<string, unknown> | undefined
+  try {
+    body = record(JSON.parse(selectedBody))
+  } catch {
+    throw new LoopXCliError('invalid_json', 'LoopX quota capture returned invalid selection JSON', false)
+  }
+  if (body?.schema_version !== schema || !Array.isArray(body.selections)) {
+    throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an incompatible selection', false)
+  }
+  return body.selections
+}
+
+async function readQuotaCapture(
+  command: LoopXCommand,
+  reference: string,
+  options: QuotaReadOptions,
+  revalidateOnly: boolean,
+): Promise<Record<string, unknown>> {
+  // Entering a queued step requires the original Turn receipt. The scheduler
+  // and reward memory are only used when first deciding whether to queue work.
+  let pointers = [...QUOTA_REQUIRED_POINTERS, QUOTA_RECEIPT_POINTER]
+  if (!revalidateOnly) {
+    // The ordinary selector rejects missing paths. Discover which optional
+    // fields exist on the same verified capture before preparing the step.
+    const index = await readQuotaSelections(command, reference, ['--list'], QUOTA_INDEX_SCHEMA, options)
+    const root = record(index[0])
+    if (index.length !== 1 || root?.pointer !== '' || !Array.isArray(root.fields)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid field index', false)
+    }
+    const present = new Set(root.fields.map(field => record(field)?.pointer))
+    if (!QUOTA_REQUIRED_POINTERS.every(pointer => present.has(pointer))) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture lacks admission fields', false)
+    }
+    pointers = [...QUOTA_REQUIRED_POINTERS, ...QUOTA_OPTIONAL_POINTERS.filter(pointer => present.has(pointer))]
+  }
+  const selected = await readQuotaSelections(
+    command, reference, pointers.flatMap(pointer => ['--select', pointer]), QUOTA_SELECTION_SCHEMA, options,
+  )
+  const result: Record<string, unknown> = {}
+  const remaining = new Set(pointers)
+  for (const item of selected) {
+    const field = record(item)
+    if (typeof field?.pointer !== 'string' || !remaining.delete(field.pointer) || !Object.hasOwn(field, 'value')) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an unexpected admission field', false)
+    }
+    result[field.pointer.slice(1)] = field.value
+  }
+  if (remaining.size !== 0) {
+    throw new LoopXCliError('invalid_schema', 'LoopX quota capture omitted requested admission fields', false)
+  }
+  return result
 }
 
 function exactQuotaContext(
@@ -952,7 +1087,7 @@ export class LoopXContinuationDriver {
     }
 
     const turnInstanceId = this.makeTurnInstanceId()
-    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, signal)
+    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
       throw new LoopXCliError(
@@ -1025,7 +1160,7 @@ export class LoopXContinuationDriver {
         state.agent,
         reservation,
         reservation.turnInstanceId,
-        signal,
+        { signal, revalidateOnly: true },
       )
       return this.reservationIsCurrent(state, reservation, signal)
         && (reservation.preserveAcrossPause
@@ -1094,14 +1229,20 @@ export class LoopXContinuationDriver {
     )
   }
 
-  private readQuota(
+  private async readQuota(
     command: LoopXCommand,
     agent: Agent,
     binding: Binding,
     turnInstanceId: string,
-    signal: AbortSignal,
+    { signal, revalidateOnly = false }: { signal: AbortSignal; revalidateOnly?: boolean },
   ): Promise<Record<string, unknown>> {
-    return runJsonCommand(
+    // The 2.3 CLI supplies immutable navigation and its bounded reader. Older
+    // supported CLIs continue to answer this Host-only call with raw JSON.
+    const progressive = supportedLoopXVersion(command.version, '2.3.0') !== undefined
+    const options = { runner: this.runner, cwd: agent.session.header.cwd, signal }
+    const rawAdmission = (payload: Record<string, unknown>) => payload.goal_id === binding.goalId
+      && typeof payload.ok === 'boolean' && typeof payload.should_run === 'boolean'
+    const quota = await runJsonCommand(
       command,
       [
         '--registry', '.loopx/registry.json',
@@ -1110,23 +1251,25 @@ export class LoopXContinuationDriver {
         '--goal-id', binding.goalId,
         '--agent-id', binding.agentId,
         '--runtime-profile', 'generic_cli',
-        '--include-detail', 'scheduler',
+        ...(progressive && revalidateOnly ? [] : ['--include-detail', 'scheduler']),
         '--turn-instance-id', turnInstanceId,
       ],
       {
-        runner: this.runner,
-        cwd: agent.session.header.cwd,
-        signal,
+        ...options,
         attempts: 3,
         retryDelaysMs: this.retryDelaysMs,
-        // The Driver reads the raw admission contract. The child-local opt-out
-        // also works with supported LoopX releases that predate the CLI flag.
-        env: { ...process.env, LOOPX_CONTEXT_DELIVERY: 'off' },
-        validate: payload => payload.goal_id === binding.goalId
-          && typeof payload.ok === 'boolean'
-          && typeof payload.should_run === 'boolean',
+        ...(progressive ? {} : { env: { ...process.env, LOOPX_CONTEXT_DELIVERY: 'off' } }),
+        validate: payload => rawAdmission(payload) || (progressive && quotaNavigationReference(payload) !== undefined),
       },
     )
+    const reference = progressive ? quotaNavigationReference(quota) : undefined
+    if (reference === undefined) return quota
+    // Reading a saved capture is outside the guard's transport retry.
+    const decision = await readQuotaCapture(command, reference, options, revalidateOnly)
+    if (!rawAdmission(decision)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
+    }
+    return decision
   }
 
   private readHeartbeat(

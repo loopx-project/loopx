@@ -304,7 +304,9 @@ export async function runJsonCommand(
   throw lastError ?? new LoopXCliError('transport', 'LoopX command failed', true)
 }
 
-function versionText(stdout: string): string | undefined {
+export function supportedLoopXVersion(
+  stdout: string, minimumVersion = MINIMUM_LOOPX_VERSION,
+): string | undefined {
   const value = stdout.trim().split(/\r?\n/u)[0]?.trim()
   if (!value || value.length > 120) return undefined
   // LoopX reports its Python package version. Compare the release tuple and
@@ -313,7 +315,7 @@ function versionText(stdout: string): string | undefined {
   if (!parsed) return undefined
   const release = parsed.slice(1, 4).map(Number)
   if (release.some(component => !Number.isSafeInteger(component))) return undefined
-  const floor = MINIMUM_LOOPX_VERSION.split('.').map(Number)
+  const floor = minimumVersion.split('.').map(Number)
   for (let index = 0; index < floor.length; index += 1) {
     const component = release[index]!
     if (component < floor[index]!) return undefined
@@ -380,7 +382,7 @@ export async function resolveLoopXCommand(
       if (options.signal?.aborted) {
         throw new LoopXCliError('aborted', 'operation was cancelled', false)
       }
-      const version = result.exitCode === 0 ? versionText(result.stdout) : undefined
+      const version = result.exitCode === 0 ? supportedLoopXVersion(result.stdout) : undefined
       if (version) return { ...candidate, version }
     } catch (error: unknown) {
       if (options.signal?.aborted) {
