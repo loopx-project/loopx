@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 import threading
-from typing import Any
+from typing import Any, Iterator
 import uuid
 from weakref import WeakValueDictionary
 
@@ -825,32 +825,27 @@ class ChatSessionStore(ChatIngressStore):
                 candidates.append(payload)
         return candidates
 
-    def list_sessions(
-        self,
-        *,
-        goal_id: str | None = None,
-        agent_id: str | None = None,
-        channel_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
+    def list_sessions(self, *, goal_id: str | None = None, agent_id: str | None = None,
+                      channel_id: str | None = None) -> list[dict[str, Any]]:
+        metadata = self.iter_session_metadata(goal_id=goal_id, agent_id=agent_id, channel_id=channel_id)
+        rows = (self.public_session(payload) for _, payload in metadata)
+        return sorted(rows, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+
+    def iter_session_metadata(self, *, goal_id: str | None = None, agent_id: str | None = None,
+                              channel_id: str | None = None) -> Iterator[tuple[Path, dict[str, Any]]]:
+        """Read discoverable Session records without reading transcript versions."""
         for path in self.sessions_root.glob("*/session.json"):
             try:
                 payload = _read_json(path)
             except UnicodeDecodeError:
-                # Discovery can skip damaged metadata, just as malformed JSON.
-                # Direct Session/Turn reads stay strict: unreadable queued work
-                # must never become false evidence that a conversation is idle.
+                # Direct Session reads remain strict. Discovery skips damaged metadata.
                 continue
-            if payload.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION:
+            if (payload.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION
+                    or (goal_id and payload.get("goal_id") != goal_id)
+                    or (agent_id and payload.get("agent_id") != agent_id)
+                    or (channel_id and _session_channel(payload) != channel_id)):
                 continue
-            if goal_id and payload.get("goal_id") != goal_id:
-                continue
-            if agent_id and payload.get("agent_id") != agent_id:
-                continue
-            if channel_id and _session_channel(payload) != channel_id:
-                continue
-            rows.append(self.public_session(payload))
-        return sorted(rows, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+            yield path, payload
 
     def append_message(
         self,
