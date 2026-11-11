@@ -367,7 +367,9 @@ export function evaluateScopedYardstickFidelity(
   if (!Number.isSafeInteger(requestedK) || requestedK < 2) {
     throw new EffectRuntimeRequestError("frontier_k must be an integer >= 2");
   }
-  const frontierK = Math.min(n, requestedK);
+  let frontierK = Math.min(n, requestedK);
+  const frontierCutoff = pairedAll[frontierK - 1]!.authoritative_value;
+  while (frontierK < n && pairedAll[frontierK]!.authoritative_value === frontierCutoff) frontierK++;
   const frontierSlice = pairedAll.slice(0, frontierK);
   const frontierConcordance = pairwiseConcordance(
     frontierSlice.map(p => authUtil(p.authoritative_value)),

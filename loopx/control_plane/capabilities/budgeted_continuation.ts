@@ -57,9 +57,9 @@ export interface EvaluatedContinuationRoute {
   eval_slot_feasible: boolean | null;
   unknown_cost_dimensions: string[];
   reversible_probe_window_feasible: boolean;
-  expected_gain_min: number;
-  expected_gain_expected: number;
-  expected_gain_max: number;
+  expected_gain_min: number | null;
+  expected_gain_expected: number | null;
+  expected_gain_max: number | null;
   dominated_by_baseline: boolean;
   p_star_at_expected_gain: number | null;
   p_star_optimistic: number | null;
@@ -89,7 +89,7 @@ export interface BudgetedContinuationPlan {
     unit: string;
   };
   baseline_route: EvaluatedContinuationRoute;
-  effective_safe_gain: number;
+  effective_safe_gain: number | null;
   candidate_routes: EvaluatedContinuationRoute[];
   counts: {
     total_candidates: number;
@@ -119,11 +119,15 @@ function nullableNonNegativeInt(value: unknown, label: string): number | null {
   return value;
 }
 
-function finiteGain(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new EffectRuntimeRequestError(`${label} requires a finite number`);
-  }
-  return value;
+function roundNullableGain(value: number | null): number | null {
+  return value === null ? null : round6(value);
+}
+
+function breakEvenProbability(reference: number, floor: number, target: number | null): number | null {
+  if (target === null) return null;
+  if (reference <= floor) return 0;
+  if (target < reference) return null;
+  return round6((reference - floor) / (target - floor));
 }
 
 interface NormalizedRouteInput {
@@ -134,9 +138,9 @@ interface NormalizedRouteInput {
   implementation_minutes: number;
   expected_tokens: number | null;
   requires_authoritative_eval: boolean;
-  expected_gain_min: number;
-  expected_gain_expected: number;
-  expected_gain_max: number;
+  expected_gain_min: number | null;
+  expected_gain_expected: number | null;
+  expected_gain_max: number | null;
 }
 
 function normalizeRoute(value: unknown, label: string, defaultKind?: ContinuationRouteKind): NormalizedRouteInput {
@@ -157,10 +161,11 @@ function normalizeRoute(value: unknown, label: string, defaultKind?: Continuatio
   if (typeof row.requires_authoritative_eval !== "boolean") {
     throw new EffectRuntimeRequestError(`${label} requires explicit requires_authoritative_eval boolean`);
   }
-  const gMin = finiteGain(row.expected_gain_min, `${label} expected_gain_min`);
-  const gExp = finiteGain(row.expected_gain_expected, `${label} expected_gain_expected`);
-  const gMax = finiteGain(row.expected_gain_max, `${label} expected_gain_max`);
-  if (gMin > gExp || gExp > gMax) {
+  const gMin = optionalFiniteNumber(row.expected_gain_min, `${label} expected_gain_min`);
+  const gExp = optionalFiniteNumber(row.expected_gain_expected, `${label} expected_gain_expected`);
+  const gMax = optionalFiniteNumber(row.expected_gain_max, `${label} expected_gain_max`);
+  const knownGains = [gMin, gExp, gMax].filter(gain => gain !== null);
+  if (knownGains.some((gain, index) => index > 0 && gain < knownGains[index - 1]!)) {
     throw new EffectRuntimeRequestError(`${label} requires expected_gain_min <= expected_gain_expected <= expected_gain_max`);
   }
   return {
@@ -298,33 +303,22 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
     const reversibleProbe = route.probe_minutes > 0 && feasible && baselineFeasible
       && round6(fallbackFinishesAt) <= wallMinutes;
 
-    const refGain = safeGain ?? 0;
-    const dominated = feasible && safeGain !== null && route.expected_gain_max <= refGain;
+    const dominated = feasible && safeGain !== null && route.expected_gain_max !== null
+      && route.expected_gain_max <= safeGain;
     let pStarExp: number | null = null;
     let pStarOpt: number | null = null;
     if (feasible && safeGain !== null && !dominated) {
-      // Retained-incumbent semantics: a regressed candidate does not overwrite the
-      // incumbent, so post-confirmation floor over incumbent is max(0, expected_gain_min).
-      const retainedFloor = Math.max(0, route.expected_gain_min);
-      if (refGain <= retainedFloor) {
-        pStarExp = route.expected_gain_expected > retainedFloor || refGain <= 0 ? 0 : null;
-        pStarOpt = route.expected_gain_max > retainedFloor || refGain <= 0 ? 0 : null;
-      } else {
-        pStarOpt = route.expected_gain_max > retainedFloor
-          ? round6(Math.min(1, (refGain - retainedFloor) / (route.expected_gain_max - retainedFloor)))
-          : null;
-        pStarExp = route.expected_gain_expected >= refGain && route.expected_gain_expected > retainedFloor
-          ? round6((refGain - retainedFloor) / (route.expected_gain_expected - retainedFloor))
-          : null;
-      }
+      const retainedFloor = Math.max(0, route.expected_gain_min ?? 0);
+      pStarExp = breakEvenProbability(safeGain, retainedFloor, route.expected_gain_expected);
+      pStarOpt = breakEvenProbability(safeGain, retainedFloor, route.expected_gain_max);
     }
 
     let disposition: RouteDisposition;
     if (!feasible) disposition = "reject_infeasible";
-    else if (safeGain === null) disposition = "viable_direct_continuation";
     else if (dominated) disposition = "dominated_by_baseline";
     else if (reversibleProbe) disposition = "probe_then_decide";
-    else if (pStarExp !== null && pStarExp <= 1) disposition = "viable_direct_continuation";
+    else if (safeGain === null || route.expected_gain_expected === null || route.expected_gain_max === null
+        || pStarExp !== null) disposition = "viable_direct_continuation";
     else disposition = "upside_tail_only";
 
     return {
@@ -344,9 +338,9 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
       eval_slot_feasible: slotFeasible,
       unknown_cost_dimensions: unknownDims,
       reversible_probe_window_feasible: reversibleProbe,
-      expected_gain_min: round6(route.expected_gain_min),
-      expected_gain_expected: round6(route.expected_gain_expected),
-      expected_gain_max: round6(route.expected_gain_max),
+      expected_gain_min: roundNullableGain(route.expected_gain_min),
+      expected_gain_expected: roundNullableGain(route.expected_gain_expected),
+      expected_gain_max: roundNullableGain(route.expected_gain_max),
       dominated_by_baseline: dominated,
       p_star_at_expected_gain: pStarExp,
       p_star_optimistic: pStarOpt,
@@ -357,7 +351,8 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
   const evaluatedBaseline = evaluateOne(baselineInput, null);
   const baselineFeasible = evaluatedBaseline.feasibility_status === "feasible"
     || evaluatedBaseline.feasibility_status === "feasible_with_unknown_bounds";
-  const effectiveSafeGain = baselineFeasible ? Math.max(0, evaluatedBaseline.expected_gain_expected) : 0;
+  const effectiveSafeGain = incumbent.value === null ? null
+    : Math.max(0, evaluatedBaseline.feasibility_status === "feasible" ? baselineInput.expected_gain_expected ?? 0 : 0);
 
   const evaluatedCandidates = candidateInputs.map(c => evaluateOne(c, effectiveSafeGain, baselineFeasible));
 
@@ -378,7 +373,7 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
     },
     incumbent,
     baseline_route: evaluatedBaseline,
-    effective_safe_gain: round6(effectiveSafeGain),
+    effective_safe_gain: roundNullableGain(effectiveSafeGain),
     candidate_routes: evaluatedCandidates,
     counts: {
       total_candidates: evaluatedCandidates.length,

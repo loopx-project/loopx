@@ -186,7 +186,7 @@ def register_explore_planning_commands(
     yardstick_fidelity.add_argument(
         "--frontier-k",
         type=int,
-        help="Optional top-K authoritative frontier size (2..12).",
+        help="Requested top-K cutoff (at least 2). Includes candidates tied at the cutoff.",
     )
     yardstick_fidelity.add_argument(
         "--profiles-json",

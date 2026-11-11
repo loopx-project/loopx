@@ -122,13 +122,13 @@ test("BudgetedContinuationPlan: back-schedules confirmation deadlines, preserves
   const plan = evaluateBudgetedContinuationPlan({
     remaining_budget: {
       wall_minutes: 180,
-      token_budget: null,
+      token_budget: 200000,
       authoritative_eval_slots: 2,
     },
     confirmation: {
       eval_duration_minutes: 45,
       cooldown_minutes: 15,
-      eval_tokens: null,
+      eval_tokens: 20000,
       pending_in_flight_minutes: 10,
     },
     incumbent: {

@@ -119,13 +119,14 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     )
     assert rc == 0, settled
 
-    # Record 4 additional paired candidates + 1 proxy-only winner on the same linked question:
-    # Bottom candidates (c1..c2) agree, top-3 authoritative frontier (c3..c5) reverses!
+    # The bottom two agree and the authoritative frontier reverses. Two
+    # candidates tie at the third-place cutoff and both belong in that frontier.
     candidates = [
         ("cand:c2", 35.0, 1.90),
         ("cand:c3", 72.0, 0.80),
         ("cand:c4", 81.0, 0.92),
         ("cand:c5", 93.0, 1.10),
+        ("cand:c6", 72.0, 0.80),
     ]
     for idx, (cand_ref, a_val, p_val) in enumerate(candidates, start=2):
         res_path = tmp_path / f"cand_{idx}.json"
@@ -198,7 +199,8 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     assert fidelity_packet["evaluation_count"] == 1
     eval_row = fidelity_packet["evaluations"][0]
     assert eval_row["fidelity_status"] == "frontier_bias_cliff"
-    assert eval_row["counts"]["paired_candidates"] == 5
+    assert eval_row["counts"]["paired_candidates"] == 6
+    assert eval_row["frontier_neighborhood"]["frontier_k"] == 4
     assert eval_row["frontier_neighborhood"]["frontier_kendall_tau_b"] == -1
     assert eval_row["audit_candidates"]["unconfirmed_proxy_winners"][0]["candidate_ref"] == "cand:proxy_star"
 
@@ -213,7 +215,7 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     assert evo_packet["plan_count"] == 1
     evo_row = evo_packet["plans"][0]
     assert evo_row["selection_status"] == "mechanism_unresolved"
-    assert evo_row["counts"]["unknown_mechanism_candidates"] == 5
+    assert evo_row["counts"]["unknown_mechanism_candidates"] == 6
     assert evo_row["counts"]["mechanism_islands"] == 0
     assert evo_row["crossover_pairs"] == []
     assert evo_row["elites"][0]["candidate_ref"] == "cand:c5"
@@ -229,7 +231,7 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     )
     compact_cue = compact_ctx["graph"]["work_yardsticks"][0]
     assert compact_cue["fidelity_status"] == "frontier_bias_cliff"
-    assert compact_cue["paired_candidates"] == 5
+    assert compact_cue["paired_candidates"] == 6
     assert "eligible authoritative comparison" in compact_cue["fidelity_guidance"]
 
     detail_ctx = explore_turn_context(
@@ -337,6 +339,35 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     assert plan_out["candidate_routes"][0]["recommended_disposition"] in {
         "viable_direct_continuation", "probe_then_decide",
     }
+
+    limited["confirmation"]["eval_tokens"] = 10
+    limited["baseline_route"]["expected_tokens"] = None
+    candidate = limited["candidate_routes"][0]
+    candidate.update(probe_minutes=0, expected_gain_expected=0.005, expected_gain_max=0.01)
+    plan_doc.write_text(json.dumps(limited), encoding="utf-8")
+    plan_out = json.loads(invoke("explore", "budgeted-plan", "--document", str(plan_doc), "--format", "json").stdout)
+    assert plan_out["baseline_route"]["feasibility_status"] == "feasible_with_unknown_bounds"
+    assert plan_out["effective_safe_gain"] == 0
+    assert plan_out["candidate_routes"][0]["feasibility_status"] == "feasible"
+    assert plan_out["candidate_routes"][0]["recommended_disposition"] == "viable_direct_continuation"
+
+    limited["baseline_route"]["expected_tokens"] = 40
+    candidate.update(expected_gain_min=None, expected_gain_expected=None, expected_gain_max=None)
+    plan_doc.write_text(json.dumps(limited), encoding="utf-8")
+    plan_out = json.loads(invoke("explore", "budgeted-plan", "--document", str(plan_doc), "--format", "json").stdout)
+    assert plan_out["effective_safe_gain"] == 0.02
+    unestimated = plan_out["candidate_routes"][0]
+    assert unestimated["feasibility_status"] == "feasible"
+    assert unestimated["expected_gain_expected"] is None
+    assert unestimated["p_star_at_expected_gain"] is None
+    assert unestimated["recommended_disposition"] == "viable_direct_continuation"
+
+    limited["incumbent"].update(candidate_ref=None, value=None)
+    candidate.update(expected_gain_min=-0.03, expected_gain_expected=-0.02, expected_gain_max=-0.01)
+    plan_doc.write_text(json.dumps(limited), encoding="utf-8")
+    plan_out = json.loads(invoke("explore", "budgeted-plan", "--document", str(plan_doc), "--format", "json").stdout)
+    assert plan_out["effective_safe_gain"] is None
+    assert plan_out["candidate_routes"][0]["recommended_disposition"] == "viable_direct_continuation"
 
     # 3. `explore counterfactual-eval` (strict failure vs. audit mode)
     sha = "d" * 64

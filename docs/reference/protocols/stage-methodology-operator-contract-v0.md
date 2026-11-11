@@ -106,6 +106,8 @@ Evaluates multi-point agreement between a fast `proxy` profile and an
 - Audits `unconfirmed_proxy_winners` (proxy-only candidates exceeding the best
   paired proxy score) and `proxy_false_negatives` without globally blacklisting
   any evaluator (`scope_bound: true`, `global_evaluator_blacklist: false`).
+- Includes every candidate tied at the authoritative top-K cutoff. The returned
+  `frontier_k` is the number of candidates analyzed after including those ties.
 
 ### 2. `budgeted_continuation_plan_v0` (`explore budgeted-plan`)
 
@@ -121,6 +123,12 @@ bounds `null`) and evaluates candidate continuation routes:
   cooldown expiry.
 - Uses the sum of known nonnegative token costs as a lower bound. A route
   above the ceiling is infeasible even when its full cost is unknown.
+- Uses a baseline route's expected gain as a decision reference only when its
+  costs fit the known budget. Otherwise the measured incumbent supplies a
+  zero-gain reference. Without a measured incumbent the reference is `null`.
+- Accepts explicit `null` gain estimates and checks the order of the available
+  estimates. A missing estimate leaves its corresponding break-even probability
+  unknown. Dominance requires a known upper gain bound and a known reference.
 - Under LoopX's retained-incumbent rule, a regressed candidate does not replace
   the verified incumbent, so floor post-confirmation gain is
   $g_{\text{floor}} = \max(0, g_{\min})$ and break-even success probability
