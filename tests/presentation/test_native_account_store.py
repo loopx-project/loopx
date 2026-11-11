@@ -253,13 +253,14 @@ class AccountTests(unittest.TestCase):
         gateway = ('# kept\nmodel="gateway-model"\nmodel_provider="gateway"\n'
                    'model_catalog_json="models.json"\n'
                    '[model_providers.gateway]\nname="Gateway"\n'
-                   'base_url="https://gateway.example/v1"\n'
+                   'base_url="http://127.0.0.1:32100/v1"\n'
                    'wire_api="responses"\n'
                    'requires_openai_auth=true\n'
                    '[mcp_servers.demo]\ncommand="demo"\n')
         self.manager.config.write_text(gateway)
         self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
                                 base_url='http://127.0.0.1:32100/v1')
+        self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'gateway')
         self.current()
         self.manager.switch('api')
         cfg = tomllib.loads(self.manager.config.read_text())
@@ -310,7 +311,7 @@ class AccountTests(unittest.TestCase):
                                 base_url='http://127.0.0.1:32100/v1')
         for legacy_provider, base_url in [
             ('openai_retry20', 'https://gateway.example/v1'),
-            ('custom_relay', 'http://127.0.0.1:32100/v1'),
+            ('loopx_account_api', 'http://127.0.0.1:32100/v1'),
         ]:
             with self.subTest(legacy_provider=legacy_provider):
                 legacy = json.loads(self.manager.slot('api').read_text())
@@ -717,6 +718,8 @@ class AccountTests(unittest.TestCase):
             'name="OpenAI"\n'
             'base_url="https://gateway.example/v1"\n'
             'wire_api="responses"\n'
+            'http_headers={"X-Route"="gateway"}\n'
+            'query_params={route="explicit"}\n'
         )
         # 1. Subscription session continues through managed fallback (legacy relay provider migrated to openai).
         self.current()
@@ -743,13 +746,64 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(cfg['model_provider'], 'review_gateway')
         self.assertNotIn('openai_base_url', cfg)
         self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
+        self.manager.config.write_text(self.manager.config.read_text().replace(
+            'https://gateway.example/v1', 'http://127.0.0.1:32100/v1'))
+        gateway = tomllib.loads(self.manager.config.read_text())['model_providers']['review_gateway']
         self.manager.switch('a')
         self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
         self.manager.switch('api')
         cfg = tomllib.loads(self.manager.config.read_text())
         self.assertEqual(cfg['model_provider'], 'review_gateway')
+        self.assertEqual(cfg['model_catalog_json'], 'models.json')
+        self.assertEqual(cfg['model_providers']['review_gateway'], gateway)
         self.assertNotIn('openai_base_url', cfg)
         self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'review_gateway')
+
+    @unittest.skipUnless(os.environ.get('LOOPX_TEST_CODEX_BIN'), 'native Codex binary required')
+    def test_native_codex_resumes_gateway_with_shared_relay_endpoint(self):
+        from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+
+        with local_inference_provider() as (relay, calls, requests):
+            proxy = relay.removesuffix('/v1')
+            env = {
+                'PATH': os.environ.get('PATH', os.defpath),
+                'HOME': str(self.home),
+                'CODEX_HOME': str(self.spec['home']),
+                'XDG_CONFIG_HOME': str(self.home / '.config'),
+                'HTTP_PROXY': proxy,
+                'HTTPS_PROXY': proxy,
+                'NO_PROXY': '127.0.0.1',
+            }
+
+            def run(*args):
+                completed = subprocess.run(
+                    [os.environ['LOOPX_TEST_CODEX_BIN'], 'exec', *args, '--json',
+                     '--skip-git-repo-check', '-c', 'analytics.enabled=false',
+                     '-c', 'check_for_update_on_startup=false', '-c', 'sandbox_mode="read-only"'],
+                    cwd=self.home, env=env, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                events = [json.loads(line) for line in completed.stdout.splitlines()]
+                return next(event['thread_id'] for event in events if event['type'] == 'thread.started')
+
+            self.current()
+            gateway = f'{proxy}/custom/v1'
+            self.manager.config.write_text(
+                'model="gpt-5.4"\nmodel_provider="explicit_gateway"\n'
+                '[model_providers.explicit_gateway]\nname="Fixture Gateway"\n'
+                f'base_url="{gateway}"\nwire_api="responses"\nrequires_openai_auth=true\n'
+                'http_headers={"X-Route"="gateway"}\nquery_params={route="explicit"}\n'
+            )
+            self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token', base_url=relay)
+            self.manager.switch('api')
+            thread_id = run('First synthetic gateway turn.')
+            self.manager.config.write_text(self.manager.config.read_text().replace(gateway, relay))
+            self.manager.switch('a')
+            self.manager.switch('api')
+
+            self.assertEqual(run('resume', thread_id, 'Second synthetic gateway turn.'), thread_id)
+            self.assertEqual(calls, ['/custom/v1/responses?route=explicit', '/v1/responses?route=explicit'])
+            self.assertIn('First synthetic gateway turn.', json.dumps(requests[1]['input']))
 
 
 

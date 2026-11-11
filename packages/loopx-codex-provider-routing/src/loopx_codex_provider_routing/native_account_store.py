@@ -206,26 +206,22 @@ def routed_auth(raw, provider):
     return encoded(obj)
 
 
-def managed_relay_provider(cfg, provider, endpoint):
-    """True when an API slot provider is the built-in or legacy loopback relay route."""
-    if not provider or provider == 'openai' or provider in LEGACY_RELAY_PROVIDERS:
-        return True
-    providers = cfg.get('model_providers')
-    definition = providers.get(provider) if isinstance(providers, dict) else None
-    return isinstance(definition, dict) and definition.get('base_url') == endpoint
+def normalize_relay_provider(provider):
+    """Use the built-in provider for known legacy relay IDs."""
+    if not provider or provider in LEGACY_RELAY_PROVIDERS:
+        return 'openai'
+    return provider
 
 
-def routed_api_auth(raw, cfg, current_provider, *, outgoing=False):
+def routed_api_auth(raw, current_provider, *, outgoing=False):
     """Preserve explicit custom gateways while migrating legacy relay providers to openai."""
     if auth_kind(raw) != 'api':
         return raw
     obj = json.loads(raw)
-    endpoint = api_endpoint(obj['loopx_api_base_url'])
-    provider = current_provider if outgoing and current_provider != 'openai' else (
-        obj.get('loopx_model_provider') or current_provider)
-    if managed_relay_provider(cfg, provider, endpoint):
-        provider = 'openai'
-    return routed_auth(raw, provider)
+    provider = obj.get('loopx_model_provider') or current_provider
+    if outgoing and current_provider != 'openai':
+        provider = current_provider
+    return routed_auth(raw, normalize_relay_provider(provider))
 
 
 def toml_string(value):
@@ -256,8 +252,7 @@ def file_config(raw, auth=None):
         identity(auth)
         auth_obj = json.loads(auth)
         endpoint = api_endpoint(auth_obj['loopx_api_base_url'])
-        stored_provider = auth_obj.get('loopx_model_provider', 'openai')
-        target_provider = 'openai' if managed_relay_provider(cfg, stored_provider, endpoint) else stored_provider
+        target_provider = normalize_relay_provider(auth_obj.get('loopx_model_provider'))
         candidate = dict(cfg, model_provider=target_provider)
         provider_route(candidate)
     # Subscription and managed relay slots use the built-in provider identity so
@@ -520,8 +515,7 @@ class Accounts:
         provider = 'openai'
         if self.config.exists():
             cfg = tomllib.loads(self.config.read_text())
-            current = provider_route(cfg)
-            provider = 'openai' if managed_relay_provider(cfg, current, endpoint) else current
+            provider = normalize_relay_provider(provider_route(cfg))
         raw = encoded({'auth_mode': 'apikey', 'OPENAI_API_KEY': api_key,
                        'loopx_api_base_url': endpoint,
                        'loopx_model_provider': provider})
@@ -590,9 +584,8 @@ class Accounts:
             raise ValueError('Interrupted account operation; run codex app recover with GPT closed')
         raw = read_private(target)
         config_raw = self.config.read_bytes() if self.config.exists() else b''
-        cfg = tomllib.loads(config_raw.decode()) if config_raw else {}
-        current_provider = provider_route(cfg)
-        raw = routed_api_auth(raw, cfg, current_provider)
+        current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
+        raw = routed_api_auth(raw, current_provider)
         ident = identity(raw)
         converted = file_config(config_raw, raw)
         state, outgoing = self.selected()
@@ -605,11 +598,10 @@ class Accounts:
             state, outgoing = self.selected()
             raw = outgoing if state and state['slot'] == name else read_private(target)
             config_raw = self.config.read_bytes() if self.config.exists() else b''
-            cfg = tomllib.loads(config_raw.decode()) if config_raw else {}
-            current_provider = provider_route(cfg)
+            current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
             if state and auth_kind(outgoing) == 'api':
-                outgoing = routed_api_auth(outgoing, cfg, current_provider, outgoing=True)
-            raw = routed_api_auth(raw, cfg, current_provider)
+                outgoing = routed_api_auth(outgoing, current_provider, outgoing=True)
+            raw = routed_api_auth(raw, current_provider)
             ident = identity(raw)
             converted = file_config(config_raw, raw)
             updates = []
