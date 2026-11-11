@@ -6,14 +6,14 @@
 
 **Start with one goal. Keep long-running agent work verifiable.**
 
-Tell the Agent you already use what you want done. LoopX keeps the goal,
-work, approvals and evidence durable behind the scenes, so the next session can
-continue without making you learn LoopX internals first.<br>
-<sub>Work with Codex, Claude Code, DeepSeek Harness and other runtimes. Advanced docs still expose the local-first semantic kernel, ownership model and research workbench.</sub>
+Tell the Agent you already use what you want done. LoopX keeps the goal, work,
+needed decisions and verifiable results durable behind the scenes, so the next
+session can continue without making you learn LoopX internals first.<br>
+<sub>Work with Codex, Claude Code, DeepSeek Harness and other runtimes. Advanced docs still expose the local-first architecture, ownership model and research workbench.</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-[![Local first](https://img.shields.io/badge/control--plane-local--first-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
+[![Local-first state](https://img.shields.io/badge/local--first-state-brightgreen.svg)](docs/public-private-boundary.md) [![Loop Agents](https://img.shields.io/badge/status-loop%20agents%20supported-brightgreen.svg)](docs/product/release-readiness.md) [![GitHub contributors](https://img.shields.io/github/contributors-anon/loopx-project/loopx?color=blue)](https://github.com/loopx-project/loopx/graphs/contributors) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/XmGgQyCFZd) [![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/loopx-project/loopx)
 
 [Get started](#quick-start) · [Why LoopX](#why-loopx) · [See it in action](#see-loopx-in-action) · [Evidence](#evidence) · [Contribute](#contributing) · [Docs](https://loopx-project.github.io/loopx/docs/) · [简体中文](README.zh-CN.md)
 
@@ -41,9 +41,10 @@ then send one natural-language goal:
 $loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
-LoopX turns that into visible tasks, gates and evidence as needed. Claude Code
-uses `/loopx <complex task>`; see [host setup](#start-from-your-agent) for other
-runtimes. Prefer a guided first run? [Choose a task below](#try-loopx).
+LoopX turns that into a visible plan, decisions that need you, and verification
+as needed. Claude Code uses `/loopx <complex task>`; see
+[host setup](#start-from-your-agent) for other runtimes. Prefer a guided first
+run? [Choose a task below](#try-loopx).
 
 ## 📰 News
 
@@ -54,10 +55,10 @@ runtimes. Prefer a guided first run? [Choose a task below](#try-loopx).
      dates (UTC). -->
 
 - **2026-10-25 · 🤝 [Long-horizon agent research: collaborators welcome](https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/)** — Exploring **breakthroughs in long-horizon outcomes under equal budgets**, through feedback, replanning and reproducible evaluation on EdgeBench and real-world tasks. Academic labs and industry teams are welcome to collaborate, comparing outcomes and total cost. [Discuss collaboration](https://github.com/loopx-project/loopx/discussions).
-- **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript control plane and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
+- **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — A shared TypeScript state layer and long-horizon research workbench. [Migration guide](docs/product/releases/v2.0.0.md) · [Engineering story](https://loopx-project.github.io/loopx/blog/typescript-control-plane-refactor/).
 - **2026-10-14 · 🤖 [Agentic software](https://loopx-project.github.io/loopx/blog/semantic-software-development/)** — Connecting goals, evidence and human feedback to engineering delivery.
 - **2026-10-02 · 🧠 [Long-horizon bootstrapping & RSI](https://loopx-project.github.io/loopx/blog/long-horizon-rsi/)** — Four months of developing LoopX with LoopX: public project history and a design perspective on system-level self-improvement.
-- **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task, same-model study provides empirical support for **trading more compute for better outcomes**: LoopX Heartbeat mean reward is 17.3% above Plain Codex and 10.6% above native Goal.
+- **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/)** — A 46-task, same-model study provides empirical support for **trading more compute for better outcomes**: LoopX continued runs reach mean reward 17.3% above Plain Codex and 10.6% above native Goal.
 - **2026-09-06 · 🎉 [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — A Personal Agent Workspace to follow agent work, act on decisions, and inspect delivered results across sessions. [Workspace guide](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md).
 - **2026-08-02 · ⏱️ [200+ hour trajectories shared on X](https://x.com/huangruiteng/status/2083904257494024425)** — Early owner-run examples spanning 200+ elapsed hours drew broad attention on X, showing work across execution, waits, human decisions and recovery. [Trajectories and limits](#open-source-issue-fix).
 
@@ -78,12 +79,12 @@ hand work to peers. A timer can keep a loop running without making it useful.
 
 - **Continue without starting over.** Keep the Goal, accepted requirements,
   decisions and evidence across sessions and restarts.
-- **[Coordinate without losing ownership.](https://loopx-project.github.io/loopx/blog/agent-facing-kanban/#walkthrough)** Connect delegated work, dependent
+- **[Coordinate without dropping context.](https://loopx-project.github.io/loopx/blog/agent-facing-kanban/#walkthrough)** Connect delegated work, dependent
   artifacts, review and returned results while keeping responsibility explicit.
 - **Judge progress by what changed.** Inspect deliverables, supporting and
   refuting evidence, costs and the next decision—not just activity.
 
-Your Agent runtime supplies the model and tools. LoopX’s semantic control plane
+Your Agent runtime supplies the model and tools. LoopX’s durable state layer
 preserves goals, acceptance, decisions, ownership and evidence across sessions
 and runtimes for engineering, research and operations. Agents and people use
 those facts to reassess what to do next. Human authorization still governs
@@ -97,24 +98,24 @@ protected actions.
 | Manage personal projects, schedules and decisions in one place | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
 | Let agents collaborate and deliver verifiable results | [Agent collaboration guide](docs/product/use-cases/cross-runtime/README.md) |
 
-LoopX keeps the durable control state in one compact layer:
+LoopX keeps the durable work state in one compact layer:
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/harness-neutral.en.mobile.svg">
   <img src="docs/assets/harness-neutral.en.svg" alt="Your harness runs the turn. LoopX carries the work." width="1200">
 </picture>
 
-Agent runtimes execute the work. LoopX governs the state that lets engineering,
+Agent runtimes execute the work. LoopX keeps the state that lets engineering,
 research, discovery, and operations loops continue across runs. It is not
 another agent framework or a provider-specific orchestration runtime.
 
+<details>
+<summary>Advanced: how the control layer works and where it fits</summary>
+
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/control-plane-board.en.mobile.svg">
-  <img src="docs/assets/control-plane-board.en.svg" alt="One turn is a governed state transition—not just a timer." width="1200">
+  <img src="docs/assets/control-plane-board.en.svg" alt="Advanced view of a governed state transition, not just a timer." width="1200">
 </picture>
-
-<details>
-<summary>How the control plane works and where it fits</summary>
 
 A useful mental model is an
 **[agent-native Kanban for long-running work](docs/development/control-plane-course/00-concept-primer.md)**.

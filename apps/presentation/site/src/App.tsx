@@ -38,7 +38,7 @@ Do not clone LoopX. Follow the README Quick Start to use the no-clone installer 
 
 After setup, first report whether the project is connected, then ask me for one natural-language goal unless I already included it.
 
-When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, then write it as P0/P1/P2 todos so I can see what needs to be done, what is blocked by a gate, and what the next safe action is.
+When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, then show me the current work, any decision that needs me, and the next safe action.
 
 Keep LoopX internal terms behind advanced or debugging explanations unless a decision requires them.`,
   zh: `帮我在当前项目启动 LoopX: https://github.com/loopx-project/loopx
@@ -48,9 +48,7 @@ Keep LoopX internal terms behind advanced or debugging explanations unless a dec
 
 接入后先汇报项目是否已连接；如果我还没有给目标，就先问我要一个自然语言目标。
 
-收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，再把它写成
-P0/P1/P2 todos，让我能看到当前要做什么、什么被 gate 卡住、
-下一步安全动作是什么。
+收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，再让我看到当前要做什么、哪里需要我判断、下一步安全动作是什么。
 
 LoopX 内部机制术语默认放在高级或调试说明里，只有决策需要时再展开。`,
 };
@@ -76,7 +74,7 @@ const content = {
       secondPrefix: "Keep ",
       secondAccent: "progress visible",
     },
-    body: "Use the agent you already trust. LoopX turns one natural-language goal into durable work, gates, and evidence behind the scenes, so the next session can continue without making you learn LoopX internals first.",
+    body: "Use the agent you already trust. LoopX turns one natural-language goal into durable work, needed decisions, and verifiable results behind the scenes, so the next session can continue without making you learn LoopX internals first.",
     copy: "Get started",
     mac: {
       download: "Download for Mac",
@@ -98,24 +96,24 @@ const content = {
     },
     demo: "See in action",
     panel: {
-      label: "ONE GOAL · ACROSS SESSIONS",
+      label: "ONE OUTCOME · ACROSS SESSIONS",
       title: "Ship the next release",
       status: "On track",
-      running: "Agent work",
-      researcher: "Research and implementation",
-      gate: "Human gate",
-      gateBody: "Merge needs your approval",
-      waiting: "Waiting",
-      evidence: "Evidence",
-      evidenceBody: "Validation and handoff written",
-      complete: "Complete",
+      running: "Work in progress",
+      researcher: "Research and implementation underway",
+      gate: "Your decision",
+      gateBody: "Approve the release when ready",
+      waiting: "Needs you",
+      evidence: "Verified result",
+      evidenceBody: "Checks and handoff written",
+      complete: "Saved",
       next: "Next safe action",
-      nextBody: "Keep independent tasks moving while review waits",
+      nextBody: "Continue work that does not depend on approval",
     },
     proof: [
       ["No vocabulary tax", "Start from the outcome; open LoopX details only when they matter."],
       ["Durable work", "The next session resumes from governed state, not memory."],
-      ["Reviewable evidence", "Every transition leaves a result another person can verify."],
+      ["Verifiable results", "Every transition leaves a result another person can check."],
     ],
     sectionEyebrow: "One goal-first lifecycle",
     sectionTitle: "Useful work can start before the machinery is familiar.",
@@ -123,18 +121,18 @@ const content = {
     steps: [
       ["01", "One goal", "A natural-language outcome"],
       ["02", "Plan", "Visible work to do"],
-      ["03", "Gate", "A concrete decision"],
-      ["04", "Evidence", "A validated result"],
+      ["03", "Decision", "A concrete choice"],
+      ["04", "Proof", "A validated result"],
       ["05", "Resume", "Recoverable progress"],
     ],
     capabilities: {
-      eyebrow: "Default simple, kernel intact",
+      eyebrow: "Simple by default, durable underneath",
       title: "A natural entry backed by durable state.",
       body: "Codex, Claude Code, OpenCode, TraeX, Pi, and custom runners can share one durable lifecycle. First contact starts with one goal; advanced surfaces expose ownership, scheduling, recovery, and protocols when needed.",
       items: [
-        ["01", "Goal-first entry", "Start from a natural-language outcome; LoopX records the durable Goal and Todo structure as work becomes concrete."],
+        ["01", "Goal-first entry", "Start from a natural-language outcome; LoopX records durable work as the plan becomes concrete."],
         ["02", "Cross-runtime continuity", "Change the executor or host without reconstructing the objective from chat history."],
-        ["03", "Gate-aware progress", "A blocked P0 stays visible while independent P1 and P2 lanes continue safely."],
+        ["03", "Decision-aware progress", "A blocked decision stays visible while independent safe work can continue."],
         ["04", "Reviewable outcomes", "Every run writes validation, ownership, review, and handoff evidence into the next loop."],
       ],
     },
@@ -195,7 +193,7 @@ const content = {
       secondPrefix: "让进展",
       secondAccent: "持续可见",
     },
-    body: "继续使用你已经信任的 Agent。LoopX 在背后把一个自然语言目标变成持久工作、决策门和证据，让下一轮会话可以接着推进，而不要求你先学会 LoopX 内部机制。",
+    body: "继续使用你已经信任的 Agent。LoopX 在背后把一个自然语言目标变成持久工作、需要你判断的决策和可验证结果，让下一轮会话可以接着推进，而不要求你先学会 LoopX 内部机制。",
     copy: "开始使用",
     mac: {
       download: "下载 Mac App",
@@ -217,19 +215,19 @@ const content = {
     },
     demo: "查看实战",
     panel: {
-      label: "一个目标 · 跨越多轮会话",
+      label: "一个结果 · 跨越多轮会话",
       title: "交付下一个版本",
       status: "进展正常",
-      running: "Agent 执行",
-      researcher: "研究与实现",
-      gate: "Human Gate",
-      gateBody: "合并前，等待你的批准",
-      waiting: "等待中",
-      evidence: "Evidence",
-      evidenceBody: "验证与交接已写回",
-      complete: "已完成",
+      running: "正在推进",
+      researcher: "研究与实现正在进行",
+      gate: "需要你判断",
+      gateBody: "版本准备好后由你批准",
+      waiting: "等你决定",
+      evidence: "已验证结果",
+      evidenceBody: "检查与交接已写回",
+      complete: "已保存",
       next: "下一步安全动作",
-      nextBody: "审批等待中，继续推进不依赖审批的任务",
+      nextBody: "继续推进不依赖审批的工作",
     },
     proof: [
       ["无术语门槛", "先描述结果；LoopX 细节只在需要决策或调试时展开。"],
@@ -242,8 +240,8 @@ const content = {
     steps: [
       ["01", "一个目标", "自然语言结果"],
       ["02", "计划", "可见的待办"],
-      ["03", "Gate", "一个具体判断"],
-      ["04", "Evidence", "一个验证结果"],
+      ["03", "判断", "一个具体选择"],
+      ["04", "证明", "一个验证结果"],
       ["05", "恢复", "可继续的进展"],
     ],
     capabilities: {
@@ -251,9 +249,9 @@ const content = {
       title: "自然入口背后，是持久状态。",
       body: "Codex、Claude Code、OpenCode、TraeX、Pi 与自定义 Runner 可以共享同一套持久生命周期。第一次接触从一个目标开始；需要时，高级界面再展开 ownership、调度、恢复与协议。",
       items: [
-        ["01", "目标优先入口", "从自然语言结果开始；随着工作具体化，LoopX 写入持久 Goal 与 Todo 结构。"],
+        ["01", "目标优先入口", "从自然语言结果开始；随着计划具体化，LoopX 记录可持续推进的工作。"],
         ["02", "跨运行时连续性", "更换执行器或 Host 时，无需从聊天记录重建长期目标。"],
-        ["03", "Gate-aware 进展", "P0 等待决策时保持可见，独立的 P1、P2 线路可以安全继续。"],
+        ["03", "决策可见的进展", "需要你判断的事项保持可见，不依赖它的安全工作可以继续。"],
         ["04", "可审查结果", "每轮运行都把验证、归属、审查和交接证据写入下一轮闭环。"],
       ],
     },
@@ -350,7 +348,7 @@ function ControlPlane({ language }: { language: Language }) {
           <Target size={18} strokeWidth={1.8} />
         </div>
         <div>
-          <small>{language === "en" ? "ACTIVE GOAL" : "当前目标"}</small>
+          <small>{language === "en" ? "CURRENT GOAL" : "当前目标"}</small>
           <strong>{panel.title}</strong>
         </div>
         <StatusPill tone="ok">{panel.status}</StatusPill>
@@ -365,7 +363,7 @@ function ControlPlane({ language }: { language: Language }) {
             <Code2 size={17} />
           </div>
           <div className="row-copy">
-            <small>P0 · {panel.running}</small>
+            <small>{language === "en" ? "NOW" : "当前"} · {panel.running}</small>
             <strong>{panel.researcher}</strong>
           </div>
           <div className="progress-track">
@@ -378,7 +376,7 @@ function ControlPlane({ language }: { language: Language }) {
             <UserRoundCheck size={17} />
           </div>
           <div className="row-copy">
-            <small>GATE · {panel.gate}</small>
+            <small>{language === "en" ? "DECISION" : "判断"} · {panel.gate}</small>
             <strong>{panel.gateBody}</strong>
           </div>
           <StatusPill tone="waiting">{panel.waiting}</StatusPill>
@@ -458,10 +456,10 @@ const terminalCases = {
     },
     lines: [
       ["GOAL", "Ship the focused fix and preserve reusable knowledge.", "交付聚焦修复，并保留可复用知识。", "ACTIVE", "active"],
-      ["P0", "Focused PR delivery · bounded diff and validation", "聚焦式 PR 交付 · 有边界的改动与验证", "RUNNING", "running"],
-      ["GATE", "Reviewer authority · approve the focused change", "审查权限 · 批准聚焦改动", "WAITING", "waiting"],
-      ["P1", "Repository knowledge and terminal resume remain available", "仓库知识与终端恢复保持可用", "READY", "ready"],
-      ["EVIDENCE", "Merge/open result linked to the next reusable discovery", "合并 / 开放结果连接到下一轮可复用发现", "WRITTEN", "written"],
+      ["NOW", "Focused PR delivery · bounded diff and validation", "聚焦式 PR 交付 · 有边界的改动与验证", "RUNNING", "running"],
+      ["DECISION", "Reviewer authority · approve the focused change", "审查权限 · 批准聚焦改动", "WAITING", "waiting"],
+      ["SUPPORT", "Repository knowledge and terminal resume remain available", "仓库知识与终端恢复保持可用", "READY", "ready"],
+      ["PROOF", "Merge/open result linked to the next reusable discovery", "合并 / 开放结果连接到下一轮可复用发现", "WRITTEN", "written"],
       ["NEXT", "Review the focused diff, then continue the capability lane.", "先审查聚焦改动，再继续能力沉淀线路。", "SAFE", "safe"],
     ],
   },
@@ -473,15 +471,15 @@ const terminalCases = {
     command: "$ loopx status --goal-id auto-ml",
     image: mlEvidenceUrl,
     imageTitle: {
-      en: "Evidence branches remain visible until promotion or stop.",
-      zh: "证据分支保持可见，直到晋级或停止。",
+      en: "Result branches remain visible until promotion or stop.",
+      zh: "结果分支保持可见，直到晋级或停止。",
     },
     lines: [
       ["BASELINE", "Matched candidate and evaluation contract locked.", "匹配候选项与评估契约已锁定。", "MATCHED", "active"],
       ["BRANCHES", "Positive · Negative · Invalid lineage · Running replicate", "正向 · 负向 · 无效谱系 · 运行中复现", "VISIBLE", "ready"],
-      ["P1", "Replicate capacity stays bounded while evidence accumulates", "证据持续积累，同时保持复现容量有界", "RUNNING", "running"],
-      ["EVIDENCE", "Negative results and invalid lineages remain traceable", "负向结果和无效谱系持续可追溯", "WRITTEN", "written"],
-      ["P0 GATE", "Promote or stop after the running replicate completes", "运行中复现完成后，决定晋级或停止", "WAITING", "waiting"],
+      ["SUPPORT", "Replicate capacity stays bounded while evidence accumulates", "证据持续积累，同时保持复现容量有界", "RUNNING", "running"],
+      ["PROOF", "Negative results and invalid lineages remain traceable", "负向结果和无效谱系持续可追溯", "WRITTEN", "written"],
+      ["DECISION", "Promote or stop after the running replicate completes", "运行中复现完成后，决定晋级或停止", "WAITING", "waiting"],
       ["NEXT", "Compare replicate evidence, then record the decision.", "比较复现证据，再记录最终决策。", "SAFE", "safe"],
     ],
   },
