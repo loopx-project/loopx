@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { statSync } from 'node:fs'
 
 // 1.2.4 includes the released Windows peer-file fix. Bootstrap and every
 // runtime consumer must use the same floor, including an existing global CLI.
@@ -21,10 +22,55 @@ export class LoopXCliError extends Error {
     message: string,
     readonly retryable: boolean,
     readonly exitCode?: number | undefined,
+    readonly diagnostics: LoopXCliDiagnostics = {},
   ) {
     super(message)
     this.name = 'LoopXCliError'
   }
+}
+
+export interface LoopXCliDiagnostics {
+  osCode?: string | undefined
+  candidate?: 'configured-command' | 'managed-launcher' | 'path-loopx' | 'python-module' | undefined
+  cwdExists?: boolean | undefined
+  causeKind?: LoopXCliErrorKind | undefined
+  probes?: readonly LoopXCliError[] | undefined
+}
+
+export function spawnCwdExists(cwd?: string): boolean | undefined {
+  try {
+    return statSync(cwd ?? process.cwd(), { throwIfNoEntry: false })?.isDirectory() ?? false
+  } catch {
+    return undefined
+  }
+}
+
+/** Only closed labels and scalars belong in the driver's diagnostic record. */
+function cliFailureFields(error: unknown): string {
+  const failure = error instanceof LoopXCliError ? error : undefined
+  const details = failure?.diagnostics
+  const kind = (value: unknown): string => [
+    'aborted', 'missing', 'timeout', 'transport', 'output_limit', 'exit',
+    'typed_failure', 'invalid_json', 'invalid_schema',
+  ].includes(value as string) ? String(value) : 'internal'
+  const code = [
+    'ENOENT', 'EPERM', 'EACCES', 'ETIMEDOUT', 'EAGAIN', 'EBUSY', 'EMFILE',
+    'ENFILE', 'ENOMEM', 'ENOTDIR', 'E2BIG', 'ENOEXEC', 'EINVAL', 'ECANCELED', 'EIO',
+  ].includes(details?.osCode ?? '') ? details!.osCode : 'none'
+  const candidate = [
+    'configured-command', 'managed-launcher', 'path-loopx', 'python-module',
+  ].includes(details?.candidate ?? '') ? details!.candidate : 'unknown'
+  const exitCode = Number.isSafeInteger(failure?.exitCode) ? failure!.exitCode : 'none'
+  const cwd = typeof details?.cwdExists === 'boolean' ? details.cwdExists : 'unknown'
+  return `kind=${kind(failure?.kind)} cause_kind=${kind(details?.causeKind ?? failure?.kind)} code=${code} exit_code=${exitCode} candidate=${candidate} cwd_exists=${cwd}`
+}
+
+export function cliErrorFields(error: unknown): string {
+  const probes = error instanceof LoopXCliError
+    ? error.diagnostics.probes ?? [] : []
+  const selected = probes.length > 8 ? [probes[0]!, ...probes.slice(-7)] : probes
+  const fields = selected.map(probe => cliFailureFields(probe).replaceAll(' ', ',')).join(';')
+  return `${cliFailureFields(error)} probes=${fields || 'none'} probes_omitted=${probes.length - selected.length}`
 }
 
 export interface FileResult {
@@ -52,6 +98,7 @@ export interface LoopXCommand {
   readonly prefix: readonly string[]
   readonly skillCommand: string
   readonly version: string
+  readonly candidate?: LoopXCliDiagnostics['candidate']
 }
 
 export interface ManagedLoopXLauncher {
@@ -72,9 +119,9 @@ const FORCE_KILL_GRACE_MS = 250
 
 function transportKind(error: NodeJS.ErrnoException): LoopXCliError {
   if (error.code === 'ENOENT') {
-    return new LoopXCliError('missing', 'required executable is unavailable', false)
+    return new LoopXCliError('missing', 'required executable is unavailable', false, undefined, { osCode: error.code })
   }
-  return new LoopXCliError('transport', 'could not start the LoopX command', true)
+  return new LoopXCliError('transport', 'could not start the LoopX command', true, undefined, { osCode: error.code })
 }
 
 export const runFile: FileRunner = (file, args, options) => new Promise((resolve, reject) => {
@@ -266,6 +313,7 @@ export async function runJsonCommand(
   let lastError: LoopXCliError | undefined
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const cwdExists = spawnCwdExists(options.cwd)
     try {
       const result = await runner(
         command.file,
@@ -296,6 +344,8 @@ export async function runJsonCommand(
       const failure = error instanceof LoopXCliError
         ? error
         : new LoopXCliError('transport', 'LoopX command failed to execute', true)
+      failure.diagnostics.cwdExists = cwdExists
+      failure.diagnostics.candidate ??= command.candidate
       lastError = failure
       if (!failure.retryable || attempt + 1 >= attempts) throw failure
       await wait(retryDelays[attempt] ?? retryDelays.at(-1) ?? 0, options.signal)
@@ -367,7 +417,12 @@ export async function resolveLoopXCommand(
         })),
       ]
 
+  const probes: LoopXCliError[] = []
   for (const candidate of candidates) {
+    const label = configured ? 'configured-command'
+      : managedCandidates.includes(candidate) ? 'managed-launcher'
+        : candidate.file === 'loopx' ? 'path-loopx' : 'python-module'
+    const cwdExists = spawnCwdExists()
     try {
       const result = await runner(
         candidate.file,
@@ -383,13 +438,25 @@ export async function resolveLoopXCommand(
         throw new LoopXCliError('aborted', 'operation was cancelled', false)
       }
       const version = result.exitCode === 0 ? supportedLoopXVersion(result.stdout) : undefined
-      if (version) return { ...candidate, version }
+      if (version) return { ...candidate, version, candidate: label }
+      throw new LoopXCliError(
+        result.exitCode === 0 ? 'invalid_schema' : 'exit',
+        'LoopX version probe did not verify', false, result.exitCode,
+      )
     } catch (error: unknown) {
       if (options.signal?.aborted) {
         throw new LoopXCliError('aborted', 'operation was cancelled', false)
       }
       if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+      const failure = error instanceof LoopXCliError ? error
+        : new LoopXCliError('transport', 'LoopX version probe failed to execute', false)
+      probes.push(new LoopXCliError(failure.kind, 'version probe failed', false, failure.exitCode, {
+        osCode: failure.diagnostics.osCode, candidate: label, cwdExists,
+      }))
     }
   }
-  throw new LoopXCliError('missing', `LoopX CLI ${MINIMUM_LOOPX_VERSION} or newer is unavailable`, false)
+  const last = probes.at(-1)
+  throw new LoopXCliError('missing', `LoopX CLI ${MINIMUM_LOOPX_VERSION} or newer is unavailable`, false, last?.exitCode, {
+    ...last?.diagnostics, causeKind: last?.kind, probes,
+  })
 }
