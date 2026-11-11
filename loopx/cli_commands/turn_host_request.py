@@ -101,7 +101,7 @@ def build_codex_cli_host_runner(
         options["goal_admission"] = (
             goal_admission or FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path, goal_id=args.goal_id,
-                planned_goal_ref=goal_ref,
+                planned_goal_ref=goal_ref, agent_id=args.agent_id,
             )
         ).with_launch_decision(current_launch_decision)
         if getattr(args, "codex_operation_tools", False):
