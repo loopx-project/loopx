@@ -165,6 +165,21 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
     host_gate = host_gate if isinstance(host_gate, dict) else {}
     host_gate_lines = ""
     if host_gate:
+        detail_command = host_gate.get("full_choices_detail_command")
+        omitted_count = host_gate.get("omitted_choice_count")
+        if isinstance(detail_command, str) and detail_command.strip():
+            detail_line = (
+                "\n\n"
+                "Need another host"
+                + (
+                    f" ({omitted_count} more)"
+                    if isinstance(omitted_count, int) and omitted_count > 0
+                    else ""
+                )
+                + f"? Run `{detail_command}`."
+            )
+        else:
+            detail_line = ""
         choices = [
             f"- `{choice.get('host_surface')}`: {choice.get('description')}  "
             f"\n  `{choice.get('rerun_command')}`"
@@ -172,9 +187,10 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
             if isinstance(choice, dict)
         ]
         host_gate_lines = (
-            "\n## Host Surface Gate\n\n"
+            "\n## Choose Where This Agent Runs\n\n"
             f"{host_gate.get('reason')}\n\n"
             + "\n".join(choices)
+            + detail_line
             + "\n"
         )
     return f"""# Guided Start Goal

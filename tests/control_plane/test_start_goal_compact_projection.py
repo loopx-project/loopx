@@ -2085,33 +2085,58 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
+    base_args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--goal-text",
+        GOAL_TEXT,
+        "--capability-route",
+        "issue-fix",
+    ]
+
+    compact_output = io.StringIO()
+    with contextlib.redirect_stdout(compact_output):
         exit_code = cli_main(
-            [
-                "--format",
-                "json",
-                "start-goal",
-                "--guided",
-                "--project",
-                str(project),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--goal-text",
-                GOAL_TEXT,
-                "--capability-route",
-                "issue-fix",
-            ]
+            base_args
         )
 
     assert exit_code == 0
-    payload = json.loads(output.getvalue())
+    payload = json.loads(compact_output.getvalue())
     assert payload["guided_transaction"]["blocked_by"] == "host_surface_selection"
     assert payload["safety_contract"]["writes_registry"] is False
     choices = payload["host_surface_selection_gate"]["choices"]
     assert [choice["host_surface"] for choice in choices] == [
+        "codex-app",
+        "trae_app",
+        "codex-app-ssh",
+        "codex-cli-tui",
+        "claude-code",
+        "shell",
+        "other-agent",
+    ]
+    gate = payload["host_surface_selection_gate"]
+    assert gate["choice_projection"] == "compact"
+    assert gate["omitted_choice_count"] == 14
+    assert "--include-command-pack-detail" in gate["full_choices_detail_command"]
+    assert payload["packet_summary"]["compatibility"]["compact_projection_default"] is True
+    assert "Choose Where This Agent Runs" in payload["message"]
+    assert "Need another host (14 more)?" in payload["message"]
+
+    detailed_output = io.StringIO()
+    with contextlib.redirect_stdout(detailed_output):
+        detailed_exit = cli_main([*base_args, "--include-command-pack-detail"])
+    assert detailed_exit == 0
+    detailed = json.loads(detailed_output.getvalue())
+    full_choices = detailed["host_surface_selection_gate"]["choices"]
+    assert [choice["host_surface"] for choice in full_choices] == [
         "codex-app",
         "trae_app",
         "codex-app-ssh",
@@ -2134,7 +2159,13 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "shell",
         "other-agent",
     ]
-    ide = next(choice for choice in choices if choice["host_surface"] == "codex-ide-plugin")
+    assert detailed["host_surface_selection_gate"]["choice_projection"] == "complete"
+    assert detailed["host_surface_selection_gate"]["omitted_choice_count"] == 0
+    ide = next(
+        choice
+        for choice in full_choices
+        if choice["host_surface"] == "codex-ide-plugin"
+    )
     assert "--host-surface codex-ide-plugin" in ide["rerun_command"]
     assert "--capability-route issue-fix" in ide["rerun_command"]
 

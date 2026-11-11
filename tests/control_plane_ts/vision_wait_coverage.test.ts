@@ -51,9 +51,9 @@ test("unbound acceptance and malformed facts cannot prove a wait", () => {
   }
 });
 
-function scheduledFrontier(resumeOverrides: Record<number, string> = {}): JsonObject {
+function scheduledFrontier(resumeOverrides: Record<number, string> = {}, status = "deferred"): JsonObject {
   const todos = Array.from({length: 7}, (_, index) => ({todo_id: `todo_scheduled_${index}`,
-    text: "Deliver scheduled public work.", role: "agent", status: "deferred",
+    text: "Deliver scheduled public work.", role: "agent", status,
     task_class: "advancement_task", claimed_by: "agent-a",
     resume_when: resumeOverrides[index] ?? `resume_at:2099-01-0${7 - index}T00:00:00Z`}));
   const conditions = evaluateTodoResumeConditions({schema_version: "todo_resume_evaluation_request_v0",
@@ -69,8 +69,8 @@ function scheduledFrontier(resumeOverrides: Record<number, string> = {}): JsonOb
     lineage_source_items: todos, resume_planning_request: {
       schema_version: "todo_resume_planning_request_v1", agent_id: "agent-a", item_limit: 2,
       has_deferred_count: false, has_visible_deferred_count: false, deferred_count: null,
-      available_capabilities: null, records, sources: {items: refs, deferred_items: refs,
-        backlog_items: [], first_open_items: [], deferred_resume_candidates: [], resume_blocked_items: [],
+      available_capabilities: null, records, sources: {items: refs, deferred_items: status === "deferred" ? refs : [],
+        backlog_items: [], first_open_items: [], deferred_resume_candidates: [], resume_blocked_items: status === "blocked" ? refs : [],
         monitor_open_items: [], current_agent_claimed_monitor_items: [], claimed_monitor_open_items: []}}};
 }
 
@@ -102,4 +102,24 @@ test("unsupported or missing sources cannot relax automatic-wait supervision", (
       agent_id: "agent-a", vision_wait_state: wait}), {required: true});
   }
   assert.equal(projectGoalVisionWaitState({...scheduledFrontier(), selectable_advancement_count: 1}), null);
+});
+
+test("automatic proof takes precedence when timed successors are also generic blockers", () => {
+  const wait = projectGoalVisionWaitState(scheduledFrontier({}, "blocked"))!;
+  assert.equal(wait.reason_code, "exact_blocked_successor");
+  assert.equal(wait.automatic_resume, true);
+  assert.equal(wait.resume_when, "resume_at:2099-01-07T00:00:00Z");
+});
+
+test("a scheduled path cannot make an independent manual blocker automatic", () => {
+  const request = scheduledFrontier({}, "blocked");
+  const planning = request.resume_planning_request as JsonObject;
+  const records = planning.records as JsonObject[];
+  const manual = records[0];
+  manual.resume = null;
+  (manual.payload as JsonObject).resume_when = null;
+  (manual.payload as JsonObject).resume_condition = null;
+  const wait = projectGoalVisionWaitState(request)!;
+  assert.equal(wait.reason_code, "current_agent_blocker");
+  assert.equal(wait.automatic_resume, false);
 });

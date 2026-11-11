@@ -92,6 +92,15 @@ START_GOAL_HOST_SURFACES = (
     "shell",
     "other-agent",
 )
+DEFAULT_HOST_SURFACE_SELECTION_CHOICES = (
+    "codex-app",
+    "trae_app",
+    "codex-app-ssh",
+    "codex-cli-tui",
+    "claude-code",
+    "shell",
+    "other-agent",
+)
 
 
 def _iter_string_leaves(
@@ -382,9 +391,9 @@ def build_start_goal_host_surface_selection_packet(
         "shell": "manual shell or an explicitly configured external scheduler",
         "other-agent": "custom agent host using the returned activation contract",
     }
-    choices: list[dict[str, Any]] = []
-    for host_surface in START_GOAL_HOST_SURFACES:
-        rerun_command = (
+
+    def rerun_command_for(host_surface: str, *, include_detail: bool) -> str:
+        return (
             f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
             f"start-goal --guided "
             f"--project {shell_arg_for_host(resolved_project)}"
@@ -402,20 +411,56 @@ def build_start_goal_host_surface_selection_packet(
             )
             + f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
             + render_optional_cli_arg("--display-name", display_name)
-            + (" --include-command-pack-detail" if include_command_pack_detail else "")
+            + (" --include-command-pack-detail" if include_detail else "")
         )
-        choices.append(
+
+    def detail_command() -> str:
+        return (
+            f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=command_runtime_root)} "
+            f"start-goal --guided "
+            f"--project {shell_arg_for_host(resolved_project)}"
+            + (f" --goal-id {shell_arg_for_host(goal_id)}" if goal_id else "")
+            + (f" --agent-id {shell_arg_for_host(agent_id)}" if agent_id else "")
+            + (f" --thread-id {shell_arg_for_host(thread_id)}" if thread_id else "")
+            + (" --new-peer" if new_peer else "")
+            + render_available_capability_args(available_capabilities)
+            + (" --fine-grained" if fine_grained else "")
+            + (
+                f" --capability-route {shell_arg_for_host(capability_route)}"
+                if capability_route
+                else ""
+            )
+            + f" --goal-text {shell_arg_for_host(normalized_goal_text)}"
+            + render_optional_cli_arg("--display-name", display_name)
+            + " --include-command-pack-detail"
+        )
+
+    all_choices: list[dict[str, Any]] = []
+    for host_surface in START_GOAL_HOST_SURFACES:
+        all_choices.append(
             {
                 "host_surface": host_surface,
                 "description": host_descriptions[host_surface],
-                "rerun_command": rerun_command,
+                "rerun_command": rerun_command_for(
+                    host_surface,
+                    include_detail=include_command_pack_detail,
+                ),
             }
         )
-    reason = (
-        "host surface is required because Codex App automation, Codex App over SSH, "
-        "the Codex IDE plugin, Codex CLI, and Ark Managed Agent "
-        "have different continuation contracts"
+    default_host_surfaces = set(DEFAULT_HOST_SURFACE_SELECTION_CHOICES)
+    choices = (
+        all_choices
+        if include_command_pack_detail
+        else [
+            choice
+            for choice in all_choices
+            if choice["host_surface"] in default_host_surfaces
+        ]
     )
+    reason = (
+        "LoopX needs to know where this agent is running before it can start a durable goal."
+    )
+    detail = detail_command()
     gate = {
         "schema_version": HOST_SURFACE_SELECTION_SCHEMA_VERSION,
         "state": "selection_required",
@@ -423,6 +468,12 @@ def build_start_goal_host_surface_selection_packet(
         "reason": reason,
         "required_cli_arg": "--host-surface <exact-host-surface>",
         "choices": choices,
+        "choice_projection": "complete" if include_command_pack_detail else "compact",
+        "all_host_surfaces": list(START_GOAL_HOST_SURFACES),
+        "omitted_choice_count": 0
+        if include_command_pack_detail
+        else len(START_GOAL_HOST_SURFACES) - len(choices),
+        "full_choices_detail_command": None if include_command_pack_detail else detail,
     }
     transaction = {
         "schema_version": GUIDED_START_SCHEMA_VERSION,
@@ -439,6 +490,9 @@ def build_start_goal_host_surface_selection_packet(
                 "kind": "host_surface_selection_gate",
                 "choices": choices,
                 "purpose": "select the current host before planning, mutation, or loop activation",
+                "full_choices_detail_command": None
+                if include_command_pack_detail
+                else detail,
             }
         ],
         "idempotency_policy": {"safe_to_rerun_preview": True},
@@ -489,6 +543,7 @@ def build_start_goal_host_surface_selection_packet(
             "safety_contract": "#/safety_contract",
             "compatibility_message": "#/message",
         },
+        compact_projection_default=not include_command_pack_detail,
     )
     return payload
 
