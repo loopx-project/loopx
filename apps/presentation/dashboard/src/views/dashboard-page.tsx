@@ -3925,7 +3925,6 @@ export function DashboardPage() {
       hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
       search: (current) => ({
         ...current,
-        ...("goalId" in current && current.goalId === goalId ? {} : clearedResearchSearch),
         goalId,
         workspace: undefined,
         conversationBinding: undefined,
@@ -3976,7 +3975,6 @@ export function DashboardPage() {
       onChangeGoalRoot={rootGoalId => void navigate({
         hash: !rootGoalId || rootGoalId === search.goalId ? keepCaseChapterHash : undefined,
         search: current => ({...current,
-          ...(!rootGoalId || ("goalId" in current && current.goalId === rootGoalId) ? {} : clearedResearchSearch),
           workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined,
           rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined}),
       })}
