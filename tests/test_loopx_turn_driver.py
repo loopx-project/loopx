@@ -1494,6 +1494,7 @@ def _write_live_fixture(
     todo_metadata_extra: str = "",
     extra_agent_todo_lines: tuple[str, ...] = (),
     provider: str = "file",
+    handoff_mode: str = "soft_claim",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -1549,6 +1550,7 @@ def _write_live_fixture(
                         },
                         "quota": {"compute": 1.0, "window_hours": 24},
                         "coordination": {
+                            **({"handoff_mode": handoff_mode} if handoff_mode != "soft_claim" else {}),
                             "agent_model": "peer_v1",
                             "registered_agents": ["codex-fixture"],
                             "agent_profiles": {
@@ -1574,7 +1576,7 @@ def _write_live_fixture(
     )
     projection = build_todo_runtime_shadow_projection(
         goal_id="loopx-turn-fixture",
-        handoff_mode="soft_claim",
+        handoff_mode=handoff_mode,
         todos=parsed["agent_todos"]["items"],
     )
     initialize_canonical_authority(
