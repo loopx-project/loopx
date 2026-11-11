@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import os
 import stat
+from types import SimpleNamespace
 
 import pytest
 
 from loopx.control_plane.state_recovery_io import StateRecoveryError, _regular_input
 from loopx.control_plane.turn_driver.codex_input_trace import read_native_trace_file
+from loopx.hosts import checkpoint_retention
 from loopx.hosts.checkpoint_retention import _sync
 
 OWNER_MODEL = pytest.mark.skipif(
@@ -114,8 +116,9 @@ def test_checkpoint_sync_refuses_a_target_that_is_not_a_directory(tmp_path, monk
 
 def test_checkpoint_sync_claims_nothing_off_posix(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(os, "fsync", lambda descriptor: calls.append(descriptor))
-    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(
+        checkpoint_retention, "os", SimpleNamespace(name="nt", fsync=calls.append)
+    )
     target = tmp_path / "bank.json"
     target.write_text("{}")
     _sync(tmp_path)

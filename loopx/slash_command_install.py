@@ -933,11 +933,9 @@ def _merge_managed_hooks_json(
         marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         marker_payload = {}
-    recorded_hooks = (
-        cast(dict[str, Any], marker_payload.get("hooks"))
-        if isinstance(marker_payload, dict) and isinstance(marker_payload.get("hooks"), dict)
-        else {}
-    )
+    recorded_hooks = marker_payload.get("hooks") if isinstance(marker_payload, dict) else None
+    if not isinstance(recorded_hooks, dict):
+        recorded_hooks = {}
     recorded = recorded_hooks.get(MANAGED_MCP_KEY)
     # Native named hooks live at the top level. Earlier proposals wrote an
     # ignored `hooks.loopx` wrapper; migrate it only with exact ownership proof.
