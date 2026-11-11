@@ -489,10 +489,21 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
         assert json.loads(diagnostic_page["content"])["selections"] == [
             {"pointer": "/heartbeat_receipt", "value": context["heartbeat_receipt"]},
         ]
-        response = hook(diagnostic_page)
-        readback = json.loads(response["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
-        assert readback["event"] == "host_execution_preparation_readback_required"
-        assert readback["claim_operation_id"] == receipt["claim_operation_id"]
+        # Even reading the rejected file explicitly does not observe ready work context.
+        select_at = recovery.index("--select")
+        raw_reader = recovery[:select_at] + recovery[select_at + 2:]
+        raw = subprocess.run(raw_reader, cwd=tmp_path, check=True, text=True, capture_output=True)
+        raw_page = json.loads(raw.stdout)
+        assert raw_page["sha256"] == context["capture_sha256"]
+        for page in (diagnostic_page, raw_page):
+            response = hook(page)
+            readback = json.loads(response["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+            assert readback["event"] == "host_execution_preparation_readback_required"
+            assert readback["claim_operation_id"] == receipt["claim_operation_id"]
+        implicit = subprocess.run([*raw_reader[:raw_reader.index("quota")], "quota", "context-read",
+            "--codex-context-dir", str(native), "--goal-id", GOAL, "--agent-id", AGENT],
+            cwd=tmp_path, text=True, capture_output=True)
+        assert implicit.returncode == 1 and json.loads(implicit.stdout)["ok"] is False
         retry = shlex.split(readback["context"]["recovery_command"])
         assert "context-project" in retry and "--turn-instance-id" in retry
         refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
