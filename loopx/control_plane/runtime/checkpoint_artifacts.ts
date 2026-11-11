@@ -134,8 +134,25 @@ function unchanged(a: unknown, b: unknown, message = "checkpoint source moved; r
 }
 async function absentDestination(path: string): Promise<void> {
   await physical(dirname(path));
-  try {await lstat(path); throw new Error("checkpoint destination already exists");}
-  catch (error) {if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;}
+  try {await lstat(path);}
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new EffectRuntimeConflictError("checkpoint destination already exists");
+}
+async function publishCheckpointDirectory(staging: string, destination: string): Promise<void> {
+  try {await publishNewDirectory(staging, destination);}
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const permissionFailure = code === "EACCES" || code === "EPERM";
+    // A directory rename can report a permission error for an occupied target.
+    // Confirm the entry exists before changing the meaning of that error.
+    const occupied = code === "EEXIST" || code === "ENOTEMPTY" ||
+      (permissionFailure && await lstat(destination).then(() => true, () => false));
+    if (occupied) throw new EffectRuntimeConflictError("checkpoint destination already exists");
+    throw error;
+  }
 }
 async function sqliteFile(path: string): Promise<boolean> {
   const handle = await open(path, "r");
@@ -430,7 +447,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
       await copyComponent(root, join(staging, "unit"), false);
       await verify(join(staging, "unit"), request.expected_sha256);
       withinDeadline();
-      await publishNewDirectory(join(staging, "unit"), destination);
+      await publishCheckpointDirectory(join(staging, "unit"), destination);
       return {...verification, materialized: true, activation_performed: false};
     }
     const sources = components(request.components);
@@ -465,7 +482,7 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     await verify(staging, manifest.sha256);
     unchanged(before, await witness(sources));
     withinDeadline();
-    await publishNewDirectory(staging, destination);
+    await publishCheckpointDirectory(staging, destination);
     return {...await verify(destination, manifest.sha256), source_stability_verified: true};
   } finally {await rm(staging, {recursive: true, force: true});}
 }

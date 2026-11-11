@@ -30,6 +30,7 @@ from typing import Any
 
 import pytest
 
+from loopx.capabilities.agent_turn_recall import core
 from loopx.capabilities.periodic_report import (
     archive,
     audience,
@@ -58,7 +59,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_OWNER = "loopx/control_plane/digest_envelope.py"
 ENVELOPE = "sha256:"
 
-CONVERTED_SURFACES = ("loopx/capabilities/periodic_report",)
+CONVERTED_SURFACES = (
+    "loopx/capabilities/agent_turn_recall",
+    "loopx/capabilities/periodic_report",
+)
 
 
 def _fold_joined_prefix(node: ast.JoinedStr, scope: Any) -> str | None:
@@ -297,6 +301,7 @@ SAMPLE = {"goal_id": "goal-7", "route": ["a", "b"], "count": 3}
 @pytest.mark.parametrize(
     "helper,expected",
     [
+        (core._canonical_hash, _reference(_canonical(SAMPLE))),
         (bindings._sha256, _reference(_canonical(SAMPLE))),
         (audience._digest, _reference(_canonical(SAMPLE))),
         (machine_defaults._digest, _reference(_canonical(SAMPLE))),
