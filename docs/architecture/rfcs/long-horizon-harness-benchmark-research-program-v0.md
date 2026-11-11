@@ -1002,6 +1002,39 @@ delivery and model adoption qualify the path, not effectiveness. A dual-session
 Controller/Worker runtime, numerical fidelity engine and learned policy are not
 prerequisites. Later schema work needs an observed missing producer/consumer fact.
 
+<a id="action-value-episode"></a>
+
+#### Decision-episode readback for action-value evidence
+
+From a prospectively selected meaningful decision point, the first implementation
+slice should demonstrate one real, followable episode: **state then → pre-action
+forecast and choice → actual work/resources → returned evidence and next decision
+→ frozen terminal outcome**. Data semantics are in
+[research rationale §9](../../research/budgeted-research-planning.md#action-value-evidence);
+owners and negative cases are in
+[joint RFC §5.9 and C17–C18](target-yardstick-stride-decisions-v0.md#policy-evolution).
+Reuse existing plan/finding/measurement/followthrough. Report missing records as
+unrecoverable; do not fabricate retrospective forecasts or add model/Native calls
+to complete an episode. Include capture and analysis overhead in full cost.
+If the run is unfinished, leave the terminal link pending until the planned
+endpoint; do not add a run merely to complete readback.
+
+Readback should identify which key forecast was supported/refuted and how actual
+subsequent work addressed it. Evidence-backed continuation also counts as adoption.
+A two-hour local gain cannot label an eighteen-hour terminal forecast; an
+unobserved alternative is not zero. Keep the relevant work chain for delayed
+gains rather than crediting the last switch with all progress.
+
+This readback establishes linkage and analyzability. Synthetic examples can
+validate missing/late/revised-record handling but do not replace real adoption.
+Formal comparisons retain every prospectively selected episode, including
+failure, cancellation, no gain and insufficient evidence, rather than only
+success stories. Report forecast calibration, adoption/decision change,
+same-state paired contrasts, from-start terminal results and new-task benefit
+separately; passing one level does not pass the next. Hold out tasks, source runs
+or sibling-branch families for learning/calibration. Use the pilot and full-budget
+contracts below, not a separate experiment or expanded feedback permission.
+
 #### Affordable conditional-effect pilot
 
 Start with three complementary task types, under the pinned upstream task names:
