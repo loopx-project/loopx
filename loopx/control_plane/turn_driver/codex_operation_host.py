@@ -95,7 +95,7 @@ def run_codex_operation_host(
         profile["operation_request"] = request_source.profile(source_route)
     admission = goal_admission or FirstPartyHostGoalAdmission.for_plan(
         registry_path=registry_path,
-        goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
+        goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"), agent_id=lineage["agent_id"],
     )
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()

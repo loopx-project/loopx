@@ -216,11 +216,19 @@ def test_operation_dispatch_releases_goal_lock_before_native_response_wait(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("failure", ["stop", "inventory-unavailable", "authority-unavailable", "agent-revoked"])
+@pytest.mark.parametrize("failure", [
+    "stop", "inventory-unavailable", "authority-unavailable", "agent-revoked",
+    "work-mode-changed", "workspace-changed",
+])
 def test_running_operation_stop_waits_for_owned_native_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, failure: str,
 ) -> None:
     runtime, registry, _, turns, arguments = _fixture(tmp_path, monkeypatch, provider)
+    if failure == "agent-revoked":
+        with project_registry_transaction(registry, operation="fixture_legacy_peer_alias") as transaction:
+            legacy = transaction.payload_copy()
+            legacy["goals"][0]["registered_agents"] = ["codex-fixture"]
+            assert transaction.commit(legacy)
     executable = Path(arguments[arguments.index("--codex-bin") + 1])
     events = tmp_path / "native-control"
     authority_unavailable = threading.Event()
@@ -289,6 +297,16 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
             authority_unavailable.set()
         elif failure == "agent-revoked":
             _configure_fixture_goal(registry, runtime, "--registered-agent", "replacement-agent")
+            configured = json.loads(registry.read_text())["goals"][0]
+            assert configured["registered_agents"] == ["codex-fixture"]
+            assert configured["coordination"]["registered_agents"] == ["replacement-agent"]
+        elif failure == "work-mode-changed":
+            _configure_fixture_goal(registry, runtime, "--agent-work-mode", "codex-fixture=monitor_only")
+        elif failure == "workspace-changed":
+            with project_registry_transaction(registry, operation="replace_fixture_workspace") as transaction:
+                changed = transaction.payload_copy()
+                changed["goals"][0]["repo"] = str(tmp_path / "replacement-workspace")
+                assert transaction.commit(changed)
         else:
             stopped = activation_service.set_goal_activation_state(
                 registry_path=registry, goal_id="loopx-turn-fixture", state="stopped",
@@ -303,6 +321,8 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
         "inventory-unavailable": "codex_operation_host_stop_unconfirmed",
         "authority-unavailable": "goal_authority_unavailable",
         "agent-revoked": "stale_goal_authority",
+        "work-mode-changed": "stale_goal_authority",
+        "workspace-changed": "stale_goal_authority",
     }[failure]
     assert expected in json.dumps(payload), payload
     expected_events = ["interrupt", "terminate-owned", "owned-gone"] if inventory_available else ["interrupt"]
@@ -312,14 +332,32 @@ def test_running_operation_stop_waits_for_owned_native_terminal(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("change", ["unrelated-registration", "review-order", "mirror-review-order"])
-def test_running_operation_survives_non_authority_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, change: str,
+@pytest.mark.parametrize(("transport", "change"), [
+    ("operation", "unrelated-goal"), ("operation", "review-order"), ("operation", "mirror-review-order"),
+    ("operation", "peer-add"), ("ordinary", "peer-add"),
+    ("operation", "peer-remove"), ("ordinary", "peer-remove"),
+    ("operation", "mirror-peer-add"),
+])
+def test_running_codex_turn_survives_non_authority_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, transport: str, change: str,
 ) -> None:
     runtime, registry, _, _, arguments = _fixture(tmp_path, monkeypatch, provider)
+    if change == "peer-add":
+        # Earlier registries can omit the default peer model marker.
+        with project_registry_transaction(registry, operation="fixture_implicit_peer_model") as transaction:
+            legacy = transaction.payload_copy()
+            legacy["goals"][0]["coordination"].pop("agent_model")
+            assert transaction.commit(legacy)
+    if change == "peer-remove":
+        _configure_fixture_goal(
+            registry, runtime, "--registered-agent", "codex-fixture", "--registered-agent", "other-agent",
+            "--agent-profile-json", json.dumps({"agent_id": "other-agent", "profile_role": "fixture"}),
+            "--agent-work-mode", "other-agent=monitor_only",
+            "--todo-lifecycle-authority-json", json.dumps({"agent_id": "other-agent", "actions": ["complete"]}),
+        )
     mirror = None
     original_sync_stamp = "2026-01-01T00:00:00+00:00"
-    if change == "mirror-review-order":
+    if change.startswith("mirror-"):
         synced = sync_project_registry_to_global(
             registry_path=registry, runtime_root_override=str(runtime), goal_id="loopx-turn-fixture",
         )
@@ -331,17 +369,30 @@ def test_running_operation_survives_non_authority_change(
             original["goals"][0]["synced_at"] = original_sync_stamp
             assert transaction.commit(original)
         arguments[arguments.index("--registry") + 1] = str(mirror)
-    executable = Path(arguments[arguments.index("--codex-bin") + 1])
     waiting, proceed = tmp_path / "native-waiting", tmp_path / "native-proceed"
-    after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
+    executable_at = arguments.index("--codex-bin") + 1
+    if transport == "ordinary":
+        executable, argv_log = _fake_codex(tmp_path)
+        monkeypatch.setenv("FAKE_CODEX_LOG", str(argv_log))
+        monkeypatch.setenv("FAKE_CODEX_RESULT_FIELDS", json.dumps({
+            "result_kind": "wait", "classification": "fixture_wait",
+            "next_action": "", "delivery_batch_scale": "", "delivery_outcome": "",
+            "vision_unchanged_reason": "", "work_evidence": None, "validation_evidence": None,
+        }))
+        arguments[executable_at] = str(executable)
+        arguments.remove("--codex-operation-tools")
+        after_start = 'if os.environ.get("FAKE_CODEX_FAIL") == "1":'
+        pause = (f"pathlib.Path({str(waiting)!r}).touch()\n"
+                 f"while not pathlib.Path({str(proceed)!r}).exists(): time.sleep(.01)\n")
+        replacement = pause + after_start
+    else:
+        executable = Path(arguments[executable_at])
+        after_start = '        emit({"id": row["id"], "result": {"turn": {"id": turn}}})'
+        replacement = (after_start + f"\n        pathlib.Path({str(waiting)!r}).touch()"
+                       + f"\n        while not pathlib.Path({str(proceed)!r}).exists(): time.sleep(.01)")
     server = executable.read_text()
     assert after_start in server
-    executable.write_text(server.replace(
-        after_start,
-        after_start + f"\n        pathlib.Path({str(waiting)!r}).touch()"
-        + f"\n        while not pathlib.Path({str(proceed)!r}).exists(): time.sleep(.01)",
-        1,
-    ))
+    executable.write_text(server.replace(after_start, replacement, 1))
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         host = executor.submit(_cli, [*arguments, "--execute"])
@@ -350,27 +401,32 @@ def test_running_operation_survives_non_authority_change(
             while not waiting.exists() and not host.done() and time.monotonic() < deadline:
                 time.sleep(0.01)
             assert waiting.exists(), host.result() if host.done() else "native Turn was not acknowledged"
-            if change != "unrelated-registration":
+            if change.endswith("review-order"):
                 configured = _configure_fixture_goal(registry, runtime, "--pr-review-order", "reverse")
                 assert configured["after"]["pull_request_review"]["review_order"] == "reverse"
-                if mirror is not None:
-                    synced = sync_project_registry_to_global(
-                        registry_path=registry, runtime_root_override=str(runtime), goal_id="loopx-turn-fixture",
-                    )
-                    assert synced["ok"], synced
-                    projected = json.loads(mirror.read_text())["goals"][0]
-                    assert projected["synced_at"] != original_sync_stamp
-                    assert projected["source_registry"] == str(registry.resolve())
+            elif change.endswith("peer-add"):
+                _configure_fixture_goal(registry, runtime, "--registered-agent", "codex-fixture",
+                                        "--registered-agent", "other-agent")
+            elif change == "peer-remove":
+                _configure_fixture_goal(registry, runtime, "--registered-agent", "codex-fixture")
             else:
                 with project_registry_transaction(registry, operation="register_other_fixture_goal") as transaction:
                     registry_payload = transaction.payload_copy()
                     registry_payload["goals"].append({"id": "other-goal", "status": "active"})
                     assert transaction.commit(registry_payload)
+            if mirror is not None:
+                synced = sync_project_registry_to_global(
+                    registry_path=registry, runtime_root_override=str(runtime), goal_id="loopx-turn-fixture",
+                )
+                assert synced["ok"], synced
+                projected = json.loads(mirror.read_text())["goals"][0]
+                assert projected["synced_at"] != original_sync_stamp
+                assert projected["source_registry"] == str(registry.resolve())
         finally:
             proceed.touch()
         code, payload = host.result(timeout=12)
 
-    assert code == 0 and payload["ok"], payload
+    assert code == 0 and payload["ok"], payload.get("reason", payload)
     assert payload["result_kind"] == "wait", payload
 
 

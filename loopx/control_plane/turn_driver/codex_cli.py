@@ -857,6 +857,7 @@ def run_codex_cli_host(
     if admission is None and registry_path is not None:
         admission = FirstPartyHostGoalAdmission.for_plan(
             registry_path=registry_path, goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
+            agent_id=lineage["agent_id"],
         )
     launch_scope = FirstPartyHostGoalAdmission.launch_scope_for_plan(
         admission=admission, registry_path=registry_path,
