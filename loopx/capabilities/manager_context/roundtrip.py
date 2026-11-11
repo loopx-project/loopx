@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 import json
 import re
+from fnmatch import fnmatch
 from hashlib import sha256
 import threading
 from itertools import islice
+from os import scandir
 from contextlib import contextmanager, ExitStack, nullcontext
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -332,6 +334,22 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
                 if message.get("message_id") in pending_message_ids
                 and isinstance(message.get("turn_id"), str) and message.get("turn_id")
             )
+            # A cursor page holds at most 200 rows. Wider reads with a dense
+            # set of returns can skip opening each original Turn: the complete
+            # route scan costs at most a Turn and route lookup per visible Turn.
+            # Only choose locators here; the same route and result checks apply.
+            if len(turn_ids) > 200:
+                lookup_limit = 2 * len(turn_ids)
+                try:
+                    with scandir(routes) as entries:
+                        names = list(islice((entry.name for entry in entries if fnmatch(entry.name, "*.json")),
+                                            lookup_limit + 1))
+                except OSError:
+                    pass  # A direct locator may still be readable.
+                else:
+                    if 0 < len(names) <= lookup_limit:
+                        yield from sorted(routes / name for name in names)
+                        return
             for turn_id in turn_ids:
                 try:
                     turn = source_store.load_turn(session_id, turn_id) or {}
@@ -592,7 +610,7 @@ def _return_transaction(host, path, phase, request):
             observed[field] = {key: observed[field][key] for key in keys if key in observed[field]}
     result = effect_runtime_result("manager.return_delivery.transact", {
         "schema_version": RETURN_DELIVERY_TRANSACTION,
-        "runtime_root": str(root.resolve()), "request_id": path.parent.name,
+        "runtime_root": str(root), "request_id": path.parent.name,
         "result_key": path.stem, "phase": phase, "now": host["clock"]().isoformat(),
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
@@ -709,7 +727,7 @@ def _pending_return_paths(host, paths):
         candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
         selected = effect_runtime_result("manager.return_delivery.transact", {
             "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
-            "runtime_root": str(root.resolve()), "now": scan_at.isoformat(), "exact": exact,
+            "runtime_root": str(root), "now": scan_at.isoformat(), "exact": exact,
             "candidates": candidates,
         })
         if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
@@ -725,6 +743,9 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
+
+    # Derive source paths and the typed transaction's root from one directory.
+    root = root.resolve()
 
     def clock() -> datetime:
         return datetime.now(timezone.utc) if now is None else now

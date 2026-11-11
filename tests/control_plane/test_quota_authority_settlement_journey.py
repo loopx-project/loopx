@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import test_quota_settlement_cli as cli
 from canonical_authority_fixture import initialize_canonical_authority
+from codex_checkpoint_fixture import selected_context_values
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
@@ -333,14 +334,20 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
     assert cli._spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("qualified", [False, True])
-def test_workspace_repair_wait_requires_original_business_admission(tmp_path, provider, qualified):
+def _workspace_repair_source(tmp_path, provider, goal_scopes=None, todo_scopes=None):
     project, runtime, registry = cli._write_fixture(tmp_path)
     state = cli._configure_repository_write_todo(project)
-    state.write_text(state.read_text().replace("action_kind=validate", "action_kind=implement"))
+    body = state.read_text().replace("action_kind=validate", "action_kind=implement")
+    if todo_scopes is not None:
+        body = body.replace("required_capabilities=filesystem_write -->",
+                            "required_capabilities=filesystem_write "
+                            f"required_write_scopes={','.join(todo_scopes)} -->")
+    state.write_text(body)
     registered = json.loads(registry.read_text())
-    registered["goals"][0]["coordination"]["registered_agents"].append("fixture-peer")
+    coordination = registered["goals"][0]["coordination"]
+    coordination["registered_agents"].append("fixture-peer")
+    if goal_scopes is not None:
+        coordination["write_scope"] = goal_scopes
     registry.write_text(json.dumps(registered))
     cli._initialize_git_checkout(project)
     subprocess.run([
@@ -348,6 +355,86 @@ def test_workspace_repair_wait_requires_original_business_admission(tmp_path, pr
         "commit", "--quiet", "--allow-empty", "-m", "fixture",
     ], cwd=project, check=True)
     cli._initialize_fixture_authority(project, runtime, provider=provider)
+    return project, runtime, registry
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_workspace_repair_opening_keeps_action_and_recovers_scopes(tmp_path, provider):
+    goal_path = "/goal_boundary/write_scope"
+    todo_path = "/selected_todo/required_write_scopes"
+    goal_scopes = ["src/**"] + [f"docs/area-{i:03d}/reference/specifications/**" for i in range(300)]
+    todo_scopes = [f"src/area-{i:03d}/implementations/shared/**" for i in range(300)]
+    project, runtime, registry = _workspace_repair_source(tmp_path, provider, goal_scopes, todo_scopes)
+    turn = "workspace-repair-context"
+    code, plain = _guard(project, runtime, registry, turn_id=turn)
+    assert code == 0 and plain["effective_action"] == "agent_workspace_repair"
+    assert plain["goal_boundary"]["write_scope"] == goal_scopes
+    assert plain["selected_todo"]["required_write_scopes"] == todo_scopes
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+    identity = plain["heartbeat_receipt"]["settlement_identity"]
+    repair_action = plain["interaction_contract"]["agent_channel"]["primary_action"]
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    code, view = cli._run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+        "--turn-instance-id", turn, "--context-delivery", "on", "--delta-delivery", "off",
+        "--decision-output-root", str(captures), "--codex-context-root", str(captures), cwd=project,
+    )
+    assert code == 0 and view["ok"], view
+
+    def selection(command):
+        parts = bytearray()
+        pages = []
+        while command:
+            args = shlex.split(command)
+            code, page = cli._run_cli(registry, runtime, *args[args.index("quota"):], cwd=project)
+            assert code == 0 and page["ok"] and page["offset"] == len(parts), page
+            parts.extend(page["content"].encode())
+            pages.append(page)
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and pages[-1]["total_bytes"] == len(parts)
+        return pages, selected_context_values(parts.decode())
+
+    pages, initial = selection(view["first_read_command"])
+    first = pages[0]
+    if remainder := view.get("remaining_read_command"):
+        more, remaining = selection(remainder)
+        assert initial.keys().isdisjoint(remaining)
+        pages.extend(more)
+        initial.update(remaining)
+    print(json.dumps({"provider": provider, "pages_before_worktree_move": len(pages),
+                      "selection_bytes": sum(len(page["content"].encode()) for page in pages)}))
+    assert json.dumps(repair_action, ensure_ascii=False) in first["content"]
+    assert initial["/execution_obligation"] == plain["execution_obligation"]
+    assert initial["/goal_boundary/stop_condition"] == plain["goal_boundary"]["stop_condition"]
+    assert initial["/heartbeat_receipt/settlement_identity"] == identity
+    assert initial["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert goal_path not in initial and todo_path not in initial
+    assert initial["/goal_boundary/write_scope_pointer"] == goal_path
+    detail = initial["/context_details/unread_context_index/source"]
+    _, exact = selection(
+        "quota context-read "
+        f"--capture-file {shlex.quote(detail['path'])} --capture-sha256 {detail['sha256']} "
+        f"--select {goal_path} --select {todo_path}"
+    )
+    assert exact[goal_path] == goal_scopes and exact[todo_path] == todo_scopes
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+
+    workspace = tmp_path / "repair-worktree"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(workspace)], cwd=project, check=True)
+    code, ready = _guard(workspace, runtime, registry, turn_id=turn)
+    assert code == 0 and ready["normal_delivery_allowed"] is True
+    assert ready["heartbeat_receipt"]["settlement_identity"] == identity
+    assert ready["goal_boundary"]["write_scope"] == goal_scopes
+    assert cli._heartbeat_receipt_count(runtime, turn) == 2  # Repair and legitimate same-Turn reentry.
+    assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("qualified", [False, True])
+def test_workspace_repair_wait_requires_original_business_admission(tmp_path, provider, qualified):
+    project, runtime, registry = _workspace_repair_source(tmp_path, provider)
     turn_id = "turn-workspace-repair-wait"
     code, initial = _guard(project, runtime, registry, turn_id=turn_id)
     assert code == 0, initial

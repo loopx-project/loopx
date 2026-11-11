@@ -29,6 +29,10 @@ function record(value: unknown, session: string) {
     usage: tokens(p.usage), thread: tokens(p.thread_token_usage), turn: tokens(p.turn_token_usage)};
 }
 type Request = ReturnType<typeof record>;
+
+export function isIdentifiedTurnAbort(payload: {type?: unknown; turn_id?: unknown} | undefined | null): boolean {
+  return payload?.type === 'turn_aborted' && typeof payload.turn_id === 'string' && payload.turn_id.length > 0;
+}
 const same = (a: Request, b: Request) => a.response_id === b.response_id && a.turn_id === b.turn_id
   && a.root_turn_id === b.root_turn_id && equal(a.usage, b.usage) && equal(a.thread, b.thread) && equal(a.turn, b.turn);
 
@@ -54,10 +58,12 @@ export function reconcileTrajectoryRequests(rows: Array<{type?: unknown; payload
     for (const e of rows) {
       const p = object(e.payload);
       if (e.type === 'session_meta') continue;
-      if (e.type !== 'token_usage_record' && e.type !== 'compacted'
+      const interrupted = e.type === 'event_msg' && isIdentifiedTurnAbort(p);
+      if (e.type !== 'token_usage_record' && e.type !== 'compacted' && !interrupted
         && !(e.type === 'event_msg' && ['task_started', 'task_complete', 'token_count'].includes(p.type as string))) continue;
       if (e.type === 'event_msg' && p.type === 'task_started') active = p.turn_id as string;
-      if (e.type === 'event_msg' && p.type === 'task_complete') active = null;
+      if (interrupted && p.turn_id !== active) return invalid('Aborted Turn identity mismatch.');
+      if (interrupted || e.type === 'event_msg' && p.type === 'task_complete') active = null;
       if (typeof e.timestamp !== 'string' || !/\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(e.timestamp)
         || !Number.isFinite(Date.parse(e.timestamp)) || Date.parse(e.timestamp) < previousTime) return invalid('Request timestamps are invalid or out of order.');
       previousTime = Date.parse(e.timestamp);

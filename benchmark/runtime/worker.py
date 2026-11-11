@@ -150,6 +150,8 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
         # launch with the existing Goal lifetime owner, never the whole model run.
         with (goal_admission.launch_lifetime(operation="codex_agent_host_launch")
               if goal_admission is not None else nullcontext()):
+            # The child can write a native event before Popen returns.
+            launch_started_at_unix = time.time()
             process = subprocess.Popen(
                 command,
                 cwd=env["LOOPX_PROJECT"],
@@ -164,7 +166,7 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
                 umask=0o077 if os.name == "posix" and env.get("LOOPX_CONTEXT_DELIVERY") == "on" else -1,
             )
         if process_observation is not None:
-            process_observation.started(process)
+            process_observation.started(process, launch_started_at_unix=launch_started_at_unix)
         yield process
     except BaseException as exc:
         scope_error = type(exc).__name__
@@ -214,12 +216,15 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
         guard = ProviderRequestAdmission(env, session_wake, receipt, wake,
             timeout=timeout, original_quota=original_quota)
         scope = guard.serve(command)
-    observation = guard
+    native_observation = None
     if env.get("LOOPX_HOST_ATTEMPT_ID") and session_wake is not None:
         from loopx.capabilities.benchmark_toolkit.native_codex_process import NativeCodexProcessObservation
-        from .interruption_recovery import ProcessObservers
 
         native_observation = NativeCodexProcessObservation(lambda value: receipt.update(native_process=value))
+    observation = None
+    if native_observation is not None or guard is not None:
+        from .interruption_recovery import ProcessObservers
+
         observation = ProcessObservers(native_observation, guard)
     with scope as routed:
         with child_process(routed, env=env, stdout=stdout, stderr=stderr,

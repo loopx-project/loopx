@@ -214,12 +214,14 @@ revision and advisory authority. This captured pre-work view does not replace th
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
 The initial read includes the bounded `unfinished_delegations` projection and
-`read_complete` flag. For an admitted normal work Turn with a large, complete
-agenda and a matching required Manager Inbox read, the initial view keeps the
-incoming and outgoing request counts, scan status and required command. The
-required read delivers the rows and their guidance. The original rows remain
-available from the same capture. Adoption and
-queued returns are intermediate states. Read the full current request before
+`read_complete` flag. For an admitted normal work Turn with a large
+agenda, a complete scan and a matching required Manager Inbox read, the initial
+view keeps the incoming and outgoing request counts, scan status and required
+command. A complete scan can still hit the summary's display limit. The initial
+view then also keeps the exact omitted count and reconciliation guidance. The
+required read and its existing cursor deliver the scoped request rows. The
+captured summary remains available at its original address. An incomplete scan, unavailable scan records or an unmatched read keeps the whole summary inline.
+Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.
 It also exposes existing outcome material addresses and the current settlement
@@ -233,10 +235,12 @@ selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
 Historical recipe-only references and explicit-file initial cursors still reject
-a changed selection digest; recover through the same original full-capture
-reference, without another admission or rewriting the saved descriptor. These
-legacy readers still require reconciliation of their unfinished original Turns
-before retirement; this slice retains their decoder and full-capture recovery.
+a changed selection digest. If the original capture passes file-digest
+verification, the recovery command restarts at offset zero. Historical
+initial-read cursors can recover the full original file. An explicit selection
+or field listing keeps its original scope, including a receipt-only diagnostic.
+The recovery never repeats admission or rewrites the saved descriptor. Retain
+the legacy readers while unfinished Turns still depend on them.
 Initial navigation can replace fully
 selected children with their complete captured parent to avoid repeating addresses.
 An unselected child, including optional or unknown material, prevents that merge.
@@ -315,15 +319,30 @@ immutable capture.
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
 
-The native `quota should-run` navigation can link two reads when a ready
-decision's write scope pushes its controls past the serialized first page
-budget. When those controls fit, the ordinary reader keeps its cursor.
+When native quota navigation requires explicit Todo selection, the opening
+keeps the discovery and same-Turn selection commands with the read obligations
+and execution controls. If the recommended candidate makes these controls too
+large for one page, the linked remainder contains its full details and the
+suggested alternatives. The selection commands use the original Turn identity.
+
+Native ready decisions from `quota should-run` and saved `quota context-project`
+can link two reads when boundary detail pushes controls past the serialized
+first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
 If `remaining_read_command` is present,
 follow it and its cursor before work, even when the opening reports EOF. It
-starts with the complete current write scope and uses the same capture.
+starts with the complete current write scope and any checkpointed approval
+entries. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
+
+When the guard requires an independent worktree before delivery, the opening
+keeps the relocation instructions and the current decision controls. Large
+Goal and selected Todo write scope lists are available from the same capture
+at `/goal_boundary/write_scope` and `/selected_todo/required_write_scopes`.
+Select them if the relocation needs them. Once relocated, rerun the guard for
+the same Turn and read its complete current scopes before editing. This
+presentation changes neither admission nor the explicit off view.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
@@ -339,12 +358,23 @@ observation is lost, its same-capture fallback restores the full remainder.
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
 
-原生 `quota should-run` 的已就绪决策中，如果写入范围让控制信息超出序列化后的首页
-预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
+原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
+约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整
+候选和其他建议选项。选择命令沿用原轮次身份。
+
+原生 `quota should-run` 及已保存的 `quota context-project` 就绪决策中，如果权限明细让
+控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读从完整的当前写入范围开始，两段绑定同一份捕获。
+续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
+数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
+
+准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
+如迁移需要较长的 Goal 或选中 Todo 写入范围，可从同一捕获按
+`/goal_boundary/write_scope` 和 `/selected_todo/required_write_scopes` 读取。
+切换后以原 Turn 重新准入，编辑前读取其完整的当前范围。该展示调整不改变准入判定
+或显式关闭渐进读取时的视图。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
@@ -385,9 +415,11 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 却绑定规范排序正文的摘要，仅在摘要不匹配后，对同一已验证来源及相同地址集合重试
 一次原规范 planner；只返回摘要完全匹配的字节。此兼容路径每个旧分页最多增加一次
 只读 planner 调用，不写状态或证明模型输入覆盖。历史 recipe-only 引用和原始首读
-游标仍在 profile 变化时严格拒绝，并保留完整捕获恢复。既有内部 `context_select`
-请求为重放接受严格 boolean 的 `preserve_selection_order`；公开显式选读及错误诊断
-不变，reader 描述符字段结构和 CLI 选项不变。
+游标仍在 profile 变化时严格拒绝。原捕获摘要通过校验后，恢复命令从字节零开始。
+历史首读可恢复完整原文件；显式选读和字段列表保留原范围，包括只读诊断回执。
+恢复不会再次准入或改写已保存的描述符。既有内部 `context_select`
+请求为重放接受严格 boolean 的 `preserve_selection_order`。常规显式选读和其他错误
+诊断不变，reader 描述符字段结构和 CLI 选项不变。
 首读按 TypeScript owner 的优先顺序呈现，不再按指针字母序重排；当前控制条件、必读
 来源和结算义务先于完整的未读材料索引。合并父节点保留首个已选子节点的位置，
 显式选读仍按既有规范排序。这只调整相同事实的顺序，不缩减总正文，也不保证全部
@@ -396,10 +428,12 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
 首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
-工作 Turn 若有完整的大型委派摘要，且必读列表中有同一条管家收件箱命令，首读保留
-收发请求计数、扫描状态和必读命令，逐条记录及其说明由必做的收件箱读取交付。原记录仍可从
-同一捕获回读。采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，
-并沿已有范围约束和消费入口办理。
+工作 Turn 若有大型委派摘要、扫描完整，且必读列表中有同一条管家收件箱命令，首读保留
+收发请求计数、扫描状态和必读命令。扫描完整但摘要达到展示上限时，首读同时保留精确的
+省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。原摘要仍可从同一
+捕获取回。扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
+采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，并沿已有范围约束和
+消费入口办理。
 
 既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
 Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
@@ -477,6 +511,11 @@ The native hook executes only a preparation bound to a captured Turn. An
 ordinary claim recommendation remains available to its caller; reading one
 or reading an original receipt does not trigger an automatic claim.
 
+For a selected Todo, preparation reads the canonical Todo and leases at one
+checked provider revision. The internal read returns only that Todo's status,
+assignment and lease facts. Unrelated Todo bodies stay with the provider
+reader. Quota still checks ownership and lease expiry before reporting readiness.
+
 中文：私有原生日志在对绑定 capture 发起领取前先登记自动准备，并在投影前记录已校验的
 ready capture。若就绪检查或 Hook 送达中断，Hook 可重复提供原领取回执、当前租约
 及 ready capture 的回读入口，不再重复自动领取或准入。Hook 输出本身不足以确认送达。
@@ -489,12 +528,20 @@ Goal、Agent、Todo 和 Turn 运行 `quota should-run`，生成新的 capture，
 原生 Hook 只执行与已捕获 Turn 绑定的准备。调用方仍可读取普通领取建议；读取建议或原
 领取回执都不会触发自动领取。
 
+准备阶段从同一已校验的权威版本读取 Todo 和租约，只传回所选 Todo 的状态、归属和租约
+事实。其他任务正文留在读取端。额度检查仍核对归属和租约到期时间，再报告是否就绪。
+
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
 internal context-projection bridge, preserving the complete progressive read
 without an unused body copy. Explicitly owned sources send the complete
-non-generated narrative and region lineage to the typed consumer. Missing files
-and invalid UTF-8 still block dependent delivery. Byte reduction alone does not
+non-generated narrative and region lineage to the typed consumer. Whole-line
+SQLite archive summaries from the current writer and the older unscoped writer
+are recorded as archive ranges when they appear outside marked Todo blocks.
+The full file revision still covers these lines. The canonical Todo query owns
+archived and omitted work. Unrecognized forms, foreign Goal bindings and
+examples inside code fences remain in the narrative. Missing files and invalid
+UTF-8 still block dependent delivery. Byte reduction alone does not
 establish model-token, latency or outcome gains.
 
 Already delivered sources disappear from `required_reads`; unresolved provider
@@ -933,7 +980,7 @@ first reader and every observed reader output,
 including complete byte coverage of the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
-profile is qualified on Codex 0.162.1 paginated rollouts. It streams only the
+profile is qualified on Codex 0.162.1 and 0.167.0-alpha.3.2 paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
@@ -944,6 +991,12 @@ back to full. One decoded record remains bounded; this is not a history-size
 limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
+For a complete one-page selection from the current capture, the adapter can
+verify that exact selected output across an ordinary resume. The source and
+read scope must still match. Only the replayed literal sections remain
+eligible for reuse in the next progressive view. Partial or inherited
+selections still need their ordinary recovery, and a selected read cannot
+establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
@@ -1005,8 +1058,11 @@ Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 
 布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
 模型补读或 runtime 往返；不同来源事实保留完整指引。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
-显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
-任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间
+显式标记时，`work_context.sources` 原样携带完整非生成正文，保留目标、frontmatter、
+任意章节、注释、历史和末尾停止条件。当前 writer 和旧版无 Goal 参数的 writer 生成的
+独立整行 SQLite 归档索引即使位于已标记区域之外，也按 archive 区间记录。原文件修订
+覆盖这些行，归档及省略任务由 canonical Todo 查询读取。外 Goal 标记、未知格式及
+代码块中的示例仍保留在正文。`excluded_todo_regions` 保留每段的角色、行区间
 和 SHA-256，`revision` 仍覆盖完整原文件；任务要求与权限由 canonical 精确 Todo 和
 scoped User 读取保留。默认 Goal 必读对象改为完整非生成正文，不摘要要求、不删除历史，
 不重写原文件或权威记录。未标记或混合归属仍须渐进式读取全文；错误标记、标记内非生成
@@ -1227,7 +1283,7 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
-中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 的分页
+中间没有压缩、回滚、替换或未知重放记录。此 IO profile 在 Codex 0.162.1 和 0.167.0-alpha.3.2 的分页
 rollout 上验证；流式读取当前基线对应区间及后续记录，不哈希或解码无关旧历史，
 文件总大小不决定是否差分。session metadata 的创建版本不等于当前宿主版本。
 code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部精确页字节。

@@ -23,6 +23,7 @@ from pathlib import Path
 from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
+from loopx.control_plane.content_digest import BARE_SHA256_PATTERN
 from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
 
 
@@ -248,7 +249,7 @@ def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: st
     require_host_failure_kind(failure_kind)
     if ((returned_error_sha256 is None and failure_kind != "quota_exhausted") or not session_id
             or (returned_error_sha256 is not None and (not isinstance(returned_error_sha256, str)
-                or re.fullmatch(r'[a-f0-9]{64}', returned_error_sha256) is None))
+                or BARE_SHA256_PATTERN.fullmatch(returned_error_sha256) is None))
             or any(type(x) not in (int, float) or not math.isfinite(x)
                    for x in (process_started_at, process_stopped_at, timeout))
             or process_started_at > process_stopped_at or timeout <= 0):
@@ -368,16 +369,21 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         except (SystemExit, ValueError) as error:
             raise ValueError("native pending guard arguments are invalid") from error
     args = arguments(item.get("command", ""))
-    # Older sealed interrupted guards were captured with mandatory envelopes.
-    # New captures bind the explicit execution mode; neither format opts in.
+    # Older sealed guards could omit the then-mandatory envelope flag.
+    # Missing complete mode is historical off, never inferred from the command.
     turn_envelope = guard.get("turn_envelope", True)
+    complete_turn = guard.get("complete_turn", False)
     if not isinstance(turn_envelope, bool):
         raise ValueError("native pending guard envelope mode must be boolean")
+    if not isinstance(complete_turn, bool):
+        raise ValueError("native pending guard complete mode must be boolean")
+    if turn_envelope and complete_turn:
+        raise ValueError("native pending guard has incompatible envelope and complete modes")
     expected = {"command": "quota", "quota_command": "should-run", "format": "json",
                 "registry": guard["registry"], "runtime_root": guard["runtime_root"],
                 "goal_id": guard["goal_id"], "agent_id": guard["agent_id"],
                 "turn_instance_id": guard["turn_instance_id"], "turn_envelope": turn_envelope,
-                "decision_output_root": guard["capture_root"],
+                "complete_turn": complete_turn, "decision_output_root": guard["capture_root"],
                 "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"],
                 "codex_context_dir": guard.get("codex_context_dir"),
                 "codex_context_root": guard.get("codex_context_root"),

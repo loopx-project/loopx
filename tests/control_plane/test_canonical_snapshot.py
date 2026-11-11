@@ -58,12 +58,16 @@ def pages():
     )
 
 
-def read(responses, *, include_leases=True):
+def read(responses, *, include_leases=True, lease_todo_ids=None):
     calls = []
 
     def rpc(method, request, *, timeout, large_local_snapshot):
         assert method == METHOD
         assert request["include_leases"] is include_leases
+        if lease_todo_ids is None:
+            assert "lease_todo_ids" not in request
+        else:
+            assert request["lease_todo_ids"] == sorted(lease_todo_ids)
         assert timeout == 15
         assert large_local_snapshot is True
         assert request["after"] == (None if not calls else calls[-1]["next"])
@@ -78,6 +82,7 @@ def read(responses, *, include_leases=True):
         include_leases=include_leases,
         projection_readback=None,
         timeout=15,
+        lease_todo_ids=lease_todo_ids,
     )
     return result, calls
 
@@ -239,6 +244,24 @@ def test_empty_snapshot_is_complete_without_legacy_fallback():
 def test_todo_only_read_rejects_unrequested_lease_population():
     result, _ = read(pages(), include_leases=False)
     assert result["reason_code"] == "canonical_snapshot_result_invalid"
+
+
+def test_lease_selection_verifies_the_entire_paged_population():
+    first, last = pages()
+    first["snapshot"].update(todo_count=0, lease_count=2)
+    for page, todo_id in ((first, "a"), (last, "b")):
+        page.update(todos=[], leases=[{"todo_id": todo_id}], goal_acceptance_work_guards={})
+    first["next"].update(todo_offset=0, lease_offset=1)
+
+    result, calls = read([first, last], lease_todo_ids={"b", "a"})
+    assert len(calls) == 2
+    assert result["todos"] == [] and result["leases"] == [{"todo_id": "a"}, {"todo_id": "b"}]
+
+    last["leases"][0]["todo_id"] = "unselected"
+    result, _ = read([first, last], lease_todo_ids={"a", "b"})
+    assert result["reason_code"] == "canonical_snapshot_result_invalid"
+    assert "escaped the lease selection" in result["reason"]
+    assert "leases" not in result
 
 
 def test_unicode_order_is_code_point_order_across_runtimes():

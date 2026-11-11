@@ -162,6 +162,14 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
+When an owner-private steward Session has adopted an executor and its
+binding still names the previous executor, a newly captured ordinary message
+stays prepared against that exact Session. The existing reply worker waits
+for the binding and Session to agree, then revalidates the original source
+before queueing the request. Closing the Session before admission ends that
+request without creating a replacement. Previously rejected requests retain
+their recorded outcome.
+
 For a private Lark reply, the adapter keeps the thread ID from the verified
 provider context when the incoming event omits it. This lets the App show the
 original body, exact quote and verified thread excerpt together. Redelivery

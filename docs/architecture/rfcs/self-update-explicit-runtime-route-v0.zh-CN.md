@@ -1,8 +1,8 @@
 # 回滚全程保留所选运行目录
 
-状态：实现提案。
-
-[English](self-update-explicit-runtime-route-v0.md)
+- **RFC 状态：** 已接受（#8470 已实现有界回滚路由修复；安装态验收独立）
+- **替代 / 关闭：** 无
+- **语言：** [English](self-update-explicit-runtime-route-v0.md) 与本文互为语义镜像。
 
 ## 问题与责任层
 

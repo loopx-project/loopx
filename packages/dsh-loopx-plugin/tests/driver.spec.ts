@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
+import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
@@ -466,7 +466,183 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
   })
 }
 
+describe('driver diagnostic records', () => {
+  it.each(['before', 'downstream'])('restores user input with a throwing Cordis exporter in the %s batch', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const service = new LoggerService(new Context())
+    const exporter = { export: vi.fn(() => { throw new Error('exporter unavailable') }) }
+    const removeExporter = service.exporter(exporter)
+    const logger = new Logger({ name: 'fixture', level: 2 }, service)
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner: fixture.runner,
+      warn: message => { logger.warn(message) },
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      const other = userMessage('pending user input')
+      const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [submitted, other] }))
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      await expect(driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
+        new AbortController().signal, next,
+      )).resolves.toEqual({ kind: 'reject' })
+      expect(exporter.export).toHaveBeenCalledOnce()
+      expect(host.nextStep).toEqual([other])
+      expect(next).toHaveBeenCalledTimes(phase === 'before' ? 0 : 1)
+      await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
+        .resolves.toEqual({ kind: 'reject' })
+      expect(host.nextStep).toEqual([other])
+      expect(host.cancelCalls).toBe(0)
+    } finally {
+      removeExporter()
+      await driver.dispose()
+    }
+  })
+
+  it('records the maintenance signal independently of the Driver controller', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      resolveCommand: async () => {
+        maintenance.abort()
+        throw new LoopXCliError('missing', 'PRIVATE output', false)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings[0]).toContain('stage=resolve-command kind=missing')
+      expect(warnings[0]).toContain('signal_aborted=true')
+    } finally { await driver.dispose() }
+  })
+
+  it.each([
+    ['resolve-command', '--version'], ['resolve-binding', 'resolve-agent-thread'],
+    ['quota', 'should-run'], ['heartbeat', 'heartbeat-prompt'],
+  ])('identifies %s failures without publishing command output', async (stage, arg) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: async (file, args, options) => {
+        if (args.includes(arg)) throw new LoopXCliError('missing', 'PRIVATE command output', false, undefined, { osCode: 'ENOENT' })
+        return fixture.runner(file, args, options)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(`admission_failed stage=${stage} kind=missing`)
+      expect(warnings[0]).toMatch(/code=ENOENT .*candidate=(path-loopx|python-module) cwd_exists=(true|false).* elapsed_ms=\d+$/u)
+      expect(warnings.join('')).not.toContain('PRIVATE')
+      expect(host.nextTurn).toHaveLength(0)
+    } finally { await driver.dispose() }
+  })
+
+  it('distinguishes a typed maintenance-slot failure', async () => {
+    const host = fakeAgent()
+    const warnings: string[] = []
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(() => { throw new LoopXCliError('transport', 'PRIVATE', true) })
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, warn: message => warnings.push(message) })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => warnings.length > 0)
+      expect(warnings[0]).toContain('stage=maintenance-slot kind=transport')
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+
+  it.each(['before', 'downstream'])('records only competing source kinds in the %s batch', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner: fixture.runner, retryDelaysMs: [0, 0],
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      const other = userMessage('PRIVATE message text')
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      expect(await driver.onPreStep(host.agent, phase === 'before' ? [submitted, other] : [submitted],
+        new AbortController().signal, async () => ({ kind: 'enter', messages: [submitted, other] }),
+      )).toEqual({ kind: 'reject' })
+      expect(warnings[0]).toContain(`reason=${phase === 'before' ? 'competing-messages' : 'downstream-batch'} other_kinds=user`)
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+})
+
+describe('pre-step authority diagnostics', () => {
+  it('records a failed recheck before rejecting its continuation', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    let failRecheck = false
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: (file, args, options) => {
+        if (failRecheck) throw new LoopXCliError('missing', 'PRIVATE path', false, undefined, { osCode: 'ENOENT' })
+        return fixture.runner(file, args, options)
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      failRecheck = true
+      expect(await driver.onPreStep(host.agent, [submitted], new AbortController().signal,
+        async () => ({ kind: 'enter', messages: [submitted] }),
+      )).toEqual({ kind: 'reject' })
+      expect(warnings[0]).toContain('admission_failed stage=pre-step-recheck kind=missing')
+      expect(warnings[1]).toContain('reason=authority-before-next other_kinds=none')
+      expect(warnings.join('')).not.toContain('PRIVATE')
+    } finally { await driver.dispose() }
+  })
+})
+
 describe('same-session LoopX driver', () => {
+  it('does not report a cancelled maintenance probe as a missing CLI', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    let probes = 0
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      runner: async () => {
+        probes += 1
+        maintenance.abort()
+        return { exitCode: 1, stdout: '', stderr: '' }
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => probes > 0)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(warnings).toEqual([])
+      expect(host.nextTurn).toHaveLength(0)
+      expect(probes).toBe(1)
+    } finally { await driver.dispose() }
+  })
+
   it('retries admission after attach-time maintenance becomes free without an idle event', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
@@ -956,8 +1132,11 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('queues one authoritative task and revalidates the same receipt before entry', async () => {
-    const fixture = runnerFixture()
+  it.each([
+    ['POSIX', 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.'],
+    ['PowerShell', '$LOOPX_TURN = "turn-stable"\nContinue through the authoritative LoopX workflow.'],
+  ])('queues one authoritative %s task and revalidates the same receipt before entry', async (_shell, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const driver = makeDriver(fixture)
 
@@ -967,7 +1146,7 @@ describe('same-session LoopX driver', () => {
     expect(queued.content).toEqual([
       {
         type: 'text',
-        text: 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.',
+        text: heartbeatTaskBody,
       },
     ])
     expect(queued.source).toEqual({
@@ -1188,14 +1367,14 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('fails closed when the canonical task body contains a conflicting turn id', async () => {
-    const fixture = runnerFixture({
-      heartbeatTaskBody: [
-        'LOOPX_TURN=turn-stable',
-        'LOOPX_TURN=turn-other',
-        'Continue through the authoritative LoopX workflow.',
-      ].join('\n'),
-    })
+  it.each([
+    ['wrong POSIX id', 'LOOPX_TURN=turn-other'],
+    ['wrong PowerShell id', '$LOOPX_TURN = "turn-other"'],
+    ['conflicting POSIX ids', 'LOOPX_TURN=turn-stable\nLOOPX_TURN=turn-other'],
+    ['duplicate PowerShell ids', '$LOOPX_TURN = "turn-stable"\n$LOOPX_TURN = "turn-stable"'],
+    ['mixed shell duplicates', 'LOOPX_TURN=turn-stable\n$LOOPX_TURN = "turn-stable"'],
+  ])('fails closed when the canonical task body contains %s', async (_case, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const warnings: string[] = []
     const driver = new LoopXContinuationDriver({
@@ -1471,6 +1650,89 @@ describe('same-session LoopX driver', () => {
     expect(decision).toEqual({ kind: 'reject' })
     expect(host.nextStep).toEqual([human])
     expect(fixture.quotaCalls).toHaveLength(1)
+    await driver.dispose()
+  })
+
+  it.each([
+    ['runtime-context', 'before'], ['runtime-context', 'after'],
+    ['time-context', 'before'], ['time-context', 'after'],
+    ['skill-catalog', 'before'], ['skill-catalog', 'after'],
+  ])('admits a continuation with %s context added %s downstream listeners', async (kind, phase) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = {
+      ...userMessage('host context'),
+      source: kind === 'skill-catalog'
+        ? { kind, form: 'catalog', entries: [] }
+        : { kind, form: 'snapshot', sections: [] },
+    } as UserMessage
+    const messages = [queued, context]
+    const downstream = vi.fn(async () => ({ kind: 'enter' as const, messages }))
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued],
+      new AbortController().signal, downstream,
+    )
+
+    expect(downstream).toHaveBeenCalledOnce()
+    expect(decision).toEqual({ kind: 'enter', messages })
+    expect(host.nextStep).toEqual([])
+    expect(fixture.quotaCalls).toHaveLength(3)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('restores competing work added %s downstream listeners with host context', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = { ...userMessage('host snapshot'), source: { kind: 'runtime-context' } } as unknown as UserMessage
+    const human = userMessage('new human work')
+    const messages = [queued, context, human]
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued, context],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([context, human])
+    expect(fixture.quotaCalls).toHaveLength(phase === 'before' ? 1 : 2)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('does not treat a plugin snapshot as host context %s downstream listeners', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const plugin = { ...userMessage('competing plugin work'),
+      source: { kind: 'plugin-snapshot', form: 'snapshot', sections: [] },
+    } as unknown as UserMessage
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? [queued, plugin] : [queued],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages: [queued, plugin] }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([plugin])
     await driver.dispose()
   })
 

@@ -32,7 +32,9 @@ loopx project-skill install \
 | Surface | Project target |
 | --- | --- |
 | `codex` | `.agents/skills/<skill-id>/` |
+| `antigravity` | `.agent/skills/<skill-id>/` |
 | `claude-code` | `.claude/skills/<skill-id>/` |
+| `kiro-cli` | `.kiro/skills/<skill-id>/` |
 | `opencode` | `.opencode/skills/<skill-id>/` |
 | `pi` | `.pi/skills/<skill-id>/` |
 

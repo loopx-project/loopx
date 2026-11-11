@@ -5,9 +5,23 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from ...chat_store import ChatSessionStore, _read_json
+from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
+
+
+def prepared_steward_binding_waits(
+    request: dict[str, Any], bindings: list[dict[str, Any]], store: ChatSessionStore
+) -> bool:
+    """Skip provider reads while a recorded executor mismatch persists."""
+    session = store.load_session(request["session_id"])
+    binding = next((row for row in bindings if row["binding_id"] == request["binding_id"]), None)
+    if not session or not binding or not binding.get("enabled"):
+        return False
+    allocation = session.get("manager_executor_allocation")
+    return (session.get("status") in RESUMABLE_SESSION_STATES
+            and session.get("executor_endpoint_id") != binding.get("executor_endpoint_id")
+            and isinstance(allocation, dict) and allocation.get("selection_policy") in ("preferred", "pinned"))
 
 
 class PrivateDeliveryDiscovery:
@@ -43,23 +57,34 @@ class PrivateDeliveryDiscovery:
 
         for path in sorted(self.root.glob("*.json")):
             seen.add(path)
-            before = file_change_fingerprint(path)
-            saved = self._completed.get(path)
-            if before is not None and saved is not None and saved[0] == before:
-                yield path, saved[1], saved[2]
+            try:
+                row, repairs = self._observe(path)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                # Keep unreadable or disappearing journals intact and evict
+                # their stale hints. The next scan can observe a readable
+                # receipt; unrelated replies stay discoverable now.
+                self._completed.pop(path, None)
                 continue
-            self._completed.pop(path, None)
-            row = _read_json(path)
-            repairs = False
-            if row["status"] == "delivered":
-                repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
-                view = {key: row.get(key) for key in
-                        ("status", "request_ref", "binding_id", "session_id", "turn_id")}
-                view.update(agent_target=bool(row.get("agent_target")),
-                            event={"chat_type": row.get("event", {}).get("chat_type")})
-                if before is not None and file_change_fingerprint(path) == before:
-                    self._completed[path] = (before, view, repairs)
-                row = view
             yield path, row, repairs
         for path in self._completed.keys() - seen:
             del self._completed[path]
+
+    def _observe(self, path: Path) -> tuple[dict[str, Any], bool]:
+        before = file_change_fingerprint(path)
+        saved = self._completed.get(path)
+        if before is not None and saved is not None and saved[0] == before:
+            return saved[1], saved[2]
+
+        self._completed.pop(path, None)
+        row = _read_json(path)
+        if row["status"] != "delivered":
+            return row, False
+
+        repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
+        view = {key: row.get(key) for key in
+                ("status", "request_ref", "binding_id", "session_id", "turn_id")}
+        view.update(agent_target=bool(row.get("agent_target")),
+                    event={"chat_type": row.get("event", {}).get("chat_type")})
+        if before is not None and file_change_fingerprint(path) == before:
+            self._completed[path] = (before, view, repairs)
+        return view, repairs

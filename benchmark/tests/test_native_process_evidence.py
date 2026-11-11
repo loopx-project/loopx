@@ -119,6 +119,30 @@ def test_normal_goal_completion_records_intentional_cleanup_separately(tmp_path)
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cleanup")
+def test_process_window_starts_before_child_can_emit_events(tmp_path, monkeypatch):
+    from benchmark.runtime import worker
+    from loopx.capabilities.benchmark_toolkit.native_codex_process import NativeCodexProcessObservation
+
+    popen = worker.subprocess.Popen
+    child_started_at = []
+
+    def spawn_before_parent_observes(*args, **kwargs):
+        process = popen(*args, **kwargs)
+        stdout, _ = process.communicate(timeout=5)
+        child_started_at.append(float(stdout))
+        return process
+
+    monkeypatch.setattr(worker.subprocess, "Popen", spawn_before_parent_observes)
+    observation = NativeCodexProcessObservation(lambda _snapshot: None)
+    with worker.child_process(
+        [sys.executable, "-c", "import time; print(time.time())"],
+        env={**os.environ, "LOOPX_PROJECT": str(tmp_path)},
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, process_observation=observation,
+    ):
+        assert observation.snapshot()["started_at_unix"] <= child_started_at[0]
+
+
 def test_first_failure_is_durable_before_cleanup_and_never_replaced(tmp_path, monkeypatch):
     from benchmark.runtime import worker
     from loopx.capabilities.benchmark_toolkit.native_codex_process import (

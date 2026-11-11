@@ -558,6 +558,20 @@ the feedback transport; the receipt otherwise contains only digests and
 submission/delivery counts. A prose claim that feedback was expected, an unbound score
 log, an undeclared channel, or an incomplete transport does not relax the blind default.
 
+A runner may combine those declared channels with periodic background evaluation by
+adding `background_evaluation={"feedback":"blinded","timing":"during_solving"}`
+to the same protocol. This mixed mode additionally requires
+`verifier_started_after_agent`, `background_evaluation_log_complete`, and
+`background_feedback_blinded`. Its private log binds ordered snapshot and evaluation
+digests and timestamps: each snapshot and evaluation must start while the solver is
+still running, although an evaluation that already started may finish afterward. The
+compact receipt exposes only their count. Background results never enter declared
+deliveries. If the solver never uses an active feedback channel, explicit empty
+submissions, deliveries, transport counters, and record digests remain valid only when
+at least one complete blinded background evaluation is present. Missing background
+records, any evaluation log under the default blind policy, an undeclared background
+log, or a background result delivered to the solver fails closed.
+
 Qualification rejects a run when it detects any of the following:
 
 - post-run agent confirmation that restricted answer, out-of-scope task-source,

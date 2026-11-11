@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -15,7 +16,6 @@ from loopx.bootstrap_command_pack import (
     GUIDED_COMMAND_PACK_PROJECTION_SCHEMA_VERSION,
     build_loopx_bootstrap_command_pack,
     build_start_goal_guided_packet,
-    render_start_goal_guided_markdown,
 )
 from loopx.capabilities.issue_fix.candidate_preflight import (
     build_issue_fix_candidate_preflight_packet,
@@ -237,17 +237,17 @@ def _block_effect_runtime_startup(
     diagnostic_code: str = "node_unavailable",
     message: str = "TypeScript Effect runtime could not serve the request",
 ) -> None:
-    def unavailable(*_args: object, **_kwargs: object) -> object:
-        raise effect_runtime.EffectRuntimeStartupError(
-            message,
-            diagnostic_code=diagnostic_code,
-        )
+    request = effect_program.effect_runtime_result
 
-    monkeypatch.setattr(
-        command_pack_module,
-        "effect_program_from_ordered_steps",
-        unavailable,
-    )
+    def unavailable(method, params, **kwargs):
+        if method == "effect.program_from_ordered_steps":
+            raise effect_runtime.EffectRuntimeStartupError(
+                message,
+                diagnostic_code=diagnostic_code,
+            )
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", unavailable)
 
 
 @pytest.mark.parametrize(
@@ -328,8 +328,12 @@ def test_cli_reports_effect_runtime_startup_failure_without_traceback(
 
 @pytest.mark.parametrize(
     "host_args",
-    [("--host-surface", "codex-app"), ()],
-    ids=["guided_start", "host_selection_gate"],
+    [
+        ("--host-surface", "codex-app"),
+        (),
+        ("--host-surface", "codex-app", "--fine-grained", "--capability-route", "issue-fix"),
+    ],
+    ids=["guided_start", "host_selection_gate", "fine_issue_fix"],
 )
 def test_start_goal_markdown_reuses_the_rendered_message(
     tmp_path: Path,
@@ -345,25 +349,65 @@ def test_start_goal_markdown_reuses_the_rendered_message(
         "start-goal", "--guided", "--project", str(project),
         "--goal-text", GOAL_TEXT, *host_args,
     ]
-    render_calls = 0
+    render_requests: list[dict[str, Any]] = []
     request = effect_program.effect_runtime_result
 
     def count_render(method, params, **kwargs):
-        nonlocal render_calls
         if method == "effect.program_from_ordered_steps":
-            render_calls += 1
+            render_requests.append(params)
         return request(method, params, **kwargs)
 
     monkeypatch.setattr(effect_program, "effect_runtime_result", count_render)
 
     assert cli_main(["--format", "markdown", *args]) == 0
     markdown = capsys.readouterr().out
-    assert render_calls == 1
+    assert len(render_requests) == 1
 
     assert cli_main(["--format", "json", *args]) == 0
     packet = json.loads(capsys.readouterr().out)
-    assert render_calls == 2
+    assert len(render_requests) == 2
     assert markdown == packet["message"] + "\n"
+    assert render_requests[0] == render_requests[1]
+    assert render_requests[0]["include_raw"] is False
+    transaction = packet["guided_transaction"]
+    rpc_steps = render_requests[1]["ordered_steps"]
+    assert [step["id"] for step in rpc_steps] == [step["id"] for step in transaction["ordered_steps"]]
+    if not host_args:
+        gate = transaction["host_surface_selection_gate"]
+        assert gate["choices"][0]["rerun_command"] in markdown
+        assert all("choices" not in step for step in rpc_steps)
+        return
+
+    sources = {step["id"]: step for step in transaction["ordered_steps"]}
+    projected = {step["id"]: step for step in rpc_steps}
+    connect = sources["connect_if_needed"]["command"]
+    assert len(connect.splitlines()) > 1
+    assert projected["connect_if_needed"]["command"] == connect
+    planning = sources["plan_ranked_todos"]
+    assert "Goal requirements and Todos:" in planning["prompt"]
+    assert planning["goal_requirements"]["inspect_command"]
+    assert "goal_requirements" not in projected["plan_ranked_todos"]
+    assert projected["plan_ranked_todos"]["prompt"] == planning["prompt"].splitlines()[0]
+    assert "overall requirements: reuse existing or declare missing requirements" in markdown
+    if "--capability-route" in host_args:
+        assert "candidate_preflight" in sources["qualify_selected_capability"]
+        assert "candidate_preflight" not in projected["qualify_selected_capability"]
+        assert "preflight: refresh" in markdown
+
+
+def test_guided_markdown_keeps_a_present_command_with_an_empty_first_line() -> None:
+    step = MappingProxyType({
+        "id": "preview",
+        "kind": "read_only",
+        "purpose": "Read a saved preview",
+        "command": "\nRead only the original evidence.",
+        "command_template": "fallback must stay unused",
+    })
+    rendered = command_pack_module.render_start_goal_guided_markdown({
+        "guided_transaction": {"ordered_steps": [step]},
+    })
+    assert "1. `preview` (read_only): Read a saved preview\n   - ``\n" in rendered
+    assert "fallback must stay unused" not in rendered
 
 
 def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(
@@ -701,7 +745,7 @@ def test_issue_fix_goal_projects_capability_guard_without_todo_fields(
     assert commands[route["admission_command_key"]].startswith(
         "loopx issue-fix feasibility "
     )
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "authority: open public issue; source clues are evidence only" in rendered
     assert "discover: `gh issue list " in rendered
     assert (
@@ -994,9 +1038,10 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    # Exact-readback guidance is useful common content in both projections;
-    # retain the duplicate-content checks below rather than remove that guidance.
-    assert len(compact_json) <= int(len(detailed_json) * 0.66)
+    # Both views carry one copy of the declaration/link recipe. Its roughly
+    # 700 common characters contribute about 240 characters to the ratio
+    # difference (34% of the added content). Keep the duplicate limits below.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66) + 240
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
@@ -1944,6 +1989,47 @@ def test_projection_preserves_multi_goal_selection_actions(tmp_path: Path) -> No
     ]
 
 
+def test_guided_start_uses_one_registry_version_for_goal_selection(tmp_path: Path, monkeypatch) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    single_goal = registry_path.read_bytes()
+    initial = json.loads(single_goal)
+    second_goal_id = "guided-projection-second-goal"
+    initial["goals"].append({**initial["goals"][0], "id": second_goal_id})
+    registry_path.write_text(json.dumps(initial), encoding="utf-8")
+    replacement = registry_path.with_name("registry.next")
+    replacement.write_bytes(single_goal)
+    load_registry = command_pack_module.load_registry
+
+    def replace_after_first_read(path, **kwargs):
+        document = load_registry(path, **kwargs)
+        if path == registry_path and replacement.exists():
+            replacement.replace(registry_path)
+        return document
+
+    monkeypatch.setattr(command_pack_module, "load_registry", replace_after_first_read)
+
+    def preview():
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            assert cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(tmp_path / "runtime"),
+                "--format", "json", "start-goal", "--guided", "--project", str(project),
+                "--host-surface", "codex-app", "--thread-id", "snapshot-thread", "--goal-text", GOAL_TEXT,
+            ]) == 0
+        return json.loads(stdout.getvalue())
+
+    first = preview()
+    assert first["guided_transaction"]["blocked_by"] == "goal_selection"
+    assert [choice["goal_id"] for choice in first["goal_selection_gate"]["choices"]] == [GOAL_ID, second_goal_id]
+    assert first["agent_id"] is None
+    assert registry_path.read_bytes() == single_goal
+
+    next_preview = preview()
+    assert next_preview["goal_id"] == GOAL_ID
+    assert "goal_selection_gate" not in next_preview["guided_transaction"]
+
+
 def test_start_goal_keeps_the_requested_linked_worktree(
     tmp_path: Path,
     monkeypatch,
@@ -2041,33 +2127,58 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
     tmp_path: Path,
 ) -> None:
     project = _write_connected_project(tmp_path)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
+    base_args = [
+        "--format",
+        "json",
+        "start-goal",
+        "--guided",
+        "--project",
+        str(project),
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--goal-text",
+        GOAL_TEXT,
+        "--capability-route",
+        "issue-fix",
+    ]
+
+    compact_output = io.StringIO()
+    with contextlib.redirect_stdout(compact_output):
         exit_code = cli_main(
-            [
-                "--format",
-                "json",
-                "start-goal",
-                "--guided",
-                "--project",
-                str(project),
-                "--goal-id",
-                GOAL_ID,
-                "--agent-id",
-                AGENT_ID,
-                "--goal-text",
-                GOAL_TEXT,
-                "--capability-route",
-                "issue-fix",
-            ]
+            base_args
         )
 
     assert exit_code == 0
-    payload = json.loads(output.getvalue())
+    payload = json.loads(compact_output.getvalue())
     assert payload["guided_transaction"]["blocked_by"] == "host_surface_selection"
     assert payload["safety_contract"]["writes_registry"] is False
     choices = payload["host_surface_selection_gate"]["choices"]
     assert [choice["host_surface"] for choice in choices] == [
+        "codex-app",
+        "trae_app",
+        "codex-app-ssh",
+        "codex-cli-tui",
+        "claude-code",
+        "shell",
+        "other-agent",
+    ]
+    gate = payload["host_surface_selection_gate"]
+    assert gate["choice_projection"] == "compact"
+    assert gate["omitted_choice_count"] == 14
+    assert "--include-command-pack-detail" in gate["full_choices_detail_command"]
+    assert payload["packet_summary"]["compatibility"]["compact_projection_default"] is True
+    assert "Choose Where This Agent Runs" in payload["message"]
+    assert "Need another host (14 more)?" in payload["message"]
+
+    detailed_output = io.StringIO()
+    with contextlib.redirect_stdout(detailed_output):
+        detailed_exit = cli_main([*base_args, "--include-command-pack-detail"])
+    assert detailed_exit == 0
+    detailed = json.loads(detailed_output.getvalue())
+    full_choices = detailed["host_surface_selection_gate"]["choices"]
+    assert [choice["host_surface"] for choice in full_choices] == [
         "codex-app",
         "trae_app",
         "codex-app-ssh",
@@ -2090,7 +2201,13 @@ def test_cli_without_host_returns_read_only_host_selection_gate(
         "shell",
         "other-agent",
     ]
-    ide = next(choice for choice in choices if choice["host_surface"] == "codex-ide-plugin")
+    assert detailed["host_surface_selection_gate"]["choice_projection"] == "complete"
+    assert detailed["host_surface_selection_gate"]["omitted_choice_count"] == 0
+    ide = next(
+        choice
+        for choice in full_choices
+        if choice["host_surface"] == "codex-ide-plugin"
+    )
     assert "--host-surface codex-ide-plugin" in ide["rerun_command"]
     assert "--capability-route issue-fix" in ide["rerun_command"]
 
@@ -2355,7 +2472,7 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     # The takeover continues through the normal refresh/host-loop/quota tail.
     assert step_ids.index("apply_todo_delta") < step_ids.index("read_back_authored_todos") < step_ids.index("refresh_state")
     assert "quota_guard" in step_ids
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "apply_todo_delta" in rendered
     assert "reuse" in rendered
     assert "todo_delta:" in rendered

@@ -8,7 +8,7 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,8 @@ from loopx.control_plane.turn_driver.executor import _run_host
 from loopx.control_plane.turn_driver.host_process_transport import (
     HOST_PROCESS_RECORD_ENV,
     HostOutputLines,
+    HostProcessInterruptionUnconfirmed,
+    execution_host_drain,
     run_host_process,
 )
 from tests.control_plane.host_process_fixture import COUNTER_PROCESS_SOURCE
@@ -71,6 +73,42 @@ def test_rejected_launch_guard_keeps_nonexecution_evidence(tmp_path: Path, monke
             project=tmp_path, input_text="", timeout_seconds=5, launch_guard=stopped,
         )
     assert not marker.exists() and record.read_bytes() == before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native SIGINT handling on POSIX")
+@pytest.mark.parametrize("handles_interrupt", [True, False])
+def test_running_guard_interrupts_silent_host(tmp_path: Path, monkeypatch, handles_interrupt: bool) -> None:
+    ready, interrupted = tmp_path / "ready", tmp_path / "interrupted"
+    record = tmp_path / "host.json"
+    monkeypatch.setenv(HOST_PROCESS_RECORD_ENV, str(record))
+    handler = "on_interrupt" if handles_interrupt else "signal.SIG_IGN"
+    host = f'''
+import signal, sys, time
+from pathlib import Path
+
+def on_interrupt(_signum, _frame):
+    Path("interrupted").touch()
+    sys.exit(1)
+
+signal.signal(signal.SIGINT, {handler})
+Path("ready").touch()
+time.sleep(30)
+'''
+
+    def check_running() -> None:
+        if ready.exists():
+            raise ValueError("Goal stopped while Host was running")
+
+    error = ValueError if handles_interrupt else HostProcessInterruptionUnconfirmed
+    message = "Goal stopped while Host was running" if handles_interrupt else "interrupt unconfirmed"
+    with pytest.raises(error, match=message):
+        run_host_process(
+            [sys.executable, "-c", host], project=tmp_path, input_text="", timeout_seconds=8,
+            launch_guard=nullcontext, check_running=check_running, interrupt_before_terminate=True,
+        )
+    assert ready.exists()
+    assert interrupted.exists() is handles_interrupt
+    assert execution_host_drain(record) == ("drained" if handles_interrupt else "unattributable")
 
 
 def test_host_output_lines_bound_storage_and_use_lf() -> None:

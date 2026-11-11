@@ -8,6 +8,7 @@ import type {
   AuthorityStoreLoadResult,
   AuthorityStoreReadFailure,
   AuthorityStoreReceiptResult,
+  AuthorityStoreReceiptSnapshotResult,
   AuthorityStoreScanResult,
 } from "./authority_store.ts";
 import {
@@ -825,6 +826,11 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
   }
 
   async readReceipt(operationId: string): Promise<AuthorityStoreReceiptResult> {
+    const result = await this.readReceiptSnapshot(operationId);
+    return result.status === "snapshot" ? result.receipt : result;
+  }
+
+  async readReceiptSnapshot(operationId: string): Promise<AuthorityStoreReceiptSnapshotResult> {
     let normalized: string;
     try {
       normalized = requireAuthorityStoreId(operationId, "operation id");
@@ -843,13 +849,17 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
            WHERE commit.tenant_id = $1 AND commit.goal_id = $2 AND commit.operation_id = $3`,
           [this.tenantId, this.goalId, normalized],
         ), "PostgreSQL authority receipt");
-        if (value === null) return { status: "missing" } as const;
+        if (value === null) return {status: "snapshot", store_identity: storeIdentity,
+          receipt: {status: "missing"}} as const;
         const transaction = decodeTransactionRow(value);
         return {
-          status: "found",
-          cursor: transaction.cursor,
-          provider_revision: providerRevisionToken(storeIdentity, transaction.provider_revision),
-          receipts: structuredClone(transaction.receipts),
+          status: "snapshot", store_identity: storeIdentity,
+          receipt: {
+            status: "found",
+            cursor: transaction.cursor,
+            provider_revision: providerRevisionToken(storeIdentity, transaction.provider_revision),
+            receipts: structuredClone(transaction.receipts),
+          },
         } as const;
       });
     } catch (error) {

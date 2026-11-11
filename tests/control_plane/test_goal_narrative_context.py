@@ -115,6 +115,39 @@ def test_unowned_monitor_like_text_remains_verbatim(tmp_path, monkeypatch, chang
     assert "excluded_monitor_receipts" not in content
 
 
+def archive_summaries():
+    # Independently name the writer's stored formats, including the old
+    # query without a Goal flag and the current bound omission query.
+    prefix = "<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+    return (
+        prefix + 'query="loopx todo list --include-archived" -->\n'
+        + prefix + 'archived_count=320 active_done_omitted=4 query="loopx todo list --include-archived" -->\n'
+        + prefix + 'archived_count=320 active_done_omitted=5 query="loopx todo list --goal-id <goal-id> --include-archived" -->\r\n'
+        + prefix + 'archived_count=320 active_done_omitted=5 active_fields_omitted=1 '
+        + 'omitted_todo_ids=todo_work omitted_fields=text,note goal_id=context-goal '
+        + 'todo_query="loopx todo list --goal-id context-goal --todo-id todo_work" '
+        + 'query="loopx todo list --goal-id context-goal --include-archived" -->\n'
+    )
+
+
+def test_archive_summary_examples_and_unowned_lines_remain_verbatim(tmp_path, monkeypatch):
+    runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, "sqlite")
+    valid = archive_summaries().splitlines(keepends=True)[-1]
+    examples = (
+        valid.replace("context-goal", "foreign-goal")
+        + valid.replace("--todo-id todo_work", "--todo-id todo_other")
+        + valid.replace("active_fields_omitted=1", "active_fields_omitted=2")
+        + valid.replace("omitted_fields=text,note", "omitted_fields=text,future_field")
+        + valid.replace("archived_count=320", "archived_count=-320")
+        + valid.rstrip("\n") + " Keep this authored instruction.\n"
+        + "```md\n" + valid + "```\n"
+        + "<!-- Copied example:\n" + valid + "-->\n"
+    )
+    narrative = "# Goal\n" + examples + "Final requirement.\n"
+    state.write_bytes((narrative + section("agent", "Agent Todo", "Old task.")).encode())
+    assert source(runtime, registry)["text"] == narrative
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monkeypatch, provider):
     runtime, registry, state, todo = fixture(tmp_path, monkeypatch, provider)
@@ -123,7 +156,8 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
         "```md\n## Agent Todo\n<!-- loopx:todo-region-v0 role=agent begin -->\n```\n")
     after = "<!-- an ordinary retained comment -->\n## Recovery\nKeep the final stop and recovery condition.\n"
     generated = section("archive", "Completed Work Archive", "Historical observation. " * 100_000)
-    document = before + section("user", "User Todo", "Past decision.") + middle + generated + after
+    summaries = archive_summaries()
+    document = before + summaries + section("user", "User Todo", "Past decision.") + middle + generated + after
     state.write_bytes(document.encode())
     original = state.read_bytes()
     packet = guard(runtime, registry)
@@ -133,7 +167,10 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
     context = next(r["content"] for r in channel["work_context"]["sources"] if r.get("source") == "goal_state")
     assert context["text"] == before + middle + after
     assert context["revision"] == "sha256:" + sha256(original).hexdigest()
-    assert [r["role"] for r in context["excluded_todo_regions"]] == ["user", "archive"]
+    regions = context["excluded_todo_regions"]
+    assert [r["role"] for r in regions] == ["archive", "user", "archive"]
+    assert regions[0] == {"role": "archive", "start_line": 6, "end_line": 9,
+        "revision": "sha256:" + sha256(summaries.encode()).hexdigest()}
     assert len(json.dumps(context).encode()) < 2000 < len(original)
     exact = next(r["content"]["todo"] for r in channel["work_context"]["sources"] if r.get("source") == "selected_todo")
     assert exact["text"] == todo["text"]
@@ -163,9 +200,10 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
         assert rejected.returncode != 0 and "action signature" in rejected.stderr
         assert (tmp_path / "received.txt").read_text() == prompt
     # A change even in an excluded archive changes the source revision.
-    state.write_bytes(original.replace(b"Historical observation.", b"Changed observation.", 1))
+    state.write_bytes(original.replace(b"archived_count=320", b"archived_count=319", 1))
     refreshed = source(runtime, registry)
     assert refreshed["text"] == context["text"] and refreshed["revision"] != context["revision"]
+    assert refreshed["excluded_todo_regions"][0]["revision"] != regions[0]["revision"]
     state.write_bytes((document + "Extra final requirement.\n").encode())
     refreshed_packet = guard(runtime, registry)
     refreshed_context = next(r["content"] for r in refreshed_packet["interaction_contract"]["agent_channel"]["work_context"]["sources"] if r.get("source") == "goal_state")
@@ -178,10 +216,14 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
     section("user", "User Todo", "Old decision.") + "## Agent Todo\n- [ ] Unmarked work.\n"])
 def test_unmarked_or_mixed_ownership_keeps_full_progressive_read(tmp_path, monkeypatch, provider, body):
     runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, provider)
-    state.write_text("---\nstatus: active\n---\n# Goal\n" + body)
+    document = "---\nstatus: active\n---\n# Goal\n" + archive_summaries() + body
+    state.write_bytes(document.encode())
     content = source(runtime, registry)
     assert "text" not in content and "excluded_todo_regions" not in content
     assert content["revision"] == "sha256:" + sha256(state.read_bytes()).hexdigest()
+    full = _source_content({"source": "goal_state"}, registry_path=registry, runtime_root=runtime,
+        goal_id="context-goal", todo_id="todo_work", inline_goal_source=True)
+    assert full["full_source"] and full["text"] == document
     channel = guard(runtime, registry)["interaction_contract"]["agent_channel"]
     assert any(r.get("source") == "goal_state" for r in channel["required_reads"])
     assert not any(r.get("source") == "goal_state" for r in channel["work_context"]["sources"])

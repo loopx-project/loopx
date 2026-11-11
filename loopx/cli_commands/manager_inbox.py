@@ -14,6 +14,27 @@ from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
+def _read_markdown(result: dict) -> str:
+    items = result.get("items")
+    shared = {}
+    if isinstance(items, list) and len(items) > 1 and all(isinstance(item, dict) for item in items):
+        for key in ("instruction", "next_action"):
+            text = items[0].get(key)
+            if isinstance(text, str) and text and all(item.get(key) == text for item in items[1:]):
+                shared[key] = text
+
+    lines = ["# Manager Inbox"]
+    if shared and "shared_item_guidance" not in result:
+        lines.append("Apply the exact fields in `shared_item_guidance` to every item on this page.")
+        result = {
+            "shared_item_guidance": shared,
+            **result,
+            "items": [{key: value for key, value in item.items() if key not in shared} for item in items],
+        }
+    body = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    return "\n\n".join(lines) + "\n\n```json\n" + body + "\n```"
+
+
 def register_manager_inbox(subparsers, add_format):
     parser = subparsers.add_parser(
         "manager-inbox",
@@ -351,5 +372,9 @@ def handle_manager_inbox(args, registry_path, runtime_root):
         result = exc.result
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    fmt = getattr(args, "subcommand_format", None) or getattr(args, "format", None)
+    if args.manager_inbox_action == "read" and fmt == "markdown" and result["ok"]:
+        print(_read_markdown(result))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
