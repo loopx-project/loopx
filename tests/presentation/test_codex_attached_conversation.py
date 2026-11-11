@@ -397,6 +397,93 @@ def test_original_history_incremental_append_and_idempotent_owner_input(
         )  # This id already caused an effect.
 
 
+def test_model_readback_is_bound_to_the_same_open_original_turn(tmp_path, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    with fixture(tmp_path) as (request, rollout, methods, inputs, _, _home):
+        _, query = target(request)
+
+        def append(kind, **payload):
+            with rollout.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "type": kind,
+                            "timestamp": "2026-01-01T00:00:02Z",
+                            "payload": payload,
+                        }
+                    )
+                    + "\n"
+                )
+
+        def context(turn_id, model, effort):
+            append(
+                "turn_context",
+                turn_id=turn_id,
+                model=model,
+                effort=effort,
+                model_provider="openai",
+                approval_policy="private setting",
+            )
+
+        def read_model(snapshot):
+            return request(
+                query=f"{query}&turn_model=1&revision={snapshot['revision']}"
+            )
+
+        append("event_msg", type="task_started", turn_id="first")
+        context("first", "original-model-first", "high")
+        code, first = request(query=query)
+        assert code == 200 and first["activity"]["state"] == "turn_open"
+        assert "turn_model" not in first  # A failed optional read never holds history.
+        assert read_model(first) == (
+            200,
+            {
+                "ok": True,
+                "revision": first["revision"],
+                "turn_model": {
+                    "model": "original-model-first",
+                    "reasoning_effort": "high",
+                },
+            },
+        )
+
+        append("event_msg", type="task_complete", turn_id="first")
+        assert read_model(first)[1]["turn_model"] is None
+        code, idle = request(query=query)
+        assert code == 200 and idle["activity"]["state"] == "idle"
+        assert read_model(idle)[1]["turn_model"] is None
+
+        append("event_msg", type="task_started", turn_id="second")
+        context("first", "belongs-to-another-turn", "low")
+        _, missing = request(query=query)
+        assert missing["activity"]["state"] == "turn_open"
+        assert read_model(missing)[1]["turn_model"] is None
+
+        context("second", "original-model-second", "max")
+        _, second = request(query=query)
+        assert read_model(second)[1]["turn_model"] == {
+            "model": "original-model-second",
+            "reasoning_effort": "max",
+        }
+        assert request(query=query + "&turn_model=1")[0] == 409
+
+        context("second", "before-a-concurrent-finish", "medium")
+        _, before_finish = request(query=query)
+        underlying = effect_runtime.effect_runtime_result
+
+        def finish_during_read(method, params, **options):
+            result = underlying(method, params, **options)
+            if method == "runtime.execution_identity.codex":
+                append("event_msg", type="task_complete", turn_id="second")
+            return result
+
+        monkeypatch.setattr(effect_runtime, "effect_runtime_result", finish_during_read)
+        assert read_model(before_finish)[1]["turn_model"] is None
+        assert request(query=query)[1]["activity"]["state"] == "idle"
+        assert not inputs and "thread-follower-start-turn" not in methods
+
+
 def test_uncertain_delivery_never_replays_the_effect(tmp_path, monkeypatch):
     with fixture(tmp_path, uncertain=True) as (
         request,

@@ -8,6 +8,7 @@ owner-routed input. History stays in the host store, read in bounded windows.
 from __future__ import annotations
 
 from contextlib import closing
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -273,6 +274,50 @@ def locate_thread(thread_id: str, homes: list[Path] | None = None) -> tuple[Path
 
 def activity(home: Path, thread_id: str) -> dict[str, Any]:
     return observe_codex_threads([thread_id], homes=[home])[thread_id].to_payload()
+
+
+def _rollout_revision(stamp: os.stat_result) -> tuple[str, int]:
+    return history_revision(stamp), stamp.st_ctime_ns
+
+
+@lru_cache(maxsize=32)
+def _read_turn_model(
+    home: Path, path: Path, thread_id: str, revision: tuple[str, int]
+) -> dict[str, str | None] | None:
+    from ...control_plane.effect_runtime import effect_runtime_result
+
+    # The shared owner validates the original thread and the matching open Turn.
+    # Cache by exact file revision so unchanged history reads stay inexpensive.
+    observation = effect_runtime_result(
+        "runtime.execution_identity.codex",
+        {"home": str(home), "path": str(path), "thread_id": thread_id},
+        timeout=1.0,
+        retry_safe=False,
+    )
+    if _rollout_revision(path.stat()) != revision:
+        raise ValueError("Original Turn changed during model readback")
+    if (
+        observation["status"] != "runtime_reported"
+        or observation["active_turn_verified"] is not True
+    ):
+        return None
+    return {
+        "model": observation["model"],
+        "reasoning_effort": observation["reasoning_effort"],
+    }
+
+
+def observed_turn_model(
+    home: Path, path: Path, thread_id: str, stamp: os.stat_result
+) -> dict[str, str | None] | None:
+    revision = _rollout_revision(stamp)
+    try:
+        result = _read_turn_model(home, path, thread_id, revision)
+        # The file may have advanced after the HTTP handler read its stamp,
+        # including on a cache hit. Let the next snapshot observe the new Turn.
+        return result if _rollout_revision(path.stat()) == revision else None
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def input_fingerprint(binding: str, text: str) -> str:
