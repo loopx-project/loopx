@@ -52,7 +52,8 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
     # The typed program preserves one normalized step per source in order.
     # Keep the complete source here for the renderer and the public JSON.
     program = effect_program_from_ordered_steps(
-        [_guided_markdown_rpc_step(step) for step in step_sources]
+        [_guided_markdown_rpc_step(step) for step in step_sources],
+        include_raw=False,
     )
     step_lines: list[str] = []
     for index, (step, raw_step) in enumerate(

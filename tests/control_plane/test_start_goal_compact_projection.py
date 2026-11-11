@@ -368,6 +368,7 @@ def test_start_goal_markdown_reuses_the_rendered_message(
     assert len(render_requests) == 2
     assert markdown == packet["message"] + "\n"
     assert render_requests[0] == render_requests[1]
+    assert render_requests[0]["include_raw"] is False
     transaction = packet["guided_transaction"]
     rpc_steps = render_requests[1]["ordered_steps"]
     assert [step["id"] for step in rpc_steps] == [step["id"] for step in transaction["ordered_steps"]]

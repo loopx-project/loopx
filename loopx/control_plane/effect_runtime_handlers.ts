@@ -28,6 +28,7 @@ import {
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import {
   optionalNonEmptyString as optionalString,
+  requireBoolean,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
   requireStringLiteral,
@@ -485,6 +486,9 @@ export function createEffectRuntimeHandlers(
       (params) => effectProgramFromOrderedSteps(
         Array.isArray(params.ordered_steps) ? params.ordered_steps : [],
         typeof params.execution_mode === "string" ? params.execution_mode : null,
+        Object.hasOwn(params, "include_raw")
+          ? requireBoolean(params.include_raw, "include_raw")
+          : true,
       ),
     ],
     [
