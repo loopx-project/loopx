@@ -6593,6 +6593,88 @@ def test_original_reply_is_delivered_while_historical_recovery_discovery_waits(o
         runtime.close()
 
 
+def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary, monkeypatch):  # noqa: F811
+    from types import SimpleNamespace
+
+    from loopx.chat_store import _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    store, runtime, provider, transport = connect(ordinary)
+    discovery_started, background_due, release, delivered, ingress_started = (
+        threading.Event() for _ in range(5)
+    )
+    # Advance only the scheduler's due checks. The four worker threads, Core
+    # admission and provider readback still use their normal entry points.
+    monkeypatch.setattr(module, "time", SimpleNamespace(
+        monotonic=lambda: 61.0 if background_due.is_set() else 0.0,
+    ))
+    pending_bodies = transport.pending_body_paths
+    monkeypatch.setattr(transport, "pending_body_paths",
+        lambda: pending_bodies() if background_due.is_set() else [])
+    monkeypatch.setattr(transport, "reconcile_app_feedback", None)
+
+    def discover_history():
+        discovery_started.set()
+        assert release.wait(12)
+        return []
+
+    def reconcile_background():
+        assert release.wait(12)
+        return 0
+
+    def observe_ingress(*, cancelled):
+        ingress_started.set()
+        assert release.wait(12)
+        return []
+
+    monkeypatch.setattr(transport, "pending_delivery_paths", discover_history)
+    monkeypatch.setattr(transport.steward_reports, "pending", background_due.is_set)
+    monkeypatch.setattr(transport.steward_reports, "reconcile", reconcile_background)
+    monkeypatch.setattr(transport.owner_attention, "has_enabled", background_due.is_set)
+    monkeypatch.setattr(transport.owner_attention, "reconcile", reconcile_background)
+    monkeypatch.setattr(transport, "observe_ingress", observe_ingress)
+    event = provider.event("notes-app", "reply-during-due-checks", "Explain the original request")
+    ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+    target = transport.root / f"{ref}.json"
+    reconcile_original = transport.reconcile_request
+
+    def reconcile(path):
+        result = reconcile_original(path)
+        if path == target and result == 1:
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "reconcile_request", reconcile)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(12))
+    service.start()
+    try:
+        assert discovery_started.wait(5)
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        request = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        background_due.set()
+        service._delivery_wakeup.set()
+        assert delivered.wait(4), "Due background checks occupied every worker ahead of an original reply"
+        assert ingress_started.wait(4)
+        terminal = _read_json(target)["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        reply = provider.messages[terminal["attempt"]["message_ref"]]
+        assert reply["chat_id"] == event["chat_id"]
+        assert json.loads(reply["body"]["content"])["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    finally:
+        release.set()
+        service.close()
+        if service._delivery_thread is not None:
+            service._delivery_thread.join(5)
+        runtime.close()
+
+
 def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
