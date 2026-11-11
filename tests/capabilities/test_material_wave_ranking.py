@@ -209,6 +209,12 @@ def test_wave_rerank_rejects_unranked_load_bearing_cycles_and_unsafe_inputs() ->
             [{"material_ref": "material-a", "raw_content": "secret"}],
         )
 
+    with pytest.raises(ValueError, match="unsupported horizon_wave"):
+        plan_material_wave_rerank(
+            ["material-a"],
+            [{"material_ref": "material-a", "horizon_wave": "unregistered_wave"}],
+        )
+
 
 def test_cli_wave_rerank_handles_active_overflow_and_dependency_safe_replacement(
     tmp_path: Path,

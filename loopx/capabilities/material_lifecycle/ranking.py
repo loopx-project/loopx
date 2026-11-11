@@ -32,25 +32,6 @@ MATERIAL_RERANK_APPLY_RECEIPT_SCHEMA_VERSION = "material_rerank_apply_receipt_v0
 MATERIAL_WAVE_RERANK_PLAN_SCHEMA_VERSION = "material_wave_rerank_plan_v0"
 MATERIAL_RERANK_RECEIPT_MAX_REFS = 100
 
-MATERIAL_HORIZON_WAVES = (
-    "imminent_gate",
-    "active_sprint",
-    "foundational_track",
-    "orthogonal_backlog",
-)
-MATERIAL_EFFORT_BANDS = (
-    "quick_slice",
-    "focused_study",
-    "deep_monograph",
-)
-MATERIAL_EVIDENCE_ROLES = (
-    "load_bearing_primary",
-    "method_comparator",
-    "foundational_reference",
-    "secondary_or_commentary",
-    "orthogonal_signal",
-)
-
 _WAVE_ANNOTATION_FIELDS = {
     "blocks_active_deliverable",
     "decision_gain_score",
@@ -181,15 +162,15 @@ def _normalize_wave_annotations(
             )
         }
         if raw.get("horizon_wave") is not None:
-            wave = compact_token(raw["horizon_wave"], field=f"{field}.horizon_wave")
-            if wave not in MATERIAL_HORIZON_WAVES:
-                raise ValueError(f"unsupported horizon_wave: {wave}")
-            entry["horizon_wave"] = wave
+            entry["horizon_wave"] = compact_token(
+                raw["horizon_wave"],
+                field=f"{field}.horizon_wave",
+            )
         if raw.get("effort_band") is not None:
-            effort = compact_token(raw["effort_band"], field=f"{field}.effort_band")
-            if effort not in MATERIAL_EFFORT_BANDS:
-                raise ValueError(f"unsupported effort_band: {effort}")
-            entry["effort_band"] = effort
+            entry["effort_band"] = compact_token(
+                raw["effort_band"],
+                field=f"{field}.effort_band",
+            )
         if raw.get("scoped_slice_ready") is not None:
             scoped_ready = raw["scoped_slice_ready"]
             if not isinstance(scoped_ready, bool):
@@ -208,10 +189,10 @@ def _normalize_wave_annotations(
                 )
             entry["decision_gain_score"] = float(score)
         if raw.get("evidence_role") is not None:
-            role = compact_token(raw["evidence_role"], field=f"{field}.evidence_role")
-            if role not in MATERIAL_EVIDENCE_ROLES:
-                raise ValueError(f"unsupported evidence_role: {role}")
-            entry["evidence_role"] = role
+            entry["evidence_role"] = compact_token(
+                raw["evidence_role"],
+                field=f"{field}.evidence_role",
+            )
         if raw.get("blocks_active_deliverable") is not None:
             blocks = raw["blocks_active_deliverable"]
             if not isinstance(blocks, bool):
