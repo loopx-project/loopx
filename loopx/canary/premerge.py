@@ -303,14 +303,14 @@ def _path_matches(path: str, tokens: tuple[str, ...]) -> bool:
 
 
 def _dedupe(values: list[str]) -> list[str]:
+    """Deduplicate path identities without rewriting Git-provided values."""
     seen: set[str] = set()
     deduped: list[str] = []
     for value in values:
-        normalized = _norm_path(value)
-        if not normalized or normalized in seen:
+        if not value or value in seen:
             continue
-        seen.add(normalized)
-        deduped.append(normalized)
+        seen.add(value)
+        deduped.append(value)
     return deduped
 
 

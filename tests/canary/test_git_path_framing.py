@@ -174,3 +174,88 @@ def test_git_byte_paths_fail_closed_before_display_and_dedupe(tmp_path: Path) ->
     assert "not valid UTF-8" in payload["error"]
     assert payload["selector_sources"]["git_diff"]["undecodable_path_count"] >= 1
     assert "selection_inputs" not in payload
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="literal backslash and trailing space pathnames are POSIX-only",
+)
+def test_premerge_preserves_exact_git_path_identities(tmp_path: Path) -> None:
+    """Every Git path identity must survive premerge selection unchanged."""
+    from loopx.canary.planner import DEFAULT_CATALOG_PATH
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    catalog = repo / "docs/concepts/interaction-pattern-catalog.md"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes(DEFAULT_CATALOG_PATH.read_bytes())
+    _git(repo, "add", "docs/concepts/interaction-pattern-catalog.md")
+    _git(repo, "commit", "-m", "catalog")
+
+    names = [
+        "docs/back\\slash.txt",
+        "fixtures/back\\slash.py",
+        "fixtures/cr\rname.py",
+        "fixtures/leading.py ",
+        "fixtures/trailing.py",
+        "fixtures/trailing.py ",
+    ]
+    (repo / "fixtures").mkdir()
+    (repo / "docs").mkdir(exist_ok=True)
+    for name in names:
+        (repo / name).write_text("value = 1\n", encoding="utf-8")
+        _git(repo, "add", "--", name)
+    _git(repo, "commit", "-m", "exact changed paths")
+
+    selector = collect_git_diff_changed_files(repo_root=repo, base_ref="HEAD~1")
+    assert selector["changed_files"] == names
+    assert selector["changed_file_count"] == 6
+
+    response = run_source_cli(
+        [
+            "--format", "json", "canary", "premerge", "--from-git-diff",
+            "--git-diff-base", "HEAD~1", "--tier", "quick", "--no-execute",
+        ],
+        cwd=repo, check=False, timeout=60,
+    )
+    assert response.returncode == 0, response.stderr
+    payload = json.loads(response.stdout)
+    assert payload["changed_files"] == names
+    assert payload["classification"]["changed_files"] == names
+    assert payload["classification"]["changed_file_count"] == 6
+    assert payload["catalog_run"]["selection_inputs"]["changed_files"] == names
+    boundary_run = payload["boundary_run"]
+    assert boundary_run is not None
+    assert boundary_run["selection_inputs"]["changed_files"] == names
+    assert boundary_run["selection_inputs"]["scan_paths"] == names
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX CLI path spelling")
+def test_premerge_keeps_explicit_changed_file_normalization(tmp_path: Path) -> None:
+    """Manual --changed-file paths keep their historical slash normalization."""
+    from loopx.canary.planner import DEFAULT_CATALOG_PATH
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    catalog = repo / "docs/concepts/interaction-pattern-catalog.md"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes(DEFAULT_CATALOG_PATH.read_bytes())
+    _git(repo, "add", "docs/concepts/interaction-pattern-catalog.md")
+    _git(repo, "commit", "-m", "catalog")
+
+    response = run_source_cli(
+        [
+            "--format", "json", "canary", "premerge", "--changed-file",
+            "docs\\notes.py", "--tier", "quick", "--no-execute",
+        ],
+        cwd=repo, check=False, timeout=60,
+    )
+    assert response.returncode == 0, response.stderr
+    payload = json.loads(response.stdout)
+    assert payload["changed_files"] == ["docs/notes.py"]

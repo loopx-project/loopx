@@ -192,8 +192,15 @@ def collect_git_diff_changed_files(
     }
 
 
-def _resolve_canary_changed_files(args: argparse.Namespace) -> tuple[list[str], dict[str, Any] | None]:
-    changed_files = _dedupe_preserving_order(list(args.changed_file or []))
+def _resolve_canary_changed_files(
+    args: argparse.Namespace,
+    *,
+    normalize_manual: bool = False,
+) -> tuple[list[str], dict[str, Any] | None]:
+    manual_files = list(args.changed_file or [])
+    if normalize_manual:
+        manual_files = [path.strip().replace("\\", "/") for path in manual_files]
+    changed_files = _dedupe_preserving_order(manual_files)
     git_diff_selector = None
     if bool(getattr(args, "from_git_diff", False)):
         repo_root = _resolve_git_repo_root(Path.cwd())
@@ -743,7 +750,9 @@ def handle_canary_command(
         )
         renderer = render_quality_surface_catalog_audit_markdown
     elif args.canary_command == "premerge":
-        changed_files, git_diff_selector = _resolve_canary_changed_files(args)
+        changed_files, git_diff_selector = _resolve_canary_changed_files(
+            args, normalize_manual=True
+        )
         if _reject_git_diff_selector(
             git_diff_selector, args, print_payload, output_format
         ):
