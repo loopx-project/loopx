@@ -41,6 +41,18 @@ body as ``CORPUS_ID_RE`` for todo action kinds, which is why
 between those two capability packages, so naming one of them the authority over
 the other is a domain decision for a maintainer, not a deduplication.
 
+The same ``memory_utility`` -> ``utility_reducer`` pair also restated two compiled
+matchers, now converged here: ``_OPAQUE_REF_RE`` (the bounded opaque reference)
+and ``_MEMORY_REF_DIGEST_RE`` (a 16-hex or enveloped-64 memory digest). Two
+same-value neighbours stay separate, each for a stated reason:
+``control_plane/status/goal_source.py`` states the reference body unanchored and
+inline for a ``todo_id`` in another package, with no import direction to make one
+the authority (the same domain decision as ``CORPUS_ID_RE``); and
+``reward_memory/architecture.py`` lists the recall modes in a fixed order inside a
+descriptive manifest, so ``RECALL_MODES`` is pinned by identity -- ``experiment``
+borrows ``application``'s set -- rather than by the member census, which would
+otherwise sweep that ordered list.
+
 Compiled patterns are real objects, so the ``is`` assertions below carry
 information; the two field sets are compared by identity too, which only holds
 because both modules now import the same object rather than spelling it out.
@@ -60,7 +72,13 @@ from loopx.capabilities.issue_fix import repository_commit_evidence as commit_ev
 from loopx.capabilities.issue_fix import repository_snapshot
 from loopx.capabilities.issue_fix import reward_memory as issue_fix_reward_memory
 from loopx.capabilities.reward_memory import architecture as reward_architecture
-from loopx.capabilities.reward_memory import memory_utility, scoped_feedback, utility_reducer
+from loopx.capabilities.reward_memory import (
+    application,
+    experiment,
+    memory_utility,
+    scoped_feedback,
+    utility_reducer,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "loopx"
@@ -110,6 +128,18 @@ PATTERN_DECISIONS: dict[str, tuple[str, str, ModuleType, list[tuple[str, ModuleT
                 commit_evidence,
             )
         ],
+    ),
+    "_OPAQUE_REF_RE": (
+        r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$",
+        "loopx/capabilities/reward_memory/memory_utility.py",
+        memory_utility,
+        [("loopx/capabilities/reward_memory/utility_reducer.py", utility_reducer)],
+    ),
+    "_MEMORY_REF_DIGEST_RE": (
+        r"^(?:[0-9a-f]{16}|sha256:[0-9a-f]{64})$",
+        "loopx/capabilities/reward_memory/memory_utility.py",
+        memory_utility,
+        [("loopx/capabilities/reward_memory/utility_reducer.py", utility_reducer)],
     ),
 }
 
@@ -323,6 +353,50 @@ def test_both_scope_validators_accept_the_same_four_keys() -> None:
         with pytest.raises(ValueError) as missing:
             validate({"agent_id": "a"}, "scope")
         assert "missing=['corpus_id', 'project_id', 'surface_id']" in str(missing.value), label
+
+
+def test_both_reference_validators_accept_the_same_opaque_refs() -> None:
+    """Wiring through each module's own reference reader, not just the imported name."""
+
+    for value in ("ref-1", "todo_2.3:4", "a" * 200):
+        assert memory_utility._opaque_ref(value, "ref") == value
+        assert utility_reducer._ref(value, "ref") == value
+    # The bound and the class are the rule. The path-separator and anchor cases
+    # are what separate this stricter shape from public_safe_text's slash-and-#
+    # allowing reference owner, so a fold into that owner would fail here.
+    for value in ("a" * 201, "has space", "a/b", "a#b", ""):
+        for label, validate in (
+            ("owner", memory_utility._opaque_ref),
+            ("consumer", utility_reducer._ref),
+        ):
+            with pytest.raises(ValueError):
+                validate(value, "ref")
+
+
+def test_both_digest_validators_accept_the_same_two_alternatives() -> None:
+    sixteen = "0123456789abcdef"
+    enveloped = "sha256:" + "a" * 64
+    for value in ([sixteen], [enveloped], [sixteen, enveloped]):
+        assert memory_utility.normalize_reward_memory_ref_digests(value, "d") == value
+        assert utility_reducer._memory_digests(value, "d") == value
+    # A bare 64-hex is neither alternative; 15/17 hex and a short envelope fail.
+    for value in (["a" * 64], ["a" * 15], ["a" * 17], ["sha256:" + "a" * 63]):
+        for label, validate in (
+            ("owner", memory_utility.normalize_reward_memory_ref_digests),
+            ("consumer", utility_reducer._memory_digests),
+        ):
+            with pytest.raises(ValueError):
+                validate(value, "d")
+
+
+def test_experiment_borrows_the_application_recall_modes() -> None:
+    # Pinned by identity, not by the member census: architecture.py lists the
+    # same two modes in a fixed order inside a descriptive manifest, and folding
+    # that list from an unordered set would reorder it. The validator's set is
+    # the owner; the manifest's ordered list is a different question.
+    assert experiment.RECALL_MODES is application.RECALL_MODES
+    assert not hasattr(experiment, "_RECALL_MODES")
+    assert application.RECALL_MODES == {"function_boundary", "bounded_agentic_search"}
 
 
 def test_repo_shape_is_checked_by_the_producer_and_the_verifier() -> None:
