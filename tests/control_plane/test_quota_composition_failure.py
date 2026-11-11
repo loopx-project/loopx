@@ -12,6 +12,7 @@ from loopx.cli import main
 from loopx.cli_commands import quota
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeStartupError
 from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+from loopx.presentation.renderers.quota_markdown import render_quota_should_run_markdown
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _heartbeat_receipt_count,
@@ -80,9 +81,15 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
             "--decision-output-dir", str(capture))
     assert code == 1 and failed["ok"] is False and failed["should_run"] is False
     assert failed["error_code"] == "quota_decision_transport_failed"
+    assert failed["reason"] == failed["error"]
+    assert failed["diagnostic_code"] == ("runtime_unavailable" if fault == "runtime" else "invalid_request")
+    assert "saved composition diagnostic" in failed["recommended_action"]
+    assert "composition_error" not in failed and "source_diagnostic" not in failed
     assert failed["heartbeat_receipt"] == original["heartbeat_receipt"]
     saved = capture / "decision.json"
     assert failed["captured_decision"] == {"path": str(saved)}
+    markdown = render_quota_should_run_markdown(failed)
+    assert all(value in markdown for value in (str(saved), TURN_ID, failed["diagnostic_code"], failed["error"]))
     raw = saved.read_bytes()
     diagnostic = json.loads(raw)
     assert diagnostic["ok"] is False and diagnostic["should_run"] is False
@@ -91,6 +98,12 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert diagnostic["heartbeat_receipt"] == failed["heartbeat_receipt"]
     expected_error = "EffectRuntimeStartupError" if fault == "runtime" else "EffectRuntimeRejected"
     assert diagnostic["composition_error"]["type"] == expected_error
+    assert diagnostic["composition_error"]["diagnostic_code"] == failed["diagnostic_code"]
+    if fault == "runtime":
+        assert diagnostic["composition_error"]["message"] == "synthetic composition unavailable"
+        assert "synthetic composition unavailable" not in failed["error"]
+    else:
+        assert diagnostic["composition_error"]["message"] == failed["error"]
     assert "interaction_contract" not in diagnostic and "execution_preparation" not in diagnostic
     assert (native / "session.json").read_bytes() == original_journal
     assert not (native / "claim-source.json").exists()
@@ -123,3 +136,26 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert (native / "session.json").read_bytes() == original_journal
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
     assert saved.read_bytes() == raw
+
+    if fault == "runtime":
+        from loopx.control_plane.turn_driver import decision_capture
+
+        missing_capture = tmp_path / "unwritable-capture"
+
+        def fail_write(path, *_args, **_kwargs):
+            assert path == missing_capture / "decision.json"
+            raise OSError("fixture cannot publish diagnostic")
+
+        with monkeypatch.context() as unavailable:
+            unavailable.setattr(quota, "compose_quota_cli_source", reject_composition)
+            unavailable.setattr(decision_capture, "write_decision_capture", fail_write)
+            code, refused = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
+                "--context-delivery", "on", "--codex-context-dir", str(native),
+                "--decision-output-dir", str(missing_capture))
+        assert code == 1 and refused["should_run"] is False
+        assert refused["heartbeat_receipt"]["event_id"] == failed["heartbeat_receipt"]["event_id"]
+        assert refused["error_code"] == "quota_decision_transport_failed"
+        assert "Decision capture failed" in refused["reason"]
+        assert "captured_decision" not in refused and "saved" not in refused["recommended_action"]
+        assert not (missing_capture / "decision.json").exists()
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0

@@ -22,6 +22,7 @@ from ..control_plane.coordination.local_authority import (
 )
 from ..control_plane.effect_runtime import (
     EffectRuntimeHostPermissionError,
+    EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
 )
@@ -325,36 +326,50 @@ def captured_quota_failure_view(
 def quota_decision_transport_failure_payload(
     args: argparse.Namespace,
     committed: Mapping[str, object],
-    error: QuotaDecisionTransportError,
+    error: QuotaDecisionTransportError | EffectRuntimeRemoteError | EffectRuntimeStartupError,
     *,
     capture_directory: Path | None,
 ) -> dict[str, object]:
-    """Report a post-guard capture/handoff failure without a second guard.
-
-    The committed receipt and saved decision remain the evidence; the caller is
-    told to read them, not to rerun the guard or treat this as missing admission.
-    """
+    """Report a post-guard failure using the receipt and any actual capture."""
     saved = capture_directory / "decision.json" if capture_directory is not None else None
+    composition_error = (
+        error if isinstance(error, (EffectRuntimeRemoteError, EffectRuntimeStartupError)) else None
+    )
+    message = (
+        "The local runtime could not compose the complete Turn context."
+        if composition_error is not None and not isinstance(composition_error, EffectRuntimeRejected)
+        else str(error)
+    )
+    reason = " ".join(message.split())[:500]
     payload: dict[str, object] = {
         "ok": False,
         "mode": args.quota_command,
         "goal_id": args.goal_id,
         "decision": "skip",
         "should_run": False,
-        "error_code": error.error_code,
-        "reason": " ".join(str(error).split())[:500],
+        "error_code": QuotaDecisionTransportError.error_code,
+        "reason": reason,
         "state": "blocked_health",
         "waiting_on": "codex",
         "status": "decision_transport_failed",
         "source": "quota",
         "recommended_action": (
-            "The guard already ran. Read the saved decision and this Turn's receipt "
-            "instead of rerunning the guard. If the handoff endpoint belongs to an "
-            "ended Host wake, use the transport named by the current wake, or none."
+            "The guard already ran. Inspect this Turn's receipt and resolve the reported "
+            "failure before recovery. Do not rerun admission."
         ),
     }
+    if composition_error is not None:
+        payload.update(error=reason, diagnostic_code=composition_error.diagnostic_code)
     if saved is not None and saved.is_file():
         payload["captured_decision"] = {"path": str(saved)}
+        payload["recommended_action"] = (
+            "The guard already ran. Read the saved composition diagnostic and this Turn's "
+            "receipt before resolving the failure. Do not rerun admission."
+            if composition_error is not None
+            else "The guard already ran. Read the saved decision and this Turn's receipt "
+            "instead of rerunning the guard. If the handoff endpoint belongs to an "
+            "ended Host wake, use the transport named by the current wake, or none."
+        )
     for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in committed:
             payload[key] = committed[key]

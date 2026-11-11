@@ -808,6 +808,13 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("reason"):
         lines.append(f"- reason: {payload.get('reason')}")
+    if payload.get("error_code") == "quota_decision_transport_failed":
+        if code := payload.get("diagnostic_code"):
+            lines.append(f"- diagnostic_code: {markdown_scalar(code)}")
+        if turn := as_dict(payload.get("heartbeat_receipt")).get("turn_instance_id"):
+            lines.append(f"- turn_instance_id: {markdown_scalar(turn)}")
+        if saved := as_dict(payload.get("captured_decision")).get("path"):
+            lines.append(f"- captured_decision: {markdown_scalar(saved)}")
     handoff_readiness = as_dict(payload.get("handoff_readiness"))
     if handoff_readiness:
         lines.append(

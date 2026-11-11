@@ -22,7 +22,6 @@ def test_real_current_entrypoints_check_and_preserve_the_complete_source(
     from loopx.cli import main as cli_main
     from loopx.cli_commands import quota as quota_command
     from loopx.cli_commands.turn_decision import FreshTurnDecisionOwner
-    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
     from loopx.control_plane.turn_driver import loop_controller, turn_journal_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -78,21 +77,15 @@ def test_real_current_entrypoints_check_and_preserve_the_complete_source(
     argv = [*prefix, "turn", "managed-step", "--goal-id", lineage["goal_id"], "--agent-id", lineage["agent_id"],
         "--turn-key", journal["turn_key"], "--host", "dsh", "--execution-mode", "isolated-headless",
         "--observed-attempt", "1", "--observed-max-attempts", "3"]
+    turn_id = "complete-source-qualification"
     if entrypoint == "quota":
         argv = [*prefix, "quota", "should-run", "--goal-id", lineage["goal_id"],
             "--agent-id", lineage["agent_id"], "--todo-id", lineage["todo_id"],
-            "--turn-instance-id", "complete-source-qualification", "--context-delivery", "off"]
+            "--turn-instance-id", turn_id, "--context-delivery", "off"]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        try:
-            code = cli_main(argv)
-            result = json.loads(output.getvalue())
-        except EffectRuntimeRejected as error:
-            # This existing quota emitter propagates a typed composition
-            # rejection; managed-step returns its JSON diagnostic. Preserve
-            # that boundary rather than count it as a successful work result.
-            assert entrypoint == "quota" and source_fault
-            code, result = 1, {"ok": False, "error": str(error)}
+        code = cli_main(argv)
+    result = json.loads(output.getvalue())
     if source_fault:
         assert code == 1 and result["ok"] is False, result
         expected = {"unknown_action": "Turn effective_action",
@@ -100,6 +93,32 @@ def test_real_current_entrypoints_check_and_preserve_the_complete_source(
                     "unknown_read_order": "required read ordering"}[source_fault]
         assert expected in result["error"], result
         assert observed == []
+        if entrypoint == "quota":
+            assert result["should_run"] is False
+            assert result["error_code"] == "quota_decision_transport_failed"
+            assert result["diagnostic_code"] == "invalid_request"
+            assert result["reason"] == result["error"]
+            assert "receipt" in result["recommended_action"]
+            assert "saved" not in result["recommended_action"]
+            assert "captured_decision" not in result and "source_diagnostic" not in result
+            assert "interaction_contract" not in result and "execution_preparation" not in result
+            assert result["heartbeat_receipt"]["turn_instance_id"] == turn_id
+            assert result["heartbeat_receipt"]["event_id"]
+            if source_fault == "missing_read_command":
+                markdown_argv = list(argv)
+                markdown_argv[markdown_argv.index("--format") + 1] = "markdown"
+                markdown = io.StringIO()
+                with contextlib.redirect_stdout(markdown):
+                    assert cli_main(markdown_argv) == 1
+                assert expected in markdown.getvalue()
+                assert turn_id in markdown.getvalue()
+                assert "saved" not in markdown.getvalue()
+            receipt_log = runtime / "goals" / lineage["goal_id"] / "rollout-event-log.jsonl"
+            events = (json.loads(line) for line in receipt_log.read_text().splitlines())
+            guard_ids = [event["event_id"] for event in events
+                if event["event_kind"] == "quota_should_run" and event["run_id"] == turn_id
+                and event["agent_id"] == lineage["agent_id"]]
+            assert guard_ids == [result["heartbeat_receipt"]["event_id"]]
     else:
         if entrypoint == "managed":
             assert code == 0 and result["disposition"] == "wait", result
