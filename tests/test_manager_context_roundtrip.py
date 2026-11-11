@@ -1472,6 +1472,42 @@ def test_history_fallback_reads_only_visible_result_states(returned_history, mon
     assert store.messages(sid) == messages
 
 
+def test_dense_return_history_reads_routes_once_without_opening_each_turn(frozen_private_reply, monkeypatch):
+    store, session, *_ = frozen_private_reply
+    root, sid = store.root.parent, session["session_id"]
+    messages = []
+    for i in range(202):
+        rid, tid = f"{i:064x}", f"{i:032x}"
+        source = root if i != 201 else root / "other-chat-host"
+        _write(_root(root) / "roundtrips" / f"{rid}.json", {
+            "request_id": rid, "session_id": sid, "source_chat_runtime_root": str(source),
+        })
+        replies = _root(root) / "replies" / rid
+        _write(replies / "conclusion.json", {"text": f"Original result {i}"})
+        _write(replies / "conclusion.delivery.json", {"status": "delivered"})
+        messages.append({
+            "message_id": "handoff." + _hash([rid, "conclusion"]),
+            "turn_id": tid, "role": "agent", "origin": "manager_followup", "text": f"Original result {i}",
+        })
+    load_turn, opened = store.load_turn, []
+
+    def track_turn(session_id, turn_id):
+        opened.append(turn_id)
+        return load_turn(session_id, turn_id)
+
+    monkeypatch.setattr(store, "load_turn", track_turn)
+    projected = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert [row["text"] for row in projected] == [row["text"] for row in messages]
+    assert all(row["return_delivery"]["status"] == "delivered" for row in projected[:-1])
+    assert projected[-1] == messages[-1]
+    assert not opened
+
+    first = _root(root) / "replies" / ("0" * 64) / "conclusion.delivery.json"
+    _write(first, {"status": "verification_required", "error": "provider_delivery_unverified"})
+    reread = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert reread[0]["return_delivery"]["status"] == "verification_required"
+
+
 def test_paged_history_filters_result_io_and_rereads_late_state(frozen_private_reply, private_snapshot, monkeypatch):
     from loopx.control_plane.collaboration import inbox
 
