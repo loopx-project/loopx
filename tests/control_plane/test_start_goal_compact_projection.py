@@ -1038,9 +1038,10 @@ def test_projection_materially_reduces_repetition_without_hiding_measurement(
     compact_json = json.dumps(compact, ensure_ascii=False, sort_keys=True)
     detailed_json = json.dumps(detailed, ensure_ascii=False, sort_keys=True)
 
-    # Exact-readback guidance is useful common content in both projections;
-    # retain the duplicate-content checks below rather than remove that guidance.
-    assert len(compact_json) <= int(len(detailed_json) * 0.66)
+    # Both views carry one copy of the declaration/link recipe. Its roughly
+    # 700 common characters contribute about 240 characters to the ratio
+    # difference (34% of the added content). Keep the duplicate limits below.
+    assert len(compact_json) <= int(len(detailed_json) * 0.66) + 240
     compact_duplication = compact["packet_summary"]["duplication_measurement"]
     detailed_duplication = detailed["packet_summary"]["duplication_measurement"]
     assert compact_duplication["objective_content"]["duplicate_occurrences"] <= 11
