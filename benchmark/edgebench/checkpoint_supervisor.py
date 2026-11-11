@@ -94,6 +94,10 @@ class CheckpointSupervisor:
         else:
             self.preservation.finish(execution)
 
+    def finish_grading(self, status):
+        if self.preservation is not None:
+            self.preservation.finish_grading(status)
+
     def close(self):
         self.stop.set()
         if self.thread is not None:

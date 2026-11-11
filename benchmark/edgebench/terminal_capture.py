@@ -168,6 +168,38 @@ class FailurePreservation:
         finally:
             self._persist_receipt()
 
+    def finish_grading(self, grading_status):
+        """Seal the drained native registration if the joint export failed."""
+        receipt = self.receipt
+        if (grading_status != "complete" or receipt is None
+                or not receipt["capture_attempted"] or receipt["capture_succeeded"]
+                or receipt.get("source_stopped") is not True
+                or "native_scoring_checkpoint" in receipt):
+            return
+
+        # This point is captured after grading, with no worker phase clock.
+        # It is deliberately not the earlier joint attempt or a resume grant.
+        capture_id = uuid.uuid4().hex
+        retained = {"capture_id": capture_id, "capture_succeeded": False}
+        receipt["native_scoring_checkpoint"] = retained
+        self._persist_receipt()
+        try:
+            from .checkpoint_controller import capture
+
+            retained["capture"] = capture(
+                self.supervisor.controller_file,
+                token=self.supervisor.token,
+                capture_id=capture_id,
+                destination=self.receipt_path.parent / f"terminal-native-{capture_id}",
+            )
+            retained["capture_succeeded"] = True
+        except Exception as error:
+            # A failed or uncertain export remains evidence, never a retry
+            # under a different capture identity or a changed solver outcome.
+            retained["error_kind"] = type(error).__name__
+        finally:
+            self._persist_receipt()
+
 
 def _stop_retained_worker(container, receipt):
     if container.id != receipt["container_id"]:

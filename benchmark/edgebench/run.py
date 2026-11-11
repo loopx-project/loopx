@@ -613,6 +613,8 @@ def main(argv=None):
     finally:
         if feedback is not None:
             feedback.close()
+    if checkpoint is not None:
+        checkpoint.finish_grading(getattr(result, "grading_status", None))
     # Native cancellation and swallowed Docker failures return runtime=0.
     # Observe the signal independently; never infer cancellation from output prose.
     execution = backend.execution_receipt or {}
