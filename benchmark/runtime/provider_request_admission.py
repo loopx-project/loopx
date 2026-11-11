@@ -88,7 +88,9 @@ class ProviderRequestAdmission:
             "session_id": self._invocation.session_id, "requests": 0,
             "pending": 0, "sent": 0, "unknown": 0, "refused": 0,
         }
-        receipt.setdefault("provider_request_invocations", []).append(self._summary)
+        self._receipt_invocations = receipt.setdefault("provider_request_invocations", [])
+        self._receipt_index = len(self._receipt_invocations)
+        self._receipt_invocations.append(self._summary)
 
     def started(self, process):
         with self._lock:
@@ -99,7 +101,12 @@ class ProviderRequestAdmission:
 
     def retire(self):
         with self._lock:
+            if self._retired:
+                return
             self._retired = True
+            # Freeze the invocation receipt at its first exit. A gateway
+            # handler can still append observations while cleanup drains.
+            self._receipt_invocations[self._receipt_index] = self._summary.copy()
             self._ready.set()
 
     def before_cleanup(self, _process, _scope_error):

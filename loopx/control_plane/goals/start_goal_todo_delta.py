@@ -140,17 +140,33 @@ def todo_authoring_steps(
     if registry_path is not None:
         prefix += f" --registry {shell_arg(str(registry_path))}"
     acceptance = f"{prefix} --format json goal-acceptance"
-    route = f"--goal-id {shell_arg(str(goal_id))}"
-    if agent_id:
-        route += f" --agent-id {shell_arg(str(agent_id))}"
-    # The existing planning checkpoint owns declaration and later work linking.
-    # Keep their exact routed commands reachable without adding model stages.
-    requirement_commands = {
+    author = agent_id or "<agent-id>"
+    route = f"--goal-id {shell_arg(str(goal_id))} --agent-id {shell_arg(author)}"
+    # The planner supplies intent; goal-acceptance still validates each refinement.
+    requirement_authoring = {
         "inspect_command": f"{acceptance} inspect {route}",
         "refine_command_template": (
             f"{acceptance} refine {route} --document '<agent-authored-file>' "
             "--expected-provider-revision '<current-provider-revision>' "
             "--operation-id '<stable-original-operation-id>' --execute"
+        ),
+        "declaration_document_template": {
+            "outcome_id": "<outcome-id>",
+            "owner_agent_id": author,
+            "objective": "<outcome-objective>",
+            "requirements": [
+                {"id": "<requirement-id>", "description": "<requirement-description>"}
+            ],
+            "source": {"ref": "<source-ref>", "summary": "<source-summary>"},
+        },
+        "link_document_template": {
+            "outcome_id": "<same-outcome-id>",
+            "todo_ids": ["<actual-todo-id>"],
+        },
+        "revision_guidance": (
+            "Use provider_revision from current acceptance or inspect. Preserve owner and objective "
+            "when refining an existing outcome. After Todo writes, inspect again before linking. "
+            "Give each refinement its own stable operation id. Retry it unchanged after response loss."
         ),
     }
     # This adapter already owns routed CLI templates for both planning entrypoints.
@@ -180,7 +196,7 @@ def todo_authoring_steps(
                 "id": "plan_ranked_todos",
                 "kind": "model_checkpoint",
                 "prompt": plan_prompt,
-                "goal_requirements": requirement_commands,
+                "goal_requirements": requirement_authoring,
                 "purpose": (
                     "produce one public-safe, small, verifiable checkpoint Todo; keep "
                     "later options as evidence-linked planning notes"
@@ -207,7 +223,7 @@ def todo_authoring_steps(
             "id": "compare_planned_todos_with_frontier",
             "kind": "model_checkpoint",
             "prompt": plan_prompt,
-            "goal_requirements": requirement_commands,
+            "goal_requirements": requirement_authoring,
             "purpose": (
                 "compare the continuation with existing_runnable_frontier "
                 "by text/action_kind before any writeback"
@@ -247,7 +263,7 @@ def append_todo_delta_render_line(
     if isinstance(requirements, Mapping):
         step_lines.append(
             "   - overall requirements: reuse existing or declare missing requirements before Todos, link actual ids, then read back; "
-            "use this checkpoint's goal_requirements commands in the JSON detail packet."
+            "use this checkpoint's goal_requirements commands and document templates in the JSON detail packet."
         )
     todo_delta = raw_step.get("todo_delta")
     if not isinstance(todo_delta, Mapping):
