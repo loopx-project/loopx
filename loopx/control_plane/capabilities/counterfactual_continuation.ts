@@ -251,6 +251,7 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
 
   const seenPairIds = new Set<string>();
   const acceptedWorkspaces = new Set<string>();
+  const acceptedExecutions = new Set<string>();
   const evaluatedPairs: EvaluatedCounterfactualPair[] = [];
 
   for (let idx = 0; idx < root.pairs.length; idx++) {
@@ -299,6 +300,11 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     const treatment = normalizeBranch(pairRow.treatment, `pairs[${idx}].treatment`);
     const control = normalizeBranch(pairRow.control, `pairs[${idx}].control`);
 
+    // A row and its workspace labels can change while the underlying arm is the
+    // same observation. Arm IDs are execution identities within a frozen fork.
+    const executionKey = (armId: string) => JSON.stringify([taskId, cpId, cpSha, armId]);
+    const treatmentExecution = executionKey(treatment.arm_id);
+    const controlExecution = executionKey(control.arm_id);
     const violations: string[] = [];
     if (treatment.checkpoint_id !== cpId || control.checkpoint_id !== cpId) {
       violations.push("checkpoint_id_mismatch");
@@ -317,6 +323,10 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     }
     if (acceptedWorkspaces.has(treatment.workspace_isolation_id) || acceptedWorkspaces.has(control.workspace_isolation_id)) {
       violations.push("reused_run_workspace");
+    }
+    if (treatmentExecution === controlExecution || acceptedExecutions.has(treatmentExecution) ||
+        acceptedExecutions.has(controlExecution)) {
+      violations.push("reused_arm_execution");
     }
     if (treatment.terminal_boundary_ref !== scope.terminal_boundary_ref ||
         control.terminal_boundary_ref !== scope.terminal_boundary_ref) {
@@ -357,6 +367,8 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     if (validPair) {
       acceptedWorkspaces.add(treatment.workspace_isolation_id);
       acceptedWorkspaces.add(control.workspace_isolation_id);
+      acceptedExecutions.add(treatmentExecution);
+      acceptedExecutions.add(controlExecution);
     }
     const bothScored = validPair && treatment.valid_submission && control.valid_submission
       && treatment.terminal_value !== null && control.terminal_value !== null;

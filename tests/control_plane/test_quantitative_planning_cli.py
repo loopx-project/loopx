@@ -3,6 +3,7 @@ for the 5-stage methodology operator catalog, scoped multi-point Yardstick
 fidelity, budgeted continuation planning, and counterfactual pair evaluation."""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -486,12 +487,67 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     assert audited["estimand_summary"]["mean_tau_b"] == 13.0
     assert audited["pairs"][1]["identification_violations"] == ["shared_workspace_interference"]
     clean = json.loads(cf_doc.read_text(encoding="utf-8"))["pairs"][0]
-    duplicate = {**clean, "pair_id": "pair:relabeled"}
-    cf_doc.write_text(json.dumps({"pairs": [clean, duplicate]}), encoding="utf-8")
-    audited = json.loads(invoke(
-        "explore", "counterfactual-eval", "--document", str(cf_doc),
-        "--no-strict-identification", "--format", "json",
-    ).stdout)
-    assert audited["counts"]["valid_pairs"] == 1
-    assert audited["pairs"][1]["identification_violations"] == ["reused_run_workspace"]
+
+    def counterfactual(pairs, *, strict=True, expect_rc=0):
+        cf_doc.write_text(json.dumps({"pairs": pairs}), encoding="utf-8")
+        args = () if strict else ("--no-strict-identification",)
+        return json.loads(invoke(
+            "explore", "counterfactual-eval", "--document", str(cf_doc),
+            *args, "--format", "json", expect_rc=expect_rc,
+        ).stdout)
+
+    def independent_workspace(label):
+        pair = deepcopy(clean)
+        pair["pair_id"] = f"pair:{label}"
+        for side in ("treatment", "control"):
+            pair[side]["workspace_isolation_id"] = f"ws:{label}:{side}"
+        return pair
+
+    # Relabeling workspaces must not multiply a single observed execution pair.
+    replicas = [independent_workspace(f"replica-{i}") for i in range(5)]
+    inflated = [clean, *replicas]
+    audited = counterfactual(inflated, strict=False)
+    assert audited["counts"]["valid_pairs"] == audited["counts"]["wins"] == 1
+    assert audited["counts"]["contaminated_pairs"] == 5
+    assert audited["estimand_summary"]["exact_sign_flip_p_value"] == 1
     assert audited["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 20
+    assert all(row["identification_violations"] == ["reused_arm_execution"]
+               for row in audited["pairs"][1:])
+    assert "reused_arm_execution" in json.dumps(counterfactual(inflated, expect_rc=1))
+
+    # A distinct partner or a side swap does not make a consumed arm independent.
+    shared_arm = independent_workspace("shared-arm")
+    shared_arm["treatment"]["arm_id"] = clean["control"]["arm_id"]
+    shared_arm["control"]["arm_id"] = "arm:new-control"
+    audited = counterfactual([clean, shared_arm], strict=False)
+    assert audited["counts"]["valid_pairs"] == 1
+    assert audited["pairs"][1]["identification_violations"] == ["reused_arm_execution"]
+
+    same_arm = independent_workspace("same-arm-both-sides")
+    same_arm["control"]["arm_id"] = same_arm["treatment"]["arm_id"]
+    assert "reused_arm_execution" in json.dumps(counterfactual([same_arm], expect_rc=1))
+    audited = counterfactual([same_arm], strict=False)
+    assert audited["counts"]["scored_valid_pairs"] == 0
+    assert audited["pairs"][0]["identification_violations"] == ["reused_arm_execution"]
+
+    duplicate = {**clean, "pair_id": "pair:relabeled"}
+    audited = counterfactual([clean, duplicate], strict=False)
+    assert audited["counts"]["valid_pairs"] == 1
+    assert set(audited["pairs"][1]["identification_violations"]) == {
+        "reused_run_workspace", "reused_arm_execution",
+    }
+
+    # Independent declared executions under the same checkpoint can still pool.
+    for i, pair in enumerate(replicas):
+        for side in ("treatment", "control"):
+            pair[side]["arm_id"] = f"arm:{side}-{i}"
+    accepted = counterfactual([clean, *replicas])
+    assert accepted["counts"]["valid_pairs"] == accepted["counts"]["wins"] == 6
+    assert accepted["estimand_summary"]["exact_sign_flip_p_value"] == 0.03125
+    assert accepted["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 120
+
+    other_checkpoint = independent_workspace("another-checkpoint")
+    for key in ("checkpoint", "treatment", "control"):
+        other_checkpoint[key]["checkpoint_id"] = "ckpt:independent"
+    accepted = counterfactual([clean, other_checkpoint])
+    assert accepted["counts"]["valid_pairs"] == 2

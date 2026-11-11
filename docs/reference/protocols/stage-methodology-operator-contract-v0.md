@@ -147,10 +147,15 @@ identical frozen `checkpoint` (`source_state_sha256`, `input_revision`,
 `evaluation_ref`, `fork_recorded_at`). Use the same `terminal_boundary_ref`
 on the checkpoint and both continuations.
 
+- Use each observed run's stable `arm_id`, rather than a strategy label, within
+  the same task, checkpoint and source digest. The two arms must identify
+  different runs, and a run can contribute to only one pair in that scope.
+  Changing a pair or workspace label does not make the run independent.
 - Checks distinct, unreused `workspace_isolation_id` values, matching
   checkpoint and terminal boundary, and an observed context time at or before
   `fork_recorded_at` for each run. Strict mode rejects failed checks.
-  Audit mode excludes those pairs from the estimates.
+  Audit mode excludes those pairs from the estimates and marginal costs.
+  These input checks do not attest physical isolation.
 - Reports first-action divergence separately from score delta. Missing action
   evidence is `action_unobserved`. Direction-normalized deltas combine only
   within the same declared comparison scope, metric, unit, direction, input,
