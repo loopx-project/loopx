@@ -11,7 +11,8 @@ import {planLeaseClaimTransfer} from "./lease_claim_transfer.ts";
 import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle,
   type TaskLeaseLifecycleDecisionOperation, type TaskLeaseLifecycleDecisionCommand} from "../work_items/task_lease_lifecycle_decision.ts";
 import {requireStringLiteral} from "../runtime_decode.ts";
-import {HANDOFF_MODES, retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
+import {HANDOFF_MODES, EXECUTION_HANDOFF_MODES, retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON,
+  type ExecutionHandoffMode} from "./handoff_mode_policy.ts";
 import {leaseEpoch, leaseIsActive, leaseVersion, normalizeAgent, normalizeGoalId,
   normalizeIdempotencyKey, normalizeOwner, normalizeTodoId,
   normalizeTtl, utcIsoformat, TaskLeaseAcquireError, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
@@ -36,6 +37,8 @@ export interface CanonicalTaskLeaseLifecycleInput {
   new_owner?: string | null;
   new_idempotency_key?: string | null;
   transfer_claim?: boolean;
+  /** Admission constraint on the decision and replay, not a new business intent. */
+  required_handoff_mode?: ExecutionHandoffMode;
   registered_agents: readonly string[];
   now: Date;
 }
@@ -56,6 +59,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
     if (input.expected_version === null) return failed("version_required", `task lease ${input.operation} requires the current lease version`);
     if (!Number.isSafeInteger(input.expected_version) || input.expected_version < 0) return failed("invalid_expected_version", "lease version must be a non-negative safe integer");
     if (!(input.now instanceof Date) || !Number.isFinite(input.now.valueOf())) return failed("invalid_clock", "lease mutation requires a valid runtime clock");
+    if (input.required_handoff_mode !== undefined && !EXECUTION_HANDOFF_MODES.includes(input.required_handoff_mode)) {
+      return failed("invalid_canonical_lifecycle_request", "required_handoff_mode must be a current execution mode");
+    }
     if (raw.transfer_claim !== undefined && (typeof raw.transfer_claim !== "boolean" || raw.operation !== "transfer")) {
       return failed("invalid_canonical_lifecycle_request", "transfer_claim is a boolean valid only for transfer");
     }
@@ -79,6 +85,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
   const receipt = new CoordinationCommandReceipt({result_schema: contract.result, identity, failure: failed,
     decode(original) {
       const payload = commandReceiptResult(original), fields = payload.fields;
+      if (input.required_handoff_mode !== undefined && fields.handoff_mode !== input.required_handoff_mode) {
+        throw new AuthorityStoreProtocolError("lease receipt does not satisfy its admission constraint");
+      }
       if (input.operation === "release" && fields.missing === true) {
         if (fields.released !== false || fields.lease != null || payload.changed || input.expected_version !== 0) {
           throw new AuthorityStoreProtocolError("missing-lease receipt does not match release intent");
@@ -142,6 +151,9 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
     const excluded = todo?.excluded_agents ?? [];
     if (!Array.isArray(excluded) || excluded.some(value => typeof value !== "string")) return failed("invalid_coordination_projection", "Todo exclusions must be strings");
     const mode = requireStringLiteral(head.head.handoff_mode ?? "legacy", HANDOFF_MODES, "canonical handoff_mode");
+    if (input.required_handoff_mode !== undefined && mode !== input.required_handoff_mode) {
+      return failed("lease_handoff_mode_mismatch", "Current handoff mode does not satisfy the lease's admission constraint");
+    }
     const claim = planLeaseClaimTransfer({requested: input.transfer_claim === true, handoff_mode: mode,
       todo, owner: input.owner, new_owner: command.new_owner, registered_agents: input.registered_agents,
       updated_at: utcIsoformat(input.now)});

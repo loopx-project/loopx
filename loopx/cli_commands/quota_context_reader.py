@@ -14,6 +14,7 @@ from ..control_plane.turn_driver.decision_capture import (
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     CONTEXT_CAPTURE_PAGE_GUIDANCE,
     CONTEXT_CAPTURE_READ_GUIDANCE,
+    ContextSelectionDigestChanged,
     context_capture_read_command,
     context_selection_binding,
     context_selection_view as _context_selection_view,
@@ -104,9 +105,13 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
 
 
 
-def _observed_read_presentation(fields: dict[str, Any]) -> dict[str, Any]:
-    return {"previously_delivered_fields": list(fields),
-        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
+def _observed_read_presentation(fields: dict[str, Any], text_append: dict[str, Any] | None = None) -> dict[str, Any]:
+    appended = text_append["pointer"] if text_append is not None else None
+    instruction = "These unchanged fields still apply. "
+    if appended is not None:
+        instruction += "For append_to_observed_text, append value to the previously delivered text. "
+    return {"previously_delivered_fields": [pointer for pointer in fields if pointer != appended],
+        "field_recovery": instruction + "If needed or uncertain, append --select "
             "and the field pointer to recovery.command for its complete current body."}
 
 
@@ -281,6 +286,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         selectors = getattr(args, "select", None)
         initial_read = getattr(args, "initial_read", False)
         selection_digest = getattr(args, "selection_sha256", None)
+        text_append = None
         if pinned_selection is not None:
             if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
                 raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
@@ -310,8 +316,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                             reference_file = write_context_read_reference(path, digest)
                         except OSError:
                             reference_file = None
-                elif offset == 0:
-                    presentation = {**(presentation or {}), **_observed_read_presentation(observation["fields"])}
+                else:
+                    text_append = observation.get("text_append")
+                    if offset == 0:
+                        presentation = {**(presentation or {}),
+                            **_observed_read_presentation(observation["fields"], text_append)}
         if pinned_selection is not None:
             selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
             list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
@@ -332,12 +341,26 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             if offset > 0 and selection_digest is None:
                 raise ValueError("selected continuation requires selection-sha256; follow next_command")
             pinned_explicit = pinned_selection is not None and not initial_read
-            plan, selected_raw, expected = _context_selection_view(payload, select=selectors,
-                initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
-                expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
-                present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
-                    if pinned_selection is not None else None),
-                selection_paths=reference.get("selection_paths") if pinned_selection is not None else None)
+            try:
+                plan, selected_raw, expected = _context_selection_view(payload, select=selectors,
+                    initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
+                    expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
+                    present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
+                        if pinned_selection is not None else None),
+                    selection_paths=reference.get("selection_paths") if pinned_selection is not None else None,
+                    text_append=text_append)
+            except ContextSelectionDigestChanged as exc:
+                # A verified file digest only binds bytes. Preserve an explicit
+                # selection or listing, including a receipt-only diagnostic.
+                # Historical initial-read has no explicit scope to preserve.
+                return {"ok": False, "schema_version": "context_capture_page_v1", "reason": str(exc),
+                    "recovery_command": context_capture_read_command(path, digest,
+                        page_bytes=next_page_bytes or size,
+                        max_page_output_bytes=next_page_output_bytes or output_limit,
+                        select=selectors, list_fields=list_fields, list_depth=list_depth, reader_argv=reader_argv),
+                    "recovery": ("Use recovery_command to read the original capture from offset zero; "
+                        if initial_read else "Use recovery_command to restart the original selected read from offset zero; ")
+                    + "this read performs no guard, admission or spend."}
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -620,7 +643,8 @@ def budgeted_ready_opening(navigation: dict[str, Any], plan: dict[str, Any],
         try:
             page = _capture_page(path, content, digest, offset=0, size=page_bytes,
                 output_limit=output_bytes, instruction=False, select=[], reference_file=Path(reference),
-                presentation=_observed_read_presentation(observation["reused"]) if observation else None,
+                presentation=_observed_read_presentation(observation["reused"], observation.get("text_append"))
+                    if observation else None,
                 reader_argv=reader_argv)
         except ValueError:
             pass  # The ordinary reader has no room for its page framing.

@@ -13,6 +13,7 @@ from typing import Any, Iterable, cast
 import hashlib
 import json
 import re
+import shlex
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -58,9 +59,13 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
 BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS = 5
+_SQLITE_ARCHIVE_POINTER_PREFIX = "<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+_SQLITE_ARCHIVE_OMITTABLE_FIELDS = (
+    "text", "note", "evidence", "reason", "completion_result", "required_write_scopes",
+)
 SQLITE_ARCHIVE_POINTER_COMMENT = (
-    '<!-- loopx:todo-archive-pointer authority=sqlite_v0 '
-    'query="loopx todo list --goal-id <goal-id> --include-archived" -->'
+    _SQLITE_ARCHIVE_POINTER_PREFIX
+    + 'query="loopx todo list --goal-id <goal-id> --include-archived" -->'
 )
 
 
@@ -94,11 +99,60 @@ def format_sqlite_archive_pointer_comment(
         )
     extra_suffix = (" " + " ".join(extra_parts)) if extra_parts else ""
     return (
-        f"<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
-        f"archived_count={archived_count} "
+        f"{_SQLITE_ARCHIVE_POINTER_PREFIX}archived_count={archived_count} "
         f"active_done_omitted={active_done_omitted}"
         f"{extra_suffix} "
         f'query="loopx todo list --goal-id {resolved_goal} --include-archived" -->'
+    )
+
+
+def is_sqlite_archive_summary_pointer(line: str, *, goal_id: str) -> bool:
+    """Recognize complete generated summaries from the current and older writers."""
+    text = line.rstrip("\r\n")
+    if not text.startswith(_SQLITE_ARCHIVE_POINTER_PREFIX) or not text.endswith(" -->"):
+        return False
+    if text in (
+        SQLITE_ARCHIVE_POINTER_COMMENT,
+        SQLITE_ARCHIVE_POINTER_COMMENT.replace(" --goal-id <goal-id>", ""),
+    ):
+        return True
+
+    try:
+        fields = dict(token.split("=", 1) for token in shlex.split(
+            text[len(_SQLITE_ARCHIVE_POINTER_PREFIX):-4]
+        ))
+        archived_count = int(fields["archived_count"])
+        active_done_omitted = int(fields["active_done_omitted"])
+        active_fields_omitted = int(fields.get("active_fields_omitted", "0"))
+    except (KeyError, ValueError):
+        return False
+
+    pointer_goal = fields.get("goal_id")
+    if pointer_goal is not None and pointer_goal != goal_id:
+        return False
+    todo_ids = tuple(fields["omitted_todo_ids"].split(",")) if "omitted_todo_ids" in fields else ()
+    omitted_fields = tuple(fields["omitted_fields"].split(",")) if "omitted_fields" in fields else ()
+    if (
+        archived_count < 0
+        or active_done_omitted < 0
+        or active_fields_omitted != len(todo_ids)
+        or bool(omitted_fields) != bool(todo_ids)
+        or any(normalize_todo_id(todo_id) != todo_id for todo_id in todo_ids)
+        or tuple(field for field in _SQLITE_ARCHIVE_OMITTABLE_FIELDS if field in omitted_fields) != omitted_fields
+    ):
+        return False
+    generated = format_sqlite_archive_pointer_comment(
+        archived_count=archived_count,
+        active_done_omitted=active_done_omitted,
+        active_fields_omitted=active_fields_omitted,
+        omitted_fields=omitted_fields,
+        omitted_todo_ids=todo_ids,
+        goal_id=pointer_goal,
+    )
+    # The pre-goal-scoped writer used only the two archive counts.
+    return text == generated or (
+        pointer_goal is None and not todo_ids
+        and text == generated.replace(" --goal-id <goal-id>", "")
     )
 
 
@@ -811,14 +865,7 @@ def render_canonical_todo_sections(
     ):
         unique_omitted_fields = tuple(
             field
-            for field in (
-                "text",
-                "note",
-                "evidence",
-                "reason",
-                "completion_result",
-                "required_write_scopes",
-            )
+            for field in _SQLITE_ARCHIVE_OMITTABLE_FIELDS
             if any(
                 field in item["omitted_fields"]  # type: ignore[operator]
                 for item in omitted_active_records

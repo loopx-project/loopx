@@ -12,6 +12,7 @@ export interface HostProcessRequest {
   timeout_ms: number | null;
   drain_timeout_ms: number;
   stdout_limit_bytes: number | null;
+  interrupt_before_terminate?: true;
 }
 export interface HostProcessResult {
   kind: "result";
@@ -21,6 +22,7 @@ export interface HostProcessResult {
   output_complete: boolean;
   cleanup_scope: "process_group" | "process_tree_best_effort";
   group_signal_sent: boolean;
+  interrupt_returned?: boolean;
 }
 export type HostProcessOutput = {kind: "stdout" | "stderr"; text: string};
 /** The group this owner will clean up, reported once the Host is spawned.
@@ -33,6 +35,9 @@ export function decodeHostProcessRequest(value: unknown): HostProcessRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid Host request");
   const v = value as Record<string, unknown>;
   const fields = ["argv", "cwd", "input", "timeout_ms", "drain_timeout_ms", "stdout_limit_bytes"];
+  if (Object.hasOwn(v, "interrupt_before_terminate") && v.interrupt_before_terminate === true) {
+    fields.push("interrupt_before_terminate");
+  }
   if (Object.keys(v).length !== fields.length || fields.some(k => !Object.hasOwn(v, k)) ||
       !Array.isArray(v.argv) || !v.argv.length || !v.argv[0] || v.argv.some(x => typeof x !== "string" || x.includes("\0")) ||
       typeof v.cwd !== "string" || !v.cwd || v.cwd.includes("\0") || typeof v.input !== "string" ||
@@ -82,6 +87,13 @@ export async function runHostProcess(request: HostProcessRequest,
       });
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       return;
+    }
+    if (request.interrupt_before_terminate && outcome !== "exited" &&
+        child.exitCode === null && child.signalCode === null && child.kill("SIGINT")) {
+      // Codex exec owns native commands that can run outside this process
+      // group. Give the CLI's interrupt handler a bounded chance to close them.
+      await Promise.race([exited, delay(terminationGraceMs)]);
+      base.interrupt_returned = child.exitCode !== null;
     }
     // Always signal the owned group, including after the leader's exit.
     const sent = signalGroup(child, "SIGTERM");

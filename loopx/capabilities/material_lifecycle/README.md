@@ -165,6 +165,45 @@ contracts; the single-receipt limit remains 100.
 This SDK slice is independent of project-scope ownership support. It does not
 add a CLI writer, store authority, scoring policy or automatic reranker.
 
+## Wave-Based Multi-Material Reranking
+
+`plan_material_wave_rerank(ordered_material_refs, annotations, ...)` (and the
+stateless CLI preview `loopx material-lifecycle plan-wave-rerank --input <path-or-->`)
+delegates multi-item shortlist ordering to the shared TypeScript control-plane
+owner (`material_lifecycle.plan_wave_rerank`) while keeping `apply_authorized`
+false and leaving source authority untouched.
+
+It deterministically resolves three common ranking failure modes across large
+queues:
+
+1. **Horizon-wave and effort-band cost-adjusted ordering**: stratifies annotated
+   items across `imminent_gate`, `active_sprint`, `foundational_track`, and
+   `orthogonal_backlog` with effort-weighted VOI (`quick_slice` `/1.0`,
+   `focused_study` `/2.0`, `deep_monograph` `/6.0`). Unsliced `deep_monograph`
+   items (`scoped_slice_ready=False`) declared in `imminent_gate` or
+   `active_sprint` automatically stratify to `foundational_track` so multi-week
+   courses or books never block quick high-VOI slices unless a bounded
+   chapter/section slice is ready.
+2. **Load-bearing primary-over-secondary lineage and unranked dependency gate**:
+   rejects rerank plans when any `required_load_bearing_refs` entry is absent
+   from `ordered_material_refs` (requiring candidate intake settlement first),
+   enforces topological precedence so ranked `primary_source_refs` always land
+   strictly ahead of secondary commentary, and verifies that every
+   `blocks_active_deliverable=True` + `load_bearing_primary` material lands
+   within `top_window_size`.
+3. **Orthogonal Top-Window cap and passive backlog retention**: caps
+   `orthogonal_backlog` and `orthogonal_signal` items inside
+   `1..top_window_size` (`max_orthogonal_in_top_window`, default `0`) whenever
+   non-orthogonal ranked items exist below `top_window_size`. Unannotated
+   items retain exact original relative order after the structured active waves,
+   and demoted orthogonal items land cleanly at the start of `ranked_backlog`
+   (`max(top_window_size + 1, after_active_waves)`) rather than displacing the
+   entire tail.
+
+The returned `(reordered_refs, summary)` supplies `moves` and `constraints`
+directly compatible with `build_material_rerank_proposal(..., moves=summary["moves"], **summary["constraints"])`
+and `material_rerank_receipt_chunks`.
+
 ## Project-Local Skill Delivery
 
 LoopX ships the canonical `loopx-material` skill, but deliberately does not
@@ -182,8 +221,11 @@ loopx project-skill install \
 Supported surfaces:
 
 - `codex` -> `.agents/skills/loopx-material/`
+- `antigravity` -> `.agent/skills/loopx-material/`
 - `claude-code` -> `.claude/skills/loopx-material/`
+- `kiro-cli` -> `.kiro/skills/loopx-material/`
 - `opencode` -> `.opencode/skills/loopx-material/`
+- `pi` -> `.pi/skills/loopx-material/`
 
 Repeat `--surface` to install multiple host-native copies in one transaction.
 Inspect before or after installation:
@@ -242,6 +284,14 @@ Inspect the provider-neutral contract:
 loopx material-lifecycle architecture --format json
 ```
 
+Preview a deterministic wave rerank from exact-read annotations:
+
+```bash
+loopx material-lifecycle plan-wave-rerank \
+  --input request.json \
+  --format json
+```
+
 Inspect the managed project skill:
 
 ```bash
@@ -266,8 +316,11 @@ no Goal. Its project/profile/grant references select existing Core context and
 source ownership, and never grant access by themselves.
 
 Project intake/rollback require the source provider's `verify_project_scope`
-to resolve the current Core caller, audience, exact profile/store, workspace
-write grant and expiring owner gate. Verification runs before source access
+to resolve the active native turn of the calling verified local owner host
+(`Codex`, `Antigravity`, `Claude Code`, `OpenCode`, `Kiro CLI`, etc.) or
+authorized native Bot turn under the same Core workspace write grant, audience,
+exact profile/store, and expiring owner gate—never inventing a dummy Goal or
+borrowing another host's turn. Verification runs before source access
 and publication; the source must retain its transaction authorization fence.
 Source initialization stays project owned. Migration, rebuild and Explore keep
 their existing Goal route. No new CLI or transport configuration path is added.

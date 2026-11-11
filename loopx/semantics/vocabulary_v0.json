@@ -345,12 +345,13 @@
       ],
       "value_notes": {
         "agent_scope_exhausted": "The current agent has no projected current or unclaimed advancement candidate and no other visible advancement work, despite a goal-level advancement lane. It stays active but quiet until LoopX projects a candidate or a peer transfers work.",
-        "agent_scope_wait": "The current agent has no current or unclaimed advancement candidate and the blocking handoff work is claimed by another agent. It stays active but quiet until that agent finishes, the work is reassigned, or a concrete candidate exists.",
+        "agent_scope_wait": "The current agent has no runnable current or unclaimed candidate and is waiting on a pending successor condition, explicitly blocked work, or another agent's blocking handoff. It stays active but quiet until the condition, ownership or available work changes.",
         "reassignment_required": "The current agent has no current or unclaimed advancement candidate while visible advancement work is claimed by another agent. That work needs finishing, reassignment, or a concrete current-agent candidate before delivery.",
         "successor_replan_required": "The successor lane must replan before this lane advances. It is produced by the selected-candidate priority, monitor blocked resume, deferred resume, route continuation and cleared handoff frontiers, and with must_attempt the scheduler treats it as active work rather than a wait."
       },
       "producers": [
         "loopx/control_plane/agents/agent_scope.py::_blocked_successor_wait_frontier",
+        "loopx/control_plane/agents/agent_scope.py::_blocked_todo_wait_frontier",
         "loopx/control_plane/agents/agent_scope.py::_blocking_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_cleared_handoff_frontier",
         "loopx/control_plane/agents/agent_scope.py::_deferred_resume_frontier",

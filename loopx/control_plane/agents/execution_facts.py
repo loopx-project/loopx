@@ -9,8 +9,7 @@ running work, so the agent management projection can derive `executing` and
   `turn_lane_liveness`; a delegated member executes inside its own lane too;
 - the delegation worker: an in-flight delegation journal row whose operation
   lock and the delegated Todo's execution slot are held by one live process;
-- the task leases on the Goal's open Todos, read from the canonical head after
-  cutover and from the local lease files before it.
+- the task leases on the Goal's open Todos, read from the canonical head.
 
 It writes nothing, takes no lock and keeps no state of its own: every input is
 owned elsewhere and this is a bounded read model over them. A fact that cannot
@@ -167,22 +166,17 @@ def _delegation_worker_agents(
 
 def _open_todo_leases(
     runtime_root: Path, *, goal_id: str, todo_ids: set[str]
-) -> tuple[list[Mapping[str, Any]], set[str]] | None:
-    """Readable leases and unreadable Todo IDs; ``None`` if authority is unreadable.
-
-    The canonical head is the only lease source; its failure is
-    reported, never replaced by the local files it superseded. The failure
-    classes are the ones the ownership observation already isolates.
-    """
+) -> list[Mapping[str, Any]] | None:
+    """Read the selected leases, or return ``None`` when authority is unreadable."""
 
     try:
         canonical = read_canonical_todos_if_promoted(
-            runtime_root=runtime_root, goal_id=goal_id, include_leases=True
+            runtime_root=runtime_root, goal_id=goal_id, include_leases=True,
+            lease_todo_ids=todo_ids,
         )
     except (OSError, RuntimeError, ValueError):
         return None
-    return [lease for lease in canonical["leases"]
-        if isinstance(lease, Mapping) and lease.get("todo_id") in todo_ids], set()
+    return list(canonical["leases"])
 
 
 def _lease_fact(lease: Mapping[str, Any], *, at: datetime) -> dict[str, Any]:
@@ -235,8 +229,7 @@ def collect_agent_execution_facts(
             requesters=(spelling for work in agents.values() for spelling in work["spellings"]),
         )
         todo_ids = {todo_id for work in agents.values() for todo_id in work["open_todo_ids"]}
-        observed_leases = _open_todo_leases(root, goal_id=goal_id, todo_ids=todo_ids) if todo_ids else ([], set())
-        leases, unreadable_todo_ids = observed_leases if observed_leases is not None else ([], set())
+        leases = _open_todo_leases(root, goal_id=goal_id, todo_ids=todo_ids) if todo_ids else []
         for agent_id, work in agents.items():
             row = facts.setdefault(
                 agent_id, {"lane": TURN_LANE_ABSENT, "delegation_worker_active": False}
@@ -245,11 +238,9 @@ def collect_agent_execution_facts(
                 _merge_lane(row, _lane_fact(root, goal_id=goal_id, agent_id=spelling))
             if agent_id in workers:
                 row["delegation_worker_active"] = True
-            if (observed_leases is None and work["open_todo_ids"]) or (
-                unreadable_todo_ids.intersection(work["open_todo_ids"])
-            ):
+            if leases is None and work["open_todo_ids"]:
                 _merge_lease(row, {"status": LEASE_STATUS_UNAVAILABLE})
-        for lease in leases:
+        for lease in leases or []:
             owner = normalize_todo_claimed_by(lease.get("owner"))
             if owner in agents:
                 _merge_lease(facts[owner], _lease_fact(lease, at=at))

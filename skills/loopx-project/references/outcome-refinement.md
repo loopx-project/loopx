@@ -32,6 +32,14 @@ and mark both met, or silently edit an authoritative file. Ask only when a
 consequential meaning or authority is genuinely missing, not merely because the
 user gave a correction.
 
+For obsolete work covered by executable checks, follow the
+[owner check-scope reconciliation example](../../../docs/reference/goal-acceptance-observations.md#owner-check-scope-reconciliation).
+It preserves accepted work and current/final checks in an explicit
+`selected_work` replacement before lease-fenced supersession. Removing a binding
+alone does not remove work from `all_advancement`. This owner configuration path
+does not supersede persisted additive outcome requirements; keep any conflicting
+requirement explicit rather than claiming the check update retired it.
+
 ## Current operating objective
 
 When recorded explicit user direction makes the Goal objective obsolete, prepare

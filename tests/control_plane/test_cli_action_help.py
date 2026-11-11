@@ -40,6 +40,18 @@ def test_action_help_from_real_cli_with_unavailable_registry(tmp_path, command, 
     assert not registry.exists()
 
 
+def test_supersede_help_explains_the_retained_claim_reference(capsys):
+    with pytest.raises(SystemExit) as exited:
+        build_parser().parse_args(["todo", "supersede", "--help"])
+    assert exited.value.code == 0
+    output = capsys.readouterr().out
+    declared = [line.strip().split()[0] for line in output.splitlines() if line.startswith("  --")]
+    assert "--claim-operation-id" in declared
+    assert "update/complete/supersede" in output
+    assert "--task-lease-idempotency-key" not in declared
+    assert "--task-lease-expected-version" not in declared
+
+
 def test_action_help_keeps_required_usage_and_lists_optional_grammar_once(capsys):
     parser = build_parser()
     command = ["todo", "update", "--goal-id", "fixture", "--todo-id", "todo_a", "--note", "progress"]

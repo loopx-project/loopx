@@ -7,7 +7,8 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -37,14 +38,21 @@ from .executor import (
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
     MATERIAL_HOST_RESULT_KINDS,
-    STOP_HOST_RESULT_KINDS,
 )
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
 from .host_candidate import assert_turn_host_request_version, execution_profile_present
-from .host_process_transport import HostOutputLines, run_host_process
-from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
+from .host_process_transport import (
+    HostOutputLines,
+    HostProcessInterruptionUnconfirmed,
+    run_host_process,
+)
+from .transaction import (
+    LOOPX_TURN_RESULT_SCHEMA_VERSION,
+    STOP_RESULT_KINDS as STOP_HOST_RESULT_KINDS,
+    TRANSACTION_PHASES,
+)
 
 
 CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION = "codex_stdio_mcp_server_v0"
@@ -368,7 +376,7 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
     if not complete:
         assert_turn_envelope_consumer_version(envelope)
     model_request: Mapping[str, Any] = complete_input if complete_input is not None else request
-    detail = _mapping((complete_input if complete else envelope).get("detail_ref"))
+    detail = _mapping((complete_input if complete_input is not None else envelope).get("detail_ref"))
     staged = _mapping(detail.get("replan_action_packet")).get("review")
     if staged and not complete:
         from .host_candidate import extract_turn_authority, replan_prompt_instruction
@@ -397,6 +405,16 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
     if complete:
         from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
 
+        instructions.insert(2,
+            "Read the original captured decision inline in work_contract before dependent work. "
+            "The host has validated this complete observation and its source binding. "
+            "detail_ref.captured_decision preserves its Goal/Agent/Turn and source hash provenance; "
+            "it is not a prerequisite filesystem read when that observation is present here. "
+            "The private capture may be unreadable from sandboxed tools. Use detail_ref.full_decision "
+            "only for original context missing after compaction; never rerun admission to recover it. "
+            "Other required reads remain mandatory. "
+            "Missing or invalid original evidence still holds dependent work and closure; "
+            "inline delivery grants no new permissions.")
         instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
         acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
         if acceptance:
@@ -796,6 +814,31 @@ def _codex_command(
     return command
 
 
+def _run_codex_exec(
+    command: list[str],
+    *,
+    project: Path,
+    input_text: str,
+    timeout_seconds: float | None,
+    on_stdout: Callable[[str], None],
+    on_stderr: Callable[[str], None],
+    launch_guard: Callable[[], AbstractContextManager[None]],
+    check_running: Callable[[], None] | None,
+) -> dict[str, Any]:
+    try:
+        observation = run_host_process(
+            command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
+            drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS, on_stdout=on_stdout, on_stderr=on_stderr,
+            launch_guard=launch_guard, check_running=check_running,
+            interrupt_before_terminate=check_running is not None,
+        )
+    except HostProcessInterruptionUnconfirmed as exc:
+        raise BuiltInHostError("codex_cli_stop_unconfirmed") from exc
+    if check_running is not None:
+        check_running()
+    return observation
+
+
 def run_codex_cli_host(
     request: Mapping[str, Any],
     *,
@@ -820,8 +863,14 @@ def run_codex_cli_host(
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
     lineage = _lineage(request)
+    admission = goal_admission
+    if admission is None and registry_path is not None:
+        admission = FirstPartyHostGoalAdmission.for_plan(
+            registry_path=registry_path, goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
+            agent_id=lineage["agent_id"],
+        )
     launch_scope = FirstPartyHostGoalAdmission.launch_scope_for_plan(
-        admission=goal_admission, registry_path=registry_path,
+        admission=admission, registry_path=registry_path,
         goal_id=lineage["goal_id"], planned_goal_ref=request.get("goal_ref"),
     )
     planned_session = _mapping(request.get("session"))
@@ -962,11 +1011,17 @@ def run_codex_cli_host(
 
         events = HostOutputLines(observe_event)
         diagnostics = HostOutputLines(observe_stderr)
+        def check_running() -> None:
+            assert admission is not None
+            admission.require_running(operation="codex_cli_host_continue")
+
         with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
-            observed = run_host_process(command, project=project, input_text=input_text,
-                timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
+            observed = _run_codex_exec(
+                command, project=project, input_text=input_text, timeout_seconds=timeout_seconds,
                 on_stdout=events.feed, on_stderr=diagnostics.feed,
-                launch_guard=lambda: launch_scope("codex_cli_host_launch"))
+                launch_guard=lambda: launch_scope("codex_cli_host_launch"),
+                check_running=check_running if admission is not None else None,
+            )
             events.finish()
             diagnostics.finish()
         returncode = observed["returncode"]
