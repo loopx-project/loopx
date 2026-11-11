@@ -554,7 +554,10 @@ describe('DSH admission-to-closeout integration', () => {
       expect(reachedNext).toBe(true)
       expect(admission).toEqual({ kind: 'reject' })
       expect(guards).toBe(3)
-      expect(warnings).toEqual([])
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(
+        'pre_step_rejected stage=pre-step-recheck reason=authority-after-next other_kinds=none',
+      )
       expect(testFixture.queued).toHaveLength(0)
     } finally {
       await driver.dispose()
@@ -624,9 +627,11 @@ describe('DSH admission-to-closeout integration', () => {
         if (scenario === 'digest mismatch' || scenario === 'inline digest mismatch') {
           expect(reads).toBe(1)
           expect(testFixture.queued).toHaveLength(0)
-          expect(warnings).toEqual([expect.stringContaining(
-            scenario === 'digest mismatch' ? 'invalid page' : 'selection digest did not match',
-          )])
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'admission_failed stage=quota kind=invalid_schema cause_kind=invalid_schema',
+          )
+          expect(warnings[0]).not.toMatch(/invalid page|selection digest did not match/u)
         } else if (scenario === 'held') {
           expect(reads).toBe(2)
           expect(testFixture.queued).toHaveLength(0)
