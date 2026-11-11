@@ -464,8 +464,21 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert observed.returncode == 0, observed.stderr
     ready_page = json.loads(observed.stdout)
     assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
+    observations = []
+    if readback_command[readback_command.index("quota") + 1] == "context-project":
+        # The complete source must pass validation before its first page is
+        # readable. The projection itself does not prove delivery of any bytes.
+        observations.append((ready_page, True))
+        reader = shlex.split(ready_page["recovery"]["command"])
+        assert reader[reader.index("quota") + 1] == "context-read"
+        observed = subprocess.run(reader, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        assert observed.returncode == 0, observed.stderr
+        ready_page = json.loads(observed.stdout)
+        assert ready_page["ok"] and ready_page["sha256"] == readback["capture_sha256"]
+    assert ready_page["offset"] == 0 and ready_page["content"]
     forged = {**ready_page, "content": "x" + ready_page["content"][1:]}
-    for observation, should_repeat in ((forged, True), (ready_page, False)):
+    observations.extend(((forged, True), (ready_page, False)))
+    for observation, should_repeat in observations:
         shown = subprocess.run(hook, input=json.dumps({**hook_event, "tool_response": observation}),
             env=hook_env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
         assert shown.returncode == 0, shown.stderr
