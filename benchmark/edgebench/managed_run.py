@@ -35,6 +35,9 @@ TERMINAL_FILENAME = "managed-terminal.json"
 RUNTIME_FILENAME = "runtime-receipt.json"
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_HISTORY_BYTES = 16 * 1024 * 1024
+# These two native artifacts carry every solver segment, including repeated
+# resumes. Keep their budget separate from the compact managed control records.
+_MAX_NATIVE_SOLVER_EVIDENCE_BYTES = 64 * 1024 * 1024
 _IDENTITY_FIELDS = {"benchmark_id", "study_id", "case_id", "run_id", "arm_id", "arm_role", "attempt"}
 _BOARD_STATUS = {"terminal": "completed", "runner_failed": "runner_invalid", "cancelled": "cancelled"}
 _NATIVE_TERMINAL_STATUS = {"normal_exit", "nonzero_exit", "timed_out", "cancelled", "signaled"}
@@ -163,7 +166,9 @@ def retain_managed_solver(trial: Path, binding: dict, launch: dict, *, receipt: 
     """Bind the exact native solver snapshot to the returned runtime receipt."""
     retained = dict(launch)
     if receipt["status"] in _BOARD_STATUS and getattr(result, "solver_execution", None) is not None:
-        execution, digest = _read_record(trial / "solver_execution.json")
+        execution, digest = _read_record(
+            trial / "solver_execution.json", limit=_MAX_NATIVE_SOLVER_EVIDENCE_BYTES,
+        )
         admitted = _timestamp(binding["admission_receipt"]["run"]["admitted_at"])
         if (execution == result.solver_execution and _solver_ended(
                 execution, admitted_at=admitted.timestamp(), observed_at=datetime.now(UTC).timestamp())):
@@ -216,7 +221,7 @@ def _grading_drained(trial: Path, *, history_file: str, run_id: str, task_id: st
 def _retained_completed_result(trial: Path, receipt: dict) -> dict | None:
     """Read the runner's completion marker when its terminal receipt did not land."""
     try:
-        result, _ = _read_record(trial / "final_result.json")
+        result, _ = _read_record(trial / "final_result.json", limit=_MAX_NATIVE_SOLVER_EVIDENCE_BYTES)
     except FileNotFoundError:
         return None
     duration = result.get("runtime_seconds")
@@ -255,7 +260,9 @@ def publish_managed_terminal(trial: Path, *, execute: bool = False) -> bool:
     history_file = retained.get("history_file")
     if history_file not in _NATIVE_HISTORY_FILES:
         raise ValueError("Retained managed grading history path differs")
-    execution, solver_digest = _read_record(trial / "solver_execution.json")
+    execution, solver_digest = _read_record(
+        trial / "solver_execution.json", limit=_MAX_NATIVE_SOLVER_EVIDENCE_BYTES,
+    )
     if recovered_completion is None:
         solver_matches = retained.get("solver_execution_sha256") == solver_digest
     else:

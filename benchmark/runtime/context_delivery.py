@@ -27,17 +27,18 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
     project = [*prefix, "context-project", *source,
         "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
         "--turn-instance-id", turn_id, "--initial-read", "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
-    recovery_index = [*prefix, "context-read", *source, "--list"]
+    receipt_reader = [*prefix, "context-read", *source, "--select", "/heartbeat_receipt"]
     return ("Run this command directly and deliver its complete bounded stdout to the model. "
         "Keep top-level content and next_command when present; navigation alone omits the returned page. "
         "Preserve any failure response.\n```sh\n" + shlex.join(project)
-        + "\n```\n" + ("" if guide_in_host else CONTEXT_CAPTURE_NAVIGATION_GUIDANCE)
-        + "If the projection command itself fails, recover necessary facts from the same original capture. "
-        "When pointers are unknown, discover them with:\n```sh\n" + shlex.join(recovery_index)
-        + "\n```\nUse the same capture's generic reader and selectors for the facts the current decision needs. "
-        "For known fields, replace --initial-read with repeated --select pointers in the first command. "
-        "Continue the returned page or use navigation.recovery.command to reread; do not project again. "
-        "Discovery does not require draining the packet. "
+        + "\n```\n" + ("" if guide_in_host else "After projection succeeds: " + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE)
+        + "For known fields, replace --initial-read with repeated --select pointers in the first command. "
+        "After a successful projection, continue the returned page or use navigation.recovery.command to reread. "
+        "If projection fails, follow its recovery instructions and preserve the original receipt. "
+        "If it provides no verified context or usable instructions, restore the intact capture and retry the same "
+        "context-project with its original digest and Turn. Use this command for diagnostic receipt readback:\n```sh\n"
+        + shlex.join(receipt_reader) + "\n```\n"
+        "Use verified context before work. Do not rerun admission to recover presentation. "
         "Neither presentation nor recovery renews this decision's authority or freshness. ")
 
 

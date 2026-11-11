@@ -35,6 +35,16 @@ collection is a complete result; it does not authorize Markdown fallback.
 Pagination is a transport mechanism, not a UI display limit or a partial domain
 query. Summary computation still receives the complete population.
 
+Status shares one checked revision between contract diagnostics and its Todo
+summaries. Its internal reply carries the diagnostic fields for every record,
+including archived records, alongside the existing summaries and acceptance
+facts. The response does not carry a second copy of the full records. Exact
+Todo detail and summary replay still use their original full-source reads.
+
+状态读取的合同诊断与 Todo 摘要使用同一个已校验的版本。内部响应为每条记录（含归档）
+返回诊断所需的字段，并保留原有摘要及验收事实，响应不再另附完整记录。
+精确 Todo 详情与摘要重放仍使用原有的完整来源读取。
+
 Each request has `schema_version`, `runtime_root`, `goal_id`, `include_leases`,
 `projection_readback` and `after`. The first `after` is null; subsequent calls
 send the previous page's `next` unchanged. A continuation contains:

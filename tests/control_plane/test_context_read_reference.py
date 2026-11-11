@@ -112,7 +112,12 @@ def assert_section_read_only(page, machine):
     observed = _verified_context_pages({"source_recovery": reference, "recovery": reference}, pages)
     assert len(observed) == 1, "a valid selected page must reach the section-read owner"
     assert observed[0]["source_sha256"] == machine["sha256"]
-    assert observed[0]["read_sections"]
+    # With no terminal range in this observation or the journal, verified
+    # bytes can contribute coverage while section digests are deferred.
+    if page["eof"]:
+        assert observed[0]["read_sections"]
+    else:
+        assert observed[0]["read_sections"] == {}
     assert capture_page_range(observed[0], raw=raw, digest=machine["sha256"]) is None
 
 
@@ -197,10 +202,12 @@ def test_selected_continuations_hide_both_digests_and_preserve_exact_values(tmp_
     assert changed["ok"] is False and "cannot change selectors" in changed["reason"]
 
 
-def test_initial_reference_rejects_changed_selection_profile(tmp_path, monkeypatch):
-    _, _, model = fixture(tmp_path)
-    first = read(model["first_read_command"], max_page_output_bytes=3000, page_bytes=3000)
+def test_explicit_initial_cursor_rejects_changed_selection_profile(tmp_path, monkeypatch):
+    _, machine, _ = fixture(tmp_path)
+    first = read(machine["first_read_command"], max_page_output_bytes=3000, page_bytes=3000)
     assert first["ok"] and not first["eof"]
+    cursor = shlex.split(first["next_command"])
+    assert {"--initial-read", "--selection-sha256"} <= set(cursor)
     from loopx.control_plane.quota import turn_envelope
 
     original = turn_envelope._turn_envelope_result
