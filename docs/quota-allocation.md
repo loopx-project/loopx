@@ -347,6 +347,9 @@ retain the existing heartbeat default.
 A rejected `refresh-state`, or an Agent's state-only maintenance update, also
 returns `settlement_recovery` when a persisted Turn still owes closeout. Its
 identity and progress come from the same typed receipt reader as guard recovery.
+If the caller omits the Turn ID, the refresh can discover an autonomous replan
+whose guard positively admitted work and recorded the original obligation and
+effect. Later Turn admission still follows the guard's explicit closeout marker.
 The TS `pending_closeout` read selects the candidate, validates the original
 binding and evaluates receipts under one admitted owner and immutable snapshot;
 Python only adapts CLI input and renders the returned recovery. This read mode
@@ -363,6 +366,8 @@ Agents' Turns, and already settled work do not produce pending recovery.
 
 `refresh-state` 被拒绝，或 Agent 只更新升级／维护状态时，若已有 Turn 尚欠结算，
 响应会返回 `settlement_recovery`，身份与进度沿用 guard 恢复的 typed receipt reader。
+即使调用者漏传 Turn ID，只要原 guard 已明确准入自主重规划并记录义务和 effect，
+刷新也能找回原轮次。后续 Turn 的准入仍依据 guard 明确记录的 closeout 标记。
 TS `pending_closeout` 在同一准入 owner、同一不可变快照下完成候选选择、原绑定校验
 及收据判断；Python 只适配 CLI 参数和展示，不再分两次读取决定恢复对象。这个只读
 模式不能与结算准入或最新 Run 推断混用。

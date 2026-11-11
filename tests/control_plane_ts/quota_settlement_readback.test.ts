@@ -503,7 +503,7 @@ test("pending closeout survives maintenance and reads one original receipt snaps
   });
 });
 
-test("pending closeout keeps replan identity and rejects query/admission mixing", async () => {
+test("pending closeout recovers positively admitted replan work without creating a preflight obligation", async () => {
   const root = await fixture();
   try {
     const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
@@ -511,11 +511,39 @@ test("pending closeout keeps replan identity and rejects query/admission mixing"
     const obligation = "replan-0000000000000001";
     const bound = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: null,
       replan_obligation_id: obligation, turn_instance_id: turnId});
-    events[0].details = {closeout_required: true, replan_obligation_id: obligation,
-      semantic_replan_obligation_id: obligation, settlement_effect_id: bound.effect_id};
-    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    const admitted = {closeout_required: false, replan_obligation_id: obligation,
+      semantic_replan_obligation_id: obligation, settlement_effect_id: bound.effect_id,
+      ok: true, should_run: true, must_attempt_work: true, delivery_allowed: false,
+      quiet_noop_allowed: false, interaction_mode: "autonomous_replan"};
+    const writeGuard = async (details: Record<string, unknown>) => {
+      events[0].details = details;
+      await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    };
+    await writeGuard(admitted);
     const input = request(root, {pending_closeout: true, turn_instance_id: null, todo_id: null});
-    assert.deepEqual(((await readQuotaSettlement(input)).identity as any).result.value, settlementIdentityPayload(bound));
+    for (const query of [input, {...input, replan_obligation_id: obligation}]) {
+      const readback = await readQuotaSettlement(query);
+      assert.equal(readback.found, true);
+      assert.deepEqual((readback.identity as any).result.value, settlementIdentityPayload(bound));
+    }
+    assert.equal((await readQuotaSettlement({...input, agent_id: "another-agent"})).found, false);
+    const mismatched = await readQuotaSettlement({...input, replan_obligation_id: "replan-0000000000000002"});
+    assert.equal((mismatched.identity as any).result.failure.kind, "identity_mismatch");
+    const preflight = await preflightPriorHostTurnCloseout({
+      ...input, schema_version: PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
+    });
+    assert.equal(preflight.reason, "no_prior_turn_requires_closeout");
+
+    for (const patch of [{should_run: false}, {must_attempt_work: undefined}, {quiet_noop_allowed: true},
+      {interaction_mode: "control_plane_self_repair"}, {semantic_replan_obligation_id: "replan-0000000000000002"},
+      {settlement_effect_id: undefined}, {replan_obligation_id: undefined, settlement_effect_id: undefined}]) {
+      await writeGuard({...admitted, ...patch});
+      assert.equal((await readQuotaSettlement(input)).found, false, JSON.stringify(patch));
+    }
+    await writeGuard({...admitted, settlement_effect_id: "another-effect"});
+    const wrongEffect = await readQuotaSettlement(input);
+    assert.equal((wrongEffect.identity as any).result.failure.kind, "identity_mismatch");
+
     for (const patch of [{infer_turn_instance_id: true}, {allow_unbound_binding: true},
       {refresh_retry: {}}, {heartbeat_reentry_guard: {}}, {spend_precheck: true}]) {
       await assert.rejects(readQuotaSettlement({...input, ...patch}), /read-only receipt recovery/);
