@@ -26,6 +26,7 @@ from .capabilities.native_chat.model_settings import (
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
 from .chat.event_cache import ChatEventCache
+from .chat.journal import decode_chat_journal
 from .chat_ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
@@ -100,25 +101,7 @@ def _read_jsonl(
         if raise_on_error:
             raise
         return []
-    return _decode_jsonl(lines, strict=strict)
-
-
-def _decode_jsonl(lines: list[bytes], *, strict: bool) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            if strict:
-                raise ValueError("invalid Chat journal record") from exc
-            continue
-        if isinstance(item, dict):
-            rows.append(item)
-        elif strict:
-            raise ValueError("invalid Chat journal record")
-    return rows
+    return decode_chat_journal(lines, strict=strict)
 
 
 def _session_channel(payload: dict[str, Any]) -> str:
@@ -901,7 +884,9 @@ class ChatSessionStore(ChatIngressStore):
         return _read_jsonl(self._session_dir(session_id) / "messages.jsonl",
                           raise_on_error=strict, strict=strict)
 
-    def _paged_history_messages(self, session_id: str) -> list[dict[str, Any]]:
+    def _paged_history_messages(
+        self, session_id: str, *, copy_cached: bool = True,
+    ) -> list[dict[str, Any]]:
         """Reuse one bounded parse only after a fresh read of identical bytes."""
         try:
             raw = (self._session_dir(session_id) / "messages.jsonl").read_bytes()
@@ -910,16 +895,26 @@ class ChatSessionStore(ChatIngressStore):
         digest = hashlib.sha256(raw).digest() if len(raw) <= 64 * 1024 * 1024 else None
         cached = self._paged_history
         if cached is not None and cached[:2] == (session_id, digest):
+            if not copy_cached:
+                return cached[2]
             with suppress(RecursionError):
                 return deepcopy(cached[2])
         self._paged_history = None
         lines = raw.split(b"\n")
         del raw
-        rows = _decode_jsonl(lines, strict=True)
+        rows = decode_chat_journal(lines, strict=True)
         if digest is not None and len(rows) <= 8192:
             with suppress(RecursionError):
                 self._paged_history = (session_id, digest, deepcopy(rows))
         return rows
+
+    def read_history_message(self, session_id: str, message_id: str) -> dict[str, Any]:
+        """Read one original row, sharing the verified page parse for image reads."""
+        matches = [row for row in self._paged_history_messages(session_id, copy_cached=False)
+                   if row.get("message_id") == message_id]
+        if len(matches) != 1:
+            raise KeyError("message unavailable")
+        return deepcopy(matches[0])
 
     def prepared_managed_turn_request(
         self,

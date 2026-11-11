@@ -942,8 +942,8 @@ class ChatRequestHandler(
                 self.server.runtime_controller.coordination_runtime_root, store, session_id,
                 registry=self.server.registry_path, selection=selection,
                 project_history_messages=(lambda messages: media.insert(messages, markers)) if markers else None,
-                project_provider=lambda rows: project_private_reply_history(
-                    store, session, rows))
+                project_provider=lambda rows: self._link_history_images(
+                    session_id, session, selection, project_private_reply_history(store, session, rows)))
             if markers and "session" in payload:
                 payload["session"] = media.summary(payload["session"], markers)
             self._send_json(payload)
