@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
+import pytest
+
 from benchmark.runtime.provider_request_admission import ProviderRequestAdmission
 
 
@@ -153,7 +155,10 @@ def test_provider_observes_dispatch_while_upstream_response_is_pending(tmp_path,
         assert "synthetic-provider-key" not in json.dumps(events)
 
 
-def test_invocation_exit_keeps_pending_snapshot_after_late_response(tmp_path, monkeypatch):
+@pytest.mark.parametrize("response_during_cleanup", [False, True])
+def test_invocation_exit_keeps_pending_snapshot_after_late_response(
+    tmp_path, monkeypatch, response_during_cleanup,
+):
     with _waiting_upstream() as (upstream, received, release, _observed):
         guard, receipt = _guard(tmp_path, upstream, _Admission())
         dispatched = threading.Event()
@@ -168,9 +173,20 @@ def test_invocation_exit_keeps_pending_snapshot_after_late_response(tmp_path, mo
                 finished.set()
 
         monkeypatch.setattr(guard, "observe", record)
+        shutdown = ThreadingHTTPServer.shutdown
+
+        def finish_during_gateway_shutdown(server):
+            if server.server_port == urlsplit(guard.base_url).port:
+                release.set()
+                assert finished.wait(timeout=5)
+            shutdown(server)
+
         with guard.serve(["codex", "exec", "-"]):
             client, _result = _request(guard.base_url)
             assert received.wait(timeout=5) and dispatched.wait(timeout=5)
+            guard.before_cleanup(None, None)
+            if response_during_cleanup:
+                monkeypatch.setattr(ThreadingHTTPServer, "shutdown", finish_during_gateway_shutdown)
         [snapshot] = receipt["provider_request_invocations"]
         assert snapshot["requests"] == snapshot["sent"] == snapshot["pending"] == 1
         try:

@@ -18,12 +18,39 @@ import uuid
 import pytest
 
 from benchmark.edgebench import cli_source_activation as activation
-from benchmark.edgebench.cli_source_probe import archive_witness, _archive_response, _path_stat
+from benchmark.edgebench.cli_source_probe import (
+    archive_witness, _archive_response, _path_stat, _prepare_observer_native_home,
+)
 from benchmark.edgebench.cli_source_release import StagedCliRelease
 
 
 pytestmark = pytest.mark.skipif(os.environ.get("LOOPX_CLI_ACTIVATION_DOCKER_SMOKE") != "1",
     reason="Requires explicit isolated Docker CLI-activation qualification")
+
+
+def test_native_observer_reader_can_initialize_its_private_home():
+    import docker
+
+    client = docker.from_env(timeout=15)
+    image = os.environ.get("LOOPX_CHECKPOINT_WRITER_IMAGE", "python:3.12-slim")
+    client.images.get(image)
+    box = client.containers.run(image, ["sleep", "180"], detach=True, network_disabled=True,
+        mem_limit="64m", pids_limit=32, labels={"loopx.cli-activation-test": uuid.uuid4().hex})
+    python, home, reader = "/usr/local/bin/python", "/profile/native", "65534:65534"
+    try:
+        assert box.exec_run(["mkdir", "-p", home], user="root").exit_code == 0
+        command = [python, "-I", "-B", "-c", "from pathlib import Path; import sys; "
+                   "home = Path(sys.argv[1]); assert not (home / 'auth.json').exists(); "
+                   "(home / 'native-reader-state').write_bytes(b'initialized')", home]
+        assert box.exec_run(command, user=reader).exit_code != 0
+        assert _prepare_observer_native_home(box, python=python, home=home, user=reader)
+        assert box.exec_run(command, user=reader).exit_code == 0
+        assert box.exec_run(["cat", home + "/native-reader-state"], user=reader).output == b"initialized"
+        other = box.exec_run(["ls", home], user="65533:65533")
+        assert other.exit_code != 0
+    finally:
+        box.remove(force=True)
+        client.close()
 
 
 @pytest.fixture

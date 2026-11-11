@@ -264,9 +264,9 @@ function executablePlanArgs(
   const command = String(
     steps.find(step => step.kind === kind)?.command_template ?? '',
   )
-  const tokens = command.split(/\s+/).filter(Boolean)
+  const tokens = command.match(/'[^']*'|"[^"]*"|\S+/gu) ?? []
   expect(tokens.shift()).toBe('loopx')
-  const args = tokens.map(token => replacements[token] ?? token)
+  const args = tokens.map(token => replacements[token] ?? token.replace(/^(['"])(.*)\1$/u, '$2'))
   expect(args.some(token => token.startsWith('<'))).toBe(false)
   return args
 }
@@ -300,7 +300,9 @@ describe('DSH admission-to-closeout integration', () => {
       turnInstanceId,
     })
     const content = array(queued.content)
-    expect(record(content[0]).text).toContain(`LOOPX_TURN=${turnInstanceId}`)
+    expect(record(content[0]).text).toContain(process.platform === 'win32'
+      ? `$LOOPX_TURN = "${turnInstanceId}"`
+      : `LOOPX_TURN=${turnInstanceId}`)
 
     testFixture.queued.splice(0, 1)
     ;(testFixture.agent as unknown as { setStatus(value: 'running'): void })
@@ -381,7 +383,7 @@ describe('DSH admission-to-closeout integration', () => {
       '--no-global-sync',
       '--suppress-external-sinks',
     ])
-    expect(writeback.exitCode).toBe(0)
+    expect(writeback.exitCode, JSON.stringify(writeback.payload)).toBe(0)
     expect(new Set(receiptEffectIds(writeback.payload))).toEqual(new Set([effectId]))
 
     const spendArgs = executablePlanArgs(steps, 'quota_spend')

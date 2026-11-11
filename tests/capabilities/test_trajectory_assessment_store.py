@@ -1333,7 +1333,9 @@ def test_observed_usage_real_cli_without_model_dispatch(pack, resumed):
         first_end = next(row for row in rows if row["payload"].get("type") == "task_complete")
         first_end["payload"].update(type="turn_aborted", reason="SYNTHETIC-PRIVATE-ABORT-REASON")
     else:
-        rows.pop()
+        rows[-1]["payload"] = {"type": "turn_aborted", "reason": "SYNTHETIC-PRIVATE-ABORT-REASON"}
+        rows.append({"type": "event_msg", "timestamp": "2026-01-01T00:00:07Z",
+                     "payload": {"type": "token_count", "info": None}})
     path = sources / "usage.jsonl"
     path.write_text("\n".join(map(json.dumps, rows)) + "\n")
     original = path.read_bytes()
@@ -1368,6 +1370,12 @@ def test_observed_usage_real_cli_without_model_dispatch(pack, resumed):
         assert 'SYNTHETIC-PRIVATE-ABORT-REASON' not in evidence['text']
     else:
         assert projection['incomplete_turn']['usage']['input_tokens'] == 40
+        assert projection['incomplete_turn']['last_line'] == len(rows)
+        evidence = read_usage_turn(**scope, pack_id=record['pack_id'],
+                                   analysis_key=record['analysis_key'], turn_id='b')
+        events = json.loads(evidence['text'])['events']
+        assert [event['line'] for event in events] == [3, 5, 6]
+        assert 'SYNTHETIC-PRIVATE-ABORT-REASON' not in evidence['text']
     assert path.read_bytes() == original
     assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
     assert not list(scope['runtime_root'].rglob('receipt.json'))

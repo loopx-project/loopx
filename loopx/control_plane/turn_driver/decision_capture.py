@@ -772,6 +772,10 @@ def _pinned_selection_plan(select: list[str] | None, paths: list[list[str | int]
     return {"selections": selections}
 
 
+class ContextSelectionDigestChanged(ValueError):
+    """The rendered selection no longer matches its recorded digest."""
+
+
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            initial_read: bool, list_fields: bool, list_depth: int | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
@@ -815,5 +819,5 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
         # enabled. Its original digest must still match the literal view.
         raw, digest, displayed = render(plan, False)
     if expected_sha256 is not None and expected_sha256 != digest:
-        raise ValueError("selected view digest changed; restore the original selection and reader")
+        raise ContextSelectionDigestChanged("selected view digest changed; restore the original selection and reader")
     return {**plan, "presentation_pointers": displayed} if displayed else plan, raw, digest

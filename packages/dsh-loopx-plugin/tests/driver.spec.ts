@@ -467,6 +467,31 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('same-session LoopX driver', () => {
+  it('does not report a cancelled maintenance probe as a missing CLI', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    let probes = 0
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      runner: async () => {
+        probes += 1
+        maintenance.abort()
+        return { exitCode: 1, stdout: '', stderr: '' }
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => probes > 0)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(warnings).toEqual([])
+      expect(host.nextTurn).toHaveLength(0)
+      expect(probes).toBe(1)
+    } finally { await driver.dispose() }
+  })
+
   it('retries admission after attach-time maintenance becomes free without an idle event', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
@@ -956,8 +981,11 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('queues one authoritative task and revalidates the same receipt before entry', async () => {
-    const fixture = runnerFixture()
+  it.each([
+    ['POSIX', 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.'],
+    ['PowerShell', '$LOOPX_TURN = "turn-stable"\nContinue through the authoritative LoopX workflow.'],
+  ])('queues one authoritative %s task and revalidates the same receipt before entry', async (_shell, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const driver = makeDriver(fixture)
 
@@ -967,7 +995,7 @@ describe('same-session LoopX driver', () => {
     expect(queued.content).toEqual([
       {
         type: 'text',
-        text: 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.',
+        text: heartbeatTaskBody,
       },
     ])
     expect(queued.source).toEqual({
@@ -1188,14 +1216,14 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('fails closed when the canonical task body contains a conflicting turn id', async () => {
-    const fixture = runnerFixture({
-      heartbeatTaskBody: [
-        'LOOPX_TURN=turn-stable',
-        'LOOPX_TURN=turn-other',
-        'Continue through the authoritative LoopX workflow.',
-      ].join('\n'),
-    })
+  it.each([
+    ['wrong POSIX id', 'LOOPX_TURN=turn-other'],
+    ['wrong PowerShell id', '$LOOPX_TURN = "turn-other"'],
+    ['conflicting POSIX ids', 'LOOPX_TURN=turn-stable\nLOOPX_TURN=turn-other'],
+    ['duplicate PowerShell ids', '$LOOPX_TURN = "turn-stable"\n$LOOPX_TURN = "turn-stable"'],
+    ['mixed shell duplicates', 'LOOPX_TURN=turn-stable\n$LOOPX_TURN = "turn-stable"'],
+  ])('fails closed when the canonical task body contains %s', async (_case, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const warnings: string[] = []
     const driver = new LoopXContinuationDriver({
@@ -1471,6 +1499,89 @@ describe('same-session LoopX driver', () => {
     expect(decision).toEqual({ kind: 'reject' })
     expect(host.nextStep).toEqual([human])
     expect(fixture.quotaCalls).toHaveLength(1)
+    await driver.dispose()
+  })
+
+  it.each([
+    ['runtime-context', 'before'], ['runtime-context', 'after'],
+    ['time-context', 'before'], ['time-context', 'after'],
+    ['skill-catalog', 'before'], ['skill-catalog', 'after'],
+  ])('admits a continuation with %s context added %s downstream listeners', async (kind, phase) => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = {
+      ...userMessage('host context'),
+      source: kind === 'skill-catalog'
+        ? { kind, form: 'catalog', entries: [] }
+        : { kind, form: 'snapshot', sections: [] },
+    } as UserMessage
+    const messages = [queued, context]
+    const downstream = vi.fn(async () => ({ kind: 'enter' as const, messages }))
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued],
+      new AbortController().signal, downstream,
+    )
+
+    expect(downstream).toHaveBeenCalledOnce()
+    expect(decision).toEqual({ kind: 'enter', messages })
+    expect(host.nextStep).toEqual([])
+    expect(fixture.quotaCalls).toHaveLength(3)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('restores competing work added %s downstream listeners with host context', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const context = { ...userMessage('host snapshot'), source: { kind: 'runtime-context' } } as unknown as UserMessage
+    const human = userMessage('new human work')
+    const messages = [queued, context, human]
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? messages : [queued, context],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([context, human])
+    expect(fixture.quotaCalls).toHaveLength(phase === 'before' ? 1 : 2)
+    await driver.dispose()
+  })
+
+  it.each(['before', 'after'])('does not treat a plugin snapshot as host context %s downstream listeners', async phase => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    const queued = host.nextTurn.shift() as UserMessage
+    host.setStatus('running')
+    driver.onInboxClaimed(host.agent, queued)
+    const plugin = { ...userMessage('competing plugin work'),
+      source: { kind: 'plugin-snapshot', form: 'snapshot', sections: [] },
+    } as unknown as UserMessage
+
+    const decision = await driver.onPreStep(
+      host.agent, phase === 'before' ? [queued, plugin] : [queued],
+      new AbortController().signal,
+      async () => ({ kind: 'enter', messages: [queued, plugin] }),
+    )
+
+    expect(decision).toEqual({ kind: 'reject' })
+    expect(host.nextStep).toEqual([plugin])
     await driver.dispose()
   })
 

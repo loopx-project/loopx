@@ -101,7 +101,12 @@ class ProviderRequestAdmission:
 
     def retire(self):
         with self._lock:
+            if self._retired:
+                return
             self._retired = True
+            # Freeze the invocation receipt at its first exit. A gateway
+            # handler can still append observations while cleanup drains.
+            self._receipt_invocations[self._receipt_index] = self._summary.copy()
             self._ready.set()
 
     def before_cleanup(self, _process, _scope_error):
@@ -215,7 +220,3 @@ class ProviderRequestAdmission:
                     self.retire()
         finally:
             self.retire()
-            with self._lock:
-                # In-flight upstream handlers can still observe a late reply.
-                # The wake receipt records the counters at invocation exit.
-                self._receipt_invocations[self._receipt_index] = self._summary.copy()

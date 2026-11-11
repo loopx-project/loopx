@@ -788,13 +788,14 @@ def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
     if not captured:
         raise PackUnavailable("usage_not_captured")
     projection = captured["projection"]
-    turns = [*projection["turns"], *projection.get("interrupted_turns", [])]
+    turns = [(turn, "task_complete") for turn in projection["turns"]]
+    turns.extend((turn, "turn_aborted") for turn in projection.get("interrupted_turns", []))
     if projection.get("incomplete_turn"):
-        turns.append(projection["incomplete_turn"])
-    matches = [turn for turn in turns if turn["turn_id"] == turn_id]
+        turns.append((projection["incomplete_turn"], None))
+    matches = [(turn, end_kind) for turn, end_kind in turns if turn["turn_id"] == turn_id]
     if len(matches) != 1:
         raise PackUnavailable("usage_turn_not_captured")
-    turn = matches[0]
+    turn, end_kind = matches[0]
     first, last = turn["first_line"], turn["last_line"]
     digest = hashlib.sha256()
     baseline = start = counter = end = None
@@ -816,7 +817,7 @@ def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
                 start = observed
             elif kind == "token_count" and observed["payload"].get("info"):
                 counter = observed
-            elif kind in ("task_complete", "turn_aborted"):
+            elif line == last and kind == end_kind and observed["payload"].get("turn_id") == turn_id:
                 end = observed
         if digest.hexdigest() != captured["artifact_sha256"]:
             raise PackUnavailable("source_changed")
