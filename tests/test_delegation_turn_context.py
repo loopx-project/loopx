@@ -254,7 +254,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
     if delivery == "native_files":
-        result = subprocess.run(shlex.split(manager_read["command"]), cwd=tmp_path, env=environment,
+        words = shlex.split(manager_read["command"])
+        assert words[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+        result = subprocess.run(words, cwd=tmp_path, env=environment,
             capture_output=True, text=True, encoding="utf-8", timeout=90)
         assert result.returncode == 0, result.stderr
         body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
