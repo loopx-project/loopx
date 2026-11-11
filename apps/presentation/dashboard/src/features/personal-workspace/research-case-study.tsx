@@ -52,8 +52,8 @@ function focusChapter(chapter: HTMLElement) {
 }
 
 /** A document's author controls the composition; the host owns navigation and evidence. */
-export function ResearchCaseStudy({study, zh, historical, scope, navigation, onCitation}: {
-  study: TrajectoryCaseStudy; zh: boolean; historical: boolean;
+export function ResearchCaseStudy({study, zh, historical, active, scope, navigation, onCitation}: {
+  study: TrajectoryCaseStudy; zh: boolean; historical: boolean; active: boolean;
   scope: {case_id: string; run_id: string; revision: string; window: string};
   navigation: {url: URL; goalId: string; packId: string; namespace: string | null; follow: (href: URL) => void};
   onCitation: (c: AssessmentCitation, origin?: HTMLButtonElement) => void;
@@ -62,6 +62,7 @@ export function ResearchCaseStudy({study, zh, historical, scope, navigation, onC
   const {url, goalId, packId, namespace, follow} = navigation;
   const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
   useEffect(() => {
+    if (!active) return;
     // The URL can arrive before the saved study is mounted, or while history
     // switches to another Goal/version. Only restore a visible matching chapter.
     let frame = 0;
@@ -84,7 +85,7 @@ export function ResearchCaseStudy({study, zh, historical, scope, navigation, onC
       window.removeEventListener('popstate', restore);
       window.removeEventListener('hashchange', restore);
     };
-  }, [goalId, packId, prefix]);
+  }, [active, goalId, packId, prefix]);
   const citationLinks = (citations: AssessmentCitation[]) => <ul className="case-citation-links" role="list">
     {citations.map((c, i) => <li key={i}><button type="button" onClick={e => onCitation(c, e.currentTarget)}>
       {c.source_id} · {zh ? '行' : 'lines'} {c.first_line}–{c.last_line} <span aria-hidden="true">↗</span>
