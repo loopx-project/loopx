@@ -107,6 +107,81 @@ def starting_page(project, runtime, path, turn, saved, monkeypatch):
     return page
 
 
+@pytest.mark.parametrize("native_session", [False, True])
+def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypatch, native_session):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    project, runtime, path = setup(tmp_path, active=True)
+    run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID,
+        "--execution-replan-after-turns", "1",
+        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    finding = attachment()
+    profiles = finding["work_yardstick_decision"]
+    finding["measurements"] = [
+        {**profiles[role], "candidate_ref": f"candidate:{name}", "evidence_ref": f"result:{role}-{name}", "value": value}
+        for role, scores in (("authoritative", (8, 4)), ("proxy", (12, 15)))
+        for name, value in zip(("a", "b"), scores)
+    ]
+    finding["evidence_refs"].extend(row["evidence_ref"] for row in finding["measurements"])
+    evidence = tmp_path / "finding.json"
+    evidence.write_text(json.dumps(finding))
+    first = refresh(project, runtime, path, "prepare-reversal", evidence,
+        "--delivery-boundary", "in_flight_continuation")
+    assert first["explore_result_delivery"]["search_comparison"]["proxy_order_reversed"]
+    run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"],
+        turn_instance_id="prepare-reversal"))
+
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    if native_session:
+        monkeypatch.setenv("CODEX_THREAD_ID", "fixture-benchmark")
+        assert codex_context_hook(str(native), {"session_id": "fixture-benchmark", "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup"}) == {}
+    else:
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    capture = tmp_path / "captures"
+    capture.mkdir(mode=0o700)
+    opening = capture / "decision-original"
+    turn = "periodic-review"
+    prepared = run(project, runtime, path, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
+        "--available-capability", "shell", "--available-capability", "filesystem_write",
+        "--decision-output-dir", str(opening), "--prepared-capture-reference", "--complete-turn",
+        "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation")
+    original = opening / "decision.json"
+    original_bytes = original.read_bytes()
+    assert prepared["capture_sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    unbound = json.loads(original_bytes)
+    unbound_cli = unbound["interaction_contract"]["cli_channel"]
+    assert unbound_cli["selection_required"] is True
+    selection = shlex.split(unbound_cli["selection_command"]["command_args_template"].replace("{todo_id}", TODO_ID))
+    bound = run(project, runtime, path, *selection)
+    [selected] = [file for file in capture.glob("decision-*/decision.json") if file != original]
+    guard = json.loads(selected.read_bytes())
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == TODO_ID and identity["turn_instance_id"] == turn
+    assert guard["effective_action"] == "autonomous_replan_required"
+    obligation = "autonomous_replan_obligation"
+    assert guard[obligation]["obligation_id"] == unbound[obligation]["obligation_id"]
+    [cue] = guard[obligation]["replan_context"]["explore_basis"]["work_yardsticks"]
+    assert cue["proxy_order_reversed"] is True
+    assert original.read_bytes() == original_bytes
+
+    command = shlex.split(bound["first_read_command"])
+    page = run(project, runtime, path, *command[command.index("quota"):])
+    basis = f"/{obligation}/replan_context/explore_basis/work_yardsticks/0/"
+    for field, expected in (("proxy_order_reversed", True), ("comparison_candidate_ref", "candidate:a"),
+                            ("source_finding_id", first["explore_result_delivery"]["finding_id"])):
+        marker = json.dumps(basis + field) + ',"value":'
+        offset = page["content"].index(marker) + len(marker)
+        observed, _ = json.JSONDecoder().raw_decode(page["content"], offset)
+        assert observed == expected
+    assert _spend_run_count(runtime) == 1
+
+
 def wide_write_scope():
     return [
         f"modules/component-{i:03d}/experiments/artifact-encodings/public-validation/"

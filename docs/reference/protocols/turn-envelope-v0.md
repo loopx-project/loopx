@@ -250,6 +250,17 @@ reader; a missing source is never replaced by a fresh guard. The existing generi
 followthrough is now available with stride off; its result-class counts and
 observations remain evidence, not successful-work or goal-gain verdicts.
 
+When the bound Todo's captured Yardstick shows a proxy ordering opposite to the
+authoritative measurement, the first complete Turn read and staged `review`
+show the conflict, the preferred candidate, and the finding that supports it.
+The pinned Explore read retains the measurement scope and evidence. Unbound
+reviews keep navigation until the Todo is selected. The read grants only
+evidence access.
+
+已绑定 Todo 的标尺若与正式测量反向，完整 Turn 的首读和分段 `review` 会显示
+分歧、正式测量更优的候选和支持它的发现。原捕获的 Explore 读取保留测量范围和证据。
+待选择的复盘保留证据入口，绑定 Todo 后才交付该任务的提示。读取只提供证据访问。
+
 Captured replans also reference Explore attachment syntax already present in the
 same captured writer instead of repeating it in the entry work context. This
 applies to default CLI/full recovery as well as optional delta delivery. Evidence,

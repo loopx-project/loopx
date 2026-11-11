@@ -8,7 +8,7 @@ import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -27,6 +27,7 @@ type ReusableReadField = {
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
+const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -833,6 +834,35 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   return [...opening, ...remaining];
 }
 
+/** A suggested Todo in an unbound guard cannot supply the next decision's cue. */
+export function scopedReplanYardstickReversal(decision: JsonObject) {
+  const packet = jsonObject(decision.replan_action_packet);
+  const review = jsonObject(at(decision, REPLAN_CONTEXT_PATH));
+  const explore = jsonObject(review?.explore_basis);
+  const cli = jsonObject(jsonObject(decision.interaction_contract)?.cli_channel);
+  const identity = jsonObject(jsonObject(cli?.settlement_plan)?.identity);
+  const todo = selectedWorkTodoId(decision);
+  const agent = decision.agent_id ?? jsonObject(decision.agent_identity)?.agent_id;
+  if (typeof packet?.obligation_id !== "string" || packet.obligation_id !== review?.obligation_id
+      || packet.settlement_only === true || explore?.availability !== "available"
+      || todo === null || cli?.selection_required === true || identity?.todo_id !== todo
+      || typeof decision.goal_id !== "string" || identity.goal_id !== decision.goal_id
+      || typeof agent !== "string" || identity.agent_id !== agent
+      || !Array.isArray(explore.work_yardsticks)) return undefined;
+
+  const index = explore.work_yardsticks.findIndex(value => {
+    const cue = jsonObject(value);
+    return cue?.todo_id === todo && cue.proxy_order_reversed === true
+      && typeof cue.source_finding_id === "string" && typeof cue.comparison_candidate_ref === "string";
+  });
+  if (index < 0) return undefined;
+  const cue = explore.work_yardsticks[index] as JsonObject;
+  const fields = ["todo_id", "source_finding_id", "comparison_candidate_ref", "proxy_order_reversed",
+    "fidelity_status", "paired_candidates"].filter(field =>
+    ["string", "boolean", "number"].includes(typeof cue[field]));
+  return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
+}
+
 /** A pending Manager Inbox read already delivers these scoped request rows. */
 function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
@@ -918,6 +948,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include("autonomous_replan_obligation", "replan_context", "context_id");
       if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
         include("autonomous_replan_obligation", "triggers", index, "kind"));
+      const reversal = scopedReplanYardstickReversal(context);
+      if (reversal) {
+        for (const field of reversal.fields) include(...reversal.path, field);
+      }
     }
   }
   include("agent_lane_next_action", "next_step");
