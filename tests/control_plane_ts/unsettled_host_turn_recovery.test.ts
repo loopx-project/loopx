@@ -289,6 +289,28 @@ test("the admission bound keeps debt identity, deduplicates replays, and accepts
   }
 });
 
+test("losing an owner activation projection cannot renew its exhausted allowance", async () => {
+  const original = receipt("owed", closeoutRequired("owed", "todo_alpha"));
+  const runtime = await runtimeWith([original]);
+  try {
+    const candidate = candidateFrom(await preflight(runtime.root));
+    const recovery = reduce(candidate, undefined, READ_TODO(ADVANCEMENT_OPEN)).recovery as JsonObject;
+    const checkpoint = recovery.admission_checkpoint as JsonObject;
+    const history = [original, ...["old-owner", "current-owner", "current-owner", "current-owner"].map(
+      (owner, index) => receipt(`admission-${index}`, {...checkpoint,
+        should_run: true, recovery_owner_action_id: owner}),
+    )];
+    await writeFile(join(runtime.root, "goals", GOAL, "rollout-event-log.jsonl"),
+      history.map(event => JSON.stringify(event)).join("\n") + "\n");
+    // Controller activation has no owner id. Keep the latest recorded owner
+    // epoch, without counting admissions before that owner's explicit reset.
+    assert.deepEqual((await preflight(runtime.root)).recovery_admissions,
+      {count: 3, owner_action_id: "current-owner"});
+  } finally {
+    await runtime.close();
+  }
+});
+
 test("the preflight reads the persisted receipts and names the newest required closeout", async () => {
   const runtime = await runtimeWith([
     receipt("turn-old", closeoutRequired("turn-old", "todo_older")),

@@ -160,6 +160,8 @@ function recoveryAdmissions(
 ): JsonObject {
   const checkpoint = admissionCheckpoint(selected, missingReceipts, request.owner_action_id);
   const admittedTurns = new Set<string>();
+  let ownerActionId = request.owner_action_id;
+  let ownerEpochObserved = ownerActionId !== null;
   for (const event of [...receipts].reverse()) {
     const details = jsonObject(event.details);
     if (details?.recovery_checkpoint_schema !== RECOVERY_ADMISSION_CHECKPOINT_SCHEMA ||
@@ -172,14 +174,18 @@ function recoveryAdmissions(
         typeof details.recovery_missing_spend !== "boolean") {
       throw new EffectRuntimeRequestError("recovery admission checkpoint has no missing-receipt snapshot");
     }
-    if (details.recovery_owner_action_id !== request.owner_action_id) break;
+    if (!ownerEpochObserved) {
+      ownerActionId = optionalHeartbeatString(details.recovery_owner_action_id);
+      ownerEpochObserved = true;
+    }
+    if (details.recovery_owner_action_id !== ownerActionId) break;
     // Only receipt progress resets this debt; other owed identities and fresh
     // host Turn ids cannot erase its unchanged admissions.
     if ((details.recovery_missing_writeback && !checkpoint.recovery_missing_writeback) ||
         (details.recovery_missing_spend && !checkpoint.recovery_missing_spend)) break;
     admittedTurns.add(requireNonEmptyString(event.run_id, "recovery admission run_id"));
   }
-  return {count: admittedTurns.size, owner_action_id: request.owner_action_id};
+  return {count: admittedTurns.size, owner_action_id: ownerActionId};
 }
 
 function settlementReadbackRequest(

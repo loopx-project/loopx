@@ -10,12 +10,17 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("reset", ["writeback", "owner_resume", "blocked_closeout"])
+@pytest.mark.parametrize("reset", ["writeback", "owner_resume", "blocked_closeout", "controller_resume"])
 def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, reset: str,
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    if reset == "controller_resume":
+        for operation in ("stop", "resume"):
+            rc, result = _run_cli(registry, runtime, "goal-lifecycle", "--goal-id", GOAL_ID,
+                                  "--operation", operation, "--actor-kind", "owner", "--execute")
+            assert rc == 0, result
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID)
     original = ("--turn-instance-id", "owed-original", "--todo-id", TODO_ID)
@@ -45,10 +50,11 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
         assert wait["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
     assert _spend_run_count(runtime) == 0
 
-    if reset == "owner_resume":
+    if reset in ("owner_resume", "controller_resume"):
         for operation in ("stop", "resume"):
             rc, result = _run_cli(registry, runtime, "goal-lifecycle", "--goal-id", GOAL_ID,
-                                  "--operation", operation, "--actor-kind", "owner", "--execute")
+                                  "--operation", operation, "--actor-kind",
+                                  "owner" if reset == "owner_resume" else "controller", "--execute")
             assert rc == 0, result
     elif reset == "blocked_closeout":
         rc, result = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
@@ -71,6 +77,9 @@ def test_unchanged_recovery_waits_then_accepts_progress_or_owner_resume(
     assert rc == 0, after
     if reset == "blocked_closeout":
         assert after.get("unsettled_host_turn_recovery") is None, after
+    elif reset == "controller_resume":
+        assert after["should_run"] is False, after
+        assert after["unsettled_host_turn_recovery"]["admissions_without_progress"] == 3
     else:
         debt = after["unsettled_host_turn_recovery"]
         assert after["should_run"] is True and debt["admissions_without_progress"] == 0, after
