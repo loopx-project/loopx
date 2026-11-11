@@ -295,10 +295,10 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
       ? []
       : projectBoundedMethodologyItems(rawMutations, mutationLimit).visible;
 
-  // Goodhart-protected proxy quarantine: never promote proxy-only winners into elites directly.
-  const proxyCliff =
-    fidelity?.fidelity_status === "frontier_bias_cliff" ||
-    fidelity?.fidelity_status === "order_reversed";
+  // Two paired candidates show a single ordering, not a calibrated frontier.
+  // Proxy-only candidates still need authoritative confirmation before breeding.
+  const proxyCliff = fidelity?.calibration_tier === "multi_point"
+    && (fidelity.fidelity_status === "frontier_bias_cliff" || fidelity.fidelity_status === "order_reversed");
   const quarantineDisposition: ProxyQuarantineDisposition = proxyCliff
     ? "quarantined_proxy_cliff"
     : "confirm_before_breeding";

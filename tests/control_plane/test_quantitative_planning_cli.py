@@ -56,7 +56,10 @@ def _profiles():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: Path, provider: str) -> None:
+@pytest.mark.parametrize("calibration", ["frontier_cliff", "two_point_reversal"])
+def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(
+    tmp_path: Path, provider: str, calibration: str,
+) -> None:
     project, runtime, registry_path = _setup_goal(tmp_path, enabled=True, provider=provider)
     auth, proxy = _profiles()
 
@@ -129,6 +132,9 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
         ("cand:c5", 93.0, 1.10),
         ("cand:c6", 72.0, 0.80),
     ]
+    if calibration == "two_point_reversal":
+        # Only one observed order: c2 beats c1 on the outcome and loses on the proxy.
+        candidates = [("cand:c2", 35.0, 3.50)]
     for idx, (cand_ref, a_val, p_val) in enumerate(candidates, start=2):
         res_path = tmp_path / f"cand_{idx}.json"
         res_path.write_text(
@@ -199,6 +205,24 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     assert rc == 0, fidelity_packet
     assert fidelity_packet["evaluation_count"] == 1
     eval_row = fidelity_packet["evaluations"][0]
+    if calibration == "two_point_reversal":
+        assert eval_row["calibration_tier"] == "two_point"
+        assert eval_row["counts"]["paired_candidates"] == 2
+        assert eval_row["fidelity_status"] == "order_reversed"
+        assert eval_row["rank_concordance"]["discordant_pairs"] == 1
+
+        rc, packet = _run_cli(
+            registry_path, runtime, "explore", "evolutionary-plan", "--goal-id", GOAL_ID, cwd=project,
+        )
+        assert rc == 0, packet
+        plan, = packet["plans"]
+        assert [r["candidate_ref"] for r in plan["elites"]] == ["cand:c2", "cand:c1"]
+        candidate, = plan["proxy_quarantine"]
+        assert candidate["candidate_ref"] == "cand:proxy_star"
+        assert candidate["disposition"] == "confirm_before_breeding"
+        assert plan["grants_execution_authority"] is False
+        return
+
     assert eval_row["fidelity_status"] == "frontier_bias_cliff"
     assert eval_row["counts"]["paired_candidates"] == 6
     assert eval_row["frontier_neighborhood"]["frontier_k"] == 4

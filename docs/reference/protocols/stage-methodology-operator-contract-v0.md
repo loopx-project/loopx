@@ -184,5 +184,7 @@ Goodharted proxy winners:
 - **Goodhart proxy quarantine (`proxy_quarantine`)**: delegates proxy screening
   to `evaluateScopedYardstickFidelity`; unconfirmed proxy winners are never
   admitted into `elites` or `crossover_pairs`, receiving disposition
-  `quarantined_proxy_cliff` under `frontier_bias_cliff` / `order_reversed` and
-  `confirm_before_breeding` otherwise.
+  `quarantined_proxy_cliff` for a multi-point `frontier_bias_cliff` or
+  `order_reversed`. Two paired candidates show one ordering; keep that
+  observation in the fidelity report and use `confirm_before_breeding` in the
+  population plan, as with other unqualified proxy evidence.
