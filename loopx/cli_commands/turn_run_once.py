@@ -128,7 +128,7 @@ def execute_turn_run_once(
                 )
                 lease = inspected.get("lease")
                 if inspected["active"]:
-                    if not isinstance(lease, Mapping) or lease.get("owner") != args.agent_id:
+                    if lease.get("owner") != args.agent_id:
                         raise ValueError("Turn completion requires the selected Agent's execution lease")
                     # Retain the launch generation across cached-result recovery;
                     # a later same-Agent claim must not authorize old work.
