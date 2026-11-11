@@ -306,13 +306,14 @@ immutable capture.
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
 
-The native `quota should-run` navigation can link two reads when a ready
-decision's write scope pushes its controls past the serialized first page
-budget. When those controls fit, the ordinary reader keeps its cursor.
+Native ready decisions from `quota should-run` and saved `quota context-project`
+can link two reads when boundary detail pushes controls past the serialized
+first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
 If `remaining_read_command` is present,
 follow it and its cursor before work, even when the opening reports EOF. It
-starts with the complete current write scope and uses the same capture.
+starts with the complete current write scope and any checkpointed approval
+entries. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
@@ -330,11 +331,12 @@ observation is lost, its same-capture fallback restores the full remainder.
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
 
-原生 `quota should-run` 的已就绪决策中，如果写入范围让控制信息超出序列化后的首页
-预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
+原生 `quota should-run` 及已保存的 `quota context-project` 就绪决策中，如果权限明细让
+控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读从完整的当前写入范围开始，两段绑定同一份捕获。
+续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
+数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 When the existing acceptance owner supplies complete `outcome_context`

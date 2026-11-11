@@ -672,7 +672,7 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 }
 
 function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
-    scope?: Path): {boundary: string; detail: string; controls: string[]} | undefined {
+    scope?: Path): {boundary: string; detail: string; controls: string[]; checkpointEntries?: string} | undefined {
   if (!scope) return undefined;
   const parent = scope.slice(0, -1), detail = scope.at(-1)!;
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
@@ -682,8 +682,20 @@ function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof init
   // reader, so an explicit historical initial-read cursor still replays.
   const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
   if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
-  return {boundary, detail: pointer(scope),
-    controls: Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]))};
+  const controls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
+  const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+  const checkpoint = jsonObject(at(context, checkpointPath));
+  const opening = {boundary, detail: pointer(scope), controls};
+  if (checkpoint?.schema_version !== "checkpointed_boundary_authority_v0"
+      || !Array.isArray(checkpoint.active_write_scope) || !Number.isSafeInteger(checkpoint.active_count)
+      || !Number.isSafeInteger(checkpoint.inactive_count) || !Array.isArray(checkpoint.entries)
+      || !checkpoint.entries.length) return opening;
+  // Keep the current approval summary in the opening. The exact entries and
+  // write scope are both required from the same capture before work.
+  const checkpointIndex = controls.indexOf(pointer(checkpointPath));
+  controls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
+    .map(key => pointer([...checkpointPath, key])));
+  return {...opening, checkpointEntries: pointer([...checkpointPath, "entries"])};
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
@@ -701,7 +713,7 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   if (readyScope) {
     // The reader chooses the split using the actual serialized opening.
     opening = opening.flatMap(field => field === readyScope.boundary ? readyScope.controls : [field]);
-    remaining = [readyScope.detail, ...remaining];
+    remaining = [readyScope.detail, ...(readyScope.checkpointEntries ? [readyScope.checkpointEntries] : []), ...remaining];
   }
   const ordinaryRows = readyScope ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))

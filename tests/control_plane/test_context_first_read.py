@@ -486,9 +486,11 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 @pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("scope_count", "page_budget"), [(165, 12000), (290, 12000), (165, 16000)])
+@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count"), [
+    (165, 12000, 0), (290, 12000, 0), (165, 16000, 0), (290, 12000, 30),
+])
 def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
-    tmp_path, monkeypatch, provider, warm, scope_count, page_budget,
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count,
 ):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
@@ -496,6 +498,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         _run_cli, _spend_run_count, _write_fixture,
     )
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from loopx.boundary_authority import build_checkpointed_boundary_authority_entry
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -507,7 +510,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
     if scope_count == 165:
         assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
-    configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
+    coordination = configuration["goals"][0]["coordination"]
+    coordination.update(write_scope=scopes, requires_parent_approval=["publish"])
+    if checkpoint_count:
+        coordination["checkpointed_boundary_authority"] = [
+            build_checkpointed_boundary_authority_entry(
+                write_scopes=[scopes[0] if index % 2 == 0 else "docs/expired-approval/**"],
+                source="public-fixture-scoped-approval",
+                decision_id=f"fixture-approval-{index:02d}",
+                recorded_at="2026-01-01T00:00:00Z",
+                expires_at="2020-01-01T00:00:00Z" if index % 2 else None,
+            )
+            for index in range(checkpoint_count)
+        ]
     configuration["goals"][0]["quota"]["allowed_slots"] = 3
     registry.write_text(json.dumps(configuration))
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
@@ -525,6 +540,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     cli("todo", "claim", *binding, "--claimed-by", AGENT_ID)
 
     def capture(turn):
+        if checkpoint_count:
+            # The Host first saves a complete ready decision, then presents it.
+            # This route retains the approval entries in the signed source.
+            saved = captures / turn
+            ready = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+                *binding, "--turn-instance-id", turn, "--decision-output-dir", str(saved),
+                "--codex-context-dir", str(journal),
+                "--defer-context-presentation", "--prepared-capture-reference")
+            return cli("quota", "context-project", "--codex-app", "--context-delivery", "on",
+                "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+                "--capture-file", str(saved / "decision.json"), "--capture-sha256", ready["capture_sha256"],
+                "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
+                "--max-page-output-bytes", str(page_budget))
         return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
             *binding, "--turn-instance-id", turn, "--decision-output-root", str(captures),
             "--codex-context-dir", str(journal), "--max-page-output-bytes", str(page_budget))
@@ -591,11 +619,21 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
     assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
     assert "/goal_boundary/write_scope" not in opening
+    authority = "/goal_boundary/checkpointed_boundary_authority"
+    if checkpoint_count:
+        assert opening[authority + "/active_count"] == checkpoint_count // 2
+        assert opening[authority + "/inactive_count"] == checkpoint_count // 2
+        assert opening[authority + "/active_write_scope"] == [scopes[0]]
+        assert authority + "/entries" not in opening
     if warm:
         deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
     assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    if checkpoint_count:
+        entries = source["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
+        assert len(entries) == checkpoint_count
+        assert remaining[authority + "/entries"] == entries
     _, remainder_ref = read_context_read_reference(pages[0]["reference_file"])
     assert remainder_ref["sha256"] == source_ref["sha256"]
     _, ordinary = read(view["recovery"]["command"] + " --initial-read")
