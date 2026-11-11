@@ -88,6 +88,24 @@ def native_read(runtime):
     )
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"include_leases": False},
+        {"include_leases": True, "include_summary": True},
+        {"include_leases": True, "projection_readback": {"operation": "confirmation"}},
+    ],
+)
+def test_lease_selection_rejects_todo_summary_and_projection_readback(tmp_path, kwargs):
+    with pytest.raises(ValueError, match="lease selection requires"):
+        local_authority.read_canonical_todos_if_promoted(
+            runtime_root=tmp_path,
+            goal_id="goal-a",
+            lease_todo_ids={"todo_000"},
+            **kwargs,
+        )
+
+
 def test_cli_preserves_projection_failure_and_original_reason(wide_goal):
     runtime, _state, registry, projection = wide_goal
     projection["todo_read_model"]["contract_fields"].append("future_field")
