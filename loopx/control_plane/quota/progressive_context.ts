@@ -48,9 +48,8 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     ? identity : undefined;
 }
 
-/** An existing dated Todo can reenter the same Turn after reopening. Its
- * current admission will supply execution and closeout; this saved capture
- * still owns the complete plan for any alternative that settles here. */
+/** Reorder the opening for an exact dated Todo reentry. The saved capture
+ * still supplies its original settlement obligations. */
 function hasBoundDatedTodoReentry(context: JsonObject, interaction: JsonObject, plan: JsonObject | undefined): boolean {
   const action = AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED;
   const cli = jsonObject(interaction.cli_channel), channel = jsonObject(interaction.agent_channel);
@@ -1011,9 +1010,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   }
   if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
-    // The continuation guard supplies the applicable plan after a successful
-    // reopen. Alternate outcomes can select the original steps from recovery.
-    (deferredReentry ? [] : steps).forEach((value, stepIndex) => {
+    steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {

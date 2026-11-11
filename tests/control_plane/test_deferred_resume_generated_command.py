@@ -25,6 +25,7 @@ from loopx.control_plane.todos.todo_summary import (
     structured_todo_item,
 )
 from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 from test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
@@ -135,6 +136,12 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     profile = "codex_app_heartbeat" if host_args == ("--codex-app",) else "generic_cli"
     complete = compose_turn_decision(guard,
         scheduler_execution_context=scheduler_execution_context_for_runtime_profile(profile))
+    plan = complete["interaction_contract"]["cli_channel"]["settlement_plan"]
+    validation_index = next(
+        index for index, step in enumerate(plan["ordered_steps"]) if step["kind"] == "validation"
+    )
+    required_control = {"required": True, "instruction": "Check the recorded owner stop before reopening."}
+    plan["ordered_steps"][validation_index]["required_control"] = required_control
     capture = tmp_path / "resume-decision.json"
     digest = write_decision_capture(capture, complete)
     before_context = state.read_bytes()
@@ -152,19 +159,19 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     off_rc, off = cli(*bound, "--context-delivery", "off")
     assert off_rc == 0 and off["mode"] == "full" and off["recovery"]["sha256"] == digest
     assert rc == 0 and opening["eof"], opening
-    rows = json.loads(opening["content"])["selections"]
-    pointers = [row["pointer"] for row in rows]
+    selected = selected_context_values(opening["content"])
+    pointers = list(selected)
     cli_path = "/interaction_contract/cli_channel"
     actions_path = cli_path + "/next_cli_actions"
     settlement_path = cli_path + "/settlement_plan"
     assert pointers.index(actions_path) < pointers.index("/interaction_contract/agent_channel/work_context/user_todos")
-    assert not any(path.startswith(settlement_path + "/ordered_steps") for path in pointers)
-    actions = next(row["value"] for row in rows if row["pointer"] == actions_path)
+    assert selected[f"{settlement_path}/ordered_steps/{validation_index}/required_control"] == required_control
+    actions = selected[actions_path]
     assert actions == guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     rc, full = cli("quota", "context-read", "--capture-file", str(capture),
         "--capture-sha256", digest, "--select", settlement_path)
     assert rc == 0 and full["eof"], full
-    assert json.loads(full["content"])["selections"][0]["value"] == complete["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert json.loads(full["content"])["selections"][0]["value"] == plan
     assert state.read_bytes() == before_context and _spend_run_count(runtime) == 0
     generated = actions[0]
     assert generated.startswith("loopx ")

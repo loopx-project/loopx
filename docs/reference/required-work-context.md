@@ -275,11 +275,12 @@ does not prove complete source delivery, model retention or fresh authority.
 
 For an exact complete Turn bound to a Todo whose dated resume condition has
 fired, the starting selection puts the existing reopen and same-Turn guard
-commands before the longer work context. The continuation guard supplies the
-applicable execution and settlement steps after reopening. For an alternative
-that settles before reopening, select `/interaction_contract/cli_channel/settlement_plan`
-from the original recovery reference before acting. Reading or reopening the
-Todo does not authorize delivery or spend.
+commands before the longer work context and retains the current plan's required
+and unknown step fields. After reopening, run the continuation guard for a
+fresh execution decision. For an alternative that settles before reopening,
+read the complete original plan at `/interaction_contract/cli_channel/settlement_plan`
+from the original recovery reference before acting. Delivery and spend require
+their existing separate authorization.
 
 The generated `first_read_command` and its paging cursor default to a 12,000-byte
 serialized UTF-8 output limit when the caller supplied no tool budget. This
