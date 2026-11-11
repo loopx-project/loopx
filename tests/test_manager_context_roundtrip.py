@@ -1227,7 +1227,7 @@ def returned_history(flow):
 
 
 @pytest.fixture
-def returned_file_history(flow):
+def returned_file_history(flow, request):
     import os
 
     if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"):
@@ -1252,12 +1252,18 @@ def returned_file_history(flow):
             return {"ok": True, "reply_verified": True}
 
     sender = Sender()
-    assert drain(root, registry, store, sender) == 1
+    delivery_root = root
+    if getattr(request, "param", False):
+        delivery_root = root.with_name(f"{root.name}-alias")
+        delivery_root.symlink_to(root.resolve(), target_is_directory=True)
+    assert drain(delivery_root, registry, store, sender) == 1
+    assert sender.calls == 1
     message = next(row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup")
     assert not message.get("attachments"), "Reproduce an existing delivered answer whose transcript lost its files"
     return root, registry, store, session, turn, receipt, message, sources, sender
 
 
+@pytest.mark.parametrize("returned_file_history", [False, True], indirect=True, ids=["direct", "runtime-alias"])
 def test_existing_return_files_project_without_resending_or_rewriting(returned_file_history):
     from loopx.capabilities.manager_context.roundtrip import read_chat_return_file
 
