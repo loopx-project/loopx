@@ -27,7 +27,7 @@ class IntegrationBranchError(ValueError):
     """A fail-closed integration-branch contract error."""
 
 
-def _retire_owned_read(process: subprocess.Popen[str]) -> None:
+def _retire_owned_read(process: subprocess.Popen[Any]) -> None:
     """Retire the read's own process group and drop its pipes within a deadline.
 
     The shared runtime bounds termination, Windows ``taskkill`` and pipe
@@ -57,15 +57,41 @@ def _git(
     never observed.
     """
 
+    result = _git_command(repo, args, check=check, text=True)
+    return subprocess.CompletedProcess(
+        result.args, result.returncode, result.stdout, result.stderr
+    )
+
+
+def _git_bytes(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one Git read whose byte records are part of the caller's boundary."""
+
+    result = _git_command(repo, args, check=check, text=False)
+    return subprocess.CompletedProcess(
+        result.args, result.returncode, result.stdout, result.stderr
+    )
+
+
+def _git_command(
+    repo: Path,
+    args: Sequence[str],
+    *,
+    check: bool,
+    text: bool,
+) -> subprocess.CompletedProcess[Any]:
     argv = ["git", "-C", str(repo), *args]
     process = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        text=text,
+        encoding="utf-8" if text else None,
+        errors="replace" if text else None,
         start_new_session=os.name == "posix",
     )
     try:
@@ -84,12 +110,19 @@ def _git(
         raise
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
-        detail = (
-            (result.stderr or "").strip()
-            or (result.stdout or "").strip()
-            or "git command failed"
+        stderr_detail = (
+            result.stderr
+            if isinstance(result.stderr, str)
+            else result.stderr.decode("utf-8", "replace")
         )
-        raise IntegrationBranchError(detail)
+        stdout_detail = (
+            result.stdout
+            if isinstance(result.stdout, str)
+            else result.stdout.decode("utf-8", "replace")
+        )
+        raise IntegrationBranchError(
+            stderr_detail.strip() or stdout_detail.strip() or "git command failed"
+        )
     return result
 
 
@@ -577,19 +610,22 @@ def integration_branch_status(
 
 
 def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
-    result = _git(repo, "worktree", "list", "--porcelain")
+    result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
     current_path: Path | None = None
     target_ref = f"refs/heads/{branch}"
-    # `--porcelain` frames records on LF and prints paths verbatim, so a path
-    # containing U+0085/U+2028/U+2029 would be split by `str.splitlines()` and
-    # the prefix returned as the worktree path. Frame on the writer's separator.
-    for line in result.stdout.split("\n"):
-        if line.startswith("worktree "):
-            current_path = Path(line.removeprefix("worktree ")).resolve()
-        elif line == f"branch {target_ref}":
-            return current_path
-        elif not line:
-            current_path = None
+    # `-z` frames fields on NUL and records on a NUL pair. A worktree path
+    # may contain LF, CR or Unicode line separators, so treating its text as
+    # a line-oriented inventory returns a prefix and can target the wrong
+    # checkout for cleanup or reset.
+    for record in result.stdout.split(b"\0\0"):
+        if not record:
+            continue
+        current_path = None
+        for field in record.split(b"\0"):
+            if field.startswith(b"worktree "):
+                current_path = Path(os.fsdecode(field.removeprefix(b"worktree "))).resolve()
+            elif field == f"branch {target_ref}".encode("utf-8"):
+                return current_path
     return None
 
 

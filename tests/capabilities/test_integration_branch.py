@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -642,6 +643,19 @@ def test_cli_rejects_plan_file_outside_loopx_state_root(
     assert payload["status"] == "invalid_state"
     assert "must remain under" in payload["error"]
     assert not outside_plan.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="line separators in paths are POSIX-only")
+@pytest.mark.parametrize("line_separator", ["\n", "\r"])
+def test_worktree_for_branch_preserves_a_line_break_in_the_path(
+    tmp_path: Path, line_separator: str
+) -> None:
+    """A path with LF or CR must not tear the NUL-framed worktree inventory."""
+    repo = _repository(tmp_path)
+    odd = tmp_path / f"odd{line_separator}worktree"
+    _git(repo, "worktree", "add", str(odd), "feature-a")
+
+    assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
 
 
 def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> None:
