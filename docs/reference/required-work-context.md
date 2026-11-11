@@ -233,11 +233,12 @@ selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
 Historical recipe-only references and explicit-file initial cursors still reject
-a changed selection digest. When the original capture passes verification, the
-error returns a recovery command that reads it from offset zero, without another
-admission or rewriting the saved descriptor. These
-legacy readers still require reconciliation of their unfinished original Turns
-before retirement; this slice retains their decoder and full-capture recovery.
+a changed selection digest. If the original capture passes file-digest
+verification, the recovery command restarts at offset zero. Historical
+initial-read cursors can recover the full original file. An explicit selection
+or field listing keeps its original scope, including a receipt-only diagnostic.
+The recovery never repeats admission or rewrites the saved descriptor. Retain
+the legacy readers while unfinished Turns still depend on them.
 Initial navigation can replace fully
 selected children with their complete captured parent to avoid repeating addresses.
 An unselected child, including optional or unknown material, prevents that merge.
@@ -377,8 +378,9 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 却绑定规范排序正文的摘要，仅在摘要不匹配后，对同一已验证来源及相同地址集合重试
 一次原规范 planner；只返回摘要完全匹配的字节。此兼容路径每个旧分页最多增加一次
 只读 planner 调用，不写状态或证明模型输入覆盖。历史 recipe-only 引用和原始首读
-游标仍在 profile 变化时严格拒绝。原捕获通过校验后，错误会返回从字节零读取原捕获的
-命令，沿用原准入且不改写已保存的描述符。既有内部 `context_select`
+游标仍在 profile 变化时严格拒绝。原捕获摘要通过校验后，恢复命令从字节零开始。
+历史首读可恢复完整原文件；显式选读和字段列表保留原范围，包括只读诊断回执。
+恢复不会再次准入或改写已保存的描述符。既有内部 `context_select`
 请求为重放接受严格 boolean 的 `preserve_selection_order`；公开显式选读及错误诊断
 不变，reader 描述符字段结构和 CLI 选项不变。
 首读按 TypeScript owner 的优先顺序呈现，不再按指针字母序重排；当前控制条件、必读

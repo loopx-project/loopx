@@ -341,14 +341,17 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                         if pinned_selection is not None else None),
                     selection_paths=reference.get("selection_paths") if pinned_selection is not None else None)
             except ContextSelectionDigestChanged as exc:
-                # The original file and digest are verified above. Only the
-                # rendered selection failed, so restart the original file at zero.
+                # A verified file digest only binds bytes. Preserve an explicit
+                # selection or listing, including a receipt-only diagnostic.
+                # Historical initial-read has no explicit scope to preserve.
                 return {"ok": False, "schema_version": "context_capture_page_v1", "reason": str(exc),
                     "recovery_command": context_capture_read_command(path, digest,
                         page_bytes=next_page_bytes or size,
-                        max_page_output_bytes=next_page_output_bytes or output_limit, reader_argv=reader_argv),
-                    "recovery": "Use recovery_command to read the original capture from offset zero; "
-                    "this read performs no guard, admission or spend."}
+                        max_page_output_bytes=next_page_output_bytes or output_limit,
+                        select=selectors, list_fields=list_fields, list_depth=list_depth, reader_argv=reader_argv),
+                    "recovery": ("Use recovery_command to read the original capture from offset zero; "
+                        if initial_read else "Use recovery_command to restart the original selected read from offset zero; ")
+                    + "this read performs no guard, admission or spend."}
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing

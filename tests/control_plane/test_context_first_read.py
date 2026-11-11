@@ -396,6 +396,59 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
 
 
 
+@pytest.mark.parametrize("reader", ["explicit", "saved-recipe", "list"])
+def test_stale_selected_cursor_restarts_in_the_same_scope(tmp_path, reader):
+    from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
+
+    receipt = {"event_id": "recorded", "turn_instance_id": "original-turn", "note": "原回执" * 90}
+    marker = "This unselected work instruction must stay out of the recovery."
+    capture = (tmp_path / "capture.json").resolve()
+    raw = json.dumps({"heartbeat_receipt": receipt, "interaction_contract": {"primary_action": marker}}).encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    stale = "0" * 64
+    flags = ["--capture-file", str(capture), "--capture-sha256", digest]
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json"]
+    command = ["quota", "context-read", "--offset", "256", "--page-bytes", "4096"]
+    pointer = "/interaction_contract" if reader == "list" else "/heartbeat_receipt"
+    if reader == "saved-recipe":
+        ref = write_context_read_reference(capture, digest, selection={
+            "select": [pointer], "initial_read": False, "list_fields": False,
+            "list_depth": None, "sha256": stale,
+        })
+        reference_before = ref.read_bytes()
+        command += ["--reference-file", str(ref)]
+    else:
+        command += [*flags, "--select", pointer, "--selection-sha256", stale]
+        if reader == "list":
+            command += ["--list", "--list-depth", "2"]
+
+    def run(args):
+        process = subprocess.run([*base, *args], cwd=tmp_path, capture_output=True, text=True, check=False)
+        return process.returncode, json.loads(process.stdout)
+
+    code, failure = run(command)
+    assert code != 0 and "digest changed" in failure["reason"] and "content" not in failure
+    recovery = shlex.split(failure["recovery_command"])
+    assert recovery[recovery.index("--offset") + 1] == "0"
+    assert recovery[recovery.index("--capture-sha256") + 1] == digest
+    assert recovery[recovery.index("--select") + 1] == pointer
+    assert ("--list" in recovery) == (reader == "list")
+    if reader == "list":
+        assert recovery[recovery.index("--list-depth") + 1] == "2"
+    code, page = run(recovery[recovery.index("quota"):])
+    assert code == 0 and page["ok"] and page["eof"] and marker not in page["content"]
+    selections = json.loads(page["content"])["selections"]
+    assert [selection["pointer"] for selection in selections] == [pointer]
+    if reader != "list":
+        assert selections[0]["value"] == receipt
+    if reader == "saved-recipe":
+        assert ref.read_bytes() == reference_before
+    assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
 @pytest.mark.parametrize("bound", [False, True])
 def test_first_read_delivers_current_task_operation_with_its_continuation(tmp_path, decision, bound):
     action = {"operation": "read_private_source", "target_ref": "fixture/private-source.json",
