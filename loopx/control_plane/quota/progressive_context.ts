@@ -18,6 +18,7 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
+export type PreparationScopeDetail = {path: Path; marker_path?: Path; instruction: string};
 type ReadSelection = {pointer: string; path: Path};
 type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
@@ -382,7 +383,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
-    scope?: {path: Path; marker_path: Path; instruction: string}): JsonObject {
+    scopes: readonly PreparationScopeDetail[] = []): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -452,9 +453,9 @@ export function progressiveContextPlan(request: JsonObject,
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  if (scope) {
+  for (const scope of scopes) {
     deferred.push({path: scope.path, read_instruction: scope.instruction});
-    instructions.push({path: scope.marker_path, value: pointer(scope.path)});
+    if (scope.marker_path) instructions.push({path: scope.marker_path, value: pointer(scope.path)});
   }
   if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:

@@ -325,6 +325,14 @@ entries. The opening shows the current approval counts and active scope summary.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
+When the guard requires an independent worktree before delivery, the opening
+keeps the relocation instructions and the current decision controls. Large
+Goal and selected Todo write scope lists are available from the same capture
+at `/goal_boundary/write_scope` and `/selected_todo/required_write_scopes`.
+Select them if the relocation needs them. Once relocated, rerun the guard for
+the same Turn and read its complete current scopes before editing. This
+presentation changes neither admission nor the explicit off view.
+
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
 已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
@@ -350,6 +358,12 @@ observation is lost, its same-capture fallback restores the full remainder.
 续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
 数量和生效范围摘要。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
+
+准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
+如迁移需要较长的 Goal 或选中 Todo 写入范围，可从同一捕获按
+`/goal_boundary/write_scope` 和 `/selected_todo/required_write_scopes` 读取。
+切换后以原 Turn 重新准入，编辑前读取其完整的当前范围。该展示调整不改变准入判定
+或显式关闭渐进读取时的视图。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
