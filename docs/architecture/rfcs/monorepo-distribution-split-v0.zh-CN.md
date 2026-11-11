@@ -2647,3 +2647,14 @@ long-task window。五个中位数为 336.34/313.05/441.09/200.01/194.94 ms，
 D2/D5/D6/D3、context/model/split-install、PostgreSQL host/wheel、
 installed-host 和 adoption 缺口继续开放。后续资格仍由这些原 owner 和验收
 边界承接；最小化内核工作尚未全部完成。
+
+### 2026-11-11 — Canonical snapshot 失败来源
+
+分页和完整 snapshot 读取将持久化 Todo 契约被拒绝
+（`canonical_snapshot_projection_invalid`）与请求参数无效区分开。现有 typed
+validator 仍拒绝未知字段清单和无效记录摘要，保留原始原因，不返回部分记录或
+legacy fallback；已支持的历史字段清单仍可读取。这是既有源传输入口的诊断
+修正，不授予旧 reader 前向兼容能力，也不升级已安装 runtime。
+
+真实 File/SQLite RPC 与 CLI 回归，以及隔离 PostgreSQL 读取，验证该失败边界
+且不重写 authority。原 installed-host 资格、完整成本和 adoption 缺口继续开放。
