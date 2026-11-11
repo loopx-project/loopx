@@ -136,12 +136,6 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     profile = "codex_app_heartbeat" if host_args == ("--codex-app",) else "generic_cli"
     complete = compose_turn_decision(guard,
         scheduler_execution_context=scheduler_execution_context_for_runtime_profile(profile))
-    plan = complete["interaction_contract"]["cli_channel"]["settlement_plan"]
-    validation_index = next(
-        index for index, step in enumerate(plan["ordered_steps"]) if step["kind"] == "validation"
-    )
-    required_control = {"required": True, "instruction": "Check the recorded owner stop before reopening."}
-    plan["ordered_steps"][validation_index]["required_control"] = required_control
     capture = tmp_path / "resume-decision.json"
     digest = write_decision_capture(capture, complete)
     before_context = state.read_bytes()
@@ -164,14 +158,32 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     cli_path = "/interaction_contract/cli_channel"
     actions_path = cli_path + "/next_cli_actions"
     settlement_path = cli_path + "/settlement_plan"
-    assert pointers.index(actions_path) < pointers.index("/interaction_contract/agent_channel/work_context/user_todos")
-    assert selected[f"{settlement_path}/ordered_steps/{validation_index}/required_control"] == required_control
+    work_path = "/interaction_contract/agent_channel/work_context/user_todos"
+    assert pointers.index(actions_path) < pointers.index(work_path)
     actions = selected[actions_path]
     assert actions == guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     rc, full = cli("quota", "context-read", "--capture-file", str(capture),
         "--capture-sha256", digest, "--select", settlement_path)
     assert rc == 0 and full["eof"], full
+    plan = complete["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert json.loads(full["content"])["selections"][0]["value"] == plan
+
+    # The literal reader also serves historical captures with compatible step
+    # fields. Keep this example separate from the validated current Turn.
+    validation_index = next(
+        index for index, step in enumerate(plan["ordered_steps"]) if step["kind"] == "validation"
+    )
+    required_control = {"required": True, "instruction": "Check the recorded owner stop before reopening."}
+    plan["ordered_steps"][validation_index]["required_control"] = required_control
+    compatibility_capture = tmp_path / "resume-compatible-decision.json"
+    compatibility_digest = write_decision_capture(compatibility_capture, complete)
+    rc, compatible = cli("quota", "context-read", "--capture-file", str(compatibility_capture),
+        "--capture-sha256", compatibility_digest, "--initial-read", "--max-page-output-bytes", "64000")
+    assert rc == 0 and compatible["eof"], compatible
+    compatible_values = selected_context_values(compatible["content"])
+    control_path = f"{settlement_path}/ordered_steps/{validation_index}/required_control"
+    assert compatible_values[control_path] == required_control
+    assert list(compatible_values).index(control_path) < list(compatible_values).index(work_path)
     assert state.read_bytes() == before_context and _spend_run_count(runtime) == 0
     generated = actions[0]
     assert generated.startswith("loopx ")

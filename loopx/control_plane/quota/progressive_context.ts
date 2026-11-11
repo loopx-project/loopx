@@ -1095,6 +1095,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
+  const planStart = pointers.length;
   if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
     steps.forEach((value, stepIndex) => {
@@ -1123,6 +1124,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       }
     });
   } else include(...planPath); // Unknown plan versions keep their complete obligations.
+  if (deferredReentry) opening.push(...pointers.splice(planStart));
   // Keep the pinned supporting-read route and its obligations inline.
   // The complete index is available at the same captured address.
   if (inlineSupportingDetails) {
