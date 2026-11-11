@@ -9,6 +9,7 @@ import {
   loadSchedulerState,
   normalizeSchedulerState,
   schedulerStatePath,
+  schedulerTimestampMilliseconds,
   SCHEDULER_STATE_OPERATION_REQUEST_SCHEMA,
   SCHEDULER_STATE_STORE_REQUEST_SCHEMA,
   writeSchedulerState,
@@ -158,6 +159,62 @@ test("failure retention accepts the ISO offsets persisted by Python", () => {
     reference_time: "2026-01-02T12:00:00+00:00",
   }).value;
   assert.equal((result as unknown[]).length, 1);
+});
+
+function hostUpdateFailure(failedAt: string) {
+  return {
+    schema_version: "scheduler_host_update_failure_v0",
+    target_rrule: "FREQ=MINUTELY;INTERVAL=3",
+    observed_host_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    failure_kind: "timeout",
+    failure_count: 1,
+    failed_at: failedAt,
+  };
+}
+
+test("scheduler timestamp codec rejects illegal calendars and keeps offset instants", () => {
+  assert.equal(schedulerTimestampMilliseconds("2026-02-31T00:00:00Z"), null);
+  assert.equal(schedulerTimestampMilliseconds("2026-02-29T00:00:00Z"), null);
+  assert.equal(schedulerTimestampMilliseconds("2024-02-29T00:00:00Z"), Date.UTC(2024, 1, 29));
+  assert.equal(schedulerTimestampMilliseconds("2026-11-31T10:04:00Z"), null);
+  assert.equal(schedulerTimestampMilliseconds("2026-01-32T12:10:00Z"), null);
+  assert.equal(schedulerTimestampMilliseconds("   "), null);
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-08-25T10:00:00+08:00"),
+    Date.UTC(2026, 7, 25, 2, 0, 0),
+  );
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-01-01T12:00:00"),
+    Date.UTC(2026, 0, 1, 12, 0, 0),
+  );
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-01-01T12:00:00+0000"),
+    Date.UTC(2026, 0, 1, 12, 0, 0),
+  );
+});
+
+test("failure retention does not roll illegal calendar timestamps into the TTL window", () => {
+  for (const [failedAt, referenceTime] of [
+    ["2026-02-31T00:00:00Z", "2026-03-03T00:00:00Z"],
+    ["2026-11-31T10:04:00Z", "2026-12-01T10:04:00Z"],
+  ] as const) {
+    const retained = evaluateSchedulerStateOperation({
+      schema_version: SCHEDULER_STATE_OPERATION_REQUEST_SCHEMA,
+      operation: "retain_failures",
+      value: [hostUpdateFailure(failedAt)],
+      reference_time: referenceTime,
+    }).value;
+    assert.deepEqual(retained, [], failedAt);
+  }
+  assert.throws(
+    () => evaluateSchedulerStateOperation({
+      schema_version: SCHEDULER_STATE_OPERATION_REQUEST_SCHEMA,
+      operation: "retain_failures",
+      value: [hostUpdateFailure("2026-03-03T00:00:00Z")],
+      reference_time: "2026-02-31T00:00:00Z",
+    }),
+    /reference_time must be an ISO timestamp/,
+  );
 });
 
 test("pure scheduler state operations do not mutate caller input", () => {

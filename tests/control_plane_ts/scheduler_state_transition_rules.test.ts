@@ -172,6 +172,33 @@ test("monitor schedule rejects malformed timestamps without wall-clock fallback"
   );
 });
 
+test("monitor schedule rejects illegal calendar timestamps without wall-clock fallback", () => {
+  for (const generatedAt of ["2026-02-29T00:00:00Z", "2026-02-31T00:00:00Z", "2026-11-31T10:04:00Z"]) {
+    assert.throws(
+      () => evaluateSchedulerStateTransition({
+        schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+        operation: "monitor_schedule",
+        generated_at: generatedAt,
+        cadence: "30 minutes",
+      }),
+      /generated_at must be an ISO timestamp/,
+      generatedAt,
+    );
+  }
+  for (const explicitNextDueAt of ["2026-02-31T12:00:00Z", "2026-11-31T10:04:00Z"]) {
+    assert.throws(
+      () => evaluateSchedulerStateTransition({
+        schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+        operation: "monitor_schedule",
+        generated_at: "2026-08-25T10:00:00Z",
+        explicit_next_due_at: explicitNextDueAt,
+      }),
+      /explicit_next_due_at must be an ISO timestamp/,
+      explicitNextDueAt,
+    );
+  }
+});
+
 function backoffRequest(extra: Record<string, unknown> = {}) {
   return {
     schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
@@ -232,6 +259,67 @@ test("coarse backoff transition owns cadence, retention, and host decision", () 
     (failedPair.recorded_host_failure as Record<string, unknown>).failure_count,
     1,
   );
+});
+
+test("backoff rejects illegal calendar clocks instead of rolling them", () => {
+  const schedulerState = {
+    progression_index: 1,
+    last_applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    reset_token: "reset-token",
+    identity_signature: "identity-signature",
+    updated_at: "2026-01-01T12:00:00Z",
+  };
+  const held = evaluateSchedulerStateTransition(backoffRequest({
+    scheduler_state: schedulerState,
+    current_time: "2026-01-01T12:10:00Z",
+  }));
+  assert.equal(held.cadence_transition, "hold_until_interval");
+
+  // Jan 32 is not a Date.parse instant on this runtime; Feb 31 and Nov 31 are
+  // rolled forward. Neither clock may count as an elapsed backoff interval.
+  for (const currentTime of [
+    "2026-01-32T12:10:00Z",
+    "2026-02-31T12:10:00Z",
+    "2026-11-31T12:10:00Z",
+  ]) {
+    assert.throws(
+      () => evaluateSchedulerStateTransition(backoffRequest({
+        scheduler_state: schedulerState,
+        current_time: currentTime,
+      })),
+      /current_time must be an ISO timestamp/,
+      currentTime,
+    );
+  }
+  for (const updatedAt of ["2026-01-32T12:00:00Z", "2026-02-31T12:00:00Z"]) {
+    assert.throws(
+      () => evaluateSchedulerStateTransition(backoffRequest({
+        scheduler_state: { ...schedulerState, updated_at: updatedAt },
+        current_time: "2026-01-01T12:10:00Z",
+      })),
+      /updated_at must be an ISO timestamp/,
+      updatedAt,
+    );
+  }
+});
+
+test("backoff still treats a missing or blank updated_at as an elapsed interval", () => {
+  const schedulerState = {
+    progression_index: 1,
+    last_applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    reset_token: "reset-token",
+    identity_signature: "identity-signature",
+  };
+  for (const updatedAt of [undefined, "", "   "]) {
+    const state = updatedAt === undefined
+      ? schedulerState
+      : { ...schedulerState, updated_at: updatedAt };
+    const advanced = evaluateSchedulerStateTransition(backoffRequest({
+      scheduler_state: state,
+      current_time: "2026-01-01T12:10:00Z",
+    }));
+    assert.equal(advanced.cadence_transition, "advance_after_interval");
+  }
 });
 
 test("coarse backoff boundary rejects malformed state facts", () => {

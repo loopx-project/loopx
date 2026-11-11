@@ -10,6 +10,7 @@ import {
   normalizeSchedulerHostUpdateFailures,
   normalizeSchedulerRrule,
   retainedSchedulerHostUpdateFailures,
+  requireSchedulerTimestampMilliseconds,
   rruleForMinutes,
   schedulerRruleIntervalMinutes,
   schedulerTimestampMilliseconds,
@@ -359,14 +360,22 @@ function schedulerProgressionIntervalElapsed(
   schedulerState: JsonObject,
   currentTime: string,
 ): boolean {
-  const updatedAt = schedulerTimestampMilliseconds(schedulerState.updated_at);
-  const current = schedulerTimestampMilliseconds(currentTime);
   const appliedInterval = schedulerRruleIntervalMinutes(
     schedulerState.last_applied_rrule,
   );
-  if (updatedAt === null || current === null || appliedInterval === null) {
-    return true;
-  }
+  // Missing interval or blank updated_at stays elapsed. A present illegal
+  // calendar is rejected instead of rolled or treated as elapsed.
+  if (appliedInterval === null) return true;
+  const updatedAt = requireSchedulerTimestampMilliseconds(
+    schedulerState.updated_at,
+    "updated_at",
+  );
+  if (updatedAt === null) return true;
+  const current = requireSchedulerTimestampMilliseconds(
+    currentTime,
+    "current_time",
+  );
+  if (current === null) return true;
   return current >= updatedAt + appliedInterval * 60_000;
 }
 
@@ -400,6 +409,7 @@ function evaluateBackoff(request: JsonObject): SchedulerBackoffTransitionResult 
     "identity_signature",
   );
   const currentTime = requiredString(request.current_time, "current_time");
+  requireSchedulerTimestampMilliseconds(currentTime, "current_time");
   const cadenceClass = requiredString(request.cadence_class, "cadence_class");
   const staleToleranceMinutes = requiredInteger(
     request.stale_tolerance_minutes,
