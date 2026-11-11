@@ -7,6 +7,7 @@ import {
   matchesExploreMetricProfile,
   normalizeExploreMetricProfile,
   projectExploreMeasurementFeedback,
+  type ExploreMeasurement,
   type ExploreMeasurementFeedback,
   type ExploreMeasurementPoint,
   type ExploreMetricProfile,
@@ -255,17 +256,11 @@ export function projectWorkMeasurementFacts(
 function measuredSearchComparison(
   scopedFindings: readonly JsonObject[],
   decision: WorkYardstickDecision,
-  cited: ReadonlySet<string>,
-  sourceOrder: unknown,
-  workObservationStart: number,
-  decisionTime: bigint | null,
+  includeMeasurement: (row: JsonObject, measurement: ExploreMeasurement) => boolean,
 ) {
   const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) => {
     const feedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
-      (row.work_yardstick !== undefined ||
-        (cited.has(measurement.evidence_ref)
-          ? recordedBeforePrefix(row, sourceOrder)
-          : row.work_binding !== undefined && committedInWorkWindow(row, workObservationStart, decisionTime))) &&
+      includeMeasurement(row, measurement) &&
       (!candidates || candidates.has(measurement.candidate_ref)),
     );
     return measuredPair(feedback.find(row => matchesExploreMetricProfile(row, profile)));
@@ -350,13 +345,15 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     },
   });
   const scopedFindings = evidenceWindow.scoped_findings;
+  const includeMeasurement = (row: JsonObject, measurement: ExploreMeasurement) =>
+    row.work_yardstick !== undefined ||
+    (cited.has(measurement.evidence_ref)
+      ? recordedBeforePrefix(row, evidenceWindow.source_order)
+      : row.work_binding !== undefined && committedInWorkWindow(
+          row, evidenceWindow.work_observation_start, evidenceWindow.decision_time_micros,
+        ));
   const searchComparison = measuredSearchComparison(
-    scopedFindings,
-    decision,
-    cited,
-    evidenceWindow.source_order,
-    evidenceWindow.work_observation_start,
-    evidenceWindow.decision_time_micros,
+    scopedFindings, decision, includeMeasurement,
   );
   const multiPointFidelity = decision.proxy
     ? evaluateScopedYardstickFidelity({
@@ -364,8 +361,21 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
         findings: scopedFindings,
         authoritative: decision.authoritative as unknown as JsonObject,
         proxy: decision.proxy as unknown as JsonObject,
-      })
+      }, includeMeasurement)
     : null;
+  const frontier = multiPointFidelity?.calibration_tier === "multi_point"
+    ? multiPointFidelity.frontier_neighborhood : null;
+  let fidelityGuidance: string | undefined;
+  if (frontier && (frontier.best_candidate_agrees === false ||
+      multiPointFidelity?.fidelity_status === "frontier_bias_cliff" ||
+      multiPointFidelity?.fidelity_status === "order_reversed")) {
+    fidelityGuidance = "This scoped proxy has misranked accepted results. Use it to generate candidates.";
+  } else if (frontier?.authoritative_best_candidate_ref && frontier.proxy_best_paired_candidate_ref === null) {
+    fidelityGuidance = "This scoped proxy leaves the best candidates tied.";
+  }
+  if (fidelityGuidance) {
+    fidelityGuidance += " If a candidate would change the next route, use one eligible authoritative comparison before selecting or discarding it.";
+  }
   return {
     source_finding_id: source.finding_id,
     node_id: source.node_id,
@@ -377,6 +387,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     ...(multiPointFidelity && multiPointFidelity.calibration_tier === "multi_point"
       ? {yardstick_fidelity: multiPointFidelity as unknown as JsonObject}
       : {}),
+    ...(fidelityGuidance ? {fidelity_guidance: fidelityGuidance} : {}),
     ...(followthrough ? {previous_decision_followthrough: followthrough} : {}),
     guidance: counter.length
       ? "Counterevidence is recorded for this scoped proxy. Reassess its use at the next concrete choice; a local screening heuristic cannot veto an informative authoritative check by itself. Preserve accepted correctness, authorization and budget constraints."

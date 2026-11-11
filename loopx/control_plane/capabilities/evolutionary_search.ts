@@ -29,6 +29,7 @@ export const EVOLUTIONARY_POPULATION_PLAN_SCHEMA = "evolutionary_population_plan
 export const EVOLUTIONARY_SELECTION_STATUSES = [
   "empty_population",
   "single_seed",
+  "mechanism_unresolved",
   "single_island_refinement",
   "multi_island_evolution",
 ] as const;
@@ -42,12 +43,12 @@ export type ProxyQuarantineDisposition = (typeof PROXY_QUARANTINE_DISPOSITIONS)[
 
 export interface EvolutionaryCandidateMember {
   candidate_ref: string;
-  mechanism_id: string;
+  mechanism_id: string | null;
   authoritative_value: number;
   utility_score: number;
   finding_id: string;
   evidence_ref: string;
-  island_rank: number;
+  island_rank: number | null;
   selection_reason: "island_champion" | "utility_fill";
 }
 
@@ -60,12 +61,12 @@ export interface EvolutionaryCrossoverPair {
   parent_b_mechanism_id: string;
   parent_b_value: number;
   combined_utility_score: number;
-  synthesis_goal: "combine_orthogonal_mechanisms";
+  synthesis_goal: "test_mechanism_combination";
 }
 
 export interface EvolutionaryMutationTarget {
   candidate_ref: string;
-  mechanism_id: string;
+  mechanism_id: string | null;
   authoritative_value: number;
   mutation_kind: "island_champion_refinement" | "tie_breaking_bottleneck_probe";
 }
@@ -79,6 +80,7 @@ export interface EvolutionaryPopulationPlan {
   proxy_fidelity_status: YardstickFidelityStatus | null;
   counts: {
     confirmed_candidates: number;
+    unknown_mechanism_candidates: number;
     mechanism_islands: number;
     selected_elites: number;
     omitted_candidates: number;
@@ -148,7 +150,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
 
   type ObservedCandidate = {
     candidate_ref: string;
-    mechanism_id: string;
+    mechanism_id: string | null;
     value: number;
     utility: number;
     finding_id: string;
@@ -170,11 +172,13 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
         authUnknowns++;
         continue;
       }
-      if (byCandidate.has(m.candidate_ref)) repeats++;
+      const previous = byCandidate.get(m.candidate_ref);
+      if (previous) repeats++;
       const mechanismId =
         mechanismOverrides.get(m.candidate_ref) ??
         methodId ??
-        `candidate:${m.candidate_ref}`;
+        previous?.mechanism_id ??
+        null;
       const utility = round6(authoritative.higher_is_better ? m.value : -m.value);
       byCandidate.set(m.candidate_ref, {
         candidate_ref: m.candidate_ref,
@@ -199,6 +203,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
   // Group confirmed candidates into mechanism islands.
   const islandMembers = new Map<string, ObservedCandidate[]>();
   for (const cand of byCandidate.values()) {
+    if (cand.mechanism_id === null) continue;
     const list = islandMembers.get(cand.mechanism_id) ?? [];
     list.push(cand);
     islandMembers.set(cand.mechanism_id, list);
@@ -214,57 +219,47 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
   // Pass 1: preserve one champion per distinct mechanism island (anti-premature-convergence).
   const selectedIds = new Set<string>();
   const elites: EvolutionaryCandidateMember[] = [];
-  for (const [mechId, members] of sortedIslands) {
-    if (elites.length >= eliteLimit) break;
-    const champ = members[0]!;
-    selectedIds.add(champ.candidate_ref);
+  const rankedCandidates = [...byCandidate.values()].sort(
+    (a, b) => b.utility - a.utility || a.candidate_ref.localeCompare(b.candidate_ref),
+  );
+  const ranks = new Map<string, number>();
+  for (const [, members] of sortedIslands) {
+    members.forEach((member, index) => ranks.set(member.candidate_ref, index + 1));
+  }
+  const keep = (candidate: ObservedCandidate, reason: EvolutionaryCandidateMember["selection_reason"]) => {
+    selectedIds.add(candidate.candidate_ref);
     elites.push({
-      candidate_ref: champ.candidate_ref,
-      mechanism_id: mechId,
-      authoritative_value: champ.value,
-      utility_score: champ.utility,
-      finding_id: champ.finding_id,
-      evidence_ref: champ.evidence_ref,
-      island_rank: 1,
-      selection_reason: "island_champion",
+      candidate_ref: candidate.candidate_ref,
+      mechanism_id: candidate.mechanism_id,
+      authoritative_value: candidate.value,
+      utility_score: candidate.utility,
+      finding_id: candidate.finding_id,
+      evidence_ref: candidate.evidence_ref,
+      island_rank: ranks.get(candidate.candidate_ref) ?? null,
+      selection_reason: reason,
     });
+  };
+  const best = rankedCandidates[0];
+  if (best?.mechanism_id === null) keep(best, "utility_fill");
+  for (const [, members] of sortedIslands) {
+    if (elites.length >= eliteLimit) break;
+    keep(members[0]!, "island_champion");
   }
 
   // Pass 2: fill remaining elite slots by highest confirmed utility across islands.
-  if (elites.length < eliteLimit) {
-    const remaining: Array<ObservedCandidate & {island_rank: number}> = [];
-    for (const [, members] of sortedIslands) {
-      members.forEach((member, idx) => {
-        if (!selectedIds.has(member.candidate_ref)) {
-          remaining.push({...member, island_rank: idx + 1});
-        }
-      });
-    }
-    remaining.sort((a, b) => b.utility - a.utility || a.candidate_ref.localeCompare(b.candidate_ref));
-    for (const cand of remaining) {
-      if (elites.length >= eliteLimit) break;
-      selectedIds.add(cand.candidate_ref);
-      elites.push({
-        candidate_ref: cand.candidate_ref,
-        mechanism_id: cand.mechanism_id,
-        authoritative_value: cand.value,
-        utility_score: cand.utility,
-        finding_id: cand.finding_id,
-        evidence_ref: cand.evidence_ref,
-        island_rank: cand.island_rank,
-        selection_reason: "utility_fill",
-      });
-    }
+  for (const candidate of rankedCandidates) {
+    if (elites.length >= eliteLimit) break;
+    if (!selectedIds.has(candidate.candidate_ref)) keep(candidate, "utility_fill");
   }
   elites.sort((a, b) => b.utility_score - a.utility_score || a.candidate_ref.localeCompare(b.candidate_ref));
 
-  // Orthogonal crossover pairs: only combine parents from distinct mechanism islands.
+  // Distinct mechanisms give a combination to test. Compatibility still needs evidence.
   const rawCrossovers: EvolutionaryCrossoverPair[] = [];
   for (let i = 0; i < elites.length; i++) {
     for (let j = i + 1; j < elites.length; j++) {
       const a = elites[i]!;
       const b = elites[j]!;
-      if (a.mechanism_id === b.mechanism_id) continue;
+      if (a.mechanism_id === null || b.mechanism_id === null || a.mechanism_id === b.mechanism_id) continue;
       rawCrossovers.push({
         pair_id: `${a.candidate_ref}+${b.candidate_ref}`,
         parent_a_candidate_ref: a.candidate_ref,
@@ -274,7 +269,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
         parent_b_mechanism_id: b.mechanism_id,
         parent_b_value: b.authoritative_value,
         combined_utility_score: round6(a.utility_score + b.utility_score),
-        synthesis_goal: "combine_orthogonal_mechanisms",
+        synthesis_goal: "test_mechanism_combination",
       });
     }
   }
@@ -287,8 +282,9 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
       : projectBoundedMethodologyItems(rawCrossovers, crossoverLimit).visible;
 
   // Targeted mutations on top elites.
-  const topTied = elites.length >= 2 && elites[0]!.utility_score === elites[1]!.utility_score;
-  const rawMutations: EvolutionaryMutationTarget[] = elites.map((elite, idx) => ({
+  const knownElites = elites.filter(elite => elite.mechanism_id !== null);
+  const topTied = knownElites.length >= 2 && knownElites[0]!.utility_score === knownElites[1]!.utility_score;
+  const rawMutations: EvolutionaryMutationTarget[] = knownElites.map((elite, idx) => ({
     candidate_ref: elite.candidate_ref,
     mechanism_id: elite.mechanism_id,
     authoritative_value: elite.authoritative_value,
@@ -330,9 +326,11 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
       ? "empty_population"
       : byCandidate.size === 1
         ? "single_seed"
-        : sortedIslands.length === 1
-          ? "single_island_refinement"
-          : "multi_island_evolution";
+        : sortedIslands.length === 0
+          ? "mechanism_unresolved"
+          : sortedIslands.length === 1
+            ? "single_island_refinement"
+            : "multi_island_evolution";
 
   return assertMethodologyOperatorOutput("evolutionary_population", {
     schema_version: EVOLUTIONARY_POPULATION_PLAN_SCHEMA,
@@ -343,6 +341,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
     proxy_fidelity_status: fidelity?.fidelity_status ?? null,
     counts: {
       confirmed_candidates: byCandidate.size,
+      unknown_mechanism_candidates: rankedCandidates.filter(candidate => candidate.mechanism_id === null).length,
       mechanism_islands: sortedIslands.length,
       selected_elites: elites.length,
       omitted_candidates: Math.max(0, byCandidate.size - elites.length),

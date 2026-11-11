@@ -30,6 +30,7 @@ export const COUNTERFACTUAL_PAIR_OUTCOMES = [
   "diverged_no_gain",
   "diverged_regressed",
   "action_identical",
+  "action_unobserved",
   "unscored_or_incomplete",
   "contaminated_excluded",
 ] as const;
@@ -37,10 +38,21 @@ export type CounterfactualPairOutcome = (typeof COUNTERFACTUAL_PAIR_OUTCOMES)[nu
 
 export type CounterfactualCostVector = Record<CounterfactualCostDimension, number | null>;
 
+type ComparisonScope = {
+  metric: string;
+  unit: string;
+  higher_is_better: boolean;
+  comparison_scope: string;
+  input_revision: string;
+  evaluation_ref: string;
+  terminal_boundary_ref: string;
+};
+
 export interface EvaluatedCounterfactualPair {
   pair_id: string;
   task_id: string;
   checkpoint_id: string;
+  scope: ComparisonScope;
   identification_valid: boolean;
   identification_violations: string[];
   outcome_classification: CounterfactualPairOutcome;
@@ -69,11 +81,13 @@ export interface CounterfactualContinuationEvaluation {
     unscored_valid_pairs: number;
     action_diverged_pairs: number;
     action_identical_pairs: number;
+    action_unobserved_pairs: number;
     wins: number;
     ties: number;
     losses: number;
   };
   estimand_summary: {
+    comparable_scope_count: number;
     mean_tau_b: number | null;
     median_tau_b: number | null;
     min_tau_b: number | null;
@@ -88,6 +102,7 @@ export interface CounterfactualContinuationEvaluation {
   };
   by_task: Array<{
     task_id: string;
+    scope: ComparisonScope;
     valid_pairs: number;
     scored_pairs: number;
     mean_tau_b: number | null;
@@ -176,6 +191,7 @@ interface NormalizedBranch {
   input_revision: string;
   evaluation_ref: string;
   workspace_isolation_id: string;
+  terminal_boundary_ref: string;
   decision_context_latest_at: bigint | null;
   first_action_signature: string | null;
   terminal_value: number | null;
@@ -186,12 +202,12 @@ interface NormalizedBranch {
 function normalizeBranch(value: unknown, label: string): NormalizedBranch {
   const allowed = [
     "arm_id", "checkpoint_id", "source_state_sha256", "input_revision", "evaluation_ref",
-    "workspace_isolation_id", "decision_context_latest_at", "first_action_signature",
+    "workspace_isolation_id", "terminal_boundary_ref", "decision_context_latest_at", "first_action_signature",
     "terminal_value", "valid_submission", "costs",
   ];
   const required = [
     "arm_id", "checkpoint_id", "source_state_sha256", "input_revision", "evaluation_ref",
-    "workspace_isolation_id", "terminal_value", "valid_submission", "costs",
+    "workspace_isolation_id", "terminal_boundary_ref", "terminal_value", "valid_submission", "costs",
   ];
   const row = exactObject(value, allowed, required, label);
   if (typeof row.valid_submission !== "boolean") {
@@ -204,6 +220,7 @@ function normalizeBranch(value: unknown, label: string): NormalizedBranch {
     input_revision: singleLine(row.input_revision, `${label}.input_revision`, 160),
     evaluation_ref: opaqueRef(row.evaluation_ref, `${label}.evaluation_ref`),
     workspace_isolation_id: opaqueRef(row.workspace_isolation_id, `${label}.workspace_isolation_id`),
+    terminal_boundary_ref: opaqueRef(row.terminal_boundary_ref, `${label}.terminal_boundary_ref`),
     decision_context_latest_at: parseOptionalTimestamp(row.decision_context_latest_at, `${label}.decision_context_latest_at`),
     first_action_signature: row.first_action_signature === null || row.first_action_signature === undefined
       ? null
@@ -233,6 +250,7 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
   }
 
   const seenPairIds = new Set<string>();
+  const acceptedWorkspaces = new Set<string>();
   const evaluatedPairs: EvaluatedCounterfactualPair[] = [];
 
   for (let idx = 0; idx < root.pairs.length; idx++) {
@@ -252,9 +270,10 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     const cpRaw = exactObject(
       pairRow.checkpoint,
       ["checkpoint_id", "source_state_sha256", "input_revision", "evaluation_ref",
-        "metric", "unit", "higher_is_better", "incumbent_at_fork", "fork_recorded_at"],
+        "metric", "unit", "higher_is_better", "comparison_scope", "terminal_boundary_ref",
+        "incumbent_at_fork", "fork_recorded_at"],
       ["checkpoint_id", "source_state_sha256", "input_revision", "evaluation_ref",
-        "metric", "unit", "higher_is_better"],
+        "metric", "unit", "higher_is_better", "comparison_scope", "terminal_boundary_ref"],
       `pairs[${idx}].checkpoint`,
     );
     if (typeof cpRaw.higher_is_better !== "boolean") {
@@ -264,8 +283,15 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     const cpSha = sha256Hex(cpRaw.source_state_sha256, `pairs[${idx}].checkpoint.source_state_sha256`);
     const cpInputRev = singleLine(cpRaw.input_revision, `pairs[${idx}].checkpoint.input_revision`, 160);
     const cpEvalRef = opaqueRef(cpRaw.evaluation_ref, `pairs[${idx}].checkpoint.evaluation_ref`);
-    singleLine(cpRaw.metric, `pairs[${idx}].checkpoint.metric`, 80);
-    singleLine(cpRaw.unit, `pairs[${idx}].checkpoint.unit`, 40);
+    const scope: ComparisonScope = {
+      metric: singleLine(cpRaw.metric, `pairs[${idx}].checkpoint.metric`, 80),
+      unit: singleLine(cpRaw.unit, `pairs[${idx}].checkpoint.unit`, 40),
+      higher_is_better: cpRaw.higher_is_better,
+      comparison_scope: opaqueRef(cpRaw.comparison_scope, `pairs[${idx}].checkpoint.comparison_scope`),
+      input_revision: cpInputRev,
+      evaluation_ref: cpEvalRef,
+      terminal_boundary_ref: opaqueRef(cpRaw.terminal_boundary_ref, `pairs[${idx}].checkpoint.terminal_boundary_ref`),
+    };
     const higherIsBetter = cpRaw.higher_is_better;
     const incumbentAtFork = nullableFinite(cpRaw.incumbent_at_fork, `pairs[${idx}].checkpoint.incumbent_at_fork`);
     const forkAt = parseOptionalTimestamp(cpRaw.fork_recorded_at, `pairs[${idx}].checkpoint.fork_recorded_at`);
@@ -289,11 +315,20 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     if (treatment.workspace_isolation_id === control.workspace_isolation_id) {
       violations.push("shared_workspace_interference");
     }
-    if (forkAt !== null) {
-      if ((treatment.decision_context_latest_at !== null && treatment.decision_context_latest_at > forkAt)
-        || (control.decision_context_latest_at !== null && control.decision_context_latest_at > forkAt)) {
-        violations.push("future_timestamp_context_leakage");
-      }
+    if (acceptedWorkspaces.has(treatment.workspace_isolation_id) || acceptedWorkspaces.has(control.workspace_isolation_id)) {
+      violations.push("reused_run_workspace");
+    }
+    if (treatment.terminal_boundary_ref !== scope.terminal_boundary_ref ||
+        control.terminal_boundary_ref !== scope.terminal_boundary_ref) {
+      violations.push("terminal_boundary_mismatch");
+    }
+    if (forkAt === null || treatment.decision_context_latest_at === null || control.decision_context_latest_at === null) {
+      violations.push("missing_context_timing");
+    }
+    if (forkAt !== null &&
+        ((treatment.decision_context_latest_at !== null && treatment.decision_context_latest_at > forkAt) ||
+         (control.decision_context_latest_at !== null && control.decision_context_latest_at > forkAt))) {
+      violations.push("future_timestamp_context_leakage");
     }
     if (violations.length > 0 && strict) {
       throw new EffectRuntimeRequestError(
@@ -319,6 +354,10 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     }
 
     const validPair = violations.length === 0;
+    if (validPair) {
+      acceptedWorkspaces.add(treatment.workspace_isolation_id);
+      acceptedWorkspaces.add(control.workspace_isolation_id);
+    }
     const bothScored = validPair && treatment.valid_submission && control.valid_submission
       && treatment.terminal_value !== null && control.terminal_value !== null;
 
@@ -329,7 +368,8 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     let outcomeClass: CounterfactualPairOutcome;
 
     if (!validPair) {
-      outcomeClass = "contaminated_excluded";
+      outcomeClass = violations.length === 1 && violations[0] === "missing_context_timing"
+        ? "unscored_or_incomplete" : "contaminated_excluded";
     } else if (!bothScored) {
       outcomeClass = "unscored_or_incomplete";
     } else {
@@ -339,7 +379,8 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
         tGain = round6(util(treatment.terminal_value!) - util(incumbentAtFork));
         cGain = round6(util(control.terminal_value!) - util(incumbentAtFork));
       }
-      if (actionDiverged === false) outcomeClass = "action_identical";
+      if (actionDiverged === null) outcomeClass = "action_unobserved";
+      else if (actionDiverged === false) outcomeClass = "action_identical";
       else if (tauB > 0) outcomeClass = "diverged_with_gain";
       else if (tauB === 0) outcomeClass = "diverged_no_gain";
       else outcomeClass = "diverged_regressed";
@@ -349,6 +390,7 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
       pair_id: pairId,
       task_id: taskId,
       checkpoint_id: cpId,
+      scope,
       identification_valid: validPair,
       identification_violations: violations,
       outcome_classification: outcomeClass,
@@ -372,6 +414,8 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
   const wins = tauValues.filter(v => v > 0).length;
   const ties = tauValues.filter(v => v === 0).length;
   const losses = tauValues.filter(v => v < 0).length;
+  const scopeCount = new Set(scoredRows.map(row => JSON.stringify(row.scope))).size;
+  const comparableTaus = scopeCount === 1 ? tauValues : [];
 
   const deltaSums = Object.fromEntries(COUNTERFACTUAL_COST_DIMENSIONS.map(d => [d, 0])) as Record<CounterfactualCostDimension, number>;
   const observedCounts = Object.fromEntries(COUNTERFACTUAL_COST_DIMENSIONS.map(d => [d, 0])) as Record<CounterfactualCostDimension, number>;
@@ -390,16 +434,18 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
 
   const taskMap = new Map<string, EvaluatedCounterfactualPair[]>();
   for (const row of validRows) {
-    const list = taskMap.get(row.task_id) ?? [];
+    const group = JSON.stringify([row.task_id, row.scope]);
+    const list = taskMap.get(group) ?? [];
     list.push(row);
-    taskMap.set(row.task_id, list);
+    taskMap.set(group, list);
   }
   const byTask = [...taskMap.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([taskId, rows]) => {
+    .map(([, rows]) => {
       const taus = rows.filter(r => r.tau_b_direction_normalized !== null).map(r => r.tau_b_direction_normalized!);
       return {
-        task_id: taskId,
+        task_id: rows[0]!.task_id,
+        scope: rows[0]!.scope,
         valid_pairs: rows.length,
         scored_pairs: taus.length,
         mean_tau_b: taus.length ? round6(taus.reduce((a, b) => a + b, 0) / taus.length) : null,
@@ -421,17 +467,19 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
       unscored_valid_pairs: validRows.length - scoredRows.length,
       action_diverged_pairs: validRows.filter(p => p.action_diverged === true).length,
       action_identical_pairs: validRows.filter(p => p.action_diverged === false).length,
+      action_unobserved_pairs: validRows.filter(p => p.action_diverged === null).length,
       wins,
       ties,
       losses,
     },
     estimand_summary: {
-      mean_tau_b: tauValues.length ? round6(tauValues.reduce((a, b) => a + b, 0) / tauValues.length) : null,
-      median_tau_b: tauValues.length ? round6(median(tauValues)) : null,
-      min_tau_b: tauValues.length ? round6(Math.min(...tauValues)) : null,
-      max_tau_b: tauValues.length ? round6(Math.max(...tauValues)) : null,
-      exact_sign_flip_p_value: exactSignFlipTwoSidedPValue(tauValues),
-      binomial_sign_p_value: binomialSignTwoSidedPValue(wins, losses),
+      comparable_scope_count: scopeCount,
+      mean_tau_b: comparableTaus.length ? round6(comparableTaus.reduce((a, b) => a + b, 0) / comparableTaus.length) : null,
+      median_tau_b: comparableTaus.length ? round6(median(comparableTaus)) : null,
+      min_tau_b: comparableTaus.length ? round6(Math.min(...comparableTaus)) : null,
+      max_tau_b: comparableTaus.length ? round6(Math.max(...comparableTaus)) : null,
+      exact_sign_flip_p_value: exactSignFlipTwoSidedPValue(comparableTaus),
+      binomial_sign_p_value: scopeCount === 1 ? binomialSignTwoSidedPValue(wins, losses) : null,
     },
     complete_marginal_costs: {
       observed_delta_sums: deltaSums,

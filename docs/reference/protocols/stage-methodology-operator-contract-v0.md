@@ -114,8 +114,13 @@ Back-schedules authoritative confirmation reserve from `remaining_budget`
 bounds `null`) and evaluates candidate continuation routes:
 
 - Computes `latest_confirmation_start_minute` and `remaining_work_window_minutes`
-  accounting for `eval_duration_minutes`, `cooldown_minutes`, and
-  `pending_in_flight_minutes`.
+  from the remaining time and the duration of confirmation. The remaining
+  cooldown starts at the planning boundary and can overlap useful work.
+  `pending_in_flight_minutes` reserves time for a result the planned route
+  depends on. Confirmation starts at the later of candidate readiness and
+  cooldown expiry.
+- Uses the sum of known nonnegative token costs as a lower bound. A route
+  above the ceiling is infeasible even when its full cost is unknown.
 - Under LoopX's retained-incumbent rule, a regressed candidate does not replace
   the verified incumbent, so floor post-confirmation gain is
   $g_{\text{floor}} = \max(0, g_{\min})$ and break-even success probability
@@ -131,16 +136,18 @@ bounds `null`) and evaluates candidate continuation routes:
 
 Evaluates matched `treatment` and `control` continuations forked from an
 identical frozen `checkpoint` (`source_state_sha256`, `input_revision`,
-`evaluation_ref`, `checkpoint_at`):
+`evaluation_ref`, `fork_recorded_at`). Use the same `terminal_boundary_ref`
+on the checkpoint and both continuations.
 
-- Enforces non-interference and causal identification: distinct
-  `workspace_isolation_id`, matching checkpoint lineage, and zero post-fork
-  future context leakage (`decision_context_latest_at <= checkpoint_at`). Fails
-  closed when `strict_identification: true` (default) or excludes contaminated
-  pairs in audit mode (`--no-strict-identification`).
-- Separates behavioral adoption (`action_diverged`) from outcome noise, computes
-  direction-normalized $\hat{\tau}_B$ (`mean_tau_b`, `median_tau_b`), exact
-  two-sided paired sign-flip $p$-value (`exact_sign_flip_p_value`), and
+- Checks distinct, unreused `workspace_isolation_id` values, matching
+  checkpoint and terminal boundary, and an observed context time at or before
+  `fork_recorded_at` for each run. Strict mode rejects failed checks.
+  Audit mode excludes those pairs from the estimates.
+- Reports first-action divergence separately from score delta. Missing action
+  evidence is `action_unobserved`. Direction-normalized deltas combine only
+  within the same declared comparison scope, metric, unit, direction, input,
+  evaluator and terminal boundary. For one comparable scope, it computes the
+  mean and median delta, exact two-sided paired sign-flip $p$-value, and
   `complete_marginal_costs` across `wall_seconds`, `total_tokens`,
   `evaluator_runs`, `control_plane_requests`, and `recovery_events`.
 
@@ -150,14 +157,15 @@ Performs mechanism-diverse evolutionary selection over confirmed Explore Graph
 measurements without collapsing into single-mechanism hyperparameter tweaks or
 Goodharted proxy winners:
 
-- Groups confirmed `authoritative` candidates into `islands` by `mechanism_id`
-  (`execution_observation.executed_method_id` / `planned_method_id`, explicit
-  `mechanism_by_candidate`, or `candidate:<ref>`).
+- Groups confirmed `authoritative` candidates by the observed executed method
+  or explicit `mechanism_by_candidate` mapping. A candidate with unknown
+  mechanism keeps its score and can fill an elite slot. Crossovers and targeted
+  mutations use candidates with identified mechanisms.
 - **Island elitism (`elites`)**: preserves the top champion of each distinct
   mechanism island first (`selection_reason: "island_champion"`), filling
   remaining slots up to `elite_limit` by utility (`"utility_fill"`).
-- **Orthogonal crossover (`crossover_pairs`)**: pairs elites strictly across
-  distinct mechanism islands (`combine_orthogonal_mechanisms`).
+- **Crossover proposals (`crossover_pairs`)**: pairs elites across distinct
+  identified mechanisms. The combination requires its own validation.
 - **Bottleneck mutation (`mutation_targets`)**: emits `island_champion_refinement`
   or `tie_breaking_bottleneck_probe` targets on top elites.
 - **Goodhart proxy quarantine (`proxy_quarantine`)**: delegates proxy screening

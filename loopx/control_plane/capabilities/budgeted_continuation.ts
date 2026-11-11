@@ -243,29 +243,37 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
   }
 
   const latestConfirmStart = round6(wallMinutes - evalDuration);
-  const remainingWorkWindow = round6(wallMinutes - inFlight - cooldown - evalDuration);
+  const remainingWorkWindow = round6(latestConfirmStart - (cooldown > latestConfirmStart
+    ? Math.max(inFlight, cooldown) : inFlight));
 
-  const baselineConfirmMinutes = baselineInput.requires_authoritative_eval ? cooldown + evalDuration : 0;
-  const baselinePostProbeWall = baselineInput.implementation_minutes + baselineConfirmMinutes;
+  const confirmationMinutes = (route: NormalizedRouteInput, readyAt: number) =>
+    route.requires_authoritative_eval ? Math.max(0, cooldown - readyAt) + evalDuration : 0;
 
-  const evaluateOne = (route: NormalizedRouteInput, safeGain: number | null): EvaluatedContinuationRoute => {
-    const confirmMinutes = route.requires_authoritative_eval ? cooldown + evalDuration : 0;
-    const totalWall = round6(inFlight + route.probe_minutes + route.implementation_minutes + confirmMinutes);
+  const evaluateOne = (
+    route: NormalizedRouteInput, safeGain: number | null, baselineFeasible = false,
+  ): EvaluatedContinuationRoute => {
+    const readyAt = inFlight + route.probe_minutes + route.implementation_minutes;
+    const confirmMinutes = confirmationMinutes(route, readyAt);
+    const totalWall = round6(readyAt + confirmMinutes);
     const slack = round6(wallMinutes - totalWall);
     const wallFeasible = slack >= 0;
 
     const unknownDims: string[] = [];
+    const confirmationTokens = route.requires_authoritative_eval ? evalTokens : 0;
+    const knownTokenFloor = (route.expected_tokens ?? 0) + (confirmationTokens ?? 0);
     let totalTokens: number | null = null;
-    if (route.expected_tokens === null || (route.requires_authoritative_eval && evalTokens === null)) {
+    if (route.expected_tokens === null || confirmationTokens === null) {
       unknownDims.push("tokens");
     } else {
-      totalTokens = round6(route.expected_tokens + (route.requires_authoritative_eval ? (evalTokens ?? 0) : 0));
+      totalTokens = round6(knownTokenFloor);
     }
     let tokenFeasible: boolean | null = null;
     if (tokenBudget === null) {
       if (!unknownDims.includes("tokens")) unknownDims.push("token_budget");
+    } else if (knownTokenFloor > tokenBudget) {
+      tokenFeasible = false;
     } else if (totalTokens !== null) {
-      tokenFeasible = totalTokens <= tokenBudget;
+      tokenFeasible = true;
     }
 
     let slotFeasible: boolean | null = null;
@@ -285,8 +293,10 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
     else feasibilityStatus = "feasible";
 
     const feasible = feasibilityStatus === "feasible" || feasibilityStatus === "feasible_with_unknown_bounds";
-    const reversibleProbe = route.probe_minutes > 0 && feasible
-      && round6(inFlight + route.probe_minutes + Math.max(route.implementation_minutes + confirmMinutes, baselinePostProbeWall)) <= wallMinutes;
+    const fallbackReadyAt = inFlight + route.probe_minutes + baselineInput.probe_minutes + baselineInput.implementation_minutes;
+    const fallbackFinishesAt = fallbackReadyAt + confirmationMinutes(baselineInput, fallbackReadyAt);
+    const reversibleProbe = route.probe_minutes > 0 && feasible && baselineFeasible
+      && round6(fallbackFinishesAt) <= wallMinutes;
 
     const refGain = safeGain ?? 0;
     const dominated = feasible && safeGain !== null && route.expected_gain_max <= refGain;
@@ -349,7 +359,7 @@ export function evaluateBudgetedContinuationPlan(params: JsonObject): BudgetedCo
     || evaluatedBaseline.feasibility_status === "feasible_with_unknown_bounds";
   const effectiveSafeGain = baselineFeasible ? Math.max(0, evaluatedBaseline.expected_gain_expected) : 0;
 
-  const evaluatedCandidates = candidateInputs.map(c => evaluateOne(c, effectiveSafeGain));
+  const evaluatedCandidates = candidateInputs.map(c => evaluateOne(c, effectiveSafeGain, baselineFeasible));
 
   return assertMethodologyOperatorOutput("budgeted_continuation", {
     schema_version: BUDGETED_CONTINUATION_PLAN_SCHEMA,

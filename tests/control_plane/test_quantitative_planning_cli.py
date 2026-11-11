@@ -212,7 +212,11 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     assert rc == 0, evo_packet
     assert evo_packet["plan_count"] == 1
     evo_row = evo_packet["plans"][0]
-    assert evo_row["selection_status"] == "multi_island_evolution"
+    assert evo_row["selection_status"] == "mechanism_unresolved"
+    assert evo_row["counts"]["unknown_mechanism_candidates"] == 5
+    assert evo_row["counts"]["mechanism_islands"] == 0
+    assert evo_row["crossover_pairs"] == []
+    assert evo_row["elites"][0]["candidate_ref"] == "cand:c5"
     assert evo_row["proxy_fidelity_status"] == "frontier_bias_cliff"
     assert evo_row["counts"]["selected_elites"] == 3
     assert evo_row["proxy_quarantine"][0]["candidate_ref"] == "cand:proxy_star"
@@ -226,6 +230,7 @@ def test_yardstick_fidelity_cli_turn_context_and_api_across_providers(tmp_path: 
     compact_cue = compact_ctx["graph"]["work_yardsticks"][0]
     assert compact_cue["fidelity_status"] == "frontier_bias_cliff"
     assert compact_cue["paired_candidates"] == 5
+    assert "eligible authoritative comparison" in compact_cue["fidelity_guidance"]
 
     detail_ctx = explore_turn_context(
         registry_path=registry_path, runtime_root=runtime,
@@ -320,6 +325,18 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     assert plan_out["ok"] is True
     assert plan_out["candidate_routes"][0]["recommended_disposition"] == "probe_then_decide"
     assert plan_out["candidate_routes"][0]["total_expected_tokens"] is None
+    limited = json.loads(plan_doc.read_text(encoding="utf-8"))
+    limited["remaining_budget"]["token_budget"] = 100
+    limited["baseline_route"]["expected_tokens"] = 150
+    limited["candidate_routes"][0]["expected_tokens"] = 20
+    plan_doc.write_text(json.dumps(limited), encoding="utf-8")
+    plan_out = json.loads(invoke("explore", "budgeted-plan", "--document", str(plan_doc), "--format", "json").stdout)
+    assert plan_out["baseline_route"]["feasibility_status"] == "token_infeasible"
+    assert plan_out["baseline_route"]["total_expected_tokens"] is None
+    assert plan_out["effective_safe_gain"] == 0
+    assert plan_out["candidate_routes"][0]["recommended_disposition"] in {
+        "viable_direct_continuation", "probe_then_decide",
+    }
 
     # 3. `explore counterfactual-eval` (strict failure vs. audit mode)
     sha = "d" * 64
@@ -339,6 +356,9 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "metric": "score",
                             "unit": "pts",
                             "higher_is_better": True,
+                            "comparison_scope": "scope:fixed",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "fork_recorded_at": "2026-01-01T00:00:00Z",
                         },
                         "treatment": {
                             "arm_id": "arm:treat",
@@ -347,6 +367,8 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "input_revision": "rev-1",
                             "evaluation_ref": "eval:v1",
                             "workspace_isolation_id": "ws:treat",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "decision_context_latest_at": "2026-01-01T00:00:00Z",
                             "first_action_signature": "act:a",
                             "terminal_value": 88.0,
                             "valid_submission": True,
@@ -359,6 +381,8 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "input_revision": "rev-1",
                             "evaluation_ref": "eval:v1",
                             "workspace_isolation_id": "ws:ctrl",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "decision_context_latest_at": "2026-01-01T00:00:00Z",
                             "first_action_signature": "act:b",
                             "terminal_value": 75.0,
                             "valid_submission": True,
@@ -376,6 +400,9 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "metric": "score",
                             "unit": "pts",
                             "higher_is_better": True,
+                            "comparison_scope": "scope:fixed",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "fork_recorded_at": "2026-01-01T00:00:00Z",
                         },
                         "treatment": {
                             "arm_id": "arm:treat",
@@ -384,6 +411,8 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "input_revision": "rev-1",
                             "evaluation_ref": "eval:v1",
                             "workspace_isolation_id": "ws:SHARED",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "decision_context_latest_at": "2026-01-01T00:00:00Z",
                             "terminal_value": 99.0,
                             "valid_submission": True,
                             "costs": {},
@@ -395,6 +424,8 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
                             "input_revision": "rev-1",
                             "evaluation_ref": "eval:v1",
                             "workspace_isolation_id": "ws:SHARED",
+                            "terminal_boundary_ref": "horizon:paired",
+                            "decision_context_latest_at": "2026-01-01T00:00:00Z",
                             "terminal_value": 70.0,
                             "valid_submission": True,
                             "costs": {},
@@ -422,3 +453,14 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     assert audited["counts"]["valid_pairs"] == 1
     assert audited["counts"]["contaminated_pairs"] == 1
     assert audited["estimand_summary"]["mean_tau_b"] == 13.0
+    assert audited["pairs"][1]["identification_violations"] == ["shared_workspace_interference"]
+    clean = json.loads(cf_doc.read_text(encoding="utf-8"))["pairs"][0]
+    duplicate = {**clean, "pair_id": "pair:relabeled"}
+    cf_doc.write_text(json.dumps({"pairs": [clean, duplicate]}), encoding="utf-8")
+    audited = json.loads(invoke(
+        "explore", "counterfactual-eval", "--document", str(cf_doc),
+        "--no-strict-identification", "--format", "json",
+    ).stdout)
+    assert audited["counts"]["valid_pairs"] == 1
+    assert audited["pairs"][1]["identification_violations"] == ["reused_run_workspace"]
+    assert audited["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 20

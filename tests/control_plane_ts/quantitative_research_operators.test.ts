@@ -103,6 +103,21 @@ test("ScopedYardstickFidelity: detects Goodhart frontier_bias_cliff across oppos
   assert.equal(report.grants_execution_authority, false);
 });
 
+test("A proxy tie leaves the best candidate unresolved despite positive global concordance", () => {
+  const result = evaluateScopedYardstickFidelity({
+    node_id: "node-opt", authoritative: authMax, proxy: proxyMin,
+    findings: [
+      makeFinding("f1", 1, "cand:low", 10, 2),
+      makeFinding("f2", 2, "cand:a", 50, 1),
+      makeFinding("f3", 3, "cand:b", 60, 1),
+    ],
+  });
+  assert.equal(result.fidelity_status, "aligned_in_tested_scope");
+  assert.equal(result.frontier_neighborhood?.authoritative_best_candidate_ref, "cand:b");
+  assert.equal(result.frontier_neighborhood?.proxy_best_paired_candidate_ref, null);
+  assert.equal(result.frontier_neighborhood?.best_candidate_agrees, null);
+});
+
 test("BudgetedContinuationPlan: back-schedules confirmation deadlines, preserves null bounds, and computes exact p*", () => {
   const plan = evaluateBudgetedContinuationPlan({
     remaining_budget: {
@@ -152,7 +167,7 @@ test("BudgetedContinuationPlan: back-schedules confirmation deadlines, preserves
         summary: "Full rewrite missing confirmation deadline",
         kind: "switch_mechanism",
         probe_minutes: 30,
-        implementation_minutes: 95,
+        implementation_minutes: 96,
         expected_tokens: 120000,
         requires_authoritative_eval: true,
         expected_gain_min: 0.0,
@@ -162,14 +177,15 @@ test("BudgetedContinuationPlan: back-schedules confirmation deadlines, preserves
     ],
   });
 
-  // 180 - 45 = 135 latest confirm start; 180 - 10 - 15 - 45 = 110 remaining work window
+  // The 15-minute cooldown starts now and overlaps work after the pending result.
   assert.equal(plan.confirmation.latest_confirmation_start_minute, 135);
-  assert.equal(plan.confirmation.remaining_work_window_minutes, 110);
+  assert.equal(plan.confirmation.remaining_work_window_minutes, 125);
   assert.equal(plan.effective_safe_gain, 0.02);
 
   const probeRoute = plan.candidate_routes.find(r => r.route_id === "route:reversible_probe_switch")!;
   assert.equal(probeRoute.feasibility_status, "feasible_with_unknown_bounds");
   assert.equal(probeRoute.total_expected_tokens, null, "Unknown token cost stays null, never 0");
+  assert.equal(probeRoute.total_wall_minutes, 115);
   assert.equal(probeRoute.reversible_probe_window_feasible, true);
   assert.equal(probeRoute.recommended_disposition, "probe_then_decide");
   // Retained-incumbent floor max(0, -0.02) = 0:
@@ -196,6 +212,8 @@ test("CounterfactualContinuations: enforces checkpoint & workspace non-interfere
       metric: "rmse",
       unit: "error",
       higher_is_better: false,
+      comparison_scope: "scope:rmse-v1",
+      terminal_boundary_ref: "horizon:one-hour",
       incumbent_at_fork: 1.50,
       fork_recorded_at: "2026-07-01T12:00:00Z",
     },
@@ -206,6 +224,7 @@ test("CounterfactualContinuations: enforces checkpoint & workspace non-interfere
       input_revision: "rev-1",
       evaluation_ref: "eval:v1",
       workspace_isolation_id: `ws:${id}:treat`,
+      terminal_boundary_ref: "horizon:one-hour",
       decision_context_latest_at: "2026-07-01T12:00:00Z",
       first_action_signature: "act:switch_solver",
       terminal_value: treatLoss,
@@ -220,6 +239,7 @@ test("CounterfactualContinuations: enforces checkpoint & workspace non-interfere
       input_revision: "rev-1",
       evaluation_ref: "eval:v1",
       workspace_isolation_id: `ws:${id}:ctrl`,
+      terminal_boundary_ref: "horizon:one-hour",
       decision_context_latest_at: "2026-07-01T11:59:59Z",
       first_action_signature: "act:tune_hyperparams",
       terminal_value: ctrlLoss,
@@ -245,6 +265,17 @@ test("CounterfactualContinuations: enforces checkpoint & workspace non-interfere
   assert.equal(cleanEval.estimand_summary.mean_tau_b, 0.2625);
   assert.equal(cleanEval.estimand_summary.exact_sign_flip_p_value, 0.125);
   assert.equal(cleanEval.complete_marginal_costs.missing_pair_counts.recovery_events, 4);
+  const accuracy = makePair("p5", "task:a", 81, 80, {treatment: {first_action_signature: null}});
+  Object.assign(accuracy.checkpoint, {metric: "accuracy", unit: "percentage-points", higher_is_better: true});
+  const mixed = evaluateCounterfactualContinuations({pairs: [pairs[0], accuracy]});
+  assert.equal(mixed.estimand_summary.comparable_scope_count, 2);
+  assert.equal(mixed.estimand_summary.mean_tau_b, null);
+  assert.equal(mixed.estimand_summary.exact_sign_flip_p_value, null);
+  assert.deepEqual(mixed.by_task.map(row => row.mean_tau_b).sort(), [0.3, 1]);
+  assert.equal(mixed.pairs[1]?.outcome_classification, "action_unobserved");
+  assert.equal(mixed.pairs[1]?.tau_b_direction_normalized, 1);
+  const missingClock = makePair("p6", "task:a", 0.9, 1.2, {control: {decision_context_latest_at: null}});
+  assert.throws(() => evaluateCounterfactualContinuations({pairs: [missingClock]}), /missing_context_timing/);
   assert.equal(cleanEval.complete_marginal_costs.observed_delta_sums.evaluator_runs, -4);
 
   // Shared workspace_isolation_id + post-fork future context leakage:

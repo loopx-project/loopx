@@ -4,6 +4,7 @@
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {
+  type ExploreMeasurement,
   extractVerifiedFindingMeasurements,
   matchesExploreMetricProfile,
   normalizeExploreMetricProfile,
@@ -191,7 +192,10 @@ function linearFit(xs: readonly number[], ys: readonly number[]) {
   return {slope: round6(slope), intercept: round6(intercept), residualMad: round6(median(residuals)), r2};
 }
 
-export function evaluateScopedYardstickFidelity(params: JsonObject): ScopedYardstickFidelity {
+export function evaluateScopedYardstickFidelity(
+  params: JsonObject,
+  includeMeasurement?: (finding: JsonObject, measurement: ExploreMeasurement) => boolean,
+): ScopedYardstickFidelity {
   const nodeId = requireOpaqueMethodologyRef(params.node_id, "node_id");
   const authoritative = normalizeYardstickMetricProfile(params.authoritative, "authoritative profile");
   const proxy = params.proxy === null || params.proxy === undefined
@@ -215,6 +219,7 @@ export function evaluateScopedYardstickFidelity(params: JsonObject): ScopedYards
     const findingId = String(finding.finding_id ?? finding.result_id ?? "");
     if (!findingId) continue;
     for (const m of extractVerifiedFindingMeasurements(finding).measurements) {
+      if (includeMeasurement && !includeMeasurement(finding, m)) continue;
       if (matchesExploreMetricProfile(m, authoritative)) {
         if (m.value === null) authUnknowns++;
         else {
@@ -368,10 +373,10 @@ export function evaluateScopedYardstickFidelity(params: JsonObject): ScopedYards
     frontierSlice.map(p => authUtil(p.authoritative_value)),
     frontierSlice.map(p => proxyUtil(p.proxy_value)),
   );
-  const authBest = aUtils[0]! > aUtils[n - 1]! ? pairedAll[0]!.candidate_ref : null;
+  const authBest = aUtils[0]! > aUtils[1]! ? pairedAll[0]!.candidate_ref : null;
   const byProxyDesc = [...pairedAll].sort((a, b) => proxyUtil(b.proxy_value) - proxyUtil(a.proxy_value)
     || a.candidate_ref.localeCompare(b.candidate_ref));
-  const proxyBest = proxyUtil(byProxyDesc[0]!.proxy_value) > proxyUtil(byProxyDesc[n - 1]!.proxy_value)
+  const proxyBest = proxyUtil(byProxyDesc[0]!.proxy_value) > proxyUtil(byProxyDesc[1]!.proxy_value)
     ? byProxyDesc[0]!.candidate_ref
     : null;
   const bestAgrees = authBest !== null && proxyBest !== null ? authBest === proxyBest : null;

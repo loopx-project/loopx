@@ -402,6 +402,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
               fidelity_status: fidelity.fidelity_status,
               paired_candidates: (fidelity.counts as JsonObject).paired_candidates,
             } : {}),
+            ...(cue.fidelity_guidance ? {fidelity_guidance: cue.fidelity_guidance} : {}),
             details_command: resultRead("--result-node", String(cue.node_id))};
         }), omitted_work_yardsticks: boundedWorkCues.omitted_count,
           work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),

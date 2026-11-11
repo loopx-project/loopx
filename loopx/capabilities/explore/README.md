@@ -406,7 +406,7 @@ loopx --format json explore budgeted-plan --document budgeted_plan.json
 # Same-checkpoint paired counterfactual evaluation (tau_B, exact sign-flip p-value, workspace & clock isolation)
 loopx --format json explore counterfactual-eval --document counterfactual_pairs.json
 
-# Mechanism-diverse island elitism, orthogonal mechanism crossover pairs, and Goodhart proxy-cliff quarantine
+# Mechanism-diverse elites, candidate combinations to test, and proxy-cliff quarantine
 loopx --format json explore evolutionary-plan --goal-id GOAL [--node-id NODE] [--elite-limit 4]
 ```
 

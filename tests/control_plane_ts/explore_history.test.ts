@@ -43,6 +43,34 @@ test("parent grouping and 200 nodes do not manufacture supporting evidence or dr
   assert.equal(layoutExploreHistory(projectExploreHistory(cyclic, goal).nodes, []).length, 2);
 });
 
+test("the current Yardstick calibration follows the last version of each finding", () => {
+  const authoritative = {metric: "score", unit: "points", higher_is_better: true,
+    comparison_scope: "native", input_revision: "revision-1", evaluation_ref: "eval:native"};
+  const proxy = {...authoritative, comparison_scope: "local", evaluation_ref: "eval:local"};
+  const measured = [1, 2, 3].map(value => {
+    const refs = [`ev:outcome:${value}`, `ev:local:${value}`];
+    return event({event_id: `e${value + 1}`, event_kind: "finding", result_id: `f${value}`, node_id: "route",
+      agent_id: "agent-1", evidence_refs: refs, status: "confirmed",
+      measurements: [{...authoritative, candidate_ref: `cand:${value}`, evidence_ref: refs[0], value},
+        {...proxy, candidate_ref: `cand:${value}`, evidence_ref: refs[1], value}],
+      ...(value === 1 ? {work_yardstick: {
+        binding: {goal_id: goal, agent_id: "agent-1", todo_id: "todo_test", turn_instance_id: "turn-1"},
+        decision: {schema_version: "work_yardstick_decision_v0",
+          target: {summary: "Improve the accepted score", scope: "Current route", acceptance_ref: "acceptance:score"},
+          authoritative, proxy, counterevidence_refs: [], prior_finding_id: null,
+          next_action: {method_id: "method:compare", reason: "Compare both measures", cost_bound: "One evaluation"}},
+      }} : {}),
+    });
+  });
+  const rows = [event(), ...measured];
+  assert.equal(projectExploreHistory(rows, goal).yardstickFidelityByEvent.size, 0);
+  assert.equal(projectExploreHistory(rows, goal, true).yardstickFidelityByEvent.get("e2")!.counts.paired_candidates, 3);
+  const withdrawal = {...measured[2]!, event_id: "e5", status: "refuted", measurements: undefined};
+  const revised = projectExploreHistory([...rows, withdrawal], goal, true);
+  assert.equal(revised.yardstickFidelityByEvent.get("e2")!.counts.paired_candidates, 2);
+  assert.ok(revised.events.find(row => row.event_id === "e4")?.measurements?.length);
+});
+
 test("explicit links and unattached findings remain source records; missing anchors and times stay unknown", () => {
   const rows = [event({recorded_at: "unknown"}),
     event({event_id: "e2", event_kind: "edge", result_id: "relation", from_node: "route", to_node: "unloaded", edge_type: "refutes"}),
