@@ -356,6 +356,11 @@ function boundProject(params: JsonObject, row: JsonObject): Record<string, strin
   return projects[0];
 }
 
+function matchesStewardContext(saved: JsonObject, context: JsonObject, row: JsonObject): boolean {
+  return isDeepStrictEqual({...saved, goal_ids: []}, {...context, goal_ids: []})
+    && (row.goal_scope === "all_registered"
+      || normalizeStewardGoalScope(saved.goal_ids).every(goal => (row.goal_ids as string[]).includes(goal)));
+}
 
 export function resolveBoundConversation(params: JsonObject): JsonObject {
   const current = state(params.current);
@@ -399,9 +404,7 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     // JSON object member order is not identity. Preserve every value and field
     // check while accepting equivalent contexts from another JSON writer.
     const matches = row.context_kind === "steward"
-      ? isDeepStrictEqual({...saved, goal_ids: []}, {...context, goal_ids: []})
-        && (row.goal_scope === "all_registered" || normalizeStewardGoalScope(saved.goal_ids).every(g => (row.goal_ids as string[]).includes(g)))
-      : isDeepStrictEqual(saved, context);
+      ? matchesStewardContext(saved, context, row) : isDeepStrictEqual(saved, context);
     if (!matches) throw new EffectRuntimeRequestError("bound Session context changed");
   }
   const channel = row.context_kind === "steward"
@@ -691,7 +694,38 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       ...(background.length ? {background_turn_ids: background} : {}),
       response_code: command === "new" ? "new_session" : turn || background.length ? "stop_requested" : "no_active_turn"};
   }
-  return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+  const adoptionHold = planStewardBindingAdoptionHold(params, row);
+  return adoptionHold ?? {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
+}
+
+function planStewardBindingAdoptionHold(params: JsonObject, request: JsonObject): JsonObject | null {
+  if (params.steward_adoption_session == null || request.status !== "prepared"
+      || request.command !== null || params.agent_target != null) return null;
+  const original = requireJsonObject(params.steward_adoption_session, "original steward Session");
+  const row = binding(params.binding);
+  const allocation = original.manager_executor_allocation as JsonObject | undefined;
+  const endpoint = original.executor_endpoint_id;
+  if (row.context_kind !== "steward" || row.audience === "group"
+      || !["antigravity", "codex"].includes(String(row.executor_endpoint_id))
+      || !["antigravity", "codex"].includes(String(endpoint))
+      || original.agent_id !== endpoint || endpoint === row.executor_endpoint_id
+      || !["preferred", "pinned"].includes(String(allocation?.selection_policy))
+      || !["ready", "busy", "stale", "resuming"].includes(String(original.status))) return null;
+  const source = requireJsonObject(request.source, "original owner source");
+  const context = requireJsonObject(params.context, "verified steward context");
+  const saved = requireJsonObject(original.steward_context, "saved steward context");
+  if (request.binding_id !== row.binding_id || source.private_human_message !== true
+      || source.sender_ref !== row.operator_ref || context.operator_ref !== row.operator_ref
+      || context.binding_id !== row.binding_id || context.provider_ref !== row.provider_ref
+      || context.project_ref !== row.project_ref || context.source_ref !== source.source_ref
+      || context.audience !== "bound_owner" || context.grant !== "portfolio_read"
+      || original.goal_id !== "loopx-manager" || original.session_mode !== "managed_runtime"
+      || original.project_context != null
+      || original.channel_id !== `manager.external.native.${row.binding_id}.${source.source_ref}`
+      || !matchesStewardContext(saved, context, row)) {
+    throw new EffectRuntimeRequestError("the original steward Session belongs to another source");
+  }
+  return {operation: "hold_steward_binding", session_id: sessionIdentity(original.session_id, "original steward Session")};
 }
 
 function pureResultText(response: JsonObject | null, allowEmpty = false): boolean {

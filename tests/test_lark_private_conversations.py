@@ -20,6 +20,90 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+@pytest.mark.parametrize("outcome", ["adopted", "closed", "interrupted"])
+def test_private_steward_holds_original_request_during_executor_adoption(tmp_path, monkeypatch, outcome):
+    from test_native_steward_private import finish, steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        event = provider.event("steward-app", "steward-original", "Read the original conversation")
+        transport.admit("steward-app", event)
+        original_ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(original_ref)
+        sid = original["session_id"]
+        assert finish(runtime, original)["status"] == "completed"
+        original_path = transport.root / f"{original_ref}.json"
+        assert transport.reconcile_request(original_path) == 1
+        original_delivery = original_path.read_bytes()
+
+        session = store.load_session(sid)
+        session["manager_executor_allocation"] = {
+            "schema_version": 1, "selection_policy": "pinned" if outcome == "interrupted" else "preferred"}
+        store._session_path(sid).write_text(json.dumps(session))
+        bindings = transport.bindings
+        adopted = bindings.read()
+        stale = {**adopted, "bindings": [
+            {**row, "executor_endpoint_id": "antigravity"} if row["binding_id"] == binding["binding_id"] else row
+            for row in adopted["bindings"]]}
+        bindings.path.write_text(json.dumps(stale))
+        pending_event = provider.event("steward-app", "steward-awaiting-executor", "Continue in the same conversation")
+        pending_ref = identity_ref(binding["provider_ref"], pending_event["message_id"])
+        pending_path = transport.root / f"{pending_ref}.json"
+        calls_before = capture.read_bytes()
+        writes_before = list(provider.writes)
+
+        def open_obsolete_executor(**kwargs):
+            raise AssertionError(f"admission tried to open a replacement Session: {kwargs['agent_id']}")
+
+        monkeypatch.setattr(runtime, "open_session", open_obsolete_executor)
+        assert transport.admit("steward-app", pending_event)["status"] == "admission_deferred"
+        held = transport.core.read_request(pending_ref)
+        assert held["status"] == "prepared" and held["session_id"] == sid and held["turn_id"] is None
+        assert held["response_code"] == "steward_executor_binding_pending"
+        provider_checks = len(provider.calls)
+        assert transport.reconcile_request(pending_path) == 0
+        assert len(provider.calls) == provider_checks
+        assert transport.core.read_request(pending_ref) == held
+        assert capture.read_bytes() == calls_before and provider.writes == writes_before
+        assert not store.queued_turns(sid)
+
+        if outcome == "closed":
+            assert runtime.close_session(sid)
+        bindings.path.write_text(json.dumps({**adopted, "revision": adopted["revision"] + 1}))
+        if outcome == "interrupted":
+            def interrupt_admission_projection(*args, **kwargs):
+                raise OSError("interrupted after Core admission")
+
+            with monkeypatch.context() as interruption:
+                interruption.setattr(transport, "_record_admission", interrupt_admission_projection)
+                with pytest.raises(OSError, match="after Core admission"):
+                    transport.reconcile_request(pending_path)
+            assert transport.core.read_request(pending_ref)["status"] == "accepted"
+            assert json.loads(pending_path.read_text())["status"] == "captured"
+        transport.reconcile_request(pending_path)
+        settled = transport.core.read_request(pending_ref)
+        assert settled["session_id"] == sid and "response_code" not in settled
+        if outcome == "closed":
+            assert settled["status"] == "rejected" and settled["turn_id"] is None
+            assert not store.turn_for_client(sid, f"external-{pending_ref}")
+            assert [row["session_id"] for row in store.list_sessions()] == [sid]
+        else:
+            assert settled["status"] == "accepted"
+            assert finish(runtime, settled)["status"] == "completed"
+            transport.reconcile_request(pending_path)
+            delivered = json.loads(pending_path.read_text())
+            assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
+            assert store.turn_for_client(sid, f"external-{pending_ref}")["turn_id"] == settled["turn_id"]
+            writes = list(provider.writes)
+            transport.reconcile_request(pending_path)
+            assert provider.writes == writes
+            assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+        assert original_path.read_bytes() == original_delivery
+    finally:
+        fixture.close()
+
+
 def test_historical_context_is_explicitly_bounded_and_never_decodes_unread_attachments():
     rows = [{"message_id": f"m-{i}", "created_at": f"2026-01-01T00:00:{i:02}+00:00",
         "role": "agent", "text": f"Complete original answer {i}"} for i in range(14)]
