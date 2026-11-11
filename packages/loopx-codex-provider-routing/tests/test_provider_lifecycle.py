@@ -285,6 +285,52 @@ def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, 
         thread.join(5)
 
 
+@pytest.mark.parametrize("saved_policy", [
+    {},
+    {"policy": None},
+    {"policy": []},
+    {"policy": {"enabled": "true"}},
+], ids=["missing", "null", "list", "invalid-enabled"])
+@pytest.mark.parametrize("operation", ["doctor", "status"])
+def test_provider_readiness_reports_invalid_saved_policy(owner, tmp_path, monkeypatch, saved_policy, operation):
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    provider = importlib.import_module("loopx_codex_provider_routing.provider")
+    probe = native.NativeAccounts(tmp_path / "probe")
+    probe.root.mkdir(mode=0o700, parents=True)
+    native.atomic(probe.path, {"schema_version": native.SCHEMA, "adapter": {}, **saved_policy})
+    before = probe.path.read_bytes()
+    credentials = {"token": "worker-" + "w" * 32, "steward_token": "steward-" + "s" * 32}
+    server = relay.RelayServer(owner, {"port": 0, **credentials})
+    native.atomic(probe.root / "api-relay.json", {
+        "schema_version": relay.SCHEMA, "port": server.server_port, **credentials,
+    })
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    monkeypatch.setenv("PYTHONPATH", str(SRC))
+    command = [sys.executable, "-m", "loopx_codex_provider_routing.provider",
+               "--runtime-root", str(tmp_path / "probe")]
+    payload = None
+    if operation == "doctor":
+        command.append("--doctor")
+    else:
+        payload = json.dumps({"schema_version": provider.SCHEMA, "operation": "status"})
+    try:
+        result = subprocess.run(command, input=payload, capture_output=True, text=True, timeout=8)
+        assert result.returncode == 1 and not result.stderr, result.stderr
+        status = json.loads(result.stdout)
+        assert status["ok"] is False and status["installation_ready"] is False
+        assert status["adapter_readiness"] == {"state": "state_untrusted", "ready": False}
+        assert status["same_relay_instance"] is True
+        assert all(observation["ready"] for observation in status["consumer_readiness"].values())
+        assert probe.path.read_bytes() == before
+        assert all(token not in result.stdout for token in credentials.values())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
 @pytest.mark.parametrize("invalid", ["shared", "", "invalid\r\nheader"])
 def test_reconcile_refuses_invalid_steward_credential_before_drain(owner, monkeypatch, invalid):
     life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")

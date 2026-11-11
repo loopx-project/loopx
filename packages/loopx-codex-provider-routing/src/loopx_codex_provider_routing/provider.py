@@ -14,11 +14,14 @@ SCHEMA = "loopx_native_account_provider_v1"
 
 
 def adapter_readiness(owner: NativeAccounts) -> dict:
-    state = owner._load()
-    adapter = state.get("adapter")
-    if adapter is None or state["policy"].get("enabled") is not True:
-        return {"state": "not_required", "ready": True}
     try:
+        state = owner._load()
+        saved_policy = state.get("policy")
+        if not isinstance(saved_policy, dict) or type(saved_policy.get("enabled")) is not bool:
+            return {"state": "state_untrusted", "ready": False}
+        adapter = state.get("adapter")
+        if adapter is None or not saved_policy["enabled"]:
+            return {"state": "not_required", "ready": True}
         checked_adapter(adapter, Path.home())
     except HostError as error:
         return {"state": error.code, "ready": False}

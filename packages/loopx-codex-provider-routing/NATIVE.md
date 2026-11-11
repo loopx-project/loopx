@@ -77,6 +77,8 @@ Version 0.15.8 reports `adapter_readiness` alongside relay readiness. With an
 enabled account policy and a saved adapter, the local probe verifies the same
 owner-file pins and native route as Chat model preparation. A stale pin reports
 `adapter_changed` and fails installation readiness even when both relays answer.
+A malformed saved policy reports `state_untrusted` and retains the two relay
+observations.
 After adoption of the reviewed package, use the existing **Reconnect** action
 with the current policy and check the live status again. For package-only
 verification before adoption, pass a disposable `--runtime-root` to `--doctor`.
