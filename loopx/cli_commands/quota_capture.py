@@ -389,7 +389,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
-                    initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
+                    initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
             return navigation
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             if complete:

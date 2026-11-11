@@ -1410,6 +1410,44 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     assert not registry.exists() and not runtime.exists()
 
 
+def test_stateless_saved_initial_read_bounds_the_default_cli_output(tmp_path):
+    import subprocess
+
+    requirement = "Preserve the original acceptance and stop. 保留原要求。\n" * 850
+    receipt = {"event_id": "original-receipt", "turn_instance_id": "original-turn"}
+    source = (tmp_path / "original.json").resolve()
+    raw = json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": receipt, "effective_action": "normal_run",
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0", "agent_channel": {
+            "work_context": {"sources": [{"source": "goal_state", "ordering": "before_work",
+                "content": {"text": requirement, "state_file": "goal.md"}}]}}}}, ensure_ascii=False).encode()
+    source.write_bytes(raw)
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json"]
+    argv = ["quota", "context-project", "--context-delivery", "auto", "--delta-delivery", "off",
+        "--initial-read", "--capture-file", str(source), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", receipt["turn_instance_id"]]
+    body = bytearray()
+    for _ in range(16):
+        result = subprocess.run([*base, *argv], cwd=tmp_path, capture_output=True, check=True)
+        assert len(result.stdout) <= 12000
+        page = json.loads(result.stdout)
+        assert page["ok"] and page["offset"] == len(body)
+        body.extend(page["content"].encode())
+        if page["eof"]:
+            assert page["total_bytes"] == len(body)
+            break
+        reader = shlex.split(page["next_command"])
+        argv = reader[reader.index("quota"):]
+    else:
+        pytest.fail("stateless first read did not complete within its bounded fixture")
+    chosen = {row["pointer"]: row["value"] for row in json.loads(body)["selections"]}
+    assert chosen["/heartbeat_receipt"] == receipt
+    assert chosen["/interaction_contract/agent_channel/work_context/sources/0/content/text"] == requirement
+    assert source.read_bytes() == raw and not registry.exists() and not (runtime / "goals").exists()
+
+
 def test_attached_selected_page_uses_the_same_window_as_its_reader(tmp_path, monkeypatch):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
