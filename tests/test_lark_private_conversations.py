@@ -2469,6 +2469,64 @@ def _drain_app_projection(transport, predicate):
         time.sleep(.02)
 
 
+@pytest.mark.parametrize("fault", ["truncated_json", "invalid_utf8", "vanished_during_scan"])
+def test_unreadable_private_delivery_does_not_hold_other_original_replies(ordinary, monkeypatch, fault):  # noqa: F811
+    from loopx.extensions.lark import private_delivery_discovery
+
+    _store, runtime, provider, transport = connect(ordinary)
+    originals = {}
+    try:
+        for profile in ("notes-app", "steward-app"):
+            event = provider.event(profile, f"independent-{profile}", f"Complete the original {profile} request")
+            transport.admit(profile, event)
+            request = identity_ref(transport._binding(profile)["provider_ref"], event["message_id"])
+            native = transport.core.read_request(request)
+            result = runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=10)
+            assert result["status"] == "completed"
+            originals[profile] = (transport.root / f"{request}.json", event)
+
+        held, held_event = originals["notes-app"]
+        healthy, healthy_event = originals["steward-app"]
+        saved = held.read_bytes()
+        with monkeypatch.context() as damage:
+            if fault == "vanished_during_scan":
+                fingerprint = private_delivery_discovery.file_change_fingerprint
+
+                def vanished(path):
+                    if path == held:
+                        raise FileNotFoundError(path)
+                    return fingerprint(path)
+
+                damage.setattr(private_delivery_discovery, "file_change_fingerprint", vanished)
+            else:
+                held.write_bytes(b'{"status":' if fault == "truncated_json" else b"\xff")
+            unchanged = held.read_bytes()
+            for discover in (transport.pending_body_paths, transport.pending_delivery_paths):
+                assert discover() == [healthy]
+
+            requests = ordinary[4].read_bytes()
+            writes_before = len(provider.writes)
+            transport.reconcile()
+            final = json.loads(healthy.read_text())["deliveries"]["terminal"]
+            assert final["verified"]
+            assert provider.messages[final["attempt"]["message_ref"]]["chat_id"] == healthy_event["chat_id"]
+            assert held.read_bytes() == unchanged
+            assert all(profile != "notes-app" for profile, _ in provider.writes[writes_before:])
+
+        if fault != "vanished_during_scan":
+            held.write_bytes(saved)
+        transport.reconcile()
+        final = json.loads(held.read_text())["deliveries"]["terminal"]
+        assert final["verified"]
+        assert provider.messages[final["attempt"]["message_ref"]]["chat_id"] == held_event["chat_id"]
+        sent = list(provider.writes)
+        transport.reconcile()
+        assert provider.writes == sent
+        assert ordinary[4].read_bytes() == requests
+    finally:
+        runtime.close()
+
+
 def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     sid = original["session_id"]
