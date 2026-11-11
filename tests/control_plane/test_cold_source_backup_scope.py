@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -138,6 +140,48 @@ def test_scoping_does_not_hide_unsafe_unrelated_members_or_changed_artifact(tmp_
     archive.write_bytes(archive.read_bytes() + b"changed")
     with pytest.raises(ValueError, match="archive_changed"):
         read_cold_source_backup(manifest, source_paths=[tmp_path / "runtime/goals/example"])
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("field", ["st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"])
+def test_archive_identity_change_policy(tmp_path, monkeypatch, platform, field):
+    from loopx.control_plane.coordination import cold_source_backup
+
+    manifest = backup(tmp_path)
+    archive = tmp_path / "state.tar.gz"
+    archive_stat = archive.stat()
+    original_fstat = os.fstat
+    observations = 0
+
+    def descriptor_stat(fd):
+        nonlocal observations
+        observed = original_fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (archive_stat.st_dev, archive_stat.st_ino):
+            return observed
+        observations += 1
+        if observations != 2:
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[field] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(cold_source_backup, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    if platform == "nt" and field == "st_ctime_ns":
+        witness = read_cold_source_backup(manifest)
+        assert witness["archive_sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+        assert witness["archive_size_bytes"] == archive_stat.st_size
+        assert witness["members"] == [
+            {"archive_path": "runtime/goals/example/state.md",
+             "sha256": hashlib.sha256(b"retained source").hexdigest()},
+            {"archive_path": "runtime/goals/example/task-leases/settled.json",
+             "sha256": hashlib.sha256(b"retained lease").hexdigest()},
+        ]
+    else:
+        with pytest.raises(ColdSourceBackupError, match="cold_import_backup_changed_retry"):
+            read_cold_source_backup(manifest)
+    assert observations == 2
 
 
 def test_streaming_witness_has_no_old_expanded_byte_ceiling(tmp_path):

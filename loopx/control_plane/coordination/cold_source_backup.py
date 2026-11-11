@@ -85,9 +85,13 @@ def _open_regular(path: Path) -> tuple[BinaryIO, os.stat_result]:
 
 
 def _same_file(before: os.stat_result, after: os.stat_result) -> bool:
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+    # Windows ctime alone does not reliably identify a file change.
+    if os.name != "nt":
+        identity_fields += ("st_ctime_ns",)
     return all(
         getattr(before, field) == getattr(after, field)
-        for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        for field in identity_fields
     )
 
 
