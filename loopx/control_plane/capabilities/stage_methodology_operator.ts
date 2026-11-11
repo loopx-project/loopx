@@ -491,7 +491,7 @@ function inspectTreeForInvariants(
   if (value !== null && typeof value === "object") {
     const row = value as Record<string, unknown>;
     for (const [key, child] of Object.entries(row)) {
-      if (depth === 0 && FORBIDDEN_AUTHORITY_KEYS.has(key)) {
+      if (FORBIDDEN_AUTHORITY_KEYS.has(key)) {
         violations.push(`${path}.${key}: methodology operator cannot emit authority/gate field`);
       }
       inspectTreeForInvariants(child, `${path}.${key}`, violations, depth + 1);

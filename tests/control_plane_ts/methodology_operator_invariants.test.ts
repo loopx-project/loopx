@@ -216,6 +216,20 @@ test("Bug Class 5: 5-stage operator catalog completeness and non-escalation outp
   });
   assert.equal(clean.valid, true);
 
+  const nestedAuthority = verifyMethodologyOperatorOutput({
+    operator_id: "scoped_yardstick_fidelity",
+    output: {
+      advisory_only: true,
+      grants_execution_authority: false,
+      result: {should_run: true, points: [{admin_bypass: false}]},
+    },
+  });
+  assert.equal(nestedAuthority.valid, false);
+  assert.deepEqual(nestedAuthority.violations, [
+    "$.result.should_run: methodology operator cannot emit authority/gate field",
+    "$.result.points[0].admin_bypass: methodology operator cannot emit authority/gate field",
+  ]);
+
   const escalated = verifyMethodologyOperatorOutput({
     operator_id: "rogue_op",
     output: {

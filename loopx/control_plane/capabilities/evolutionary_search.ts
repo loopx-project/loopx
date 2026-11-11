@@ -17,7 +17,6 @@ import {
   assertMethodologyOperatorOutput,
   projectBoundedMethodologyItems,
   requireOpaqueMethodologyRef,
-  roundMethodologyMetric as round6,
 } from "./stage_methodology_operator.ts";
 import {
   evaluateScopedYardstickFidelity,
@@ -179,7 +178,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
         methodId ??
         previous?.mechanism_id ??
         null;
-      const utility = round6(authoritative.higher_is_better ? m.value : -m.value);
+      const utility = authoritative.higher_is_better ? m.value : -m.value;
       byCandidate.set(m.candidate_ref, {
         candidate_ref: m.candidate_ref,
         mechanism_id: mechanismId,
@@ -268,7 +267,7 @@ export function evaluateEvolutionaryPopulation(params: JsonObject): Evolutionary
         parent_b_candidate_ref: b.candidate_ref,
         parent_b_mechanism_id: b.mechanism_id,
         parent_b_value: b.authoritative_value,
-        combined_utility_score: round6(a.utility_score + b.utility_score),
+        combined_utility_score: a.utility_score + b.utility_score,
         synthesis_goal: "test_mechanism_combination",
       });
     }

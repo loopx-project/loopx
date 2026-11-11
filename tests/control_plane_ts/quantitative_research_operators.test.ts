@@ -3,6 +3,7 @@ import test from "node:test";
 import {evaluateScopedYardstickFidelity} from "../../loopx/control_plane/capabilities/yardstick_fidelity.ts";
 import {evaluateBudgetedContinuationPlan} from "../../loopx/control_plane/capabilities/budgeted_continuation.ts";
 import {evaluateCounterfactualContinuations} from "../../loopx/control_plane/capabilities/counterfactual_continuation.ts";
+import {evaluateEvolutionaryPopulation} from "../../loopx/control_plane/capabilities/evolutionary_search.ts";
 
 const authMax = {
   metric: "heldout_score",
@@ -116,6 +117,30 @@ test("A proxy tie leaves the best candidate unresolved despite positive global c
   assert.equal(result.frontier_neighborhood?.authoritative_best_candidate_ref, "cand:b");
   assert.equal(result.frontier_neighborhood?.proxy_best_paired_candidate_ref, null);
   assert.equal(result.frontier_neighborhood?.best_candidate_agrees, null);
+});
+
+test("Tied authoritative ranks are invariant to candidate names and preserve the proxy follow-up", () => {
+  for (const winner of ["cand:d", "cand:a"]) {
+    const findings = [
+      makeFinding("f1", 1, "cand:b", 100, 2),
+      makeFinding("f2", 2, "cand:c", 100, 1),
+      makeFinding("f3", 3, winner, 100, 0),
+      makeFinding("f4", 4, "cand:z", 90, 3),
+      makeFinding("f5", 5, "cand:proxy-only", undefined, -1),
+    ];
+    const request = {node_id: "node-opt", authoritative: authMax, proxy: proxyMin, findings};
+    const fidelity = evaluateScopedYardstickFidelity(request);
+    assert.equal(fidelity.rank_concordance?.discordant_pairs, 0);
+    assert.equal(fidelity.frontier_neighborhood?.authoritative_best_candidate_ref, null);
+    assert.equal(fidelity.frontier_neighborhood?.proxy_best_paired_candidate_ref, winner);
+    assert.equal(fidelity.fidelity_status, "aligned_in_tested_scope");
+
+    const population = evaluateEvolutionaryPopulation(request);
+    assert.deepEqual(
+      population.proxy_quarantine.map(row => [row.candidate_ref, row.disposition]),
+      [["cand:proxy-only", "confirm_before_breeding"]],
+    );
+  }
 });
 
 test("BudgetedContinuationPlan: back-schedules confirmation deadlines, preserves null bounds, and computes exact p*", () => {
@@ -297,10 +322,7 @@ test("CounterfactualContinuations: enforces checkpoint & workspace non-interfere
   assert.equal(audited.estimand_summary.mean_tau_b, 0.2625, "Contaminated pair excluded from estimand");
 });
 
-test("evolutionary_population preserves distinct mechanism islands, generates orthogonal crossovers, and quarantines Goodharted proxy winners", async () => {
-  const {evaluateEvolutionaryPopulation} = await import(
-    "../../loopx/control_plane/capabilities/evolutionary_search.ts"
-  );
+test("evolutionary_population preserves distinct mechanism islands, generates orthogonal crossovers, and quarantines Goodharted proxy winners", () => {
   const authoritative = {
     metric: "accuracy",
     unit: "pct",
@@ -378,4 +400,39 @@ test("evolutionary_population preserves distinct mechanism islands, generates or
   assert.equal(plan.proxy_quarantine[0]?.disposition, "quarantined_proxy_cliff");
   assert.equal(plan.advisory_only, true);
   assert.equal(plan.grants_execution_authority, false);
+});
+
+test("Evolutionary choices are invariant to equivalent latency units", () => {
+  const candidates = ["cand:a", "cand:b", "cand:z"];
+  const mechanisms = ["mech:a", "mech:b", "mech:z"];
+  for (const [unit, values] of [["s", [4e-7, 3e-7, 1e-7]], ["ns", [400, 300, 100]]] as const) {
+    const authoritative = {...authMax, metric: "latency", unit, higher_is_better: false};
+    const findings = candidates.map((candidate, i) => makeFinding(
+      String(i), i + 1, candidate, undefined, undefined, {
+        measurements: [{
+          ...authoritative, candidate_ref: candidate, evidence_ref: "ev:latency:" + i, value: values[i],
+        }],
+      },
+    ));
+    const request = {node_id: "node-opt", authoritative, findings};
+    const singleIsland = evaluateEvolutionaryPopulation({
+      ...request,
+      elite_limit: 2,
+      mechanism_by_candidate: Object.fromEntries(candidates.map(candidate => [candidate, "mech:same"])),
+    });
+    assert.deepEqual(singleIsland.elites.map(row => row.candidate_ref), ["cand:z", "cand:b"]);
+    assert.equal(singleIsland.islands[0]?.champion_candidate_ref, "cand:z");
+
+    const diverse = evaluateEvolutionaryPopulation({
+      ...request,
+      elite_limit: 3,
+      mechanism_by_candidate: Object.fromEntries(candidates.map((candidate, i) => [candidate, mechanisms[i]])),
+    });
+    assert.deepEqual(diverse.elites.map(row => row.candidate_ref), ["cand:z", "cand:b", "cand:a"]);
+    assert.deepEqual(diverse.crossover_pairs.map(row => row.pair_id), ["cand:z+cand:b", "cand:z+cand:a"]);
+    assert.deepEqual(
+      diverse.mutation_targets.map(row => row.mutation_kind),
+      ["island_champion_refinement", "island_champion_refinement"],
+    );
+  }
 });

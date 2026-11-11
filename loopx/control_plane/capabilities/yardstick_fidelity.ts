@@ -383,10 +383,11 @@ export function evaluateScopedYardstickFidelity(
     : null;
   const bestAgrees = authBest !== null && proxyBest !== null ? authBest === proxyBest : null;
 
+  const topHalfCutoff = aUtils[Math.ceil(n / 2) - 1]!;
   const biasCliff = n >= 4
     && concordance.kendall_tau_b !== null && concordance.kendall_tau_b > 0
     && ((frontierConcordance.kendall_tau_b !== null && frontierConcordance.kendall_tau_b < 0)
-      || (proxyBest !== null && pairedAll.findIndex(p => p.candidate_ref === proxyBest) >= Math.ceil(n / 2)));
+      || (proxyBest !== null && authUtil(byProxyDesc[0]!.authoritative_value) < topHalfCutoff));
 
   let status: YardstickFidelityStatus;
   if (concordance.kendall_tau_b === null) {

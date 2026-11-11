@@ -57,10 +57,16 @@ try {
   assert.equal(page.items[2]!.measurements, undefined);
   assert.equal(page.items[2]!.measurement_error, undefined, "Unmeasured is not a quarantine error");
 
-  globalThis.fetch = async () => new Response(JSON.stringify({ok: true, goal_id: "research", total: 1,
-    next_cursor: null, items: [{...row, yardstick_fidelity: {...validFidelity, should_run: true}}]}),
-    {headers: {"Content-Type": "application/json"}});
-  await assert.rejects(() => fetchExploreResults("research"), /scoped_yardstick_fidelity_v0/);
+  for (const invalidFidelity of [
+    {...validFidelity, should_run: true},
+    {...validFidelity, audit_candidates: {...validFidelity.audit_candidates,
+      unconfirmed_proxy_winners: [{candidate_ref: "candidate:e", execution_authorized: true}]}},
+  ]) {
+    globalThis.fetch = async () => new Response(JSON.stringify({ok: true, goal_id: "research", total: 1,
+      next_cursor: null, items: [{...row, yardstick_fidelity: invalidFidelity}]}),
+      {headers: {"Content-Type": "application/json"}});
+    await assert.rejects(() => fetchExploreResults("research"), /scoped_yardstick_fidelity_v0/);
+  }
 } finally {
   globalThis.fetch = previousFetch;
 }
