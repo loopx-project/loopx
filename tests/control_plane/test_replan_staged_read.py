@@ -309,8 +309,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             else:
                 assert len(delivered) == 1 and delivered[0]["full_source"] is True
                 assert delivered[0]["text"] == fixture["state"].read_text()
-            # The complete-source checkpoint now starts with its pinned read,
-            # avoiding a presentation-only tool call before required context.
+            # The first tool returns required facts directly. Replan may stage
+            # the opening before SessionStart while pinning the original source.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
             projected = run(shlex.split(command), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60)
@@ -321,8 +321,28 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
 
             reference = presentation["reference_file"]
             _, metadata = read_context_read_reference(Path(reference))
-            assert metadata["path"] == str(view_path)
-            assert metadata["sha256"] == hashlib.sha256(view_path.read_bytes()).hexdigest()
+            presentation_path = Path(metadata["path"])
+            presentation_bytes = presentation_path.read_bytes()
+            assert metadata["sha256"] == hashlib.sha256(presentation_bytes).hexdigest()
+            added = {}
+            if replan:
+                assert presentation["navigation"]["mode"] == "full"
+                assert "baseline_reference" not in presentation["navigation"]
+                assert presentation_path.is_relative_to(native.resolve())
+                staged = json.loads(presentation_bytes)
+                staged_packet = staged["replan_action_packet"]
+                for stage in ("review", "writeback"):
+                    argv = shlex.split(staged_packet[stage])
+                    assert argv[argv.index("--decision-file") + 1] == str(view_path)
+                    assert argv[argv.index("--source-hash") + 1] == source["contract_binding"]["content_hash"]
+                detail = shlex.split(staged["context_details"]["command_template"])
+                assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
+                assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+                added = {"/replan_action_packet/review": staged_packet["review"],
+                         "/replan_action_packet/guidance": staged_packet["guidance"],
+                         "/context_details": staged["context_details"]}
+            else:
+                assert presentation_path == view_path and presentation_bytes == raw
             chunks, offset = [], 0
             while True:
                 assert presentation["offset"] == offset
@@ -342,10 +362,14 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             selected = json.loads(selected_body)
             assert selected["schema_version"] == "context_capture_selection_v1"
             pointers = [row["pointer"] for row in selected["selections"]]
+            assert added.keys() <= set(pointers)
             for required in ["/goal_boundary", "/heartbeat_receipt", "/execution_obligation"]:
                 assert any(required == pointer or required.startswith(pointer + "/") or pointer == ""
                            for pointer in pointers), (required, pointers)
             for row in selected["selections"]:
+                if row["pointer"] in added:
+                    assert row["value"] == added[row["pointer"]]
+                    continue
                 expected = source
                 for token in row["pointer"].split("/")[1:]:
                     token = token.replace("~1", "/").replace("~0", "~")
@@ -378,9 +402,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert view["autonomous_replan_obligation"]["replan_context"] == source["autonomous_replan_obligation"]["replan_context"]
         assert view["replan_action_packet"]["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
         assert view["replan_action_packet"]["writeback_contract"] == source["replan_action_packet"]["writeback_contract"]
-        # Historical staged consumers still use the original hash-bound reads.
-        # This does not qualify their discoverability in the complete CLI input.
-        packet = build_turn_envelope(source)["replan_action_packet"]
+        packet = staged_packet if context_delivery else build_turn_envelope(source)["replan_action_packet"]
         capture = Path(source["replan_read_path"])
         assert capture.read_bytes() == source_path.read_bytes()
         before = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -390,6 +412,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             read = json.loads(result.stdout)
             assert read["obligation_id"] == selector["obligation_id"]
             assert read["stage"] == stage
+            if stage == "review":
+                assert read["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
             if stage == "writeback":
                 # Complete delivery preserves original capability authoring;
                 # the old writer still supplies the exact applicable attachment.
