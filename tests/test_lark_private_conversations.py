@@ -104,7 +104,8 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
         fixture.close()
 
 
-@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication", "closed"])
+@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication", "closed",
+                                    "source_unavailable", "source_changed"])
 def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
     from test_native_steward_private import finish, steward
     from loopx import chat_ingress
@@ -114,8 +115,12 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, capture, _ = next(fixture)
     try:
+        def source_reads(message_id):
+            return sum("+messages-mget" in args and message_id in args for args in provider.calls)
+
         original_event = provider.event("steward-app", "original-before-adoption", "Read the original conversation")
         assert transport.admit("steward-app", original_event)["status"] == "durably_accepted"
+        assert source_reads(original_event["message_id"]) == 1
         original_ref = identity_ref(binding["provider_ref"], original_event["message_id"])
         original = transport.core.read_request(original_ref)
         assert finish(runtime, original)["status"] == "completed"
@@ -140,6 +145,9 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
             published = {**published, "app_steward_binding_id": None, "bindings": [
                 row for row in adopted["bindings"] if row["binding_id"] != binding["binding_id"]]}
         observed_endpoints = []
+        pending_event = provider.event("steward-app", "original-during-adoption", "Continue in this conversation")
+        pending_id = pending_event["message_id"]
+        pending_source = dict(provider.messages[pending_id])
 
         def publish_at_scope_fence(path, **kwargs):
             if path == bindings.path and kwargs.get("operation") == "configure_bound_delivery_scope":
@@ -147,6 +155,10 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
                 observed_endpoints.append(previous["executor_endpoint_id"])
                 if len(observed_endpoints) == 1:
                     bindings.path.write_text(json.dumps(published))
+                    if change == "source_unavailable":
+                        provider.messages.pop(pending_id)
+                    elif change == "source_changed":
+                        provider.messages[pending_id]["content"] = "Edited after the first provider read"
                 elif change == "second_publication":
                     bindings.path.write_text(json.dumps({**stale, "revision": adopted["revision"] + 2}))
                 elif change == "closed":
@@ -155,28 +167,42 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
 
         monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
         monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
-        pending_event = provider.event("steward-app", "original-during-adoption", "Continue in this conversation")
-        pending_ref = identity_ref(binding["provider_ref"], pending_event["message_id"])
+        pending_ref = identity_ref(binding["provider_ref"], pending_id)
         pending_path = transport.root / f"{pending_ref}.json"
         calls_before = capture.read_bytes()
         writes_before = list(provider.writes)
         admission = transport.admit("steward-app", pending_event)
         request = transport.core.read_request(pending_ref)
-        if change != "executor":
+        if change == "source_unavailable":
+            assert admission["status"] == "source_verification_failed"
+            assert request["status"] == "prepared" and request["session_id"] == sid and request["turn_id"] is None
+            assert json.loads(pending_path.read_text())["status"] == "captured"
+            assert source_reads(pending_id) == 2 and observed_endpoints == ["antigravity"]
+            assert not store.turn_for_client(sid, f"external-{pending_ref}")
+            assert capture.read_bytes() == calls_before and provider.writes == writes_before
+            provider.messages[pending_id] = pending_source
+            transport.reconcile_request(pending_path)
+            request = transport.core.read_request(pending_ref)
+        if change not in {"executor", "source_unavailable"}:
             assert admission["status"] == "command_rejected"
             assert request["status"] == "rejected" and request["turn_id"] is None
             assert not store.turn_for_client(sid, f"external-{pending_ref}")
             assert capture.read_bytes() == calls_before and provider.writes == writes_before
+            if change == "source_changed":
+                assert source_reads(pending_id) == 2
             assert observed_endpoints == (["antigravity", "codex"] if change in {"second_publication", "closed"} else ["antigravity"])
             if change == "closed":
                 assert request["session_id"] == sid and "response_code" not in request
         else:
-            assert admission["status"] == "durably_accepted"
+            if change == "executor":
+                assert admission["status"] == "durably_accepted"
+                assert source_reads(pending_id) == 2
             assert observed_endpoints == ["antigravity", "codex"]
             assert request["status"] == "accepted" and request["session_id"] == sid
             assert request["binding_id"] == binding["binding_id"] and request["source"] == original["source"]
             assert finish(runtime, request)["status"] == "completed"
-            assert transport.reconcile_request(pending_path) == 1
+            if json.loads(pending_path.read_text())["status"] != "delivered":
+                assert transport.reconcile_request(pending_path) == 1
             delivered = json.loads(pending_path.read_text())
             assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
             assert delivered["event"]["message_id"] == pending_event["message_id"]

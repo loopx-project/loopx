@@ -42,6 +42,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
 from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
+from .private_ingress import PrivateSourceUnavailable, private_source_text, steward_source_preflight
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
@@ -914,19 +915,9 @@ class LarkPrivateConversations:
                 canonical_type = source_message.get("msg_type", source_message.get("message_type"))
                 if canonical_type != "text":
                     return {"status": "source_conflict"}
-                content = source_message.get("content")
-                if isinstance(content, str):
-                    text = content
-                else:
-                    # Raw provider envelopes are supported by the existing
-                    # readback contract too; keep parsing isolated to body.
-                    try:
-                        raw = json.loads(source_message["body"]["content"])
-                        text = raw["text"]
-                    except (ValueError, KeyError, TypeError):
-                        return {"status": "invalid_text"}
-                    if not isinstance(text, str):
-                        return {"status": "invalid_text"}
+                text = private_source_text(source_message)
+                if text is None:
+                    return {"status": "invalid_text"}
                 if not text.strip():
                     return {"status": "empty_text"}
             elif message_type in {"image", "post"}:
@@ -1024,10 +1015,14 @@ class LarkPrivateConversations:
                         _atomic_write_json(path, record)
                         return {"status": "history_answer_held"}
                 else:
+                    preflight = (steward_source_preflight(selected["binding"], source_message,
+                        lambda fresh: self._source_message(record, selected=fresh)) if command is None else None)
                     admitted = self.core.admit(binding_id=binding["binding_id"], source=source,
                         request_ref=request, message=text, command=command, attachments=attachments,
-                        defer_background_stop=defer_background_stop)
+                        defer_background_stop=defer_background_stop, source_preflight=preflight)
                 record_event_timing(profile, event["message_id"], "core_admission_returned")
+            except PrivateSourceUnavailable:
+                return {"status": "source_verification_failed"}
             except ValueError:
                 if record.get("capture_origin") == "provider_history":
                     return {"status": "history_answer_held"}
