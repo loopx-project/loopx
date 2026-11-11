@@ -194,8 +194,8 @@ def _matches(name: str, prefixes: list[str] | None) -> bool:
 
 
 def _scan_archive(
-    archive: BinaryIO, *, selected: list[str] | None, workspace: Path
-) -> tuple[dict[str, Any], list[dict[str, Any]], int, int, int]:
+    archive: BinaryIO, *, execution: dict[str, Any], selected: list[str] | None, workspace: Path
+) -> tuple[dict[str, Any], list[dict[str, Any]], int, int, int, str, int]:
     workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
     workspace_info = workspace.lstat()
     if not stat.S_ISDIR(workspace_info.st_mode):
@@ -209,9 +209,20 @@ def _scan_archive(
             archive.seek(0)
             # One disposable transaction avoids per-prefix durable writes.
             # This scratch index is not a Goal authority or recovery store.
-            with closing(sqlite3.connect(database_path)) as database:
+            with (
+                closing(sqlite3.connect(database_path)) as database,
+                (Path(temporary) / "archive.tar.gz").open("w+b") as snapshot,
+            ):
+                # Hash and scan the same private bytes even if the source is overwritten and restored.
+                shutil.copyfileobj(archive, snapshot, _CHUNK)
+                original_sha, archive_size = _sha(snapshot)
+                if original_sha != execution.get("archive_sha256"):
+                    raise ColdSourceBackupError("cold_import_backup_archive_changed")
+                declared_size = execution.get("archive_size_bytes")
+                if declared_size is not None and declared_size != archive_size:
+                    raise ColdSourceBackupError("cold_import_backup_archive_changed")
                 database.execute("CREATE TABLE members (name BLOB PRIMARY KEY, marker BLOB NOT NULL) WITHOUT ROWID")
-                with tarfile.open(fileobj=archive, mode="r|gz") as tar:
+                with tarfile.open(fileobj=snapshot, mode="r|gz") as tar:
                     # r|gz streams bytes but still caches every TarInfo on
                     # supported Python versions. No random member lookup is
                     # needed: hardlink coverage already lives in the disk DB.
@@ -286,7 +297,7 @@ def _scan_archive(
         raise
     if embedded is None:
         raise ColdSourceBackupError("cold_import_backup_manifest_missing")
-    return embedded, members, member_count, logical_bytes, workspace_bytes
+    return embedded, members, member_count, logical_bytes, workspace_bytes, original_sha, archive_size
 
 
 def read_cold_source_backup(
@@ -323,15 +334,10 @@ def read_cold_source_backup(
     archive_path = Path(str(execution.get("archive_path") or "")).expanduser().absolute()
     archive, before = _open_regular(archive_path)
     with archive:
-        original_sha, archive_size = _sha(archive)
-        if original_sha != execution.get("archive_sha256"):
-            raise ColdSourceBackupError("cold_import_backup_archive_changed")
-        declared_size = execution.get("archive_size_bytes")
-        if declared_size is not None and declared_size != archive_size:
-            raise ColdSourceBackupError("cold_import_backup_archive_changed")
         scan_workspace = (workspace or manifest_path.parent / ".cold-import-work").expanduser().absolute()
-        embedded, members, member_count, logical_bytes, workspace_bytes = _scan_archive(
-            archive, selected=selected, workspace=scan_workspace
+        (embedded, members, member_count, logical_bytes, workspace_bytes,
+            original_sha, archive_size) = _scan_archive(
+            archive, execution=execution, selected=selected, workspace=scan_workspace
         )
         after = os.fstat(archive.fileno())
         if not _same_file(before, after):
