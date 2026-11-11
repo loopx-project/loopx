@@ -98,6 +98,20 @@ class CheckpointSupervisor:
         if self.preservation is not None:
             self.preservation.finish_grading(status)
 
+    def finish_grading_from_receipt(self, trial, *, run_id, task_id):
+        """Recover the drain observation when the native runner raises."""
+        if self.preservation is None or self.preservation.receipt is None:
+            return
+        from .managed_run import native_grading_drained
+
+        try:
+            drained = native_grading_drained(
+                trial, history_file="run_history.json", run_id=run_id, task_id=task_id)
+        except (OSError, ValueError):
+            return  # Bad optional evidence must not mask the original exception.
+        if drained:
+            self.finish_grading("complete")
+
     def close(self):
         self.stop.set()
         if self.thread is not None:

@@ -903,6 +903,8 @@ incumbent and consumed rounds. It carries no worker clock or resume qualificatio
 a receiver still needs to prove the original workspace, session and remaining
 allowance together. An unknown grading outcome or unconfirmed stop does not
 trigger this capture.
+If the native runner raises after writing its drain receipt, the runner
+checks the matching run history before attempting the same capture.
 
 If the optional preservation receipt cannot be written, a redacted warning reports
 that gap; observer shutdown, one capture attempt and verified source stopping

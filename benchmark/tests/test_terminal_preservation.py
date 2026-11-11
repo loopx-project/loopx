@@ -335,7 +335,12 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     assert result.solver_execution["status"] == "nonzero_exit"
     assert result.best_score == 7 and result.agent_submissions == 1
     assert drained == ["complete"] and result.archive == b""
-    supervisor.finish_grading(result.grading_status)
+    if capture_failure:
+        supervisor.finish_grading_from_receipt(trial, run_id="other-run", task_id="fixture")
+        assert "native_scoring_checkpoint" not in supervisor.preservation.receipt
+        supervisor.finish_grading_from_receipt(trial, run_id="source", task_id="fixture")
+    else:
+        supervisor.finish_grading(result.grading_status)
     supervisor.finish_grading(result.grading_status)  # A second notification cannot reseal.
     assert json.loads((trial / "run_history.json").read_text())["best_score"] == 7
     container.reload()
