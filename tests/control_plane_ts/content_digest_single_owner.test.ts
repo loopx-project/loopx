@@ -58,6 +58,10 @@ const RECORDED_EXCEPTIONS: Record<string, string> = {
  * and a digest restatement cannot hide in this bucket (the last assertion below proves it).
  */
 const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
+  "control_plane/capabilities/benchmark_cli_source_activation.ts": {
+    count: 1,
+    reason: "activation id, container id and target revision use runtime-selected 32/40 hex widths, not 64-hex digests",
+  },
   "control_plane/coordination/authority_format_inspection.ts": {
     count: 1,
     reason: "store identity binds a provider name at runtime; 32 hex, not a 64 digest",
