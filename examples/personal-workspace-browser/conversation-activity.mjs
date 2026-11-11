@@ -24,7 +24,27 @@ export const conversationActivityScenario = {
       response.on("close", () => { if (streams.get(request.url) === response) streams.delete(request.url); });
     });
     await new Promise(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
-    const context = await openWorkspacePage(browser, url, { collectCoverage });
+    const context = await openWorkspacePage(browser, url, { collectCoverage, beforeGoto: async (_api, page) => {
+      await page.addInitScript(() => {
+        window.__loopxSetSessionStorageFailure = message => {
+          if (!window.__loopxNativeSetItem) window.__loopxNativeSetItem = Storage.prototype.setItem;
+          const failForSessionStorage = function setItem(key, value) {
+            if (this === window.sessionStorage) throw new Error(message);
+            return window.__loopxNativeSetItem.call(this, key, value);
+          };
+          Storage.prototype.setItem = failForSessionStorage;
+          Object.defineProperty(window.sessionStorage, "setItem", {
+            configurable: true,
+            value: () => { throw new Error(message); },
+          });
+        };
+        window.__loopxRestoreSessionStorage = () => {
+          delete window.sessionStorage.setItem;
+          if (window.__loopxNativeSetItem) Storage.prototype.setItem = window.__loopxNativeSetItem;
+          delete window.__loopxNativeSetItem;
+        };
+      });
+    }});
     const { page, api } = context;
     try {
       for (const pattern of ["**/events/**", "**/api/chat/sessions/*/turns/*/events"]) {
@@ -103,6 +123,38 @@ export const conversationActivityScenario = {
       const composer = page.getByLabel("向 LoopX 发送消息");
       const submit = page.getByRole("button", { name: "发送", exact: true });
       const feedback = page.locator(".personal-action-feedback");
+      const makeStorageUnavailable = reason => page.evaluate(message => {
+        window.__loopxSetSessionStorageFailure(message);
+      }, reason);
+      const restoreStorage = () => page.evaluate(() => {
+        window.__loopxRestoreSessionStorage();
+      });
+      const assertStorageUnavailable = async reason => {
+        const message = await page.evaluate(() => {
+          try {
+            window.sessionStorage.setItem("loopx-storage-probe", "1");
+            return "";
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        });
+        assert.equal(message, reason);
+      };
+      const waitForFeedback = async (text, detail) => {
+        await feedback.filter({ hasText: text }).waitFor({timeout: 3000}).catch(async error => {
+          const storage = await page.evaluate(() => {
+            let probe = "";
+            try {
+              window.sessionStorage.setItem("loopx-storage-probe-after", "1");
+              probe = "ok";
+            } catch (cause) {
+              probe = cause instanceof Error ? cause.message : String(cause);
+            }
+            return { probe, steering: window.sessionStorage.getItem("loopx-pw-composer-steering") };
+          });
+          throw new Error(`${detail}: ${error.message}; feedback=${JSON.stringify(await feedback.allTextContents())}; adjustments=${adjustments.length}; turn_requests=${api.turnRequests.length}; send_disabled=${await submit.isDisabled()}; composer_value=${JSON.stringify(await composer.inputValue())}; active=${await page.evaluate(() => document.activeElement?.id ?? document.activeElement?.tagName)}; storage=${JSON.stringify(storage)}`);
+        });
+      };
       await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
       assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Adjust focuses the shared composer");
       assert.equal(await page.locator("textarea:visible").count(), 1, "Only one editable conversation input is visible");
@@ -157,6 +209,40 @@ export const conversationActivityScenario = {
       const correctionIndex = conversation.findIndex(row => row.user && row.text.includes("先核对依赖"));
       assert.ok(originalIndex >= 0 && originalIndex < workIndex && workIndex < correctionIndex,
         "The request, ongoing work and accepted correction remain together in conversation order");
+      await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
+      await makeStorageUnavailable("storage unavailable");
+      await assertStorageUnavailable("storage unavailable");
+      await composer.fill("先检查最新证据。");
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across manager views");
+      const dispatchedBeforeStorageFailure = adjustments.length;
+      const turnsBeforeStorageFailure = api.turnRequests.length;
+      await composer.focus();
+      await page.keyboard.press("Meta+Enter");
+      await waitForFeedback("调整尚未发送", "Storage failure did not report a retained steering draft");
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
+      assert.equal(api.turnRequests.length, turnsBeforeStorageFailure, "Storage failure cannot queue a new conversation Turn");
+      assert.equal(await composer.inputValue(), "先检查最新证据。");
+      await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
+      await restoreStorage();
+      await composer.fill("先检查最新证据，再继续。");
+      await composer.focus();
+      await page.keyboard.press("Meta+Enter");
+      await feedback.filter({ hasText: "原回合指令未确认" }).waitFor();
+      const durableRequest = adjustments.at(-1);
+      await makeStorageUnavailable("QuotaExceededError");
+      await assertStorageUnavailable("QuotaExceededError");
+      await composer.fill("另一个尚未保存的调整。");
+      await submit.click();
+      await feedback.filter({ hasText: "上条投递尚未确认" }).waitFor();
+      assert.equal(adjustments.length, dispatchedBeforeStorageFailure + 1, "A changed draft cannot replace an uncertain request");
+      await composer.fill("先检查最新证据，再继续。");
+      await submit.click();
+      await feedback.filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
+      assert.equal(adjustments.at(-1).client_ingress_id, durableRequest.client_ingress_id, "A storage failure cannot replace an existing durable retry identity");
+      await restoreStorage();
+      const adjustmentsAfterStorageFailure = adjustments.length;
       await pending.locator("summary").filter({ hasText: "最近活动" }).click();
       assert.deepEqual((await pending.locator(".personal-message-activity li").allTextContents()).slice(-3), ["Agent 正在执行命令", "Agent 正在检索", "Agent 正在执行命令"]);
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-desktop.png"), animations: "disabled" });
@@ -239,7 +325,7 @@ export const conversationActivityScenario = {
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       assert.equal(await composer.inputValue(), "保留我的未发送草稿。", "finished turn retains the unsent draft across unmount");
-      assert.equal(adjustments.length, 4, "Completion never dispatches the retained draft");
+      assert.equal(adjustments.length, adjustmentsAfterStorageFailure, "Completion never dispatches the retained draft");
       await page.unroute("**/interrupt");
 
       // The same interaction is present in Goal Chat, through the same timeline.
@@ -319,7 +405,7 @@ export const conversationActivityScenario = {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.waitForFunction(() => document.querySelector("#personal-conversation-composer")?.value === "旧版保留的原回合草稿。");
-      assert.equal(adjustments.length, 4, "Migrating an old draft never dispatches it");
+      assert.equal(adjustments.length, adjustmentsAfterStorageFailure, "Migrating an old draft never dispatches it");
       const migrated = await page.evaluate(() => JSON.parse(sessionStorage.getItem("loopx-pw-composer-steering"))
         .filter(([, request]) => request.id === "legacy-exact-ingress"));
       assert.equal(migrated.length, 1, "One retry owner remains after durable migration");
@@ -342,7 +428,7 @@ export const conversationActivityScenario = {
       await page.getByRole("region", {name: "待处理消息", exact: true}).waitFor();
       assert.equal(await page.locator(".personal-chat-activity").count(), 0, "A queued message alone is not active execution");
       assert.equal(api.turnRequests.length, 3, "Queue readback does not start work");
-      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, one composer, terminal draft isolation, interruption and completion races." };
+      return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, one composer, blocked storage, terminal draft isolation, interruption and completion races." };
     } finally {
       for (const response of streams.values()) response.destroy();
       server.closeAllConnections();
