@@ -91,7 +91,9 @@ def project_selected_todo_execution_preparation(
         raise TypeError("typed execution preparation returned an invalid projection")
     claim = result.get("claim")
     if isinstance(claim, dict) and isinstance(claim.get("cli_args"), list):
-        claim["command_line"] = shlex.join(["loopx", *map(str, claim["cli_args"])])
+        # The displayed command selects a smaller receipt. Hosts still receive
+        # the exact mutation argv in cli_args, including on historical captures.
+        claim["command_line"] = shlex.join(["loopx", *map(str, claim["cli_args"]), "--thin"])
     return result
 
 

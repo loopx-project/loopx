@@ -153,7 +153,8 @@ TODO_ACTION_FIELDS = {
     "plan": frozenset({"text", "agent_id", "project"}),
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
     "claim": frozenset({"role", "todo_id", "claimed_by", "agent_id", "state_file",
-                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version", "project", "dry_run"}),
+                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version",
+                        "project", "dry_run", "todo_thin"}),
     "update": frozenset(_TODO_UPDATE_MUTABLE_FIELDS) | frozenset({
         "role", "todo_id", "agent_id", "state_file", "project", "dry_run", "authority_reason",
         "claim_operation_id", "update_operation_id", "update_expected_provider_revision",
@@ -430,7 +431,7 @@ def validate_todo_claim_options(args: argparse.Namespace) -> None:
         raise TodoClaimArgumentError(
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
             "--claim-operation-id, --task-lease-idempotency-key, "
-            "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: "
+            "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             + ", ".join(unsupported)
         )
     if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
@@ -758,8 +759,8 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError(
             "--limit is supported only by todo list"
         )
-    if args.todo_thin and args.todo_command != "list":
-        raise ValueError("--thin is supported only by todo list")
+    if args.todo_thin and args.todo_command not in {"list", "claim"}:
+        raise ValueError("--thin is supported only by todo list and todo claim")
     if getattr(args, "todo_summary", False):
         if args.todo_command != "list":
             raise ValueError("--summary is supported only by todo list")
