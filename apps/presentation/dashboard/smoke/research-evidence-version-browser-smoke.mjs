@@ -97,7 +97,46 @@ try {
   await (await late).finished();
   await page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
   assert.equal(await citation.count(), 0, "Late original response cannot reopen the previous evidence");
-  console.log("research evidence version: saved and late original excerpts isolated");
+
+  // Open a saved chapter through the same workspace router used by the tabs
+  // and parent links. Browser Back must keep the previous visit's position.
+  localizedReady = false;
+  const child = JSON.parse(await readFile(resolve(import.meta.dirname, "../src/data/fixtures/case-study-child.json"), "utf8"));
+  const parent = {goal_id: child.parent_goal_id, display_name: "Benchmark", events: [], analyses: []};
+  const study = await start("study", child, parent);
+  const studyPack = (await (await fetch(new URL(analysisPath + "?" + new URLSearchParams({goal_id: child.goal_id}), study))).json()).pack;
+  const chapter = studyPack.case_study.sections[1];
+  const address = new URL("/chat/", study);
+  address.search = new URLSearchParams({goalId: child.goal_id, view: "research", research_goal: child.goal_id,
+    research_reading: "case", research_analysis_goal: child.goal_id, research_pack: studyPack.pack_id});
+  address.hash = "case-section-" + studyPack.pack_id + "-" + chapter.id;
+  const atChapter = () => page.waitForFunction(id => document.activeElement?.id === id, address.hash.slice(1));
+  await page.goto(address.href);
+  await atChapter();
+  const tabs = page.locator(".personal-goal-tabs");
+  await tabs.getByRole("button", {name: "任务", exact: true}).click();
+  await page.waitForURL(url => url.searchParams.get("view") === "tasks");
+  assert.equal(new URL(page.url()).hash, address.hash);
+  await tabs.getByRole("button", {name: "研究", exact: true}).click();
+  await atChapter();
+  await page.locator("button.research-parent-goal").click();
+  await page.waitForURL(url => url.searchParams.get("goalId") === parent.goal_id);
+  function assertParentAddress() {
+    const url = new URL(page.url());
+    assert.equal(url.hash, "");
+    assert.equal([...url.searchParams.keys()].some(key => key.startsWith("research_")), false,
+      "The parent's address belongs to its own research");
+  }
+  assertParentAddress();
+  await page.goBack();
+  await atChapter();
+  assert.equal(new URL(page.url()).searchParams.get("research_pack"), studyPack.pack_id);
+  await page.reload();
+  await atChapter();
+  await page.goForward();
+  await page.waitForURL(url => url.searchParams.get("goalId") === parent.goal_id);
+  assertParentAddress();
+  console.log("research evidence version: saved excerpts isolated and chapter navigation restored");
 } finally {
   releaseOriginal?.();
   await browser?.close();
@@ -110,12 +149,15 @@ try {
   await rm(root, {recursive: true, force: true});
 }
 
-async function start(name, capture) {
-  const fixture = resolve(root, name + ".json");
-  await writeFile(fixture, JSON.stringify(capture));
+async function start(name, ...captures) {
+  const fixtures = await Promise.all(captures.map(async (capture, index) => {
+    const path = resolve(root, name + "-" + index + ".json");
+    await writeFile(path, JSON.stringify(capture));
+    return path;
+  }));
   const child = spawn(resolveTestPython({repoRoot: repo}), [
     "-u", "examples/personal-workspace-browser/research-history-backend.py",
-    "--fixture", fixture, "--workspace-directory", "--assets-dir", assets,
+    ...fixtures.flatMap(path => ["--fixture", path]), "--workspace-directory", "--assets-dir", assets,
   ], {cwd: repo, env: {...process.env, PYTHONPATH: repo}, stdio: ["ignore", "pipe", "pipe"]});
   servers.push(child);
   let error = "";

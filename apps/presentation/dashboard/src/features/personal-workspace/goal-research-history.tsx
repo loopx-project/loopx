@@ -514,7 +514,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/>;
   }
   if (caseReading && (hasCases || awaitingRequestedCase)) {
-    return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
+    return <ResearchCaseReading analysis={analysis} active={active} onHistory={() => setCaseMode(false)}/>;
   }
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {hasCases ? <button type="button" className="case-return-reader" onClick={() => setCaseMode(true)}>{zh ? "← Case 深度解读" : "← Case studies"}</button> : null}
