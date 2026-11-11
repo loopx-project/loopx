@@ -86,7 +86,7 @@ function timestamp(value: unknown, label: string): bigint {
   return result;
 }
 
-function schedule(generatedAt: string, cadence: unknown, explicit: unknown = null) {
+export function planMonitorSchedule(generatedAt: string, cadence: unknown, explicit: unknown = null) {
   const result = evaluateSchedulerStateTransition({
     schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA, operation: "monitor_schedule",
     generated_at: generatedAt, cadence: cadence ?? null, explicit_next_due_at: explicit ?? null,
@@ -118,7 +118,7 @@ function normalizeMetadata(value: unknown): JsonObject {
   if (normalized.material_change_scope_generations != null) {
     parseMonitorScopeGenerations(normalized.material_change_scope_generations);
   }
-  if (normalized.cadence != null && schedule("1970-01-01T00:00:00Z", normalized.cadence).cadence_seconds === null) {
+  if (normalized.cadence != null && planMonitorSchedule("1970-01-01T00:00:00Z", normalized.cadence).cadence_seconds === null) {
     throw new EffectRuntimeRequestError("--cadence must look like 30m, 2h, or 1d");
   }
   for (const field of ["next_due_at", "expires_at", "last_checked_at"] as const) {
@@ -174,7 +174,7 @@ function poll(existing: JsonObject, observation: JsonObject, reactivate: boolean
   }
   const target = requestedTarget || existingTarget;
   const cadence = text(observation.cadence || existing.cadence);
-  const due = schedule(generatedAt, cadence, observation.next_due_at).next_due_at;
+  const due = planMonitorSchedule(generatedAt, cadence, observation.next_due_at).next_due_at;
   if (!material && !due) throw new EffectRuntimeRequestError(
     "unchanged monitor todo writeback requires --next-due-at or a parseable cadence such as 30m/2h/1d");
   const effectId = text(observation.monitor_effect_id);
@@ -266,7 +266,7 @@ export function planMonitorMetadata(value: unknown): MonitorMetadataPlan {
   }
   if (metadata.target_key != null && request.role !== "agent") throw new EffectRuntimeRequestError("target_key requires --role agent");
   if (request.generated_at != null && request.task_class === "continuous_monitor" && metadata.next_due_at == null && metadata.cadence != null) {
-    const due = schedule(text(request.generated_at), metadata.cadence).next_due_at;
+    const due = planMonitorSchedule(text(request.generated_at), metadata.cadence).next_due_at;
     if (due) metadata = {...metadata, next_due_at: due};
   }
   if (requireBoolean(request.enforce_boundedness, "enforce_boundedness") && request.task_class === "continuous_monitor") {

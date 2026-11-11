@@ -39,7 +39,6 @@ def plan_todo_creation_scope(
     *, role: str, intent: dict[str, Any], registered_agents: list[str],
     goal_id: str, unblocks_todo_id: str | None,
     unblocks_todo_id_declared: bool, monitor_metadata: dict[str, Any] | None,
-    generated_at: str,
 ) -> dict[str, Any]:
     """Transport one fresh draft; the existing typed owners compose admission."""
     try:
@@ -48,7 +47,7 @@ def plan_todo_creation_scope(
             "role": role, "intent": intent, "registered_agents": registered_agents,
             "goal_id": goal_id, "unblocks_todo_id": unblocks_todo_id,
             "unblocks_todo_id_declared": unblocks_todo_id_declared,
-            "monitor_metadata": monitor_metadata, "generated_at": generated_at,
+            "monitor_metadata": monitor_metadata,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
