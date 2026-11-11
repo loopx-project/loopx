@@ -982,6 +982,12 @@ back to full. One decoded record remains bounded; this is not a history-size
 limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
+For a complete one-page selection from the current capture, the adapter can
+verify that exact selected output across an ordinary resume. The source and
+read scope must still match. Only the replayed literal sections remain
+eligible for reuse in the next progressive view. Partial or inherited
+selections still need their ordinary recovery, and a selected read cannot
+establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
