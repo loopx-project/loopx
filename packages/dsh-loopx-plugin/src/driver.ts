@@ -516,7 +516,7 @@ function schedulerWait(
 ): WaitPlan {
   const scheduler = record(payload.scheduler_hint)
   const unchanged = record(scheduler?.unchanged_poll)
-  const local = record(unchanged?.local_scheduler)
+  const local = record(record(scheduler?.cold_path_detail)?.local_scheduler)
   if (local === undefined) return { kind: 'wait' }
 
   const reset = record(scheduler?.reset_policy)
@@ -524,7 +524,7 @@ function schedulerWait(
   const unchangedPolls = token.length > 0 && token === currentToken
     ? currentPolls
     : 0
-  const rawLimit = local.unchanged_poll_limit
+  const rawLimit = record(unchanged?.limits)?.local_scheduler
   const limit = typeof rawLimit === 'number'
     && Number.isSafeInteger(rawLimit)
     && rawLimit >= 0
@@ -548,9 +548,14 @@ function schedulerWait(
   const minutes = progression.length > 0
     ? progression[Math.min(unchangedPolls, progression.length - 1)] ?? fallback
     : fallback
+  let delayMs = minutes * 60_000
+  const recheck = local.recheck_after_seconds
+  if (typeof recheck === 'number' && Number.isFinite(recheck) && recheck >= 0) {
+    delayMs = Math.min(delayMs, recheck * 1_000)
+  }
   return {
     kind: 'wait',
-    delayMs: Math.min(Math.round(minutes * 60_000), MAX_WAIT_MS),
+    delayMs: Math.min(Math.round(delayMs), MAX_WAIT_MS),
     schedulerToken: token,
     unchangedPolls: unchangedPolls + 1,
   }
