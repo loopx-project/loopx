@@ -6,8 +6,8 @@ import {writeFile} from "node:fs/promises";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
 import {fileRemoteAuthorityAdmission} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
-import {callRemoteAuthority} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
-import {rotatePostgreSqlAuthorityStoreIdentity, type PostgreSqlAuthorityDatabase} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {callRemoteAuthority, createRemoteAuthorityServer} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
+import {PostgreSqlAuthorityStore, rotatePostgreSqlAuthorityStoreIdentity, type PostgreSqlAuthorityDatabase} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {remoteAuthorityOperationId, type RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {postgresRemoteFixture, claimRequest, credentials, serviceIdentity, servicePolicy} from "./remote_authority_fixture.ts";
@@ -139,6 +139,38 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     assert.equal((await call(claimRequest("a", "todo_never-created", "unknown"), "recover")).status, "missing");
     assert.deepEqual(await fixture.store.loadAuthority(), before);
   });
+  await t.test("shutdown waits for an admitted transaction after dropping its response socket", {timeout: 20000}, async t => {
+    await fixture.seed(["todo_shutdown"]);
+    let reached!: () => void, release!: () => void;
+    const committing = new Promise<void>(resolve => {reached = resolve;});
+    const gate = new Promise<void>(resolve => {release = resolve;});
+    const delayed: PostgreSqlAuthorityDatabase = {connect: async () => {
+      const connection = await fixture.runtimeDatabase.connect();
+      return {...connection, query: async (sql, args) => {
+        if (sql === "COMMIT") {reached(); await gate;}
+        return connection.query(sql, args);
+      }};
+    }};
+    const service = new RemoteAuthorityService({database: delayed, admit: fileRemoteAuthorityAdmission(fixture.policyPath)});
+    const listener = createRemoteAuthorityServer(service, fixture);
+    const endpoint = `https://127.0.0.1:${await listener.listen()}`;
+    let stopping: Promise<void> | undefined, closed = false;
+    t.after(async () => {release(); await (stopping ?? listener.close());});
+    const original = claimRequest("a", "todo_shutdown");
+    const pending = callRemoteAuthority(endpoint, credentials.a, original, {ca: fixture.cert});
+    await committing;
+    stopping = listener.close().then(() => {closed = true;});
+    assert.equal((await pending).status, "ambiguous");
+    assert.equal(closed, false, "the database must stay available until COMMIT settles");
+    release(); await stopping;
+    const receipt = await fixture.store.readReceipt(remoteAuthorityOperationId(original, "principal-a"));
+    assert.equal(receipt.status, "found");
+    if (receipt.status === "found") {
+      const recovered = await call(original, "recover");
+      assert.equal(recovered.status, "found");
+      assert.equal(recovered.receipt_sha256, canonicalAuthoritySha256(receipt.receipts[0]));
+    }
+  });
   await t.test("admitted work completes truthfully when its credential is revoked in flight", async () => {
     await fixture.seed(["todo_admitted"]);
     let release!: () => void, admitted!: () => void;
@@ -176,25 +208,31 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
   });
   await t.test("rotation between opening and reading cannot let a stale session adopt a new incarnation", async () => {
     await fixture.seed(["todo_rotation"]);
-    let reached!: () => void, release!: () => void, first = true;
+    let reached!: () => void, release!: () => void, opened = 0;
     const paused = new Promise<void>(resolve => {reached = resolve;});
     const gate = new Promise<void>(resolve => {release = resolve;});
     const delayed: PostgreSqlAuthorityDatabase = {connect: async () => {
       const connection = await fixture.runtimeDatabase.connect();
       return {...connection, query: async (sql, args) => {
         const result = await connection.query(sql, args);
-        if (first && sql.includes("authority_store_metadata")) {first = false; reached(); await gate;}
+        if (opened < 2 && sql.includes("authority_store_metadata")) {
+          opened++; if (opened === 2) reached(); await gate;
+        }
         return result;
       }};
     }};
     const service = new RemoteAuthorityService({database: delayed, admit: fileRemoteAuthorityAdmission(fixture.policyPath)});
     const before = await fixture.store.loadAuthority();
     const pending = service.dispatch(credentials.a, claimRequest("a", "todo_rotation"));
+    const recovering = service.dispatch(credentials.a, claimRequest("a", "todo_rotation", "unknown-operation"), "recover");
     await paused;
     const next = `postgresql:${"d".repeat(32)}`;
     try {assert.equal((await rotatePostgreSqlAuthorityStoreIdentity(fixture.database, serviceIdentity, next)).status, "rotated");}
     finally {release();}
     assert.equal((await pending).status, "unavailable");
+    const recovery = await recovering;
+    assert.equal(recovery.status, "unavailable", "negative receipt evidence must belong to the admitted incarnation");
+    assert.equal(recovery.reason_code, "remote_authority_incarnation_changed");
     const after = await fixture.store.loadAuthority();
     assert.equal(after.status, "loaded");
     if (before.status === "loaded" && after.status === "loaded") assert.deepEqual(after.head, before.head);
@@ -203,6 +241,7 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     assert.equal((await call(claimRequest("a", "todo_rotation"))).status, "rejected");
     const historic = {...claimRequest("a", "todo_disconnect"), store_identity: next};
     assert.equal((await call(historic, "recover")).historical_only, true);
+    assert.equal((await call({...claimRequest("a", "todo_rotation", "unknown-operation"), store_identity: next}, "recover")).status, "missing");
     assert.equal(result(await call({...claimRequest("a", "todo_rotation"), store_identity: next})).status, "applied");
   });
   await t.test("TLS verification failures never trigger a retry or expose a credential", async () => {
@@ -211,5 +250,31 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     assert.equal(failed.status, "ambiguous");
     assert(!JSON.stringify(failed).includes(credentials.a));
     assert.deepEqual(await fixture.store.loadAuthority(), before);
+  });
+  await t.test("negative receipt and identity share one PostgreSQL snapshot across mid-read rotation", async () => {
+    const before = await fixture.store.storeIdentity(); assert.equal(before.status, "available");
+    if (before.status !== "available") return;
+    const next = `postgresql:${"e".repeat(32)}`;
+    let rotated = false;
+    const delayed: PostgreSqlAuthorityDatabase = {connect: async () => {
+      const connection = await fixture.runtimeDatabase.connect();
+      return {...connection, query: async (sql, args) => {
+        const result = await connection.query(sql, args);
+        if (!rotated && sql.includes("authority_store_metadata")) {
+          rotated = true;
+          assert.equal((await rotatePostgreSqlAuthorityStoreIdentity(fixture.database, before.store_identity, next)).status, "rotated");
+        }
+        return result;
+      }};
+    }};
+    const store = new PostgreSqlAuthorityStore(delayed, {tenant_id: "tenant-one", goal_id: "goal-one"});
+    assert.deepEqual(await store.readReceiptSnapshot("unknown-operation"), {
+      status: "snapshot", store_identity: before.store_identity, receipt: {status: "missing"},
+    });
+    assert.deepEqual(await fixture.store.storeIdentity(), {status: "available", store_identity: next});
+    assert.deepEqual(await store.readReceiptSnapshot("unknown-operation"), {
+      status: "snapshot", store_identity: next, receipt: {status: "missing"},
+    });
+    assert.deepEqual(await store.readReceipt("unknown-operation"), {status: "missing"});
   });
 });

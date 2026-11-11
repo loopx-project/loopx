@@ -1,6 +1,7 @@
 /** TLS-only, bounded transport for the candidate task-command service. */
 import {createServer, request as httpsRequest, type ServerOptions, type RequestOptions} from "node:https";
 import type {AddressInfo} from "node:net";
+import type {Duplex} from "node:stream";
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import {decodeRemoteAuthorityRequest, REMOTE_AUTHORITY_RESPONSE, remoteAuthorityResponse,
@@ -9,11 +10,13 @@ import type {RemoteAuthorityService} from "./remote_authority_service.ts";
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const SHUTDOWN_SOCKET_DRAIN_MS = 5000;
 export function createRemoteAuthorityServer(service: RemoteAuthorityService,
   tls: Pick<ServerOptions, "key" | "cert" | "ca">, maxInFlight = 16) {
   if (!tls.key || !tls.cert || !Number.isSafeInteger(maxInFlight) || maxInFlight < 1 || maxInFlight > 128) throw new TypeError("TLS and a bounded admission limit are required");
   let active = 0, draining = false;
   let drained: (() => void) | undefined;
+  const sockets = new Set<Duplex>();
   const server = createServer({...tls, minVersion: "TLSv1.2", handshakeTimeout: 10000}, async (request, response) => {
     response.setHeader("Content-Type", "application/json");
     response.setHeader("Cache-Control", "no-store");
@@ -41,6 +44,7 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
       }
       const raw = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       const decoded = decodeRemoteAuthorityRequest(raw);
+      if (draining) return reject(503, "remote_authority_busy");
       dispatched = true;
       const result = await service.dispatch(authorization.slice(7), decoded, mode);
       const encoded = JSON.stringify(result);
@@ -54,6 +58,11 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
       if (dispatched) response.destroy();
       else if (!response.destroyed) reject(400, "invalid_remote_authority_request");
     } finally {active--; if (active === 0) drained?.();}
+  });
+  // Include sockets that have not completed the TLS handshake or HTTP headers.
+  server.on("connection", socket => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
@@ -71,7 +80,13 @@ export function createRemoteAuthorityServer(service: RemoteAuthorityService,
     async close(): Promise<void> {
       draining = true;
       const completed = active ? new Promise<void>(resolve => {drained = resolve;}) : Promise.resolve();
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      // server.close() can stop Node's request timeout checker. Bound network
+      // draining ourselves; a disconnected response never cancels dispatched
+      // business work or permits the caller to close its database pool early.
+      const deadline = setTimeout(() => {for (const socket of sockets) socket.destroy();}, SHUTDOWN_SOCKET_DRAIN_MS);
+      try {
+        await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      } finally {clearTimeout(deadline);}
       await completed;
     },
   };

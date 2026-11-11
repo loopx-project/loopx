@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {request as httpsRequest} from "node:https";
+import {connect as tlsConnect} from "node:tls";
+import {connect, type Socket} from "node:net";
+import {once} from "node:events";
 import {mkdtemp, writeFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -95,4 +98,69 @@ test("TLS listener bounds input and admission, and drains admitted requests", as
   assert.equal(closed, false);
   release(); assert.equal((await pending).reason_code, "fixture_denial");
   await stopping; assert.equal(closed, true);
+});
+
+test("shutdown bounds incomplete connections while still waiting for dispatched work", {timeout: 20000}, async t => {
+  const tls = await tlsFixture(t);
+  let admissions = 0, entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => {entered = resolve;});
+  const gate = new Promise<void>(resolve => {release = resolve;});
+  const service = new RemoteAuthorityService({database: {connect: async () => {throw new Error("Unexpected database access");}},
+    admit: async () => {admissions++; entered(); await gate; return {status: "rejected", reason_code: "fixture_denial"};}});
+  const listener = createRemoteAuthorityServer(service, tls, 4), port = await listener.listen();
+  const sockets: Socket[] = [];
+  let stopping: Promise<void> | undefined;
+  t.after(async () => {release(); sockets.forEach(socket => socket.destroy()); await (stopping ?? listener.close());});
+  const own = <T extends Socket>(socket: T) => {sockets.push(socket); socket.on("error", () => {}); socket.resume(); return socket;};
+  // A peer can stall before TLS, before the HTTP header terminator, or in the
+  // body. None of these peers has submitted a complete command to dispatch.
+  const handshake = own(connect({host: "127.0.0.1", port}));
+  await once(handshake, "connect");
+  const headers = own(tlsConnect({host: "127.0.0.1", port, ca: tls.cert}));
+  await once(headers, "secureConnect");
+  headers.write("POST /v0/tasks/execute HTTP/1.1\r\nHost: localhost\r\n");
+  const body = own(tlsConnect({host: "127.0.0.1", port, ca: tls.cert}));
+  await once(body, "secureConnect");
+  const receiving = once(listener.server, "request");
+  body.write(`POST /v0/tasks/execute HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${credentials.a}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{`);
+  await receiving;
+  const pending = callRemoteAuthority(`https://127.0.0.1:${port}`, credentials.a, claimRequest("a"), {ca: tls.cert});
+  await started;
+  let closed = false;
+  const peersClosed = Promise.all(sockets.map(socket => new Promise<void>(resolve => socket.once("close", resolve))));
+  stopping = listener.close().then(() => {closed = true;});
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([peersClosed, new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("incomplete peers outlived shutdown drain")), 10000);
+    })]);
+    // A lost socket is not a rollback: close must retain the database pool
+    // until the already-dispatched service operation has actually settled.
+    assert.equal(closed, false);
+    assert.equal(admissions, 1);
+    release();
+    assert.equal((await pending).status, "ambiguous");
+    await stopping;
+    assert.equal(closed, true);
+  } finally {clearTimeout(deadline);}
+});
+
+test("a body completed after shutdown starts cannot dispatch a new command", async t => {
+  const tls = await tlsFixture(t);
+  let admissions = 0;
+  const service = new RemoteAuthorityService({database: {connect: async () => {throw new Error("Unexpected database access");}},
+    admit: async () => {admissions++; return {status: "rejected", reason_code: "fixture_denial"};}});
+  const listener = createRemoteAuthorityServer(service, tls), port = await listener.listen();
+  const socket = tlsConnect({host: "127.0.0.1", port, ca: tls.cert});
+  socket.on("error", () => {}); socket.resume();
+  let stopping: Promise<void> | undefined;
+  t.after(async () => {socket.destroy(); await (stopping ?? listener.close());});
+  await once(socket, "secureConnect");
+  const body = JSON.stringify(claimRequest("a")), receiving = once(listener.server, "request");
+  socket.write(`POST /v0/tasks/execute HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${credentials.a}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body.slice(0, 1)}`);
+  await receiving;
+  stopping = listener.close();
+  socket.write(body.slice(1));
+  await stopping;
+  assert.equal(admissions, 0);
 });

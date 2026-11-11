@@ -40,7 +40,14 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
       return result.status === "loaded" && !matches(result.provider_revision) ? incarnationFailure : result;
     },
     async readReceipt(id) {
-      const result = await store.readReceipt(id);
+      // Both found and missing must come from the admitted incarnation. Never
+      // manufacture a snapshot from separate identity and receipt reads.
+      if (!store.readReceiptSnapshot) return {status: "unavailable",
+        reason_code: "remote_authority_receipt_snapshot_unavailable", reason: "Atomic receipt observation is required"};
+      const snapshot = await store.readReceiptSnapshot(id);
+      if (snapshot.status !== "snapshot") return snapshot;
+      if (snapshot.store_identity !== identity) return incarnationFailure;
+      const result = snapshot.receipt;
       if (result.status !== "found") return result;
       if (!matches(result.provider_revision)) return incarnationFailure;
       if (id === operationId) {

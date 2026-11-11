@@ -97,7 +97,8 @@ recovery does not reacquire execution authority.
 
 Admission metadata is written inside the existing business receipt transaction,
 not to a second ledger. A request pins every read and commit to its admitted
-database incarnation. Rotation makes an old binding unavailable; the provider's
+database incarnation. Receipt presence or absence is checked against the identity
+from the same PostgreSQL read transaction. Rotation makes an old binding unavailable; the provider's
 transactional CAS also fences rotation after a read. Following a reviewed restore,
 the operator must explicitly authorize the new identity. The same principal and
 intent can then query retained historical receipts with that new binding.
@@ -135,8 +136,10 @@ not raw provider errors or filesystem details. No browser/cookie authentication,
 CORS or redirects are supported. Input/output are bounded to 16/64 KiB; the
 default listener admits at most 16 concurrent requests and the launcher pools
 at most eight database connections with query, statement and lock deadlines.
-SIGTERM/SIGINT stop new admissions and drain existing dispatches before closing
-the pool. Disconnecting a client does not establish that its write rolled back.
+SIGTERM/SIGINT stop new dispatches and allow sockets five seconds to drain,
+then close remaining connections, including partial TLS/HTTP requests. Already
+dispatched work still finishes before the pool closes, even if its response
+socket has gone away. Disconnecting a client does not establish that its write rolled back.
 Stop the listener and remove access grants to disable this candidate; existing
 local provider selection is unaffected and durable receipts remain in PostgreSQL.
 
