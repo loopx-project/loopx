@@ -158,6 +158,96 @@ def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, dec
             assert pointer not in values
 
 
+@pytest.mark.parametrize("scope_count", [1, 290])
+def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypatch, decision, scope_count):
+    from test_codex_context_lifecycle import setup
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+    setup(tmp_path, monkeypatch)
+    turn = "fixture-select-turn"
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run",
+        agent_identity={"agent_id": "agent"}, execution_obligation={"must_attempt_work": True},
+        heartbeat_receipt={"turn_instance_id": turn, "settlement_binding_owed": True})
+    decision["selected_todo"]["required_write_scopes"] = [
+        f"docs/fixture/area-{index:03d}/public-context-entrypoint/**" for index in range(scope_count)
+    ]
+    contract = decision["interaction_contract"]
+    contract["agent_channel"].update(delivery_allowed=False, must_attempt=True)
+    contract["cli_channel"] = {
+        "selection_required": True, "next_cli_actions": [],
+        "spend_allowed_now": False, "spend_after_validation": False,
+        "selection_policy_ref": "$.action_portfolio.selection_policy",
+        "selection_command": {"schema_version": "action_selection_cli_command_v1",
+            "route_prefix": "loopx --format json",
+            "command_args_template": f"quota should-run --todo-id '{{todo_id}}' --turn-instance-id {turn}",
+            "candidate_discovery_args": "todo list --goal-id fixture --status open"},
+    }
+    decision["action_portfolio"] = {"selection_policy": {"mode": "explicit_turn_binding",
+        "decision_owner": "agent", "suggestions_exhaustive": False, "requires_explicit_turn_binding": True},
+        "suggested_actions": [{"todo_id": "todo_current"}, {"todo_id": "todo_alternative"}]}
+    capture = tmp_path / "decision.json"
+    raw = json.dumps(decision).encode()
+    capture.write_bytes(raw)
+    capture.chmod(0o600)
+    registry = tmp_path / "absent-registry.json"
+    runtime = tmp_path / "unused-runtime"
+
+    def cli(*args):
+        output = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint",
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args])
+        result = json.loads(output)
+        assert result["ok"] and len(output) <= 12000
+        return result
+
+    def read(command):
+        words = shlex.split(command)
+        return cli(*words[words.index("quota"):])
+
+    view = cli("quota", "context-project", "--codex-app", "--context-delivery", "on",
+        "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", turn,
+        "--capture-file", str(capture), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--decision-output-root", str(tmp_path / "captures"), "--codex-context-dir", str(tmp_path),
+        "--max-page-output-bytes", "12000")
+    page = read(view["first_read_command"])
+    split = scope_count > 1
+    assert ("remaining_read_command" in view) is split
+    assert page["eof"]
+    opening = selected_context_values(page["content"])
+    _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+    saved = json.loads(Path(reference["path"]).read_bytes())
+    saved_cli = saved["interaction_contract"]["cli_channel"]
+    prefix = "/interaction_contract/cli_channel/"
+    assert opening[prefix + "selection_required"] is True
+    assert opening[prefix + "selection_command"] == saved_cli["selection_command"]
+    assert opening[prefix + "next_cli_actions"] == []
+    assert opening[prefix + "spend_allowed_now"] is False
+    assert opening[prefix + "spend_after_validation"] is False
+    assert opening["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert opening["/interaction_contract/agent_channel/required_reads"] == contract["agent_channel"]["required_reads"]
+    assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
+    assert opening["/heartbeat_receipt/turn_instance_id"] == turn
+    assert "/heartbeat_receipt/settlement_identity" not in opening
+    if split:
+        assert "/selected_todo" not in opening
+        _, opening_ref = read_context_read_reference(page["reference_file"])
+        body = bytearray()
+        command = view["remaining_read_command"]
+        while command:
+            page = read(command)
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            command = page.get("next_command")
+        assert page["eof"] and page["total_bytes"] == len(body)
+        _, remaining_ref = read_context_read_reference(page["reference_file"])
+        assert opening_ref["sha256"] == remaining_ref["sha256"] == reference["sha256"]
+        remaining = selected_context_values(body.decode())
+        assert remaining["/selected_todo"] == decision["selected_todo"]
+        assert remaining["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
+    else:
+        assert opening["/selected_todo"] == decision["selected_todo"]
+    assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
 def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_list(tmp_path, decision):
     # A complete address inventory is navigation, not the Goal/Task/stop text.
     # Exercise the native reader and exact cold path over the same capture.

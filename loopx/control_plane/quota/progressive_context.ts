@@ -329,7 +329,7 @@ function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelec
     ? {selection_splice} : {selections: selected};
 }
 
-/** Compose the ready opening with the same observation, without comparing
+/** Compose the linked opening with the same observation, without comparing
  * bodies again. A coalesced parent can span both parts; keep only the coverage
  * shared by the verified reduced selection and the ordinary remainder. */
 function withLinkedObservedRemainder(observed: JsonObject | undefined,
@@ -648,11 +648,11 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
-  const readyScope = request.include_initial_read_plan === true && groups
-    ? prepareReadyOpening(required.context, groups, exactBody?.path) : undefined;
+  const openingSplit = request.include_initial_read_plan === true && groups
+    ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
-    ? nativeContextReadPlan(required.context, pointers, groups, readyScope) : undefined;
+    ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
   const observed = observe && pointers.length
     ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
@@ -671,8 +671,22 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
-function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
+function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
     scope?: Path): {boundary: string; detail: string; controls: string[]; checkpointEntries?: string} | undefined {
+  const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
+  const candidate = "/selected_todo";
+  if (cli?.selection_required === true && groups.opening.includes(candidate)) {
+    // This Todo is a recommendation. The current operation is selection;
+    // keep its route and permission controls ahead of the candidate's details.
+    const controls = ["selection_required", "selection_policy_ref", "selection_command",
+      "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
+      .map(field => pointer(["interaction_contract", "cli_channel", field]));
+    for (const control of [...controls, "/action_portfolio/selection_policy"]) {
+      const index = groups.remaining.indexOf(control);
+      if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
+    }
+    return {boundary: candidate, detail: candidate, controls: []};
+  }
   if (!scope) return undefined;
   const parent = scope.slice(0, -1), detail = scope.at(-1)!;
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
@@ -701,7 +715,7 @@ function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof init
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>, readyScope?: ReturnType<typeof prepareReadyOpening>): {
+    groups: ReturnType<typeof initialContextReadGroups>, openingSplit?: ReturnType<typeof prepareInitialOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
       ordinary_opening_rows?: number;
     } {
@@ -710,18 +724,18 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
   const plan = select(pointers);
   let {opening, remaining} = groups;
-  if (readyScope) {
+  if (openingSplit) {
     // The reader chooses the split using the actual serialized opening.
-    opening = opening.flatMap(field => field === readyScope.boundary ? readyScope.controls : [field]);
-    remaining = [readyScope.detail, ...(readyScope.checkpointEntries ? [readyScope.checkpointEntries] : []), ...remaining];
+    opening = opening.flatMap(field => field === openingSplit.boundary ? openingSplit.controls : [field]);
+    remaining = [openingSplit.detail, ...(openingSplit.checkpointEntries ? [openingSplit.checkpointEntries] : []), ...remaining];
   }
-  const ordinaryRows = readyScope ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
+  const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(readyScope ? {linked_opening_detail: readyScope.detail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.detail, ordinary_opening_rows: ordinaryRows} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {

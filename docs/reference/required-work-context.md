@@ -306,6 +306,12 @@ immutable capture.
 original digest-bound capture in the wake prompt. Recovery reuses the saved
 decision and its original receipt.
 
+When native quota navigation requires explicit Todo selection, the opening
+keeps the discovery and same-Turn selection commands with the read obligations
+and execution controls. If the recommended candidate makes these controls too
+large for one page, the linked remainder contains its full details and the
+suggested alternatives. The selection commands use the original Turn identity.
+
 Native ready decisions from `quota should-run` and saved `quota context-project`
 can link two reads when boundary detail pushes controls past the serialized
 first page budget. When those controls fit, the ordinary reader keeps its cursor.
@@ -330,6 +336,10 @@ observation is lost, its same-capture fallback restores the full remainder.
 这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
 `navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
+
+原生额度导航要求显式选择 Todo 时，首读把候选发现、同一轮次的选择命令、必读项和执行
+约束放在一起。推荐候选的明细导致这些信息超出单页预算时，同一捕获的续读保留完整
+候选和其他建议选项。选择命令沿用原轮次身份。
 
 原生 `quota should-run` 及已保存的 `quota context-project` 就绪决策中，如果权限明细让
 控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
