@@ -1337,6 +1337,7 @@ def refresh_state_run(
                     "For a selected repository delivery, use the actual producing worktree; "
                     "the registered Goal workspace does not replace that requirement."
                 )
+        explore_result_recorded_at = None
         if checkpoint_supplement:
             # The supplemental row must not reattribute the original delivery to
             # the recovery caller's current directory or change its accounting.
@@ -1350,7 +1351,13 @@ def refresh_state_run(
                 "progress_observation"
             )
             normalized_explore_result = prior_writeback_run.get("explore_result")
+            explore_result_recorded_at = prior_writeback_run.get(
+                "explore_result_recorded_at", prior_writeback_run["generated_at"]
+            )
             classification = prior_writeback_run["classification"]
+        elif normalized_explore_result is not None:
+            # Attachment recovery orders committed decisions within one wall second.
+            explore_result_recorded_at = now_local_iso(timespec="microseconds")
         record = build_state_refresh_record(
             goal_id=safe_goal_id,
             state_file=resolved_state_file,
@@ -1373,10 +1380,7 @@ def refresh_state_run(
             vision_checkpoint=vision_checkpoint,
             progress_observation=normalized_progress_observation,
             explore_result=normalized_explore_result,
-            explore_result_recorded_at=(
-                prior_writeback_run.get("explore_result_recorded_at", prior_writeback_run["generated_at"])
-                if checkpoint_supplement and prior_writeback_run else None
-            ),
+            explore_result_recorded_at=explore_result_recorded_at,
             explore_result_source_snapshot=(
                 prior_writeback_run.get("explore_result_source_snapshot")
                 if checkpoint_supplement and prior_writeback_run

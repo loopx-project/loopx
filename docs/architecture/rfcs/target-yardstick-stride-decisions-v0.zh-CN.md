@@ -163,8 +163,9 @@ M1 在既有 `explore_result_attachment_v0` 中添加可选 `work_yardstick_deci
 原 settlement 提供 Goal/Agent/Todo/Turn 身份。既有 run journal、Explore event log
 和 Todo 追加关联管理持久化与重试；不新建 journal、metadata note、planner 或必填写回。
 决策变化必须引用同 Todo 当前 finding，校验与 append CAS 使用同一 graph 快照。
-原提交时间严格早于当前选择的 durable 精确重放可以补回缺失的历史 capture，
-但不放宽同刻或较新工作的前驱检查，附件调用方也不能提供重放时间戳。
+原提交时间严格早于当前选择的 durable 精确重放可以补回缺失的历史 capture。
+主写回保留附件时间戳的微秒精度，以区分同一秒内的不同提交。
+同刻或较新工作的前驱检查保持严格，附件调用方也不能提供重放时间戳。
 按原提交时间选择当前决策，迟到接收不能覆盖更新的选择。
 普通工作保留原 settlement 类型，不为 Stride v2 伪造 obligation；
 replan 沿用既有 v2 契约。省略附件保留当前决策；显式 `proxy: null` 选择直接评测，
