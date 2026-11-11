@@ -9,6 +9,7 @@ what the recovery obligation is all come from the TypeScript owner.
 
 from __future__ import annotations
 from .effective_action import EffectiveAction
+from .states import quota_item_is_paused
 
 from collections.abc import Mapping
 from pathlib import Path
@@ -343,6 +344,8 @@ def apply_unsettled_host_turn_recovery_if_required(
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
+    if quota_item_is_paused(payload):
+        return False
     verdict = _unsettled_host_turn_recovery(
         registry_path=registry_path,
         runtime_root=runtime_root,

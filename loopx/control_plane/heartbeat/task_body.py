@@ -675,6 +675,9 @@ def render_thin_heartbeat_task_body(
     # Core's returned read/recovery contract owns section selection and recovery;
     # the bootstrap routes to that owner instead of copying layout-specific rules.
     # Historical saved bodies remain intact.
+    policy_sections = "".join(
+        f"\n\n{section}" for section in (reward_memory_rule, policy_tail) if section
+    )
     return f"""Advance `{goal_id}` from {active_state}.
 
 {RUNTIME_EXECUTION_ROUTING_RULE}
@@ -698,11 +701,9 @@ Honor explicit full reads; keep capture/handoff flags on selection/same-Turn rep
 {HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
-P0 blocked: admitted P1/P2.
+P0 blocked: admitted P1/P2.{policy_sections}"""
 
-{reward_memory_rule}
 
-{policy_tail}"""
 def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
     budget = payload.get("interface_budget")
     interface_budget = budget if isinstance(budget, dict) else {}
@@ -749,27 +750,24 @@ def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
                 f"- thin_prompt_command: `{payload.get('thin_prompt_command')}`",
             ]
         )
-    if payload.get("pr_review_pre_quota_command") is not None:
-        lines.append(
-            "- pr_review_pre_quota_command: "
-            f"`{payload['pr_review_pre_quota_command']}`"
-        )
-    guard_command = payload.get("quota_guard_command")
     task_body = payload.get("task_body")
-    # The copyable body already owns this exact command. Keep one complete
-    # spelling in Markdown; failed/partial bodies still need the diagnostic.
-    guard_in_body = (
-        payload.get("ok") is not False
-        and isinstance(guard_command, str)
-        and bool(guard_command.strip())
-        and isinstance(task_body, str)
-        and guard_command in task_body.splitlines()
+    body_lines = (
+        task_body.splitlines()
+        if payload.get("ok") is not False and isinstance(task_body, str)
+        else []
     )
+    # A complete command already in the copyable body needs only a location.
+    # Keep full diagnostics for absent, partial or failed bodies.
+    for key in ("pr_review_pre_quota_command", "quota_guard_command"):
+        command = payload.get(key)
+        if key == "pr_review_pre_quota_command" and command is None:
+            continue
+        if isinstance(command, str) and command.strip() and command in body_lines:
+            lines.append(f"- {key}: in task body")
+        else:
+            lines.append(f"- {key}: `{command}`")
     lines.extend(
         [
-            "- quota_guard_command: shown verbatim in task body"
-            if guard_in_body
-            else f"- quota_guard_command: `{guard_command}`",
             f"- quota_spend_command: `{payload.get('quota_spend_command')}`",
             f"- cli_preflight: `{payload.get('cli_preflight')}`",
             "- interface_budget: "

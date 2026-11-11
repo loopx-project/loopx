@@ -310,12 +310,13 @@ def test_thin_markdown_diagnostics_only_show_the_selected_prompt_command() -> No
     assert "- brief_prompt_command:" not in rendered
     assert payload["quota_guard_command"] in payload["task_body"].splitlines()
     assert rendered.count(payload["quota_guard_command"]) == 1
-    assert "- quota_guard_command: shown verbatim in task body" in rendered
+    assert "- quota_guard_command: in task body" in rendered
 
 
+@pytest.mark.parametrize("key", ["pr_review_pre_quota_command", "quota_guard_command"])
 @pytest.mark.parametrize("body_kind", ["missing", "prefix", "different", "error"])
-def test_markdown_keeps_guard_diagnostic_without_a_successful_exact_body_command(body_kind) -> None:
-    command = "loopx quota should-run --goal-id fixture"
+def test_markdown_keeps_diagnostics_without_a_successful_exact_body_command(key, body_kind) -> None:
+    command = "loopx --registry '/fixture path/registry.json' quota should-run --goal-id fixture"
     body = {
         "missing": "",
         "prefix": command + " --todo-id another-todo",
@@ -325,10 +326,10 @@ def test_markdown_keeps_guard_diagnostic_without_a_successful_exact_body_command
     rendered = render_heartbeat_generator_inputs_markdown({
         "ok": body_kind != "error",
         "task_body": body,
-        "quota_guard_command": command,
+        key: command,
     })
-    assert f"- quota_guard_command: `{command}`" in rendered
-    assert "shown verbatim in task body" not in rendered
+    assert f"- {key}: `{command}`" in rendered
+    assert f"- {key}: in task body" not in rendered
 
 
 @pytest.mark.parametrize("resolved", ["same", "different", None])
@@ -368,11 +369,31 @@ def test_markdown_diagnostics_keep_available_prequota_commands(review_enabled) -
     assert payload["quota_guard_command"] in payload["task_body"].splitlines()
     assert rendered.count(payload["quota_guard_command"]) == 1
     if review_enabled:
-        assert "heartbeat-prequota" in payload["pr_review_pre_quota_command"]
-        assert f"- pr_review_pre_quota_command: `{payload['pr_review_pre_quota_command']}`" in rendered
+        prequota = payload["pr_review_pre_quota_command"]
+        assert "heartbeat-prequota" in prequota
+        assert prequota in payload["task_body"].splitlines()
+        assert rendered.count(prequota) == 1
+        assert "- pr_review_pre_quota_command: in task body" in rendered
     else:
         assert payload["pr_review_pre_quota_command"] is None
         assert "- pr_review_pre_quota_command:" not in rendered
+
+
+@pytest.mark.parametrize("memory_enabled", [False, True])
+def test_thin_body_only_separates_present_policy_sections(memory_enabled: bool) -> None:
+    payload = build_heartbeat_prompt(
+        goal_id="fixture", thin=True, reward_memory_enabled=memory_enabled,
+        material_queue_rule="Use only explicitly requested materials.",
+        permission_rule="Confirm the current operation's authority.",
+    )
+    body = payload["task_body"]
+    policy_start = body.index("P0 blocked:")
+    sections = body[policy_start:].split("\n\n")
+    assert sections[-1] == "Use only explicitly requested materials. Confirm the current operation's authority."
+    assert all(section and not section.startswith("\n") for section in sections)
+    assert len(sections) == (3 if memory_enabled else 2)
+    if memory_enabled:
+        assert "--reward-memory-reflection-json" in sections[1]
 
 
 def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:

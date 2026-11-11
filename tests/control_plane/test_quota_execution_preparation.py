@@ -136,7 +136,7 @@ def _run(
     return packet
 
 
-def _present_saved_guard(tmp_path, native, capture, scenario, turn):
+def _present_saved_guard(tmp_path, native, capture, scenario, turn, *, refused_receipt=None):
     source = capture / "decision.json"
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     code, view = run_json_cli_result(
@@ -146,7 +146,14 @@ def _present_saved_guard(tmp_path, native, capture, scenario, turn):
         "--capture-file", str(source), "--capture-sha256", digest,
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
     )
-    assert code == 0 and view["ok"] is True, view
+    if refused_receipt is not None:
+        assert code == 1 and view["ok"] is False, view
+        assert view["error_code"] == "quota_decision_transport_failed"
+        assert view["reason"] == "complete Turn decision content integrity mismatch"
+        assert view["heartbeat_receipt"] == refused_receipt
+        assert not {"execution_preparation", "interaction_contract", "first_read_command"} & view.keys()
+    else:
+        assert code == 0 and view["ok"] is True, view
     return digest
 
 
@@ -663,6 +670,10 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
             "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
 
     unverified_copy = case in ("reencoded-released-execution", "legacy-marked-released-execution")
+    signed_tamper = (
+        case == "legacy-marked-released-execution"
+        and json.loads(original_bytes).get("schema_version") == "loopx_turn_envelope_v1"
+    )
     if legacy or unverified_copy:
         presented_capture = capture
         if unverified_copy:
@@ -674,16 +685,23 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
             else:
                 copy.write_bytes(original_bytes + b" ")
             copy.chmod(0o600)
-        presented_digest = _present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn)
+        presented_digest = _present_saved_guard(
+            tmp_path, native, presented_capture, "codex_app_heartbeat", turn,
+            refused_receipt=before["heartbeat_receipt"] if signed_tamper else None,
+        )
         assert (presented_digest != digest) == unverified_copy
     result = hook()
     resume = hook("SessionStart")
     current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
     assert source.read_bytes() == original_bytes
     if legacy or unverified_copy:
-        guidance = result["hookSpecificOutput"]["additionalContext"]
-        assert "no verified live guard binding" in guidance and "fresh capture" in guidance
-        assert "host_execution_prepared" not in guidance
+        if signed_tamper:
+            # A rejected complete capture must retire the moving recovery lookup.
+            assert result == resume == {}
+        else:
+            guidance = result["hookSpecificOutput"]["additionalContext"]
+            assert "no verified live guard binding" in guidance and "fresh capture" in guidance
+            assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
         assert current["active"] is (not released)
         assert current["lease"]["lease_epoch"] == lease["lease_epoch"]

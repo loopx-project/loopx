@@ -388,6 +388,14 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
       request.has_deferred_count === true ? request.deferred_count : null);
   const resumeBlocked = blocked(sources.resume_blocked_items.length ? sources.resume_blocked_items
     : [...sources.items, ...sources.backlog_items, ...sources.first_open_items]);
+  const blockedWaitItems = display.agent ? ordered(unique([
+    ...sources.items, ...sources.backlog_items, ...sources.first_open_items,
+  ])).filter(entry => {
+    const lane = claimLane(entry, display.agent!);
+    return entry.status === "blocked" && !entry.done && entry.ready !== true &&
+      ["blocker", "advancement_task"].includes(String(entry.payload.task_class)) &&
+      (lane === "current_agent" || lane === "unclaimed");
+  }) : [];
   const monitorItems = monitorBlocked(resumeBlocked);
   const waits = payloads(successorWaits(resumeBlocked, deferredItems, display.agent));
   const pending = selectPendingResume(waits, display.agent).todo;
@@ -398,6 +406,7 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),
     blocked_successor_items: waits,
+    blocked_wait_items: payloads(blockedWaitItems),
     ...(pending ? {automatic_resume_todo: {todo_id: pending.todo_id, status: pending.status,
       claimed_by: pending.claimed_by ?? null, ...automaticResumeFields(pending)}} : {}),
     dependency_cycle_replan: dependencyCycleReplan([...resumeBlocked, ...deferredItems], display.agent),
