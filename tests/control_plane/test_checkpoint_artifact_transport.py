@@ -9,6 +9,7 @@ from loopx.cli import main
 from loopx.control_plane.effect_runtime import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
+    EffectRuntimeConflict,
     EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     effect_runtime_result,
@@ -68,6 +69,12 @@ def test_large_member_transport_with_explicit_rpc_budget_preserves_inventory(tmp
     assert sorted(p.name for p in (destination / "components/research").iterdir()) == [
         row["path"] for row in expected[1:]]
     member = destination / "components/research" / expected[-1]["path"]
+    with pytest.raises(EffectRuntimeConflict, match="^checkpoint destination already exists$") as rejected:
+        effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "materialize", "root": str(unit), "expected_sha256": captured["sha256"],
+            "destination": str(destination),
+        }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
+    assert rejected.value.diagnostic_code == "state_conflict"
     assert member.read_bytes() == content
     member.unlink()
     with pytest.raises(EffectRuntimeRemoteError):
