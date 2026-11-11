@@ -17,7 +17,11 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from ...capabilities.native_chat.external_conversations import ChatExternalConversations, QUOTA_BACKLOG_BATCH_SIZE
+from ...capabilities.native_chat.external_conversations import (
+    ChatExternalConversations,
+    QUOTA_BACKLOG_BATCH_SIZE,
+    STEWARD_BINDING_ADOPTION_PENDING,
+)
 from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from ...chat_store import CHAT_MESSAGE_SCHEMA_VERSION, ChatSessionStore, TERMINAL_TURN_STATES, _atomic_write_json, _read_json
@@ -37,7 +41,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
-from .private_delivery_discovery import PrivateDeliveryDiscovery
+from .private_delivery_discovery import PrivateDeliveryDiscovery, prepared_steward_binding_waits
 from .private_ingress import project_private_reply_history as project_private_reply_history
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
@@ -681,14 +685,15 @@ class LarkPrivateConversations:
 
     @staticmethod
     def _record_admission(path: Path, record: dict[str, Any], admitted: dict[str, Any]) -> dict[str, Any]:
-        # Keep the existing recoverable capture until Core performs the frozen
-        # stop. A prepared command never claims execution or a delivered reply.
+        # Keep the recoverable capture while Core holds the original request.
         record.update(status="captured" if admitted["status"] == "prepared" else admitted["status"],
                       session_id=admitted["session_id"], turn_id=admitted["turn_id"],
                       response=admitted.get("response"), response_code=admitted.get("response_code"))
         if admitted.get("context_recovery"):
             record["context_recovery"] = admitted["context_recovery"]
         _atomic_write_json(path, record)
+        if admitted["status"] == "prepared" and admitted.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+            return {"status": "admission_deferred"}
         status = "durably_accepted" if admitted["status"] == "accepted" else (
             "queue_rejected" if admitted["status"] == "rejected" else "command_recorded")
         return {"status": status}
@@ -1947,6 +1952,13 @@ class LarkPrivateConversations:
                 native_path = self.core.root / f"{row['request_ref']}.json"
                 if row["status"] == "captured" and native_path.exists():
                     native = self.core.read_request(row["request_ref"])
+                    if (row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+                            and native.get("status") == "prepared"
+                            and native.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+                            and all(native.get(key) == row.get(key)
+                                    for key in ("request_ref", "binding_id", "source", "session_id", "turn_id"))
+                            and prepared_steward_binding_waits(native, self.bindings.read()["bindings"], self.core.controller.store)):
+                        return 0
                     if (native.get("command") == "stop" and native.get("target_recorded") is True
                             and all(native.get(key) == row.get(key)
                                     for key in ("request_ref", "binding_id", "source"))):
@@ -1966,6 +1978,8 @@ class LarkPrivateConversations:
             if row["status"] == "captured":
                 self.admit(row["profile"], row["event"])
                 row = _read_json(path)
+                if row["status"] == "captured" and row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+                    return 0
         native_path = self.core.root / f"{row['request_ref']}.json"
         if native_path.exists():
             if (self.reaction_feedback and not row.get("context_recovery") and row["status"] == "accepted"

@@ -32,6 +32,7 @@ from .file_discovery import FileChatDiscovery
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
+STEWARD_BINDING_ADOPTION_PENDING = "steward_executor_binding_pending"
 
 
 def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
@@ -1450,6 +1451,9 @@ class ChatExternalConversations:
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
                         *, recovering_request: bool = False) -> dict[str, Any]:
         controller = self.controller
+        held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
+        if held_for_binding:
+            row.pop("response_code")
         self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
             choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
@@ -1461,6 +1465,7 @@ class ChatExternalConversations:
         if row["command"] in {"agents", "select_agent", "select_project"}:
             row["agent_target"] = None
         target = row.get("agent_target")
+        steward_candidate = None
         if target:
             authority = self.bindings.resolve_agent_target(selected, target)
             row["agent_audience"] = authority["audience"]
@@ -1482,10 +1487,11 @@ class ChatExternalConversations:
                               if item.get("status") in RESUMABLE_SESSION_STATES]
                 if candidates:
                     latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
-                    candidate = controller.store.load_session(latest["session_id"])
-                    if candidate and candidate.get("manager_executor_allocation", {}).get("selection_policy") == "flexible":
-                        self.bindings.session_context(candidate["steward_context"], session=candidate)
-                        current = candidate
+                    steward_candidate = controller.store.load_session(latest["session_id"])
+                    allocation = (steward_candidate or {}).get("manager_executor_allocation")
+                    if isinstance(allocation, dict) and allocation.get("selection_policy") == "flexible":
+                        self.bindings.session_context(steward_candidate["steward_context"], session=steward_candidate)
+                        current = steward_candidate
         if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
@@ -1510,8 +1516,14 @@ class ChatExternalConversations:
                 row.update(status="accepted", turn_id=turn["turn_id"])
                 _atomic_write_json(path, row)
                 return row
+            if held_for_binding and current.get("status") == "closed":
+                raise ValueError("the original steward Session is unavailable for admission")
+            steward_candidate = current
         from ...control_plane.effect_runtime import effect_runtime_result
         observations = {}
+        if (row["command"] is None and steward_candidate and selected["binding"]["context_kind"] == "steward"
+                and steward_candidate.get("executor_endpoint_id") != selected["binding"]["executor_endpoint_id"]):
+            observations.update(steward_adoption_session=steward_candidate, context=selected["context"])
         if (row["command"] == "stop" and current and not current.get("active_turn_id")
                 and not row.get("target_recorded") and not target):
             # Freeze canonical candidates before any fallible native inventory
@@ -1536,6 +1548,11 @@ class ChatExternalConversations:
             "current_session": current, "binding": selected["binding"],
             "agent_target": target, **observations})
         operation = plan["operation"]
+        if operation == "hold_steward_binding":
+            row.update(session_id=plan["session_id"], response_code=STEWARD_BINDING_ADOPTION_PENDING)
+            if not held_for_binding:
+                _atomic_write_json(path, row)
+            return row
         if operation == "select_recipient":
             if selected["binding"]["context_kind"] != "project":
                 raise ValueError("Agent selection requires the project assistant")
