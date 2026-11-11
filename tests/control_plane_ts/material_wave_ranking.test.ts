@@ -187,6 +187,78 @@ test("enforces unranked load-bearing primary gate, topological primary-over-seco
   );
 });
 
+test("places orthogonal backlog after active waves that overflow the top window", () => {
+  const result = planMaterialWaveRerank({
+    ordered_material_refs: [
+      "material-orthogonal-backlog",
+      "material-active-a",
+      "material-active-b",
+      "material-active-c",
+    ],
+    top_window_size: 2,
+    max_orthogonal_in_top_window: 0,
+    annotations: [
+      {
+        material_ref: "material-orthogonal-backlog",
+        horizon_wave: "orthogonal_backlog",
+        effort_band: "quick_slice",
+        decision_gain_score: 100,
+        evidence_role: "orthogonal_signal",
+      },
+      ...["material-active-a", "material-active-b", "material-active-c"].map(
+        (materialRef, index) => ({
+          material_ref: materialRef,
+          horizon_wave: "active_sprint" as const,
+          effort_band: "quick_slice" as const,
+          decision_gain_score: 90 - index,
+          evidence_role: "method_comparator" as const,
+        }),
+      ),
+    ],
+  });
+
+  assert.deepEqual(result.reordered_material_refs, [
+    "material-active-a",
+    "material-active-b",
+    "material-active-c",
+    "material-orthogonal-backlog",
+  ]);
+});
+
+test("Top-Window replacement skips a candidate that depends on the shifted orthogonal source", () => {
+  const result = planMaterialWaveRerank({
+    ordered_material_refs: [
+      "material-primary",
+      "material-secondary",
+      "material-independent",
+    ],
+    top_window_size: 1,
+    max_orthogonal_in_top_window: 0,
+    annotations: [
+      {
+        material_ref: "material-primary",
+        horizon_wave: "orthogonal_backlog",
+        evidence_role: "orthogonal_signal",
+      },
+      {
+        material_ref: "material-secondary",
+        horizon_wave: "active_sprint",
+        primary_source_refs: ["material-primary"],
+      },
+      {
+        material_ref: "material-independent",
+        horizon_wave: "active_sprint",
+      },
+    ],
+  });
+
+  assert.deepEqual(result.reordered_material_refs, [
+    "material-independent",
+    "material-primary",
+    "material-secondary",
+  ]);
+});
+
 test("preserves 300-item queue ergonomics: active waves 1..16, untouched 17..30, demoted orthogonal 31..34, untouched 35..300", () => {
   const ordered = Array.from(
     {length: 300},

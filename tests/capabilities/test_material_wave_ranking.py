@@ -210,6 +210,109 @@ def test_wave_rerank_rejects_unranked_load_bearing_cycles_and_unsafe_inputs() ->
         )
 
 
+def test_cli_wave_rerank_handles_active_overflow_and_dependency_safe_replacement(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    overflow = {
+        "ordered_material_refs": [
+            "material-orthogonal-backlog",
+            "material-active-a",
+            "material-active-b",
+            "material-active-c",
+        ],
+        "top_window_size": 2,
+        "max_orthogonal_in_top_window": 0,
+        "annotations": [
+            {
+                "material_ref": "material-orthogonal-backlog",
+                "horizon_wave": "orthogonal_backlog",
+                "effort_band": "quick_slice",
+                "decision_gain_score": 100,
+                "evidence_role": "orthogonal_signal",
+            },
+            *[
+                {
+                    "material_ref": material_ref,
+                    "horizon_wave": "active_sprint",
+                    "effort_band": "quick_slice",
+                    "decision_gain_score": 90 - index,
+                    "evidence_role": "method_comparator",
+                }
+                for index, material_ref in enumerate(
+                    (
+                        "material-active-a",
+                        "material-active-b",
+                        "material-active-c",
+                    )
+                )
+            ],
+        ],
+    }
+    dependency = {
+        "ordered_material_refs": [
+            "material-primary",
+            "material-secondary",
+            "material-independent",
+        ],
+        "top_window_size": 1,
+        "max_orthogonal_in_top_window": 0,
+        "annotations": [
+            {
+                "material_ref": "material-primary",
+                "horizon_wave": "orthogonal_backlog",
+                "evidence_role": "orthogonal_signal",
+            },
+            {
+                "material_ref": "material-secondary",
+                "horizon_wave": "active_sprint",
+                "primary_source_refs": ["material-primary"],
+            },
+            {
+                "material_ref": "material-independent",
+                "horizon_wave": "active_sprint",
+            },
+        ],
+    }
+
+    for request, expected in (
+        (
+            overflow,
+            [
+                "material-active-a",
+                "material-active-b",
+                "material-active-c",
+                "material-orthogonal-backlog",
+            ],
+        ),
+        (
+            dependency,
+            [
+                "material-independent",
+                "material-primary",
+                "material-secondary",
+            ],
+        ),
+    ):
+        input_path = tmp_path / f"wave-request-{len(expected)}.json"
+        input_path.write_text(json.dumps(request), encoding="utf-8")
+        assert (
+            main(
+                [
+                    "material-lifecycle",
+                    "plan-wave-rerank",
+                    "--input",
+                    str(input_path),
+                    "--format",
+                    "json",
+                ]
+            )
+            == 0
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["reordered_material_refs"] == expected
+
+
 def test_material_lifecycle_cli_plan_wave_rerank_supports_file_stdin_and_fail_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

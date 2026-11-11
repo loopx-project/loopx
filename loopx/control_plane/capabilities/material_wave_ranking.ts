@@ -700,7 +700,8 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
 
   const topWindowMovable: NormalizedItem[] = [];
   const deferredOrthogonal: NormalizedItem[] = [];
-  const remainingMovable: NormalizedItem[] = [];
+  const remainingActiveWaves: NormalizedItem[] = [];
+  const remainingPassive: NormalizedItem[] = [];
   const deferredByCapSet = new Set<string>();
   let movableOrthUsed = 0;
 
@@ -724,16 +725,23 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
       } else {
         topWindowMovable.push(item);
       }
+    } else if (
+      item.effectiveWave === "imminent_gate" ||
+      item.effectiveWave === "active_sprint" ||
+      item.effectiveWave === "foundational_track"
+    ) {
+      remainingActiveWaves.push(item);
     } else {
-      remainingMovable.push(item);
+      remainingPassive.push(item);
     }
   }
 
   const initialMovable = [
     ...topWindowMovable,
+    ...remainingActiveWaves,
     ...deferredOrthogonal,
     ...orthogonalWaveItems,
-    ...remainingMovable,
+    ...remainingPassive,
   ].map((item) => item.materialRef);
 
   const basePos = new Map<string, number>();
@@ -792,7 +800,7 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
     unplacedPredCount.set(ref, preds.get(ref)!.size);
   }
   const unplacedMovable = new Set<string>(pulledList);
-  const finalOrder: string[] = [];
+  let finalOrder: string[] = [];
 
   const countOpenSlotsInRange = (startRank: number, endRank: number): number => {
     let count = 0;
@@ -897,6 +905,25 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
     }
     return false;
   };
+  const rebuildFinalOrder = (movableOrder: readonly string[]): string[] => {
+    const rebuilt = [...finalOrder];
+    let cursor = 0;
+    for (let index = 0; index < totalCount; index++) {
+      if (!lockedRankToRef.has(index + 1)) {
+        rebuilt[index] = movableOrder[cursor++]!;
+      }
+    }
+    return rebuilt;
+  };
+  const preservesPrimaryPrecedence = (order: readonly string[]): boolean => {
+    const ranks = currentRankOf(order);
+    for (const [ref, predSet] of preds.entries()) {
+      for (const pred of predSet) {
+        if (ranks.get(pred)! >= ranks.get(ref)!) return false;
+      }
+    }
+    return true;
+  };
 
   while (
     countOrthInTop(finalOrder) > maxOrthogonalInTopWindow &&
@@ -918,18 +945,31 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
     }
     // Find leftmost movable non-orthogonal item below Top Window whose predecessors are all in Top Window.
     let replacementMovableIndex = -1;
+    let replacementFinalOrder: string[] | null = null;
     for (let mIdx = openSlotsInTop; mIdx < movableSeq.length; mIdx++) {
       const candidate = movableSeq[mIdx]!;
       if (itemByRef.get(candidate)!.isOrthogonal) continue;
       const allPredsInTop = [...preds.get(candidate)!].every(
         (pred) => rankMap.get(pred)! <= effectiveTopWindow,
       );
-      if (allPredsInTop) {
+      if (!allPredsInTop) continue;
+      const candidateMovable = [...movableSeq];
+      candidateMovable.splice(mIdx, 1);
+      candidateMovable.splice(orthMovableIndex, 1);
+      candidateMovable.splice(openSlotsInTop - 1, 0, candidate);
+      candidateMovable.splice(openSlotsInTop, 0, movableSeq[orthMovableIndex]!);
+      const candidateOrder = rebuildFinalOrder(candidateMovable);
+      if (preservesPrimaryPrecedence(candidateOrder)) {
         replacementMovableIndex = mIdx;
+        replacementFinalOrder = candidateOrder;
         break;
       }
     }
-    if (orthMovableIndex === -1 || replacementMovableIndex === -1) {
+    if (
+      orthMovableIndex === -1 ||
+      replacementMovableIndex === -1 ||
+      replacementFinalOrder === null
+    ) {
       fail(
         "cannot satisfy max_orthogonal_in_top_window without violating primary_source_refs or protected anchors",
       );
@@ -941,13 +981,7 @@ export function planMaterialWaveRerank(rawRequest: JsonObject): JsonObject {
     movableSeq.splice(orthMovableIndex, 1);
     movableSeq.splice(openSlotsInTop - 1, 0, promotedNonOrth);
     movableSeq.splice(openSlotsInTop, 0, shiftedOrth);
-
-    let mCursor = 0;
-    for (let idx = 0; idx < totalCount; idx++) {
-      if (!lockedRankToRef.has(idx + 1)) {
-        finalOrder[idx] = movableSeq[mCursor++]!;
-      }
-    }
+    finalOrder = replacementFinalOrder;
     rankMap = currentRankOf(finalOrder);
   }
 
