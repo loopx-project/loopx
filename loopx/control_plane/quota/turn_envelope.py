@@ -302,6 +302,14 @@ def compose_turn_decision(
     return _apply_context_projection_changes(source, result)
 
 
+def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
+    """Recognize saved raw/v0 carriers that predate complete-source checking."""
+    return (
+        "contract_binding" not in payload
+        and payload.get("schema_version", TURN_ENVELOPE_SCHEMA_VERSION) == TURN_ENVELOPE_SCHEMA_VERSION
+    )
+
+
 def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
     """Validate the original contract; keep its host binding and caller-owned bytes."""
     _turn_envelope_result("complete_consumer", payload=dict(payload))
