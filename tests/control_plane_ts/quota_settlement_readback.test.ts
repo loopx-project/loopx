@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { settlementIdentity } from "../../loopx/control_plane/effect_program.ts";
+import { settlementIdentity, settlementIdentityPayload } from "../../loopx/control_plane/effect_program.ts";
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -28,6 +28,7 @@ import {
   QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
   readQuotaSettlement,
   readQuotaSettlementSnapshot,
+  readQuotaSettlementFromSnapshot,
 } from "../../loopx/control_plane/quota/settlement_readback.ts";
 import {
   PRIOR_HOST_TURN_CLOSEOUT_PREFLIGHT_REQUEST_SCHEMA,
@@ -461,6 +462,83 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("pending closeout survives maintenance and reads one original receipt snapshot", async t => {
+  for (const entry of [
+    {state: "writeback_required"},
+    {writeback: true, state: "spend_required"},
+    {writeback: true, spend: true, remove: "quota_spend", state: "spend_receipt_required"},
+    {writeback: true, spend: true, state: null},
+    {monitor: true, state: null},
+    {guard: false, state: null},
+    {legacy: true, state: null},
+  ]) await t.test(entry.state ?? "no debt", async () => {
+    const root = await fixture(entry);
+    try {
+      const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const index = join(root, "goals", goalId, "runs", "index.jsonl");
+      const events = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+      for (const event of events) if (event.event_kind === "quota_should_run") event.details.closeout_required = entry.legacy !== true;
+      await writeFile(log, events.filter(event => event.event_kind !== entry.remove).map(event => JSON.stringify(event)).join("\n") + "\n");
+      await appendFile(index, JSON.stringify({goal_id: goalId, agent_id: agentId,
+        classification: "local_upgrade_status_updated", delivery_outcome: "surface_only"}) + "\n");
+      const input = request(root, {pending_closeout: true, turn_instance_id: null, todo_id: null});
+      const snapshot = await readQuotaSettlementSnapshot(root, goalId);
+      const result = readQuotaSettlementFromSnapshot(input, snapshot);
+      assert.equal(result.found, entry.state !== null);
+      if (entry.state !== null) {
+        assert.deepEqual((result.identity as any).result.value, settlementIdentityPayload(identity));
+        assert.equal((result.progress as any).state, entry.state);
+        const mismatch = readQuotaSettlementFromSnapshot({...input, todo_id: "todo_foreign"}, snapshot);
+        assert.equal((mismatch.identity as any).payload.ok, false);
+        assert.match((mismatch.identity as any).result.failure.reason, /binding differs/);
+      }
+      assert.equal(readQuotaSettlementFromSnapshot({...input, agent_id: "another-agent"}, snapshot).found, false);
+      assert.deepEqual(await readQuotaSettlement(input), result);
+      // Candidate selection and exact readback use the already acquired snapshot.
+      await writeFile(log, "corrupt live history\n");
+      assert.deepEqual(readQuotaSettlementFromSnapshot(input, snapshot), result);
+      await assert.rejects(readQuotaSettlement(input), /malformed/);
+    } finally {await rm(root, {recursive: true, force: true});}
+  });
+});
+
+test("pending closeout keeps replan identity and rejects query/admission mixing", async () => {
+  const root = await fixture();
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const events = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const obligation = "replan-0000000000000001";
+    const bound = settlementIdentity({goal_id: goalId, agent_id: agentId, todo_id: null,
+      replan_obligation_id: obligation, turn_instance_id: turnId});
+    events[0].details = {closeout_required: true, replan_obligation_id: obligation,
+      semantic_replan_obligation_id: obligation, settlement_effect_id: bound.effect_id};
+    await writeFile(log, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+    const input = request(root, {pending_closeout: true, turn_instance_id: null, todo_id: null});
+    assert.deepEqual(((await readQuotaSettlement(input)).identity as any).result.value, settlementIdentityPayload(bound));
+    for (const patch of [{infer_turn_instance_id: true}, {allow_unbound_binding: true},
+      {refresh_retry: {}}, {heartbeat_reentry_guard: {}}, {spend_precheck: true}]) {
+      await assert.rejects(readQuotaSettlement({...input, ...patch}), /read-only receipt recovery/);
+    }
+    await assert.rejects(readQuotaSettlement({...input, pending_closeout: "yes"}), /must be a boolean/);
+    await assert.rejects(readQuotaSettlement({...input, agent_id: null}), /explicit Agent/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("pending closeout cannot adopt another Goal instance's receipts", async () => {
+  const root = await fixture({goalRef: {goal_id: goalId, goal_instance_id: instanceA}});
+  try {
+    const log = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    const event = JSON.parse((await readFile(log, "utf8")).trim());
+    event.details.closeout_required = true;
+    await writeFile(log, JSON.stringify(event) + "\n");
+    await withSourceAdmission(root, instanceB, instanceB, async binding => {
+      const result = await readQuotaSettlement(request(root, {...binding, pending_closeout: true,
+        turn_instance_id: null, todo_id: null}));
+      assert.equal(result.found, false);
+    });
+  } finally {await rm(root, {recursive: true, force: true});}
+});
 
 function sourceGuardPath(registryPath: string): string {
   const digest = createHash("sha256").update(goalId, "utf8").digest("hex");

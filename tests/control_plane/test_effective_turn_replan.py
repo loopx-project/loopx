@@ -479,11 +479,24 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert transition["reason_code"] == "stride_review_basis_mismatch"
     assert transition["host_action"] == "read_current_replan_context"
     assert transition["next_cli_actions"] == []  # No unbound repeat of the rejected write.
+    owed_recovery = foreign["settlement_recovery"]
+    assert owed_recovery["settlement_identity"] == reread["heartbeat_receipt"]["settlement_identity"]
+    from tests.control_plane.test_quota_settlement_cli import _run_generated_cli
+    recovered_code, recovered_turn = _run_generated_cli(owed_recovery["next_cli_actions"][0],
+        registry_path=registry, cwd=project)
+    assert recovered_code == 0, json.dumps(recovered_turn, indent=2)
+    assert recovered_turn["heartbeat_receipt"]["settlement_identity"] == owed_recovery["settlement_identity"]
+    assert _heartbeat_receipt_count(runtime, "stride-due-review") == receipt_count
+    assert _spend_run_count(runtime) == spend_count
     reference = transition["context_recovery"]
     # A rejected write must not eagerly import historical acceptance/evidence
     # into the model. Its exact write-time basis remains independently readable.
     if os.name == "posix":
-        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 4096
+        # Preserve the old diagnostic budget; the additive original-Turn
+        # recovery has its own bounded allowance, not historical context.
+        assert len(json.dumps({key: value for key, value in foreign.items() if key != "settlement_recovery"}, ensure_ascii=False).encode()) < 4096
+        assert len(json.dumps(owed_recovery, ensure_ascii=False).encode()) < 2048
+        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 6144
         from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
         saved, _, recovery = read_context_capture_file(reference["path"], reference["sha256"], private=True)
         assert saved.stat().st_mode & 0o077 == 0
