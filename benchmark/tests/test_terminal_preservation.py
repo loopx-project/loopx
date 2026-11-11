@@ -326,6 +326,12 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     assert receipt["source_retained"] and receipt["source_stopped"]
     assert not receipt["restore_qualified"]
     assert receipt["capture_succeeded"] is not capture_failure
+    if capture_failure:
+        assert receipt["error_kind"] == "NotFound"
+        assert receipt["missing_component_id"] == "missing"
+        assert "/missing-participant" not in json.dumps(receipt)
+    else:
+        assert "missing_component_id" not in receipt
     assert len(grades) == 1  # Saving the tail did not create an evaluation opportunity.
     if not capture_failure:
         point = supervisor.destination / receipt["capture_id"]

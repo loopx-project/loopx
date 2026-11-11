@@ -114,7 +114,7 @@ def test_archive_keeps_private_directory_modes_without_special_bits(writer, tmp_
     assert (copied / "child").stat().st_mode & 0o7777 == 0o700
 
 
-@pytest.mark.parametrize("fault", [None, "source_moved", "expired", "read_race", "late_native",
+@pytest.mark.parametrize("fault", [None, "source_moved", "source_missing", "expired", "read_race", "late_native",
     "retention", "retention_default", "retention_off", "retention_pin", "retention_failure", "continued_clock"])
 def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writer, tmp_path, monkeypatch, fault):
     from loopx.control_plane.effect_runtime import effect_runtime_result
@@ -145,6 +145,8 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
         "deadline_epoch": time.time() + (-1 if fault == "expired" else 8 if fault == "late_native" else 30)}
     if fault == "source_moved":
         assert container.exec_run(["python", "-c", "from pathlib import Path; Path('/candidate').write_text('later')"]).exit_code == 0
+    if fault == "source_missing":
+        assert container.exec_run(["rm", "/candidate"]).exit_code == 0
     assert container.exec_run(["python", "-c", "from pathlib import Path; "
         "Path('/logs/agent/checkpoint-controller/ready.json').write_text(" + repr(json.dumps(request)) + ")"]).exit_code == 0
     if fault == "read_race":
@@ -232,6 +234,13 @@ def test_supervisor_captures_only_the_prepared_worker_boundary(controllers, writ
             assert (tmp_path / "points/retention-error.json").exists()
     else:
         assert not unit.exists()
+        if fault == "source_missing":
+            reply = container.exec_run(["cat", "/logs/agent/checkpoint-controller/" + nonce + ".json"])
+            assert reply.exit_code == 0
+            assert json.loads(reply.output) == response
+            assert response["error_kind"] == "NotFound"
+            assert response["missing_component_id"] == "code"
+            assert b"/candidate" not in reply.output
         if fault != "late_native":
             assert not (Path(json.loads(files[0].read_bytes())["bank_root"]) / nonce).exists()
     container.reload()
