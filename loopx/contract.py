@@ -688,7 +688,7 @@ def _todo_contract_diagnostics(
             # and non-terminal User class/scope rules. Evaluate provider rows without reading display.
             try:
                 canonical_diagnostics = todo_contract_diagnostics(
-                    todos=canonical["todos"],
+                    todos=canonical["todo_contract_rows" if todo_snapshot is not None else "todos"],
                     registered_agents=registered_agent_ids_for_goal(goal),
                     terminal_statuses=TERMINAL_TODO_STATUSES,
                 )
