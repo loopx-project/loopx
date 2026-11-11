@@ -32,7 +32,7 @@ import mlEvidenceUrl from "../../../../docs/assets/long-running-loop-ml-experime
 type Language = "en" | "zh";
 
 const setupPrompts: Record<Language, string> = {
-  en: `Help me start LoopX in the current project: https://github.com/loopx-project/loopx
+  en: `Connect the current project to LoopX: https://github.com/loopx-project/loopx
 
 Do not clone LoopX. Follow the README Quick Start to use the no-clone installer and \`loopx doctor\`, then reuse or \`loopx connect/bootstrap\` the current project state.
 
@@ -41,7 +41,7 @@ After setup, first report whether the project is connected, then ask me for one 
 When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, then show me the current work, any decision that needs me, and the next safe action.
 
 Keep LoopX internal terms behind advanced or debugging explanations unless a decision requires them.`,
-  zh: `帮我在当前项目启动 LoopX: https://github.com/loopx-project/loopx
+  zh: `把当前项目接入 LoopX: https://github.com/loopx-project/loopx
 
 不要 clone LoopX；按 README Quick Start 使用 no-clone installer、
 \`loopx doctor\`，复用或 \`loopx connect/bootstrap\` 当前项目状态。
@@ -85,7 +85,7 @@ const content = {
     setup: {
       eyebrow: "Goal-first setup",
       title: "Start from the outcome.",
-      body: "Give your current agent one setup prompt, then send the goal. Shell remains available when you want the manual path.",
+      body: "Give your current agent one setup prompt, then send the goal. Prefer the shell? Install LoopX manually.",
       agentTitle: "Guided agent start",
       agentBody: "Ask Codex, Claude Code, OpenCode, TraeX, Pi, or another shell-capable agent to connect this project and keep the machinery behind the scenes.",
       shellTitle: "Manual shell setup",
