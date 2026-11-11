@@ -68,6 +68,7 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
         for command in re.findall(r"```sh\n(.*?)\n```", instruction, re.S)
     ]
     assert len(commands) == 2
+    assert commands[1][commands[1].index("--select") + 1:] == ["/heartbeat_receipt"]
 
     def invoke(argv):
         return subprocess.run(
@@ -94,6 +95,14 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
     assert index["ok"] and index["sha256"] == digest and index["eof"]
     assert json.loads(index["content"])["schema_version"] == "context_capture_index_v1"
     assert len(discovery.stdout.encode()) < len(raw) // 5
+
+    diagnostic = invoke(commands[1])
+    assert diagnostic.returncode == 0, diagnostic.stderr
+    receipt_page = json.loads(diagnostic.stdout)
+    assert receipt_page["sha256"] == digest and receipt_page["eof"]
+    assert json.loads(receipt_page["content"])["selections"] == [
+        {"pointer": "/heartbeat_receipt", "value": source["heartbeat_receipt"]},
+    ]
 
     reader = recovery[:recovery.index("context-read") + 1]
     branch = invoke([

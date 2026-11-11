@@ -18,6 +18,7 @@ PROJECT_SKILL_MANAGED_MARKER = ".loopx-managed-project-skill.json"
 PROJECT_SKILL_MARKER_SCHEMA_VERSION = "loopx_managed_project_skill_v0"
 PROJECT_SKILL_SURFACE_ROOTS = {
     "codex": Path(".agents") / "skills",
+    "antigravity": Path(".agent") / "skills",
     "claude-code": Path(".claude") / "skills",
     "kiro-cli": Path(".kiro") / "skills",
     "opencode": Path(".opencode") / "skills",

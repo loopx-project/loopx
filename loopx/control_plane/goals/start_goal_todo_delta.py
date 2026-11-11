@@ -35,6 +35,7 @@ def existing_runnable_agent_frontier(
     resolved_goal_id: str,
     effective_agent_id: str | None,
     runtime_root_arg: str | None = None,
+    registry_payload: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Runnable advancement agent Todos already present in the goal's state.
 
@@ -48,11 +49,13 @@ def existing_runnable_agent_frontier(
     an unmigrated Goal or unavailable provider raises instead of being mistaken
     for an empty frontier. A missing display is safe
     to ignore, not permission to reconstruct its non-Todo narrative.
+    When supplied, registry_payload is the decoded registry for this preview.
     """
     if inspection.get("connection_state") != "connected":
         return None
     registry_path = Path(str(inspection.get("registry") or ""))
-    registry_payload, _registry_error = _read_registry(registry_path)
+    if registry_payload is None:
+        registry_payload, _registry_error = _read_registry(registry_path)
     registry_goal = next(
         (
             goal
@@ -161,10 +164,9 @@ def todo_authoring_steps(
             "todo_ids": ["<actual-todo-id>"],
         },
         "revision_guidance": (
-            "Use the current provider_revision from the attached acceptance or inspect. "
-            "Keep the original owner and objective when adding requirements to an existing outcome. "
-            "After Todo writes, inspect for the current revision before linking. "
-            "Use a distinct stable operation id for each refinement and retry it unchanged after response loss."
+            "Use provider_revision from current acceptance or inspect. Preserve owner and objective "
+            "when refining an existing outcome. After Todo writes, inspect again before linking. "
+            "Give each refinement its own stable operation id. Retry it unchanged after response loss."
         ),
     }
     # This adapter already owns routed CLI templates for both planning entrypoints.

@@ -557,7 +557,7 @@ def test_monitor_change_scope_requires_material_transition() -> None:
             ],
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
             "--claim-operation-id, --task-lease-idempotency-key, "
-            "--task-lease-expected-version, --project, --state-file, and --dry-run; unsupported: "
+            "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             "--decision-outcome, --next-agent-todo",
         ),
     ],
