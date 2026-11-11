@@ -532,6 +532,56 @@ def test_local_file_growth_during_read_is_bounded(tmp_path, monkeypatch):
     assert read_sizes == [17]
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="Open-file replacement requires POSIX sharing")
+@pytest.mark.parametrize("file_index_available", [False, True])
+def test_local_file_same_metadata_replacement_has_no_verified_read(tmp_path, monkeypatch, file_index_available):
+    import os
+    from types import SimpleNamespace
+
+    from loopx import materials
+
+    authority = tmp_path / "authority.txt"
+    authority.write_bytes(b"original")
+    os.utime(authority, (1_700_000_000, 1_700_000_000))
+    before = authority.stat()
+    replacement = tmp_path / "replacement.txt"
+    replacement.write_bytes(b"replaced")
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert replacement.stat().st_ino != before.st_ino
+    assert replacement.stat().st_size == before.st_size
+    assert replacement.stat().st_mtime_ns == before.st_mtime_ns
+    original_fstat, original_stat = os.fstat, Path.stat
+    observations = 0
+
+    def windows_stat(observed):
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = before.st_ctime_ns + (observed.st_ino != before.st_ino)
+        if not file_index_available:
+            fields["st_ino"] = 0
+        return SimpleNamespace(**fields)
+
+    def descriptor_stat(fd):
+        nonlocal observations
+        observed = original_fstat(fd)
+        observations += 1
+        if observations == 2:
+            replacement.replace(authority)
+        return windows_stat(observed)
+
+    def path_stat(path, *args, **kwargs):
+        observed = original_stat(path, *args, **kwargs)
+        return windows_stat(observed) if path == authority else observed
+
+    monkeypatch.setattr(materials, "os", SimpleNamespace(**{
+        **vars(os), "name": "nt", "fstat": descriptor_stat,
+    }))
+    monkeypatch.setattr(Path, "stat", path_stat)
+    with pytest.raises(ValueError, match="changed during bounded read"):
+        materials.read_bounded_material_file(authority, 64)
+    assert observations == 2
+    assert authority.read_bytes() == b"replaced"
+
+
 def test_local_file_replacement_after_open_has_no_verified_read(tmp_path, monkeypatch):
     import os
 
