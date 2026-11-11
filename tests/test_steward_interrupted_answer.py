@@ -337,6 +337,49 @@ def test_native_timeout_reports_its_clock_without_extending_native_retry(
     assert len(errors) == diagnostic["native_error_count"]
 
 
+def test_original_steward_observes_native_work_at_idle_deadline_and_replies_once(
+    steward, language_server, monkeypatch,
+):
+    from test_antigravity_steward_adapter import _native_clock
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    _, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.hard_timeout_sec = None
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    previous = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_DONE"}
+    resumed = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_RUNNING"}
+    finished = {**resumed, "status": "CORTEX_STEP_STATUS_DONE"}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "plannerResponse": {"response": "Original answer", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1, "steps": [user, previous], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 302, "steps": [user, previous], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 302.01, "steps": [user, previous, resumed], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 304, "steps": [user, previous, finished, final], "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+
+    source = provider.event("steward-app", "idle-deadline-source", "Finish this request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    done = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+
+    assert done["status"] == "completed" and done["response"]["message"] == "Original answer"
+    assert transport.reconcile() == 1
+    delivery = json.loads((transport.root / f"{ref}.json").read_text())["deliveries"]["terminal"]
+    assert delivery["verified"] and delivery["text"] == done["response"]["message"]
+    returned = provider.messages[delivery["attempt"]["message_ref"]]
+    assert returned["chat_id"] == source["chat_id"]
+    assert "Original answer" in json.dumps(returned["body"])
+    assert transport.reconcile() == 0
+    assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+    assert not language_server["cancelled"].is_set()
+
+
 @pytest.mark.parametrize("kind, expected", [
     ("idle", "等待原生助手有效进展超时"), ("hard", "原生助手达到本次执行时限"),
     ("unknown-host-value", "等待助手响应超时"), (None, "等待助手响应超时"),
