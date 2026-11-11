@@ -66,6 +66,10 @@ includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
 owner. Older plugin releases retain their original CLI requirements.
+The continuation driver follows LoopX's context delivery setting on CLI 2.3
+and later. When the guard returns a capture reference, the driver reads the
+admission fields from that same capture. The driver requests raw admission
+JSON from older supported CLIs.
 Install the prebuilt release into the web profile:
 
 ```bash
@@ -575,6 +579,10 @@ The Driver resolves the current project registry with
 session, and rechecks binding plus quota before and after downstream pre-step
 listeners. A human message removes an unclaimed automatic reservation; a
 mixed batch rejects the automatic message and restores the human work.
+DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
+may share the step with that continuation, including after downstream listeners.
+The source's `kind` identifies those producers; a plugin's snapshot or catalog
+`form` alone does not make its message host-owned context.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.

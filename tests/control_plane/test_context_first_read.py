@@ -158,6 +158,96 @@ def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, dec
             assert pointer not in values
 
 
+@pytest.mark.parametrize("scope_count", [1, 290])
+def test_native_selection_opening_fits_before_candidate_scope(tmp_path, monkeypatch, decision, scope_count):
+    from test_codex_context_lifecycle import setup
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+    setup(tmp_path, monkeypatch)
+    turn = "fixture-select-turn"
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run",
+        agent_identity={"agent_id": "agent"}, execution_obligation={"must_attempt_work": True},
+        heartbeat_receipt={"turn_instance_id": turn, "settlement_binding_owed": True})
+    decision["selected_todo"]["required_write_scopes"] = [
+        f"docs/fixture/area-{index:03d}/public-context-entrypoint/**" for index in range(scope_count)
+    ]
+    contract = decision["interaction_contract"]
+    contract["agent_channel"].update(delivery_allowed=False, must_attempt=True)
+    contract["cli_channel"] = {
+        "selection_required": True, "next_cli_actions": [],
+        "spend_allowed_now": False, "spend_after_validation": False,
+        "selection_policy_ref": "$.action_portfolio.selection_policy",
+        "selection_command": {"schema_version": "action_selection_cli_command_v1",
+            "route_prefix": "loopx --format json",
+            "command_args_template": f"quota should-run --todo-id '{{todo_id}}' --turn-instance-id {turn}",
+            "candidate_discovery_args": "todo list --goal-id fixture --status open"},
+    }
+    decision["action_portfolio"] = {"selection_policy": {"mode": "explicit_turn_binding",
+        "decision_owner": "agent", "suggestions_exhaustive": False, "requires_explicit_turn_binding": True},
+        "suggested_actions": [{"todo_id": "todo_current"}, {"todo_id": "todo_alternative"}]}
+    capture = tmp_path / "decision.json"
+    raw = json.dumps(decision).encode()
+    capture.write_bytes(raw)
+    capture.chmod(0o600)
+    registry = tmp_path / "absent-registry.json"
+    runtime = tmp_path / "unused-runtime"
+
+    def cli(*args):
+        output = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint",
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args])
+        result = json.loads(output)
+        assert result["ok"] and len(output) <= 12000
+        return result
+
+    def read(command):
+        words = shlex.split(command)
+        return cli(*words[words.index("quota"):])
+
+    view = cli("quota", "context-project", "--codex-app", "--context-delivery", "on",
+        "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", turn,
+        "--capture-file", str(capture), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--decision-output-root", str(tmp_path / "captures"), "--codex-context-dir", str(tmp_path),
+        "--max-page-output-bytes", "12000")
+    page = read(view["first_read_command"])
+    split = scope_count > 1
+    assert ("remaining_read_command" in view) is split
+    assert page["eof"]
+    opening = selected_context_values(page["content"])
+    _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+    saved = json.loads(Path(reference["path"]).read_bytes())
+    saved_cli = saved["interaction_contract"]["cli_channel"]
+    prefix = "/interaction_contract/cli_channel/"
+    assert opening[prefix + "selection_required"] is True
+    assert opening[prefix + "selection_command"] == saved_cli["selection_command"]
+    assert opening[prefix + "next_cli_actions"] == []
+    assert opening[prefix + "spend_allowed_now"] is False
+    assert opening[prefix + "spend_after_validation"] is False
+    assert opening["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert opening["/interaction_contract/agent_channel/required_reads"] == contract["agent_channel"]["required_reads"]
+    assert opening["/goal_boundary/stop_condition"] == decision["goal_boundary"]["stop_condition"]
+    assert opening["/heartbeat_receipt/turn_instance_id"] == turn
+    assert "/heartbeat_receipt/settlement_identity" not in opening
+    if split:
+        assert "/selected_todo" not in opening
+        _, opening_ref = read_context_read_reference(page["reference_file"])
+        body = bytearray()
+        command = view["remaining_read_command"]
+        while command:
+            page = read(command)
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            command = page.get("next_command")
+        assert page["eof"] and page["total_bytes"] == len(body)
+        _, remaining_ref = read_context_read_reference(page["reference_file"])
+        assert opening_ref["sha256"] == remaining_ref["sha256"] == reference["sha256"]
+        remaining = selected_context_values(body.decode())
+        assert remaining["/selected_todo"] == decision["selected_todo"]
+        assert remaining["/action_portfolio/suggested_actions"] == decision["action_portfolio"]["suggested_actions"]
+    else:
+        assert opening["/selected_todo"] == decision["selected_todo"]
+    assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
 def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_list(tmp_path, decision):
     # A complete address inventory is navigation, not the Goal/Task/stop text.
     # Exercise the native reader and exact cold path over the same capture.
@@ -373,8 +463,17 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
         + " --offset " + str(pages[0]["next_offset"]))
     assert code != 0 and not rejected["ok"] and "digest changed" in rejected["reason"]
     assert "content" not in rejected
+    recovery = shlex.split(rejected["recovery_command"])
+    assert recovery[recovery.index("--offset") + 1] == "0"
+    assert recovery[recovery.index("--capture-file") + 1] == view["recovery"]["path"]
+    assert recovery[recovery.index("--capture-sha256") + 1] == view["recovery"]["sha256"]
+    assert not {"--initial-read", "--select", "--selection-sha256"} & set(recovery)
+    wrong_capture = recovery.copy()
+    wrong_capture[wrong_capture.index("--capture-sha256") + 1] = "0" * 64
+    code, invalid = invoke(shlex.join(wrong_capture))
+    assert code != 0 and not invalid["ok"] and "recovery_command" not in invalid
     restored = b""
-    command = original
+    command = rejected["recovery_command"]
     while True:
         code, page = invoke(command)
         assert code == 0 and page["offset"] == len(restored), page
@@ -385,6 +484,59 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
     assert restored == raw == Path(view["recovery"]["path"]).read_bytes()
     assert not registry.exists() and not runtime.exists()
 
+
+
+@pytest.mark.parametrize("reader", ["explicit", "saved-recipe", "list"])
+def test_stale_selected_cursor_restarts_in_the_same_scope(tmp_path, reader):
+    from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
+
+    receipt = {"event_id": "recorded", "turn_instance_id": "original-turn", "note": "原回执" * 90}
+    marker = "This unselected work instruction must stay out of the recovery."
+    capture = (tmp_path / "capture.json").resolve()
+    raw = json.dumps({"heartbeat_receipt": receipt, "interaction_contract": {"primary_action": marker}}).encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    stale = "0" * 64
+    flags = ["--capture-file", str(capture), "--capture-sha256", digest]
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json"]
+    command = ["quota", "context-read", "--offset", "256", "--page-bytes", "4096"]
+    pointer = "/interaction_contract" if reader == "list" else "/heartbeat_receipt"
+    if reader == "saved-recipe":
+        ref = write_context_read_reference(capture, digest, selection={
+            "select": [pointer], "initial_read": False, "list_fields": False,
+            "list_depth": None, "sha256": stale,
+        })
+        reference_before = ref.read_bytes()
+        command += ["--reference-file", str(ref)]
+    else:
+        command += [*flags, "--select", pointer, "--selection-sha256", stale]
+        if reader == "list":
+            command += ["--list", "--list-depth", "2"]
+
+    def run(args):
+        process = subprocess.run([*base, *args], cwd=tmp_path, capture_output=True, text=True, check=False)
+        return process.returncode, json.loads(process.stdout)
+
+    code, failure = run(command)
+    assert code != 0 and "digest changed" in failure["reason"] and "content" not in failure
+    recovery = shlex.split(failure["recovery_command"])
+    assert recovery[recovery.index("--offset") + 1] == "0"
+    assert recovery[recovery.index("--capture-sha256") + 1] == digest
+    assert recovery[recovery.index("--select") + 1] == pointer
+    assert ("--list" in recovery) == (reader == "list")
+    if reader == "list":
+        assert recovery[recovery.index("--list-depth") + 1] == "2"
+    code, page = run(recovery[recovery.index("quota"):])
+    assert code == 0 and page["ok"] and page["eof"] and marker not in page["content"]
+    selections = json.loads(page["content"])["selections"]
+    assert [selection["pointer"] for selection in selections] == [pointer]
+    if reader != "list":
+        assert selections[0]["value"] == receipt
+    if reader == "saved-recipe":
+        assert ref.read_bytes() == reference_before
+    assert capture.read_bytes() == raw and not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("bound", [False, True])
@@ -486,9 +638,11 @@ def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_pat
 
 @pytest.mark.parametrize("warm", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize(("scope_count", "page_budget"), [(165, 12000), (290, 12000), (165, 16000)])
+@pytest.mark.parametrize(("scope_count", "page_budget", "checkpoint_count"), [
+    (165, 12000, 0), (290, 12000, 0), (165, 16000, 0), (290, 12000, 30),
+])
 def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
-    tmp_path, monkeypatch, provider, warm, scope_count, page_budget,
+    tmp_path, monkeypatch, provider, warm, scope_count, page_budget, checkpoint_count,
 ):
     from test_codex_context_lifecycle import deliver, setup
     from test_quota_settlement_cli import (
@@ -496,6 +650,7 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
         _run_cli, _spend_run_count, _write_fixture,
     )
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from loopx.boundary_authority import build_checkpointed_boundary_authority_entry
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -507,7 +662,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     scopes = [f"docs/areas/{index:03d}/fixture-entrypoints/public/**" for index in range(scope_count)]
     if scope_count == 165:
         assert len(json.dumps(scopes, separators=(",", ":")).encode()) < 8192
-    configuration["goals"][0]["coordination"].update(write_scope=scopes, requires_parent_approval=["publish"])
+    coordination = configuration["goals"][0]["coordination"]
+    coordination.update(write_scope=scopes, requires_parent_approval=["publish"])
+    if checkpoint_count:
+        coordination["checkpointed_boundary_authority"] = [
+            build_checkpointed_boundary_authority_entry(
+                write_scopes=[scopes[0] if index % 2 == 0 else "docs/expired-approval/**"],
+                source="public-fixture-scoped-approval",
+                decision_id=f"fixture-approval-{index:02d}",
+                recorded_at="2026-01-01T00:00:00Z",
+                expires_at="2020-01-01T00:00:00Z" if index % 2 else None,
+            )
+            for index in range(checkpoint_count)
+        ]
     configuration["goals"][0]["quota"]["allowed_slots"] = 3
     registry.write_text(json.dumps(configuration))
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
@@ -525,6 +692,19 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     cli("todo", "claim", *binding, "--claimed-by", AGENT_ID)
 
     def capture(turn):
+        if checkpoint_count:
+            # The Host first saves a complete ready decision, then presents it.
+            # This route retains the approval entries in the signed source.
+            saved = captures / turn
+            ready = cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
+                *binding, "--turn-instance-id", turn, "--decision-output-dir", str(saved),
+                "--codex-context-dir", str(journal),
+                "--defer-context-presentation", "--prepared-capture-reference")
+            return cli("quota", "context-project", "--codex-app", "--context-delivery", "on",
+                "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+                "--capture-file", str(saved / "decision.json"), "--capture-sha256", ready["capture_sha256"],
+                "--decision-output-root", str(captures), "--codex-context-dir", str(journal),
+                "--max-page-output-bytes", str(page_budget))
         return cli("quota", "should-run", "--codex-app", "--context-delivery", "on",
             *binding, "--turn-instance-id", turn, "--decision-output-root", str(captures),
             "--codex-context-dir", str(journal), "--max-page-output-bytes", str(page_budget))
@@ -591,11 +771,21 @@ def test_ready_opening_keeps_controls_readable_with_a_large_write_scope(
     assert opening["/goal_boundary/requires_parent_approval"] == ["publish"]
     assert opening["/goal_boundary/stop_condition"] == source["goal_boundary"]["stop_condition"]
     assert "/goal_boundary/write_scope" not in opening
+    authority = "/goal_boundary/checkpointed_boundary_authority"
+    if checkpoint_count:
+        assert opening[authority + "/active_count"] == checkpoint_count // 2
+        assert opening[authority + "/inactive_count"] == checkpoint_count // 2
+        assert opening[authority + "/active_write_scope"] == [scopes[0]]
+        assert authority + "/entries" not in opening
     if warm:
         deliver(journal, event, pages)
 
     pages, remaining = read(view["remaining_read_command"])
     assert len(pages) > 1 and remaining["/goal_boundary/write_scope"] == scopes
+    if checkpoint_count:
+        entries = source["goal_boundary"]["checkpointed_boundary_authority"]["entries"]
+        assert len(entries) == checkpoint_count
+        assert remaining[authority + "/entries"] == entries
     _, remainder_ref = read_context_read_reference(pages[0]["reference_file"])
     assert remainder_ref["sha256"] == source_ref["sha256"]
     _, ordinary = read(view["recovery"]["command"] + " --initial-read")
@@ -648,21 +838,32 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     _, reference = read_context_read_reference(view["recovery"]["reference_file"])
     raw = Path(reference["path"]).read_bytes()
     source = json.loads(raw)
-    words = shlex.split(view["first_read_command"])
-    for option in ("--page-bytes", "--max-page-output-bytes"):
-        words[words.index(option) + 1] = "4500"
-    content = []
-    for _ in range(20):
-        code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
-        assert code == 0 and page["ok"], page
-        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
-        assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
-        content.append(page["content"])
-        if page["eof"]:
-            break
-        words = shlex.split(page["next_command"])
-    assert page["eof"] and len(content) > 1
-    values = selected_context_values("".join(content))
+    first = shlex.split(view["first_read_command"])
+    _, first_ref = read_context_read_reference(first[first.index("--reference-file") + 1])
+    assert first_ref["path"] == reference["path"] and first_ref["sha256"] == reference["sha256"]
+    assert first_ref.get("selection_paths")
+
+    def read_initial(command):
+        words = shlex.split(command)
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            words[words.index(option) + 1] = "4500"
+        content = []
+        for _ in range(20):
+            code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+            assert code == 0 and page["ok"], page
+            assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
+            assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
+            content.append(page["content"])
+            if page["eof"]:
+                break
+            words = shlex.split(page["next_command"])
+        assert page["eof"] and len(content) > 1
+        return "".join(content)
+
+    content = read_initial(view["first_read_command"])
+    # An independent dynamic read of the same source has identical ordered facts.
+    assert content == read_initial(view["recovery"]["command"] + " --initial-read")
+    values = selected_context_values(content)
     cli_path = "/interaction_contract/cli_channel"
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
@@ -1980,6 +2181,10 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         # The later task switch retains the same independent acceptance path.
         update(ALTERNATIVE_TODO_ID, "Prepare an unrelated result.", "seed")
 
+    warm_note = note.rstrip()
+    if not complete:
+        warm_note += " Appended after an incomplete observation."
+        update(TODO_ID, warm_note, "append-after-partial")
     second = capture("note-warm")
     _, original = read_context_read_reference(second["recovery"]["reference_file"])
     source_path = Path(original["path"])
@@ -1993,7 +2198,7 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     cold_authority = cold_facts[source_pointer + "/authority_read"]
     assert current_authority["provider_revision"] != cold_authority["provider_revision"]
     warm, facts, warm_bytes = read(second["first_read_command"])
-    assert current_source[source_pointer]["todo"]["note"] == note.rstrip()
+    assert current_source[source_pointer]["todo"]["note"] == warm_note
     if revision == "selected_evidence":
         current_todo = current_source[source_pointer]["todo"]
         assert current_todo["evidence"] == "result:independent-verification"
@@ -2001,22 +2206,69 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
     recovered, restored, fallback_bytes = read(second["first_read_command"])
     assert pointer not in recovered[0].get("previously_delivered_fields", [])
-    assert restored[pointer] == note.rstrip() and source_path.read_bytes() == source
+    assert restored[pointer] == warm_note and source_path.read_bytes() == source
 
     assert _spend_run_count(runtime) == 1
     deliver(journal, event, recovered)
     settle("note-warm")
-    revised = note + "Use the revised acceptance check before writing."
+    revised = "Revised acceptance check. " + note.rstrip()
     update(TODO_ID, revised, "revise")
     update(ALTERNATIVE_TODO_ID, revised, "revise")
     corrected, current, _ = read(capture("note-corrected")["first_read_command"])
     assert current[pointer] == revised and pointer not in corrected[0].get("previously_delivered_fields", [])
     deliver(journal, event, corrected)
     settle("note-corrected")
+
+    expected_spends = 3
+    if revision == "selected_evidence":
+        def appended_turn(turn, prefix, suffix):
+            update(TODO_ID, prefix + suffix, turn)
+            guard = capture(turn)
+            pages, _, wire_bytes = read(guard["first_read_command"])
+            body = json.loads("".join(page["content"] for page in pages))
+            appended = next(row for row in body["selections"] if row["pointer"] == pointer)
+            assert appended == {"pointer": pointer, "value": suffix,
+                                "presentation": "append_to_observed_text",
+                                "prefix_bytes": len(prefix.encode("utf-8"))}
+            assert pointer not in pages[0].get("previously_delivered_fields", [])
+            _, exact, _ = read(guard["recovery"]["command"] + " --select " + pointer)
+            assert exact[pointer] == prefix + suffix
+            reference = Path(pages[0]["reference_file"])
+            _, metadata = read_context_read_reference(str(reference))
+            fallback_name = metadata["observed_read"]["fallback_reference"]["filename"]
+            fallback_command = guard["first_read_command"].replace(
+                shlex.quote(str(reference)), shlex.quote(str(reference.with_name(fallback_name))))
+            _, _, full_bytes = read(fallback_command)
+            assert full_bytes - wire_bytes > 10_000
+            print(json.dumps({"provider": provider, "prior_read": observation, "turn": turn,
+                              "full_bytes": full_bytes, "append_bytes": wire_bytes}))
+            return guard, pages
+
+        _, appended = appended_turn("note-append", revised, " 新增决策 🧪，沿用前面的验收。")
+        note_proof = codex_context._state(journal)["consumed_pointers"][pointer]
+        assert len(appended) > 1
+        deliver(journal, event, appended[-1:])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] == note_proof
+        deliver(journal, event, appended[:-1])
+        assert codex_context._state(journal)["consumed_pointers"][pointer] != note_proof
+        settle("note-append")
+
+        revised += " 新增决策 🧪，沿用前面的验收。"
+        second_suffix = " Second addition with new evidence."
+        chained, _ = appended_turn("note-append-next", revised, second_suffix)
+        revised += second_suffix
+        codex_context.codex_context_hook(str(journal), {**event, "hook_event_name": "PostCompact"})
+        fallback, exact, _ = read(chained["first_read_command"])
+        assert exact[pointer] == revised
+        assert pointer not in fallback[0].get("previously_delivered_fields", [])
+        settle("note-append-next")
+        update(ALTERNATIVE_TODO_ID, revised, "copy-final-note")
+        expected_spends += 2
+
     alternate, other, _ = read(capture("note-alternate", ALTERNATIVE_TODO_ID)["first_read_command"])
     assert other[pointer] == revised and other["/selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert pointer not in alternate[0].get("previously_delivered_fields", [])
-    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == 3
+    assert _heartbeat_receipt_count(runtime, "note-warm") == 1 and _spend_run_count(runtime) == expected_spends
 
     print(json.dumps({"provider": provider, "revision": revision, "observation": observation,
                       "warm_bytes": warm_bytes, "recovery_bytes": fallback_bytes,
@@ -2034,4 +2286,4 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
         assert fallback_bytes - warm_bytes > 10_000
     else:
         assert pointer not in warm[0].get("previously_delivered_fields", [])
-        assert facts[pointer] == restored[pointer] == note.rstrip()
+        assert facts[pointer] == restored[pointer] == warm_note

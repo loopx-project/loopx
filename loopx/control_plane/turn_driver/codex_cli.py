@@ -397,6 +397,16 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
     if complete:
         from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
 
+        instructions.insert(2,
+            "Read the original captured decision inline in work_contract before dependent work. "
+            "The host has validated this complete observation and its source binding. "
+            "detail_ref.captured_decision preserves its Goal/Agent/Turn and source hash provenance; "
+            "it is not a prerequisite filesystem read when that observation is present here. "
+            "The private capture may be unreadable from sandboxed tools. Use detail_ref.full_decision "
+            "only for original context missing after compaction; never rerun admission to recover it. "
+            "Other required reads remain mandatory. "
+            "Missing or invalid original evidence still holds dependent work and closure; "
+            "inline delivery grants no new permissions.")
         instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
         acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
         if acceptance:

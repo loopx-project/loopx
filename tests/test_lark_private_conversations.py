@@ -2469,6 +2469,64 @@ def _drain_app_projection(transport, predicate):
         time.sleep(.02)
 
 
+@pytest.mark.parametrize("fault", ["truncated_json", "invalid_utf8", "vanished_during_scan"])
+def test_unreadable_private_delivery_does_not_hold_other_original_replies(ordinary, monkeypatch, fault):  # noqa: F811
+    from loopx.extensions.lark import private_delivery_discovery
+
+    _store, runtime, provider, transport = connect(ordinary)
+    originals = {}
+    try:
+        for profile in ("notes-app", "steward-app"):
+            event = provider.event(profile, f"independent-{profile}", f"Complete the original {profile} request")
+            transport.admit(profile, event)
+            request = identity_ref(transport._binding(profile)["provider_ref"], event["message_id"])
+            native = transport.core.read_request(request)
+            result = runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=10)
+            assert result["status"] == "completed"
+            originals[profile] = (transport.root / f"{request}.json", event)
+
+        held, held_event = originals["notes-app"]
+        healthy, healthy_event = originals["steward-app"]
+        saved = held.read_bytes()
+        with monkeypatch.context() as damage:
+            if fault == "vanished_during_scan":
+                fingerprint = private_delivery_discovery.file_change_fingerprint
+
+                def vanished(path):
+                    if path == held:
+                        raise FileNotFoundError(path)
+                    return fingerprint(path)
+
+                damage.setattr(private_delivery_discovery, "file_change_fingerprint", vanished)
+            else:
+                held.write_bytes(b'{"status":' if fault == "truncated_json" else b"\xff")
+            unchanged = held.read_bytes()
+            for discover in (transport.pending_body_paths, transport.pending_delivery_paths):
+                assert discover() == [healthy]
+
+            requests = ordinary[4].read_bytes()
+            writes_before = len(provider.writes)
+            transport.reconcile()
+            final = json.loads(healthy.read_text())["deliveries"]["terminal"]
+            assert final["verified"]
+            assert provider.messages[final["attempt"]["message_ref"]]["chat_id"] == healthy_event["chat_id"]
+            assert held.read_bytes() == unchanged
+            assert all(profile != "notes-app" for profile, _ in provider.writes[writes_before:])
+
+        if fault != "vanished_during_scan":
+            held.write_bytes(saved)
+        transport.reconcile()
+        final = json.loads(held.read_text())["deliveries"]["terminal"]
+        assert final["verified"]
+        assert provider.messages[final["attempt"]["message_ref"]]["chat_id"] == held_event["chat_id"]
+        sent = list(provider.writes)
+        transport.reconcile()
+        assert provider.writes == sent
+        assert ordinary[4].read_bytes() == requests
+    finally:
+        runtime.close()
+
+
 def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execution(ordinary):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     sid = original["session_id"]
@@ -2688,6 +2746,54 @@ def test_app_projection_recovers_original_receipt_and_revocation_blocks_remainin
             transport.reconcile()
         assert provider.writes == revoked_writes
         assert len(store.list_sessions()) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("unreadable", [b'{"status":', b"\xff"])
+def test_unreadable_app_mirror_does_not_hold_other_private_replies(ordinary, unreadable):  # noqa: F811
+    store, runtime, provider, transport, original, turns, _ = _app_projection_journey(ordinary)
+    try:
+        transport._web_projection_scan_at = 0
+        [mirror] = transport._web_projection_paths()
+        complete_receipt = mirror.read_bytes()
+        mirror.write_bytes(unreadable)
+
+        event = provider.event("steward-app", "independent-private-reply", "An independent original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(transport._binding("steward-app")["provider_ref"], event["message_id"])
+        native = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=10)["status"] == "completed"
+        healthy = transport.root / f"{ref}.json"
+        for discover in (transport.pending_body_paths, transport.pending_delivery_paths):
+            paths = discover()
+            assert healthy in paths and mirror not in paths
+
+        # A previously scheduled worker can still see damage after discovery.
+        before = list(provider.writes)
+        assert transport.reconcile_request(mirror) == 0
+        assert mirror.read_bytes() == unreadable
+        assert provider.writes == before
+
+        requests = ordinary[4].read_bytes()
+        transport.reconcile()
+        terminal = json.loads(healthy.read_text())["deliveries"]["terminal"]
+        assert terminal["verified"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        assert mirror.read_bytes() == unreadable
+        assert not any("（App）" in text for _, text in provider.writes)
+
+        # Restoring the exact receipt in the disposable fixture makes the
+        # original App work available to a newly constructed worker again.
+        mirror.write_bytes(complete_receipt)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        expected = [row for row in store.messages(original["session_id"]) if row.get("turn_id") in turns]
+        _drain_app_projection(restarted, lambda: sum("（App）" in text for _, text in provider.writes) == len(expected))
+        sent = list(provider.writes)
+        restarted.reconcile()
+        assert provider.writes == sent
+        assert ordinary[4].read_bytes() == requests
     finally:
         runtime.close()
 
@@ -6479,6 +6585,88 @@ def test_original_reply_is_delivered_while_historical_recovery_discovery_waits(o
         packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         assert sum(packet["method"] == "turn/start" for packet in packets) == 1
         assert _read_json(old_path)["status"] == "delivered"
+    finally:
+        release.set()
+        service.close()
+        if service._delivery_thread is not None:
+            service._delivery_thread.join(5)
+        runtime.close()
+
+
+def test_original_reply_gets_free_worker_when_background_checks_are_due(ordinary, monkeypatch):  # noqa: F811
+    from types import SimpleNamespace
+
+    from loopx.chat_store import _read_json
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    store, runtime, provider, transport = connect(ordinary)
+    discovery_started, background_due, release, delivered, ingress_started = (
+        threading.Event() for _ in range(5)
+    )
+    # Advance only the scheduler's due checks. The four worker threads, Core
+    # admission and provider readback still use their normal entry points.
+    monkeypatch.setattr(module, "time", SimpleNamespace(
+        monotonic=lambda: 61.0 if background_due.is_set() else 0.0,
+    ))
+    pending_bodies = transport.pending_body_paths
+    monkeypatch.setattr(transport, "pending_body_paths",
+        lambda: pending_bodies() if background_due.is_set() else [])
+    monkeypatch.setattr(transport, "reconcile_app_feedback", None)
+
+    def discover_history():
+        discovery_started.set()
+        assert release.wait(12)
+        return []
+
+    def reconcile_background():
+        assert release.wait(12)
+        return 0
+
+    def observe_ingress(*, cancelled):
+        ingress_started.set()
+        assert release.wait(12)
+        return []
+
+    monkeypatch.setattr(transport, "pending_delivery_paths", discover_history)
+    monkeypatch.setattr(transport.steward_reports, "pending", background_due.is_set)
+    monkeypatch.setattr(transport.steward_reports, "reconcile", reconcile_background)
+    monkeypatch.setattr(transport.owner_attention, "has_enabled", background_due.is_set)
+    monkeypatch.setattr(transport.owner_attention, "reconcile", reconcile_background)
+    monkeypatch.setattr(transport, "observe_ingress", observe_ingress)
+    event = provider.event("notes-app", "reply-during-due-checks", "Explain the original request")
+    ref = identity_ref(transport._binding("notes-app")["provider_ref"], event["message_id"])
+    target = transport.root / f"{ref}.json"
+    reconcile_original = transport.reconcile_request
+
+    def reconcile(path):
+        result = reconcile_original(path)
+        if path == target and result == 1:
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "reconcile_request", reconcile)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(12))
+    service.start()
+    try:
+        assert discovery_started.wait(5)
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        request = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        background_due.set()
+        service._delivery_wakeup.set()
+        assert delivered.wait(4), "Due background checks occupied every worker ahead of an original reply"
+        assert ingress_started.wait(4)
+        terminal = _read_json(target)["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        reply = provider.messages[terminal["attempt"]["message_ref"]]
+        assert reply["chat_id"] == event["chat_id"]
+        assert json.loads(reply["body"]["content"])["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
     finally:
         release.set()
         service.close()

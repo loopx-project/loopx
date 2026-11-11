@@ -405,14 +405,19 @@ def test_delayed_old_request_cannot_adopt_replacement(authority, monkeypatch, st
                     old_event, = _finished(original_wake, invocation_id=old_summary["invocation_id"])
                     new_event, = _finished(successor_wake, invocation_id=new_summary["invocation_id"])
                     assert old_event["turn_id"] == "old" and old_event["forwarded"] is False
+                    assert old_event["refusal_code"] == "provider_request_without_live_owner"
                     assert new_event["turn_id"] == ("old" if shared_receipt else "new")
                     assert new_event["forwarded"] is True
                     assert old_event["session_id"] == "session-old" and new_event["session_id"] == "session-new"
                     assert old_event["invocation_id"] != new_event["invocation_id"]
-                    assert old_summary["sent"] == 0 and old_summary["refused"] == 1
+                    # Only the upstream-connect case had parsed and observed
+                    # the full request before retirement. The late refusal
+                    # remains in the journal without rewriting the snapshot.
+                    observed_at_exit = int(stage == "upstream_connect")
+                    assert old_summary["sent"] == old_summary["refused"] == 0
+                    assert old_summary["requests"] == old_summary["pending"] == observed_at_exit
                     assert new_summary["sent"] == 1 and new_summary["refused"] == 0
-                    assert old_summary["requests"] == new_summary["requests"] == 1
-                    assert old_summary["pending"] == new_summary["pending"] == 0
+                    assert new_summary["requests"] == 1 and new_summary["pending"] == 0
                     assert "refusal_code" not in new_summary
                     if shared_receipt:
                         assert original_receipt is successor_receipt and original_wake == successor_wake

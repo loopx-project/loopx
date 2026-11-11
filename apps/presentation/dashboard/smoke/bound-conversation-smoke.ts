@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatQueue, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
@@ -80,6 +80,50 @@ try {
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
   const routedRead = globalThis.fetch;
   if (!fallback) {
+    // The original idle queue gets one bounded recovery from a temporary
+    // read failure; no Turn, fallback Session or permission retry is involved.
+    const queuePath = `/api/chat/sessions/${sessionId}/queue`;
+    const queueReads: string[] = [];
+    const unavailable = () => Response.json({ok: false, error: "Queued messages are temporarily unavailable"}, {status: 503});
+    const queueInterruption = new Error("Synthetic queue transport interrupted");
+    const replies: (Response | Error)[] = [unavailable()];
+    globalThis.fetch = async (input, init) => {
+      if (String(input) !== queuePath) return routedRead(input, init);
+      queueReads.push(init?.method ?? "GET");
+      const reply = replies.shift();
+      if (reply instanceof Error) throw reply;
+      return reply ?? routedRead(input, init);
+    };
+    const observedQueue = await fetchChatQueue(sessionId, AbortSignal.timeout(5000));
+    assert.deepEqual([observedQueue.session_id, observedQueue.active_turn_id, observedQueue.turns], [sessionId, null, []]);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"]);
+    replies.push(queueInterruption);
+    assert.equal((await fetchChatQueue(sessionId, AbortSignal.timeout(5000))).session_id, sessionId);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"]);
+
+    replies.push(unavailable(), unavailable());
+    await assert.rejects(() => fetchChatQueue(sessionId, AbortSignal.timeout(5000)), /temporarily unavailable/);
+    assert.deepEqual(queueReads.splice(0), ["GET", "GET"], "A continued failure must remain unknown after one retry");
+    replies.push(Response.json({ok: false, error: "Original scope revoked"}, {status: 403}));
+    await assert.rejects(() => fetchChatQueue(sessionId), /scope revoked/);
+    assert.deepEqual(queueReads.splice(0), ["GET"], "Never retry a denial");
+    replies.push(Response.json({ok: true, schema_version: "loopx_chat_store_v1",
+      session_id: "different-source", active_turn_id: null, turns: []}));
+    await assert.rejects(() => fetchChatQueue(sessionId), /original Session queue/);
+    assert.deepEqual(queueReads.splice(0), ["GET"], "Never accept or retry another Session's queue");
+
+    const controller = new AbortController();
+    globalThis.fetch = async (input, init) => {
+      assert.equal(String(input), queuePath);
+      queueReads.push(init?.method ?? "GET");
+      controller.abort();
+      return unavailable();
+    };
+    await assert.rejects(() => fetchChatQueue(sessionId, controller.signal), /temporarily unavailable/);
+    assert.deepEqual(queueReads, ["GET"], "Leaving this read prevents another request");
+    globalThis.fetch = routedRead;
+    console.log("bound idle queue: one same-Session retry, denial and cancellation remain failures");
+
     // Repeated transport loss at later pages must advance one original prefix
     // through the existing retry caller, without ever publishing partial text.
     child.stdin.write("history\n");
