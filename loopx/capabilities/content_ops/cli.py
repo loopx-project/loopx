@@ -364,8 +364,7 @@ def register_content_ops_commands(
     )
     chatview_parser.add_argument(
         "--generated-at",
-        default="2026-06-23T00:00:00Z",
-        help="Public-safe generated_at timestamp for the ChatView report.",
+        help="Public-safe generated_at timestamp for the ChatView report (default: current UTC).",
     )
     walkthrough_parser = content_ops_sub.add_parser(
         "walkthrough-artifact",
@@ -434,8 +433,7 @@ def register_content_ops_commands(
     )
     walkthrough_parser.add_argument(
         "--generated-at",
-        default="2026-06-23T00:00:00Z",
-        help="Public-safe generated_at timestamp for the walkthrough artifact.",
+        help="Public-safe generated_at timestamp for the walkthrough artifact (default: current UTC).",
     )
     item_create_parser = content_ops_sub.add_parser(
         "item-create",

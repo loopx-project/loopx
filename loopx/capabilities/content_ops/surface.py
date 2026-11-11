@@ -1462,7 +1462,7 @@ def build_content_ops_chatview_report_packet(
     connector_url: str = "https://chatview.zaynjarvis.com/",
     source_item_id: str = "source_chatview_metadata_signal_001",
     owner_label: str = "ChatView owner",
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a public-safe ChatView report that remains aggregation-compatible."""
 
@@ -1510,7 +1510,7 @@ def build_content_ops_chatview_report_packet(
 
     report = {
         "schema_version": CONTENT_OPS_CHATVIEW_CONNECTOR_REPORT_SCHEMA_VERSION,
-        "generated_at": generated_at,
+        "generated_at": generated_at if generated_at is not None else now_utc_iso(),
         "connector_url": normalised_url,
         "operator_card": operator_card,
         "observed_shape": {
@@ -1795,10 +1795,12 @@ def build_content_ops_walkthrough_artifact_packet(
     api_path_counts: Mapping[str, Any] | None = None,
     private_preview_item_count: int = 0,
     theme_signals: Sequence[str] | None = None,
-    generated_at: str | None = "2026-06-23T00:00:00Z",
+    generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the public-safe operator artifact for the content-ops chain."""
 
+    if generated_at is None:
+        generated_at = now_utc_iso()
     preview_count = _non_negative_int(
         private_preview_item_count,
         "private_preview_item_count",
