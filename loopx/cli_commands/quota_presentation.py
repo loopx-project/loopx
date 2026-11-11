@@ -105,17 +105,21 @@ def native_quota_result(payload, args, *, capture_directory: Path,
     except NativeContextSessionUnavailable:
         # An uninitialized host receives full context without a baseline claim.
         directory = None
+    decision_path = capture_directory / "decision.json"
     prepared = prepare_codex_context(payload, directory=directory,
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
         surface=quota_context_surface(captured_payload, args),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
+        captured_decision_path=str(decision_path) if progressive_enabled else None,
         progressive_enabled=progressive_enabled, captured_recovery={
-            "path": str(capture_directory / "decision.json"), "sha256": capture_id,
-            "command": context_capture_read_command(capture_directory / "decision.json", capture_id),
-        } if directory is not None else None)
+            "path": str(decision_path), "sha256": capture_id,
+            "command": context_capture_read_command(decision_path, capture_id),
+        })
     payload = prepared.delivery
     recovery = payload.get("recovery")
-    payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
+    payload = native_context_capture_view(payload, capture_directory,
+        context_directory=directory if prepared.stateless_recovery is None else None,
+        captured_recovery=prepared.stateless_recovery,
         progressive_enabled=progressive_enabled,
         metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv,

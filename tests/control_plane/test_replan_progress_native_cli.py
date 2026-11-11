@@ -140,12 +140,17 @@ def test_progress_cli_reads_policy_with_context_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
     context_delivery: str,
 ) -> None:
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
     tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     native, captures = tmp_path / "native", tmp_path / "captures"
     native.mkdir(mode=0o700)
     captures.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "replan-progress-session")
+    codex_context_hook(str(native), {"session_id": "replan-progress-session",
+        "cwd": str(fixture["project"]), "hook_event_name": "SessionStart", "source": "startup"})
     try:
         presented = call_progress_cli(
             fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
@@ -164,6 +169,17 @@ def test_progress_cli_reads_policy_with_context_delivery(
         assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
         assert identity["todo_id"] == TODO
         assert policy["execution_obligation"]["must_attempt_work"] is True
+        [original] = captures.glob("decision-*/decision.json")
+        source = json.loads(original.read_bytes())
+        assert source["heartbeat_receipt"] == policy["heartbeat_receipt"]
+        if context_delivery == "on":
+            packet = policy["replan_action_packet"]
+            reader = shlex.split(packet["review"])
+            assert reader[reader.index("--decision-file") + 1] == str(original)
+            assert "replan_context" not in policy["autonomous_replan_obligation"]
+            assert "settlement_plan" not in policy["interaction_contract"]["cli_channel"]
+        else:
+            assert policy["replan_action_packet"] == source["replan_action_packet"]
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
@@ -202,16 +218,43 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
             "--prepared-capture-reference", "--defer-context-presentation"])
         output = capsys.readouterr().out
         assert code == 0, output
-        captured = (capture / "decision.json").read_bytes()
-        assert json.loads(output)["capture_sha256"] == hashlib.sha256(captured).hexdigest()
+        original = capture / "decision.json"
+        captured = original.read_bytes()
+        digest = hashlib.sha256(captured).hexdigest()
+        assert json.loads(output)["capture_sha256"] == digest
         source = json.loads(captured)
         assert source["replan_action_packet"]["decision"] == "replan_required"
         assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
         projected = project_turn_context(source)
         assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
-        changed = deepcopy(relocated)
+        authority = _authority(fixture)
+        moved = original.rename(tmp_path / "other-location.json")
+        response = call_progress_cli(fixture, "quota", "context-project", "--codex-app",
+            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--capture-file", str(moved), "--capture-sha256", digest, "--initial-read",
+            "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal))
+        assert response["navigation"]["mode"] == "full"
+        assert "baseline_reference" not in response["navigation"]
+        view = read_cli_policy_payload(json.dumps(response), returncode=0)
+        assert view["reward_memory_recall"] == source["reward_memory_recall"]
+        assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
+        reader = shlex.split(view["replan_action_packet"]["review"])
+        assert reader[reader.index("--decision-file") + 1] == str(moved)
+        review = call_progress_cli(fixture, *reader[reader.index("quota"):])
+        assert review["source_hash"] == source["contract_binding"]["content_hash"]
+        writer = shlex.split(review["next"]["writeback"])
+        writeback = call_progress_cli(fixture, *writer[writer.index("quota"):])
+        assert writeback["writeback"]["settlement_plan"]["identity"] == (
+            source["heartbeat_receipt"]["settlement_identity"])
+        assert moved.read_bytes() == captured and not original.exists()
+        assert project_turn_context(json.loads(moved.read_bytes())) == projected
+        assert _authority(fixture) == authority and memory.calls == 1
+        assert not (journal / "session.json").exists()
+
+        # Relocating the file does not edit the signed source. Changing either
+        # its recorded path or executable settlement must reject scoped recall.
+        assert project_turn_context({**source, "replan_read_path": str(moved)}) == {}
+        changed = deepcopy(source)
         plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
         plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
         assert project_turn_context(changed) == {}

@@ -773,6 +773,7 @@ class NativeContextPreparation:
 
     delivery: dict[str, Any]
     initial_read_plan: dict[str, Any] | None = None
+    stateless_recovery: dict[str, Any] | None = None
 
 
 def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, Any], *, capture_sha256: str) -> None:
@@ -926,15 +927,29 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     from ..effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 
     check_saved_source = saved_capture and surface == "complete_turn"
+
+    def prepare_stateless() -> NativeContextPreparation:
+        from .decision_capture import capture_progressive_context
+
+        try:
+            view, recovery = capture_progressive_context(
+                payload, directory=capture_directory, surface=surface,
+                selection_command_args_template=selection_command_args_template,
+                captured_decision_path=captured_decision_path)
+        except (EffectRuntimeRemoteError, EffectRuntimeStartupError, OSError, ValueError, KeyError, TypeError, RecursionError):
+            if saved_capture or captured_recovery is None:
+                raise
+            # The live guard already published its source. A stateless
+            # presentation failure cannot retire another session's recovery.
+            return NativeContextPreparation(payload, stateless_recovery=captured_recovery)
+        return NativeContextPreparation(view, stateless_recovery=recovery)
+
     if directory is None:
         if not progressive_enabled:
             if check_saved_source:
                 assert_complete_turn_decision(payload)
             return NativeContextPreparation(payload)
-        from .decision_capture import capture_progressive_context
-
-        return NativeContextPreparation(capture_progressive_context(
-            payload, directory=capture_directory, surface=surface)[0])
+        return prepare_stateless()
     try:
         with _locked(directory) as root:
             recovery_committed = False
@@ -944,6 +959,11 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
+                    # Replan still has a verified reader address before native
+                    # continuity starts. Use the ordinary stateless projector.
+                    if (surface == "complete_turn" and progressive_enabled and captured_decision_path is not None
+                            and isinstance(payload.get("replan_read_path"), str)):
+                        return prepare_stateless()
                     if check_saved_source:
                         assert_complete_turn_decision(payload)
                     return NativeContextPreparation(payload)  # Do not replace another session's recovery.
@@ -1010,7 +1030,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
                     if check_saved_source and isinstance(exc, EffectRuntimeRejected):
                         raise QuotaDecisionTransportError(str(exc)) from exc
-                    if check_saved_source or (captured_decision_path is not None
+                    if check_saved_source or (saved_capture and captured_decision_path is not None
                             and isinstance(payload.get("replan_read_path"), str)):
                         raise QuotaDecisionTransportError(
                             "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."

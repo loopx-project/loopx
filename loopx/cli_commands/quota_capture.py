@@ -493,7 +493,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan
         native_prepared = True
-        if projected.get("schema_version") == "context_delivery_v1":
+        if prepared.stateless_recovery is not None:
+            full_reference = prepared.stateless_recovery
+        elif projected.get("schema_version") == "context_delivery_v1":
             # Native publication owns the complete required view. Keep its
             # committed recovery even if optional wire/inline delivery fails;
             # the input capture digest below remains the original identity.
@@ -504,7 +506,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             # Before SessionStart the source has been checked, but only this
             # invocation's display gets the caller's selection transport.
             bind_capture_selection_transport(projected, args, capture_root=root)
-        native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
+        native_view = native_context_capture_view(projected, cache,
+            context_directory=directory if prepared.stateless_recovery is None else None, hook_session=hook_session,
+            captured_recovery=prepared.stateless_recovery,
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
