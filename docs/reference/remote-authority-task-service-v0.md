@@ -77,6 +77,10 @@ maintain that execution and advance its lease version. Before a later lifecycle
 command, use `read` to confirm the same owner/epoch and obtain the current version
 while retaining the original lease key. Stale versions fail without an automatic
 rebase. Progress cannot adopt another execution generation.
+Read responses retain current lease facts even when a canonical task has a long
+note. If the note's JSON encoding exceeds 4 KiB, the response omits `note` and
+sets `todo.note_omitted: true`; the stored note remains unchanged. The overall
+response limit remains 64 KiB.
 Claim/progress request IDs identify immutable intent within
 the principal/tenant/Goal/actor scope. Reusing one with different intent fails.
 Renew/release retain the canonical lease operation identity. Their receipts also
@@ -87,6 +91,10 @@ eligibility, write-scope and lease checks still apply. A receipt is historical
 evidence, not permission to execute after expiry, release or takeover.
 
 A timeout, lost response or unverified reply is **ambiguous** for a mutation.
+The client checks the operation-specific result evidence as well as the response
+schema and request digest. Missing or invalid operation, task, lease or receipt
+fields cannot produce a successful client exit; recovery/read failures remain
+`unavailable` and mutation replies remain `ambiguous`.
 The client never retries automatically. Retain the exact command and send it to
 `/v0/tasks/recover` (the example client uses `--recover`). A `found` response
 includes `historical_only: true` and a digest of the stored receipt; `missing`

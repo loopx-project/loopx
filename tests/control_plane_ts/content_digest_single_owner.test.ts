@@ -131,6 +131,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/coordination/local_authority_migration.ts",
   "control_plane/coordination/local_authority_shadow.ts",
   "control_plane/coordination/local_authority_shadow_outbox.ts",
+  "control_plane/coordination/remote_authority_contract.ts",
   "control_plane/coordination/remote_authority_policy.ts",
   "control_plane/coordination/reviewed_promotion_plan.ts",
   "control_plane/coordination/runtime_shadow.ts",

@@ -3,6 +3,7 @@ import test from "node:test";
 import {createServer, request as httpsRequest} from "node:https";
 import type {AddressInfo} from "node:net";
 import {writeFile} from "node:fs/promises";
+import {Client} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
 import {fileRemoteAuthorityAdmission} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
@@ -98,6 +99,125 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     }
     assert.equal((await call(claimRequest("a"), "execute", `invalid-${"x".repeat(48)}`)).reason_code, "principal_unauthenticated");
     assert.deepEqual(await fixture.store.loadAuthority(), before);
+  });
+  await t.test("CLI reads current lease facts and releases tasks regardless of note size", async () => {
+    const notes = {todo_short_note: "s".repeat(1024), todo_long_note: "l".repeat(66560)};
+    await fixture.seed(Object.keys(notes), notes);
+    for (const [todo, note] of Object.entries(notes)) {
+      const unclaimed = await fixture.client(running.endpoint, "a", {...base(todo), operation: "read"});
+      assert.equal(unclaimed.code, 0); assert.equal(unclaimed.value.lease, null);
+      const claimed = await fixture.client(running.endpoint, "a", claimRequest("a", todo));
+      assert.equal(claimed.code, 0);
+      if (todo === "todo_short_note") {
+        // Existing canonical records also admit decimal-string lease counters.
+        // The wire projection keeps them usable as numeric command arguments.
+        const head = await fixture.store.loadAuthority(); assert.equal(head.status, "loaded");
+        if (head.status !== "loaded") return;
+        const projection = structuredClone(head.head);
+        const original = (projection.leases as JsonObject[]).find(row => row.todo_id === todo)!;
+        original.version = String(original.version); original.lease_epoch = String(original.lease_epoch);
+        assert.equal((await fixture.store.commitAuthority({operation_id: "legacy-lease-counters",
+          expected_provider_revision: head.provider_revision, next_projection: projection, events: [], receipts: []})).status, "applied");
+      }
+      const before = await fixture.store.loadAuthority();
+      const read = await fixture.client(running.endpoint, "a", {...base(todo), operation: "read"});
+      assert.equal(read.code, 0, "a valid note must not hide the lease needed for release");
+      assert.equal(read.value.status, "found");
+      const current = read.value.lease as JsonObject;
+      assert.equal(current.owner, "actor-a"); assert.equal(current.status, "active");
+      assert.equal(current.version, lease(claimed.value).version);
+      assert.equal(current.lease_epoch, lease(claimed.value).lease_epoch);
+      const projected = read.value.todo as JsonObject;
+      if (todo === "todo_short_note") assert.equal(projected.note, note);
+      else {assert.equal(projected.note_omitted, true); assert.equal(Object.hasOwn(projected, "note"), false);}
+      assert(Buffer.byteLength(JSON.stringify(read.value)) <= 64 * 1024);
+      assert.deepEqual(await fixture.store.loadAuthority(), before);
+      const released = await fixture.client(running.endpoint, "a", {...base(todo), operation: "release",
+        idempotency_key: String(lease(claimed.value).idempotency_key), expected_version: Number(current.version)});
+      assert.equal(released.code, 0); assert.equal(lease(released.value).status, "released");
+    }
+  });
+  await t.test("CLI rejects a correlated but incomplete success and recovers the original intent", async () => {
+    await fixture.seed(["todo_incomplete_reply"]);
+    const request = claimRequest("a", "todo_incomplete_reply");
+    let reply: JsonObject = {schema_version: "loopx_remote_authority_response_v0",
+      request_sha256: canonicalAuthoritySha256({mode: "execute", request}), status: "result", result: {status: "applied"}};
+    const proxy = createServer({key: fixture.key, cert: fixture.cert}, (incoming, outgoing) => {
+      incoming.resume(); outgoing.setHeader("Content-Type", "application/json"); outgoing.end(JSON.stringify(reply));
+    });
+    await new Promise<void>(resolve => proxy.listen(0, "127.0.0.1", resolve));
+    try {
+      const endpoint = `https://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
+      const malformed = await fixture.client(endpoint, "a", request);
+      assert.equal(malformed.code, 1, "request correlation alone does not establish a completed claim");
+      assert.equal(malformed.value.status, "ambiguous");
+      reply = {...reply, request_sha256: "0".repeat(64)};
+      assert.equal((await fixture.client(endpoint, "a", request)).code, 1);
+      const recovered = await fixture.client(running.endpoint, "a", request, true);
+      assert.equal(recovered.code, 0); assert.equal(recovered.value.status, "missing");
+      const valid = await fixture.client(running.endpoint, "a", request);
+      assert.equal(valid.code, 0); assert.equal(lease(valid.value).owner, "actor-a");
+      reply = valid.value;
+      assert.equal((await fixture.client(endpoint, "a", request)).code, 0);
+
+      const progress: RemoteAuthorityRequest = {...base(request.todo_id), operation: "progress",
+        request_id: "verified-progress", claim_request_id: `claim-${request.todo_id}`, note: "Validated response evidence"};
+      const progressed = await fixture.client(running.endpoint, "a", progress); assert.equal(progressed.code, 0);
+      const read: RemoteAuthorityRequest = {...base(request.todo_id), operation: "read"};
+      const current = await fixture.client(running.endpoint, "a", read); assert.equal(current.code, 0);
+      const renew: RemoteAuthorityRequest = {...base(request.todo_id), operation: "renew", ttl_seconds: 600,
+        idempotency_key: String(lease(valid.value).idempotency_key), expected_version: Number((current.value.lease as JsonObject).version)};
+      const renewed = await fixture.client(running.endpoint, "a", renew); assert.equal(renewed.code, 0);
+      const release: RemoteAuthorityRequest = {...base(request.todo_id), operation: "release",
+        idempotency_key: renew.idempotency_key, expected_version: Number(lease(renewed.value).version)};
+      const released = await fixture.client(running.endpoint, "a", release); assert.equal(released.code, 0);
+      const cases: {request: RemoteAuthorityRequest; reply: JsonObject; required: string[]}[] = [
+        {request, reply: valid.value, required: ["operation_id", "result.lease", "result.claim_operation_id", "result.claimed_by"]},
+        {request: progress, reply: progressed.value, required: ["operation_id", "result.todo_id", "result.changed", "result.cursor"]},
+        {request: renew, reply: renewed.value, required: ["result.renewed", "result.lease.version", "result.lease.idempotency_key"]},
+        {request: release, reply: released.value, required: ["result.released", "result.lease", "result.provider_revision"]},
+        {request: read, reply: current.value, required: ["todo", "lease", "lease.owner", "lease.lease_epoch", "lease.version"]},
+      ];
+      function removeField(value: JsonObject, path: string) {
+        const keys = path.split("."), last = keys.pop()!;
+        let parent = value;
+        for (const key of keys) parent = parent[key] as JsonObject;
+        assert(Object.hasOwn(parent, last), path); delete parent[last];
+      }
+      for (const entry of cases) {
+        reply = entry.reply;
+        assert.equal((await fixture.client(endpoint, "a", entry.request)).code, 0, entry.request.operation);
+        for (const field of entry.required) {
+          reply = structuredClone(entry.reply); removeField(reply, field);
+          const invalid = await fixture.client(endpoint, "a", entry.request);
+          assert.equal(invalid.code, 1, `${entry.request.operation}: missing ${field}`);
+          assert.equal(invalid.value.status, entry.request.operation === "read" ? "unavailable" : "ambiguous");
+        }
+        if (entry.request.operation === "read") continue;
+        // Historical receipt payloads have no execution status and must remain
+        // readable after release; they cannot be promoted to current authority.
+        const history = await fixture.client(running.endpoint, "a", entry.request, true);
+        assert.equal(history.code, 0); assert.equal(history.value.historical_only, true);
+        reply = history.value;
+        assert.equal((await fixture.client(endpoint, "a", entry.request, true)).code, 0);
+        for (const field of ["operation_id", "receipt_sha256", "historical_only", "result"]) {
+          reply = structuredClone(history.value); removeField(reply, field);
+          const invalid = await fixture.client(endpoint, "a", entry.request, true);
+          assert.equal(invalid.code, 1, `recovery: missing ${field}`); assert.equal(invalid.value.status, "unavailable");
+        }
+      }
+      for (const patch of [
+        (value: JsonObject) => {result(value).status = ["applied"];},
+        (value: JsonObject) => {result(value).todo_id = "todo_other";},
+        (value: JsonObject) => {lease(value).owner = "actor-b";},
+        (value: JsonObject) => {lease(value).version = "1";},
+        (value: JsonObject) => {lease(value).expires_at = "2026-02-31T00:00:00Z";},
+        (value: JsonObject) => {value.status = "missing";},
+      ]) {
+        reply = structuredClone(valid.value); patch(reply);
+        assert.equal((await fixture.client(endpoint, "a", request)).code, 1);
+      }
+    } finally {await new Promise<void>(resolve => proxy.close(() => resolve()));}
   });
   await t.test("revocation and unreadable policy reject new admissions, including cached TLS connections", async () => {
     const policy = servicePolicy(); policy.principals = policy.principals.slice(1);
@@ -277,4 +397,18 @@ test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !c
     });
     assert.deepEqual(await store.readReceipt("unknown-operation"), {status: "missing"});
   });
+});
+
+test("disposable database cleanup waits for client disconnects", {skip: !connectionString}, async t => {
+  // Widen the same Pool.end()/socket-close race seen in CI, using real PG
+  // connections. An early DROP DATABASE FORCE would emit an uncaught error.
+  const end = Client.prototype.end;
+  const delayed = t.mock.method(Client.prototype, "end", function(this: Client, ...args: Parameters<Client["end"]>) {
+    setTimeout(() => end.apply(this, args), 100);
+  });
+  await t.test("owns an idle connection until fixture teardown", async child => {
+    const fixture = await postgresRemoteFixture(child, connectionString!);
+    await fixture.seed(["todo_cleanup"]);
+  });
+  assert(delayed.mock.callCount() > 0);
 });

@@ -7,6 +7,7 @@ import type {PostgreSqlAuthorityDatabase} from "./postgresql_authority_store.ts"
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {executeCoordinationTodoUpdate} from "./todo_update.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "./task_lease_lifecycle.ts";
+import {leaseVersion, leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {indexCoordinationProjection, validateCoordinationTodoReadModel} from "./coordination_projection.ts";
 import {decodeRemoteAuthorityRequest, remoteAuthorityOperationId, remoteAuthorityResponse,
   type RemoteAuthorityMode, type RemoteAuthorityRequest} from "./remote_authority_contract.ts";
@@ -23,6 +24,7 @@ export interface RemoteAuthorityDependencies {
 }
 const incarnationFailure: AuthorityStoreReadFailure = {status: "unavailable",
   reason_code: "remote_authority_incarnation_changed", reason: "Rebind the authorized service scope before continuing"};
+const MAX_READ_NOTE_BYTES = 4096;
 
 /** Pin every observation and write to the admitted incarnation. The provider's
  * transactional revision check also fences rotation after our last read. */
@@ -83,8 +85,9 @@ function commandResult(result: JsonObject): JsonObject {
   }
   if (result.lease && typeof result.lease === "object" && !Array.isArray(result.lease)) {
     const lease = result.lease as JsonObject;
-    output.lease = Object.fromEntries(["goal_id", "todo_id", "owner", "idempotency_key", "status",
-      "version", "lease_epoch", "acquired_at", "updated_at", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]]));
+    output.lease = {...Object.fromEntries(["goal_id", "todo_id", "owner", "idempotency_key", "status",
+      "acquired_at", "updated_at", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
+      version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)};
   }
   return output;
 }
@@ -147,9 +150,16 @@ export class RemoteAuthorityService {
       if (request.operation === "read") {
         const todo = index.todos.get(request.todo_id), lease = index.leases.get(request.todo_id);
         if (!todo) return reply({status: "missing"});
+        const projectedTodo = Object.fromEntries(["todo_id", "status", "claimed_by", "note"].filter(k => k in todo).map(k => [k, todo[k]]));
+        // Notes authored through other canonical routes can exceed the remote
+        // write limit. Preserve the small lease facts needed for renew/release.
+        if (Object.hasOwn(projectedTodo, "note") && Buffer.byteLength(JSON.stringify(projectedTodo.note)) > MAX_READ_NOTE_BYTES) {
+          delete projectedTodo.note; projectedTodo.note_omitted = true;
+        }
         return reply({status: "found", provider_revision: head.provider_revision,
-          todo: Object.fromEntries(["todo_id", "status", "claimed_by", "note"].filter(k => k in todo).map(k => [k, todo[k]])),
-          lease: lease ? Object.fromEntries(["owner", "status", "version", "lease_epoch", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])) : null});
+          todo: projectedTodo,
+          lease: lease ? {...Object.fromEntries(["owner", "status", "expires_at"].filter(k => k in lease).map(k => [k, lease[k]])),
+            version: leaseVersion(lease), lease_epoch: leaseEpoch(lease)} : null});
       }
       if (head.head.handoff_mode !== "hard_lease") return reply({status: "rejected", reason_code: "remote_authority_requires_hard_lease"});
       const now = this.#dependencies.now?.() ?? new Date();

@@ -3,8 +3,7 @@ import {createServer, request as httpsRequest, type ServerOptions, type RequestO
 import type {AddressInfo} from "node:net";
 import type {Duplex} from "node:stream";
 import type {JsonObject} from "../effect_program.ts";
-import {canonicalAuthoritySha256} from "./authority_store_codec.ts";
-import {decodeRemoteAuthorityRequest, REMOTE_AUTHORITY_RESPONSE, remoteAuthorityResponse,
+import {decodeRemoteAuthorityRequest, decodeRemoteAuthorityResponse, remoteAuthorityResponse,
   type RemoteAuthorityMode, type RemoteAuthorityRequest} from "./remote_authority_contract.ts";
 import type {RemoteAuthorityService} from "./remote_authority_service.ts";
 
@@ -119,10 +118,7 @@ export async function callRemoteAuthority(endpoint: string, credential: string,
       response.on("end", () => {
         if (response.statusCode !== 200) {resolve(uncertain()); return;}
         try {
-          const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as JsonObject;
-          if (value.schema_version !== REMOTE_AUTHORITY_RESPONSE ||
-              value.request_sha256 !== canonicalAuthoritySha256({mode, request})) throw new TypeError("Response identity mismatch");
-          resolve(value);
+          resolve(decodeRemoteAuthorityResponse(JSON.parse(Buffer.concat(chunks).toString("utf8")), request, mode));
         } catch {resolve(uncertain());}
       });
     });
