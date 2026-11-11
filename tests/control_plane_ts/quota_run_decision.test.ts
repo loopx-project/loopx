@@ -15,9 +15,30 @@ for (const scenario of fixture.cases) {
 test("malformed admission facts cannot manufacture a runnable decision", () => {
   for (const patch of [{normal_delivery_allowed: "true"}, {replan_applies: null},
     {workspace_guard: "not a guard"}, {quota_focus_wait: 1}, {reason: null},
-    {task_orchestration_lane_count: -1}, {task_orchestration_lane_count: 1.5}]) {
+    {task_orchestration_lane_count: -1}, {task_orchestration_lane_count: 1.5},
+    {quota_allowed_slots: "-1"}, {quota_spent_slots: "1.5"}, {quota_spent_slots: 1}]) {
     assert.throws(() => resolveQuotaRunDecision({...fixture.base_facts, ...patch} as JsonObject));
   }
+});
+
+for (const state of ["throttled", "focus_wait", "waiting", "eligible"]) {
+  test(`fresh replan cannot exceed its compute window under ${state}`, () => {
+    const result = resolveQuotaRunDecision({...fixture.base_facts, state,
+      replan_required: true, replan_applies: true,
+      quota_allowed_slots: "1", quota_spent_slots: "1"});
+    assert.equal(result.should_run, false);
+    assert.equal(result.replan_decision_allowed, false);
+    assert.equal(result.normal_delivery_allowed, false);
+    assert.equal(result.effective_action, "throttled_skip");
+  });
+}
+
+test("quota boundaries retain integer precision and admit only remaining allowance", () => {
+  const facts = {...fixture.base_facts, replan_required: true, replan_applies: true,
+    quota_allowed_slots: "9007199254740993", quota_spent_slots: "9007199254740992"};
+  assert.equal(resolveQuotaRunDecision(facts).replan_decision_allowed, true);
+  assert.equal(resolveQuotaRunDecision({...facts,
+    quota_spent_slots: "9007199254740993"}).should_run, false);
 });
 
 for (const scenario of [
