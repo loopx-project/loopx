@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -671,3 +672,75 @@ def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> N
     _git(repo, "worktree", "add", str(odd), "feature-a")
 
     assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
+
+
+def _install_legacy_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put a Git wrapper first on PATH that rejects -z like Git 2.35."""
+    real_git = shutil.which("git")
+    assert real_git
+    bin_dir = tmp_path / "legacy-git-bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = "-z" ]; then\n'
+        "    echo \"error: unknown switch 'z'\" >&2\n"
+        "    exit 129\n"
+        "  fi\n"
+        "done\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_worktree_for_branch_supports_legacy_git_without_nul_framing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git 2.35 rejects worktree-list -z; ordinary paths must still resolve."""
+    repo = _repository(tmp_path)
+    ordinary = tmp_path / "ordinary worktree"
+    _git(repo, "worktree", "add", str(ordinary), "feature-a")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    assert _worktree_for_branch(repo, "feature-a") == ordinary.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="line separators in paths are POSIX-only")
+@pytest.mark.parametrize("line_separator", ["\n", "\r"])
+def test_legacy_git_fails_closed_on_line_separator_worktree_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line_separator: str
+) -> None:
+    """A legacy line-framed inventory must refuse a path it cannot represent."""
+    repo = _repository(tmp_path)
+    odd = tmp_path / f"odd{line_separator}worktree"
+    _git(repo, "worktree", "add", str(odd), "feature-a")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    with pytest.raises(IntegrationBranchError, match="Git 2.36"):
+        _worktree_for_branch(repo, "feature-a")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_sync_execute_supports_legacy_git_with_ordinary_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git 2.35 must still sync an ordinary linked integration worktree."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    integration_worktree = tmp_path / "integration worktree"
+    _git(repo, "switch", "main")
+    _git(repo, "worktree", "add", str(integration_worktree), "codex/local-integration")
+    source_worktree = tmp_path / "source worktree"
+    _git(repo, "worktree", "add", str(source_worktree), "feature-a")
+    _commit(source_worktree, "a.txt", "a2\n", "review update")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    synced = sync_integration_branch(repo_path=repo, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]

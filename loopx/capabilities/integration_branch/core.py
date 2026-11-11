@@ -609,10 +609,26 @@ def integration_branch_status(
     }
 
 
+_LEGACY_WORKTREE_PATH_ERROR = (
+    "this Git version cannot safely resolve a worktree path containing a line "
+    "separator because 'git worktree list -z' requires Git 2.36+; upgrade Git "
+    "or resolve the worktree path manually"
+)
+
+
 def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
-    result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
-    current_path: Path | None = None
     target_ref = f"refs/heads/{branch}"
+    try:
+        result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
+    except IntegrationBranchError as exc:
+        # NUL framing arrived in Git 2.36. Older Git rejects the switch before
+        # writing a record; keep ordinary paths working through the line-framed
+        # inventory, which stays fail-closed for values it cannot represent.
+        if "unknown switch" not in str(exc).lower() and "unknown option" not in str(exc).lower():
+            raise
+        return _worktree_for_branch_line_framed(repo, target_ref)
+
+    current_path: Path | None = None
     # `-z` frames fields on NUL and records on a NUL pair. A worktree path
     # may contain LF, CR or Unicode line separators, so treating its text as
     # a line-oriented inventory returns a prefix and can target the wrong
@@ -626,6 +642,43 @@ def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
                 current_path = Path(os.fsdecode(field.removeprefix(b"worktree "))).resolve()
             elif field == f"branch {target_ref}".encode("utf-8"):
                 return current_path
+    return None
+
+
+def _worktree_for_branch_line_framed(repo: Path, target_ref: str) -> Path | None:
+    """Resolve a branch from Git versions without ``worktree list -z`` support."""
+    result = _git(repo, "worktree", "list", "--porcelain")
+    lines = result.stdout.split("\n")
+    index = 0
+    while index < len(lines):
+        if not lines[index]:
+            index += 1
+            continue
+        if not lines[index].startswith("worktree "):
+            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+        path = Path(lines[index].removeprefix("worktree ")).resolve()
+        index += 1
+        # The porcelain format puts exactly one HEAD field directly after the
+        # worktree line. A path containing LF or CR shifts that field, so the
+        # record is no longer safely attributable to a checkout.
+        if index >= len(lines) or not lines[index].startswith("HEAD "):
+            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+        index += 1
+        branch_ref: str | None = None
+        while index < len(lines) and lines[index]:
+            field = lines[index]
+            if field.startswith("branch "):
+                branch_ref = field.removeprefix("branch ")
+            elif field.startswith("HEAD "):
+                raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+            elif field in ("detached", "bare") or field.startswith(("locked", "prunable")):
+                pass
+            else:
+                raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+            index += 1
+        if branch_ref == target_ref:
+            return path
+        index += 1
     return None
 
 
