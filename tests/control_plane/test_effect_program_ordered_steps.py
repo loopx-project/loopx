@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from loopx.bootstrap_command_pack import (
@@ -81,6 +82,16 @@ def test_ordered_steps_map_to_effect_program() -> None:
     assert program.steps[1].command == "loopx start-goal --guided"
     assert program.steps[2].command == "loopx todo add --goal-id loopx-meta"
     assert program.steps[2].purpose == "record the first bounded business todo"
+    assert [step.raw for step in program.steps] == steps
+
+    without_raw = effect_program_from_ordered_steps(
+        steps,
+        execution_mode="serial",
+        include_raw=False,
+    )
+    assert without_raw == replace(
+        program, steps=tuple(replace(step, raw={}) for step in program.steps)
+    )
 
 
 def test_ordered_steps_ignore_non_mapping_entries() -> None:

@@ -186,6 +186,43 @@ def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provide
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_execution_preparation_transports_only_the_selected_provider_facts(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.todos.goal_todo_projection import project_todo_read
+
+    other = {**_todo(), "todo_id": "todo_unrelated", "index": 2, "claimed_by": "agent-b",
+             "text": "[P1] Unrelated work", "note": "Unrelated durable evidence " * 200}
+    own_lease = _lease()
+    foreign_lease = {**_lease(owner="agent-b"), "todo_id": other["todo_id"]}
+    packet = _run(tmp_path, monkeypatch, provider, [own_lease, foreign_lease],
+                  todos=[_todo(), other])
+    assert packet["execution_preparation"]["state"] == "ready"
+    runtime = tmp_path / "runtime"
+    provider_head = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True)
+
+    def read(todo_id, source_root=runtime):
+        return project_todo_read({
+            "kind": "execution_preparation_source",
+            "source": {"runtime_root": str(source_root), "goal_id": GOAL}, "todo_id": todo_id,
+        })["execution_preparation_source"]
+
+    observed = read(TODO)
+    assert observed["goal_id"] == GOAL and observed["todo_id"] == TODO
+    assert observed["provider_revision"] == provider_head["provider_revision"]
+    assert observed["source_authority"] == provider_head["source_authority"]
+    assert observed["decision_read_from_provider"] and not observed["legacy_fallback_used"]
+    assert observed["todo"] == {"todo_id": TODO, "status": "open", "claimed_by": AGENT}
+    assert [row["todo_id"] for row in observed["leases"]] == [TODO]
+    assert observed["leases"][0]["expires_at"] == own_lease["expires_at"]
+    assert other["todo_id"] not in json.dumps(observed) and len(json.dumps(observed)) < 2048
+    assert read("todo_missing") is None
+    absent = tmp_path / "unbound-runtime"
+    assert read(TODO, absent) is None
+    assert not absent.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     tmp_path, monkeypatch, provider,
 ):
@@ -209,6 +246,75 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     assert after["selected_todo"]["todo_id"] == TODO
     assert after["execution_preparation"]["state"] == "ready"
     assert after["normal_delivery_allowed"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("projection_available", [True, False])
+def test_model_claim_keeps_receipt_without_unrelated_projection_details(
+    tmp_path, monkeypatch, provider, projection_available,
+):
+    other_todos = [
+        {**_todo(), "todo_id": f"todo_other_{index:03d}", "index": index + 2,
+         "claimed_by": "agent-b", "text": f"[P1] Unrelated work {index}",
+         "note": ("Supporting details for unrelated work. " * 30).strip()}
+        for index in range(72)
+    ]
+    selected = {**_todo(), "text": "[P1] Deliver one validated synthetic change"}
+    before = _run(tmp_path, monkeypatch, provider, [], todos=[selected, *other_todos],
+                  goal_suffix="\n## Agent Todo\n")
+    preparation = before["execution_preparation"]
+    assert preparation["state"] == "claim_required"
+    action = shlex.split(before["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+    assert action[0] == "loopx"
+    assert "--thin" not in preparation["claim"]["cli_args"]  # Exact Host action.
+    operation = ["--claim-operation-id", "synthetic-thin-claim"]
+
+    def invoke(*args):
+        rc, result = run_json_cli_result(
+            *args, registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        )
+        assert rc == 0 and result["ok"] is True, result
+        return result
+
+    state = tmp_path / "state.md"
+    if not projection_available:
+        state.unlink()
+        state.mkdir()  # The authority is available; only the display write fails.
+    claim = invoke(*action[1:], *operation)
+    assert claim["status"] == "applied" and claim["claim_operation_id"] == operation[1]
+    assert claim["todo_id"] == TODO and claim["claimed_by"] == AGENT
+    initial = invoke("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert initial["active"] is True and initial["lease"]["owner"] == AGENT
+    outbox = claim["projection_outbox"]
+    if not projection_available:
+        assert claim["projection_delivery"] == outbox["status"] == "pending"
+        assert outbox["reason_code"] and outbox["recommended_action"]
+        assert outbox["retryable"] is True and outbox["retry_business_mutation"] is False
+        assert "detail_command" not in outbox
+        return
+
+    assert claim["projection_delivery"] == outbox["status"] == "delivered", outbox
+    assert claim["next_cli_actions"] and outbox["next_action"] == "finish"
+    if provider == "sqlite":
+        assert outbox["active_fields_omitted"] == len(other_todos)
+        assert "omitted_active_records" not in outbox
+        before_read = state.read_bytes()
+        diagnostic_args = shlex.split(outbox["detail_command"])
+        detail = invoke(*diagnostic_args[diagnostic_args.index("todo"):])
+        assert detail["dry_run"] is True and detail["provider_revision"] == outbox["provider_revision"]
+        assert state.read_bytes() == before_read
+        rows = detail["omitted_active_records"]
+        assert {row["todo_id"] for row in rows} == {row["todo_id"] for row in other_todos}
+    else:
+        rows = []
+        assert outbox["active_fields_omitted"] == 0 and outbox["omitted_active_records"] == rows
+        assert "detail_command" not in outbox
+    assert "--thin" in action
+    replay = invoke(*preparation["claim"]["cli_args"], *operation)
+    assert replay["claim_operation_id"] == claim["claim_operation_id"]
+    assert replay["projection_outbox"]["omitted_active_records"] == rows
+    current = invoke("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert current["lease"] == initial["lease"]
 
 
 @pytest.mark.parametrize("provider,scenario,location,ambient", [
@@ -710,7 +816,7 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         read_model_view(before, "claim", deferred=True)
 
     claim_code, claim = run_json_cli_result(
-        *before["execution_preparation"]["claim"]["cli_args"],
+        *shlex.split(contract["cli_channel"]["next_cli_actions"][0])[1:],
         registry_path=tmp_path / "registry.json",
         runtime_root=tmp_path / "runtime",
     )

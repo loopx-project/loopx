@@ -110,6 +110,35 @@ receipt。完整输入先验证，重复 ref 拒绝；每份 receipt 使用唯�
 空输入返回一份空分块，供现有 no-change / rejection / rollback 契约使用。
 该 SDK 增量不依赖项目授权改动，不增设 CLI writer、素材 authority 或自动排序器。
 
+## 分波次多条目有界重排
+
+`plan_material_wave_rerank(ordered_material_refs, annotations, ...)`（以及无状态
+CLI 预览入口 `loopx material-lifecycle plan-wave-rerank --input <path-or-->`）通过
+共享 TypeScript 控制面 owner（`material_lifecycle.plan_wave_rerank`）计算确定性的多条目
+重排预览，始终保持 `apply_authorized=False`，不会直接修改素材 authority。
+
+它针对大型队列中的三类典型失真执行硬约束：
+
+1. **按周期波次与投入带宽的成本加权排序**：支持 `imminent_gate`、`active_sprint`、
+   `foundational_track`、`orthogonal_backlog` 四档波次与 `quick_slice`（`/1.0`）、
+   `focused_study`（`/2.0`）、`deep_monograph`（`/6.0`）投入带宽加权 VOI。未声明
+   有界章节切片（`scoped_slice_ready=False`）的 `deep_monograph` 若被放入
+   `imminent_gate` 或 `active_sprint`，会自动分层到 `foundational_track`，避免多周课程
+   或长篇专著阻塞高收益短切片。
+2. **承重一手信源优先拓扑与未入列依赖门禁**：若 `required_load_bearing_refs` 中存在尚未入列
+   或未进入 `ordered_material_refs`（如 `rank=None`）的一手信源，直接拒绝盲目重排并要求先完成
+   candidate intake 结算；对已入列引用强制执行 `primary_source_refs` 先于二手解读的拓扑序
+   （检测环路与锚点倒置并 fail-closed），并校验 `blocks_active_deliverable=True` 且
+   `evidence_role="load_bearing_primary"` 的条目落在 `top_window_size` 内。
+3. **正交热点 Top-Window 配额上限与未标注队列无损保序**：当 `top_window_size` 之外仍存在非正交
+   已排序条目时，将 `orthogonal_backlog` 与 `orthogonal_signal` 在 `1..top_window_size`
+   内的数量限制为 `max_orthogonal_in_top_window`（默认 `0`）。未显式标注条目在主动波次之后严格保持
+   原有相对顺序，被降级的正交条目平顺移入 `ranked_backlog` 起点（`max(top_window_size + 1, after_active_waves)`），
+   不会把前段条目挤压到数百条队列末尾。
+
+返回的 `(reordered_refs, summary)` 可直接传入 `build_material_rerank_proposal(..., moves=summary["moves"], **summary["constraints"])`
+及 `material_rerank_receipt_chunks`。
+
 ## 项目级 Skill 安装
 
 LoopX 发布 canonical `loopx-material` skill，但刻意不安装到用户的全局 skill
@@ -126,8 +155,11 @@ loopx project-skill install \
 目前支持：
 
 - `codex` -> `.agents/skills/loopx-material/`
+- `antigravity` -> `.agent/skills/loopx-material/`
 - `claude-code` -> `.claude/skills/loopx-material/`
+- `kiro-cli` -> `.kiro/skills/loopx-material/`
 - `opencode` -> `.opencode/skills/loopx-material/`
+- `pi` -> `.pi/skills/loopx-material/`
 
 重复传入 `--surface`，可以在一个 transaction 中安装多份 host-native 副本。
 安装前后可检查状态：
@@ -177,6 +209,14 @@ write scope 和 owner gate。
 loopx material-lifecycle architecture --format json
 ```
 
+预览基于 exact-read 标注的分波次重排计划：
+
+```bash
+loopx material-lifecycle plan-wave-rerank \
+  --input request.json \
+  --format json
+```
+
 检查项目级受管 skill：
 
 ```bash
@@ -195,7 +235,7 @@ storage adapter、source profile 和 provider credential 仍由项目拥有。
 
 普通项目对话可为已显式启用的素材来源使用 `MaterialProjectScope`，无需创建 Goal。inventory、candidate intake/rollback、rerank packet、readable projection 和 intake-ranking settlement 支持以 `project_scope` 替代 `goal_id`；两者必须且只能选一个。项目 packet 不含 Goal 标识，也不带入 manager 上下文。
 
-scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器，不授予权限。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前调用者/受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
+scope 的 `project_ref`、`source_profile_ref`、`workspace_grant_ref` 是既有 Core 授权与来源 profile 的选择器，不授予权限。project candidate provider 必须实现 `MaterialProjectScopeVerifier`，核对当前已验证本地 owner host（如 `Codex`、`Antigravity`、`Claude Code`、`OpenCode`、`Kiro CLI` 等）的活跃原生 turn（或同一 Core 工作区写入授权下的原生 Bot turn）、受众、精确 store/profile、工作区写入边界、owner gate 的有效期与撤销状态——不得虚构空壳 Goal，也不得借用其他 host 的 turn 身份。SDK 在访问 provider 前及发布 authority 前调用该 verifier，授权事实仍由既有 Core owner 提供；adapter 还须在自身 staging/publication 事务内执行授权检查，不能把预检查的 Boolean 当作事务 fence。
 
 默认关闭不变；本路径不注册 Goal、不创建 source authority，不扩大 Goal-only migration/rebuild/Explore。新来源初始化、私有存储与 transport 接入仍由 source owner 提供，不能仅凭这些字段或安装 skill 开始写入。
 

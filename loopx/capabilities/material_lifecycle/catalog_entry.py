@@ -41,7 +41,12 @@ MATERIAL_LIFECYCLE_CATALOG_ENTRY: dict[str, Any] = {
             "command": "loopx material-lifecycle architecture --format json",
             "purpose": "Render the default-off Stage-0 inventory, migration, lifecycle, and bounded-rerank boundaries.",
             "write_boundary": "stateless contract output only; no source store, backup, goal state, provider, or external write",
-        }
+        },
+        {
+            "command": "loopx material-lifecycle plan-wave-rerank --input - --format json",
+            "purpose": "Preview deterministic wave-based material rerank moves and bounds across horizon waves, effort bands, primary-over-secondary lineage, and orthogonal shortlist caps.",
+            "write_boundary": "stateless preview output only; apply_authorized remains false and no source store or Core state is mutated",
+        },
     ],
     "implemented_protocols": [
         {

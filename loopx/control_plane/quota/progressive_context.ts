@@ -18,6 +18,7 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
+export type PreparationScopeDetail = {path: Path; marker_path?: Path; instruction: string};
 type ReadSelection = {pointer: string; path: Path};
 type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
@@ -329,7 +330,7 @@ function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelec
     ? {selection_splice} : {selections: selected};
 }
 
-/** Compose the ready opening with the same observation, without comparing
+/** Compose the linked opening with the same observation, without comparing
  * bodies again. A coalesced parent can span both parts; keep only the coverage
  * shared by the verified reduced selection and the ordinary remainder. */
 function withLinkedObservedRemainder(observed: JsonObject | undefined,
@@ -382,7 +383,7 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
-    scope?: {path: Path; marker_path: Path; instruction: string}): JsonObject {
+    scopes: readonly PreparationScopeDetail[] = []): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -452,9 +453,9 @@ export function progressiveContextPlan(request: JsonObject,
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  if (scope) {
+  for (const scope of scopes) {
     deferred.push({path: scope.path, read_instruction: scope.instruction});
-    instructions.push({path: scope.marker_path, value: pointer(scope.path)});
+    if (scope.marker_path) instructions.push({path: scope.marker_path, value: pointer(scope.path)});
   }
   if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:
@@ -648,11 +649,11 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const groups = observe || request.include_initial_read_plan === true
     ? initialContextReadGroups(required.context, decisionFields) : undefined;
-  const readyScope = request.include_initial_read_plan === true && groups
-    ? prepareReadyOpening(required.context, groups, exactBody?.path) : undefined;
+  const openingSplit = request.include_initial_read_plan === true && groups
+    ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
-    ? nativeContextReadPlan(required.context, pointers, groups, readyScope) : undefined;
+    ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
   const observed = observe && pointers.length
     ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
@@ -671,8 +672,22 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
-function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
-    scope?: Path): {boundary: string; detail: string; controls: string[]} | undefined {
+function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,
+    scope?: Path): {boundary: string; detail: string; controls: string[]; checkpointEntries?: string} | undefined {
+  const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
+  const candidate = "/selected_todo";
+  if (cli?.selection_required === true && groups.opening.includes(candidate)) {
+    // This Todo is a recommendation. The current operation is selection;
+    // keep its route and permission controls ahead of the candidate's details.
+    const controls = ["selection_required", "selection_policy_ref", "selection_command",
+      "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
+      .map(field => pointer(["interaction_contract", "cli_channel", field]));
+    for (const control of [...controls, "/action_portfolio/selection_policy"]) {
+      const index = groups.remaining.indexOf(control);
+      if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
+    }
+    return {boundary: candidate, detail: candidate, controls: []};
+  }
   if (!scope) return undefined;
   const parent = scope.slice(0, -1), detail = scope.at(-1)!;
   const body = jsonObject(at(context, parent)), boundary = pointer(parent);
@@ -682,14 +697,26 @@ function prepareReadyOpening(context: JsonObject, groups: ReturnType<typeof init
   // reader, so an explicit historical initial-read cursor still replays.
   const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
   if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
-  return {boundary, detail: pointer(scope),
-    controls: Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]))};
+  const controls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
+  const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+  const checkpoint = jsonObject(at(context, checkpointPath));
+  const opening = {boundary, detail: pointer(scope), controls};
+  if (checkpoint?.schema_version !== "checkpointed_boundary_authority_v0"
+      || !Array.isArray(checkpoint.active_write_scope) || !Number.isSafeInteger(checkpoint.active_count)
+      || !Number.isSafeInteger(checkpoint.inactive_count) || !Array.isArray(checkpoint.entries)
+      || !checkpoint.entries.length) return opening;
+  // Keep the current approval summary in the opening. The exact entries and
+  // write scope are both required from the same capture before work.
+  const checkpointIndex = controls.indexOf(pointer(checkpointPath));
+  controls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
+    .map(key => pointer([...checkpointPath, key])));
+  return {...opening, checkpointEntries: pointer([...checkpointPath, "entries"])};
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
-    groups: ReturnType<typeof initialContextReadGroups>, readyScope?: ReturnType<typeof prepareReadyOpening>): {
+    groups: ReturnType<typeof initialContextReadGroups>, openingSplit?: ReturnType<typeof prepareInitialOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
       ordinary_opening_rows?: number;
     } {
@@ -698,18 +725,18 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
   const plan = select(pointers);
   let {opening, remaining} = groups;
-  if (readyScope) {
+  if (openingSplit) {
     // The reader chooses the split using the actual serialized opening.
-    opening = opening.flatMap(field => field === readyScope.boundary ? readyScope.controls : [field]);
-    remaining = [readyScope.detail, ...remaining];
+    opening = opening.flatMap(field => field === openingSplit.boundary ? openingSplit.controls : [field]);
+    remaining = [openingSplit.detail, ...(openingSplit.checkpointEntries ? [openingSplit.checkpointEntries] : []), ...remaining];
   }
-  const ordinaryRows = readyScope ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
+  const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(readyScope ? {linked_opening_detail: readyScope.detail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.detail, ordinary_opening_rows: ordinaryRows} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {

@@ -464,6 +464,18 @@ permitted. Downgrading code must preserve journals and captures; deleting them
 is not rollback. This transport qualification does not establish live model,
 packaged App/Lark or overall convergence acceptance.
 
+Recovery previews and journal interpretation use the same typed plan reader.
+Supported historical records keep their original versions and bytes. An
+unsupported declared plan, envelope or action-signature version or coverage
+blocks resume. Journal inspection can report the invalid work contract without
+performing recovery or a debit. Retain the historical reader until the last
+supported journal and its recovery window are reconciled.
+
+恢复预览和 journal 解释共用同一个 typed plan reader。受支持的历史记录保留原版本和
+字节。显式声明不支持的 plan、envelope 或动作签名版本及覆盖范围时，恢复会停止。
+检查入口仍可报告契约无效，不执行恢复或扣额。保留历史读取器，直到最后一份受支持的
+journal 及其恢复窗口完成核对。
+
 Repair and replan diagnostics remain in the journal's typed `host_result`,
 including its summary and follow-up action. They do not implicitly replace Todo
 notes or evidence, even when settlement succeeds. Semantic refusal and cached

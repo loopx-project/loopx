@@ -16,6 +16,8 @@ from .return_files import uploaded_result_files, verify_result_files
 from .outbound import present_lark_conversation_text
 from ...capabilities.manager_context import authority
 from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
+from ...file_lock import exclusive_file_lock
+from .conversation_identity import identity_ref
 
 
 def _resolve_return(
@@ -89,6 +91,55 @@ def _private_return_authority(*, root: Path, registry: Path, route: dict[str, An
         )
 
 
+def _verify_web_mirror(*, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
+                       text: str, private_transport: Any, attempt: Mapping[str, str | None] | None,
+                       record_attempt: Callable[[Mapping[str, str | None]], None] | None) -> dict[str, Any]:
+    """Read an existing App mirror; its original worker alone owns sends.
+
+    Manager-context supplies its typed canonical result id and owns result
+    settlement. Neither a matching body nor a historical verified flag is
+    sufficient: revalidate the source and read the exact provider attempt.
+    """
+    saved = session["steward_context"]
+    key = identity_ref(saved["binding_id"], session["session_id"])
+    path = private_transport.root / "web-projections" / f"{key}.json"
+    if not path.is_file():
+        raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "App mirror not yet recorded")
+    with exclusive_file_lock(path, operation="verify_web_conversation_return"):
+        row = private_transport._read_web_projection_journal(path)
+        canonical = private_transport.core.controller.store.load_turn(session["session_id"], turn["turn_id"])
+        if (route.get("session_id") != session["session_id"] or row.get("session_id") != session["session_id"]
+                or not canonical or canonical.get("origin") != "web"
+                or canonical.get("client_turn_id") != turn.get("client_turn_id")
+                or route.get("result_attachments")):
+            raise ValueError("original App return identity or media unavailable")
+        message = next((item for item in private_transport._web_projection_messages(row)
+            if item["message_id"] == route.get("return_message_id")), None)
+        if (not message or message.get("origin") != "manager_followup" or message.get("role") != "agent"
+                or message.get("turn_id") != turn["turn_id"] or present_lark_conversation_text(message["text"]) != text
+                or message.get("attachments")):
+            raise ValueError("canonical App result changed")
+        phase = row["deliveries"].get("web." + message["message_id"], {})
+        mirrored = phase.get("attempt")
+        if phase.get("verified") is not True or not isinstance(mirrored, dict):
+            raise ReturnResolutionBlocked("initial_delivery_receipt_unavailable", "App mirror remains unverified")
+        expected = f"**LoopX（App）**\n\n{message['text']}"
+        if phase.get("text") not in (expected, present_lark_conversation_text(expected)) or (
+                attempt is not None and dict(attempt) != mirrored):
+            raise ValueError("App mirror intent changed")
+        if attempt is None and record_attempt is not None:
+            # Persist the original locator before IO, so a crash or outage
+            # resumes verification rather than starting another delivery.
+            record_attempt(dict(mirrored))
+        result = verify_lark_inbox_reply(project=private_transport.runtime_root, config_path=private_transport._inbox(row),
+            message_id=row["event"]["message_id"], text=phase["text"], attempt=mirrored,
+            reply_placement="chat_root", delivery_id=private_transport._web_projection_delivery_id(row, message),
+            runner=private_transport._reply_runner, finalize_reactions=False, resume_parts=False,
+            source_authority_verifier=lambda profile, chat, ref: private_transport._source_authority(row, profile, chat, ref))
+        if message not in private_transport._web_projection_messages(row):
+            raise ValueError("canonical App result changed during readback")
+        return {**result, "idempotency_key": mirrored["provider_receipt"], "external_write_performed": False}
+
 def _web_return(*, root: Path, registry: Path, route: dict[str, Any], session: dict[str, Any],
                 turn: dict[str, Any], text: str, cancelled: Callable[[], bool], private_transport: Any,
                 attempt: Mapping[str, str | None] | None = None,
@@ -97,8 +148,8 @@ def _web_return(*, root: Path, registry: Path, route: dict[str, Any], session: d
                      cancelled=cancelled, private_transport=private_transport)
     _private_return_authority(**arguments)
     try:
-        result = private_transport.verify_web_return(route=route, session=session, turn=turn,
-            text=text, attempt=attempt, record_attempt=record_attempt)
+        result = _verify_web_mirror(route=route, session=session, turn=turn, text=text,
+            private_transport=private_transport, attempt=attempt, record_attempt=record_attempt)
     except ReturnResolutionBlocked:
         raise
     except (KeyError, ValueError, OSError) as exc:

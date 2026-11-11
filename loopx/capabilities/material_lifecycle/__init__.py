@@ -75,10 +75,12 @@ from .project_skill import (
 from .ranking import (
     MATERIAL_RERANK_APPLY_RECEIPT_SCHEMA_VERSION,
     MATERIAL_RERANK_PROPOSAL_SCHEMA_VERSION,
+    MATERIAL_WAVE_RERANK_PLAN_SCHEMA_VERSION,
     build_material_rerank_apply_receipt,
     build_material_rerank_proposal,
     material_rerank_receipt_chunks,
     plan_material_single_move,
+    plan_material_wave_rerank,
 )
 from .readable_projection import (
     MATERIAL_READABLE_PROJECTION_RECEIPT_SCHEMA_VERSION,
@@ -147,6 +149,7 @@ __all__ = [
     "MATERIAL_RANKED_STATE_REPAIR_PLAN_SCHEMA_VERSION",
     "MATERIAL_RERANK_APPLY_RECEIPT_SCHEMA_VERSION",
     "MATERIAL_RERANK_PROPOSAL_SCHEMA_VERSION",
+    "MATERIAL_WAVE_RERANK_PLAN_SCHEMA_VERSION",
     "MATERIAL_SKILL_ID",
     "MATERIAL_SKILL_MANAGED_MARKER",
     "MATERIAL_SKILL_SCOPE",
@@ -195,6 +198,7 @@ __all__ = [
     "material_skill_digest",
     "material_rerank_receipt_chunks",
     "plan_material_single_move",
+    "plan_material_wave_rerank",
     "plan_material_decision_actions",
     "prepare_material_migration",
     "project_material_skill_target",

@@ -463,7 +463,9 @@ def register_todo_command(
         help=(
             "For todo list, return the explicit field-only projection and omit "
             "detail lanes; returns at most two items per role, and --limit can "
-            "lower but not expand that bound."
+            "lower but not expand that bound. In a managed todo claim JSON receipt, omit "
+            "per-Todo display diagnostics from a successful projection and "
+            "return a read-only detail command."
         ),
     )
     todo_parser.add_argument(
