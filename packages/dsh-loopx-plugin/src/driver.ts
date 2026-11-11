@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { dirname, isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
@@ -159,6 +159,12 @@ function continuationSource(
 
 function isDriverMessage(message: UserMessage): boolean {
   return continuationSource(message) !== undefined
+}
+
+function isHostContextMessage(message: UserMessage): boolean {
+  // DSH kind identifies the producer; snapshot/catalog forms also describe plugin messages.
+  const kind: string = message.source.kind
+  return kind === 'runtime-context' || kind === 'time-context' || kind === 'skill-catalog'
 }
 
 function sameReservation(message: UserMessage, reservation: Reservation): boolean {
@@ -330,6 +336,7 @@ function exactBinding(
 
 const QUOTA_NAVIGATION_SCHEMA = 'context_capture_navigation_v1'
 const QUOTA_SELECTION_PAGE_SCHEMA = 'context_capture_selection_page_v1'
+const QUOTA_INLINE_PAGE_SCHEMA = 'context_capture_page_v1'
 const QUOTA_INDEX_SCHEMA = 'context_capture_index_v1'
 const QUOTA_SELECTION_SCHEMA = 'context_capture_selection_v1'
 const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/agent_identity']
@@ -354,24 +361,45 @@ async function readQuotaSelections(
   let cursor = reference
   let offset = 0
   let total: number | undefined
+  let inlineDigests: { source: string; selection: string } | undefined
   const parts: string[] = []
+  const isListing = schema === QUOTA_INDEX_SCHEMA
+  const pointers = isListing ? [''] : selectionArgs.filter((_, index) => index % 2 === 1)
   for (;;) {
     const page = await runJsonCommand(command, [
       '--format', 'json', 'quota', 'context-read', '--reference-file', cursor,
       '--offset', String(offset), '--page-bytes', '64000', '--max-page-output-bytes', '64000',
-      ...(offset === 0 ? selectionArgs : []),
+      ...(offset === 0 || inlineDigests !== undefined ? selectionArgs : []),
+      ...(inlineDigests === undefined ? [] : ['--selection-sha256', inlineDigests.selection]),
     ], options)
-    if (page.ok !== true || page.schema_version !== QUOTA_SELECTION_PAGE_SCHEMA
+    if (page.ok !== true
+      || (page.schema_version !== QUOTA_SELECTION_PAGE_SCHEMA && page.schema_version !== QUOTA_INLINE_PAGE_SCHEMA)
       || typeof page.content !== 'string' || page.offset !== offset
       || typeof page.total_bytes !== 'number' || !Number.isSafeInteger(page.total_bytes)
+      || page.total_bytes <= 0
       || (total !== undefined && page.total_bytes !== total)) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid page', false)
+    }
+    if (page.schema_version === QUOTA_INLINE_PAGE_SCHEMA) {
+      const { sha256: source, selection_sha256: selection, selected_pointers: selected } = page
+      if (typeof source !== 'string' || !/^[a-f0-9]{64}$/u.test(source)
+        || typeof selection !== 'string' || !/^[a-f0-9]{64}$/u.test(selection)
+        || (page.list_fields === true) !== isListing
+        || !Array.isArray(selected) || selected.length !== pointers.length
+        || !pointers.every(pointer => selected.includes(pointer))
+        || (inlineDigests === undefined && offset !== 0)
+        || (inlineDigests !== undefined && (source !== inlineDigests.source || selection !== inlineDigests.selection))) {
+        throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid inline selection', false)
+      }
+      // A read-only capture may have no derived reader descriptor. Continue
+      // through the original reference with the same selector and view hash.
+      inlineDigests = { source, selection }
     }
     total = page.total_bytes
     const next = offset + Buffer.byteLength(page.content, 'utf8')
     parts.push(page.content)
     if (page.eof === true && next === total && page.next_offset === null) break
-    const nextReference = page.reference_file
+    const nextReference = inlineDigests === undefined ? page.reference_file : reference
     if (page.eof !== false || next <= offset || next >= total || page.next_offset !== next
       || typeof nextReference !== 'string' || !isAbsolute(nextReference)
       || nextReference.includes('\0') || dirname(nextReference) !== dirname(reference)
@@ -381,9 +409,14 @@ async function readQuotaSelections(
     cursor = nextReference
     offset = next
   }
+  const selectedBody = parts.join('')
+  if (inlineDigests !== undefined
+    && createHash('sha256').update(selectedBody, 'utf8').digest('hex') !== inlineDigests.selection) {
+    throw new LoopXCliError('invalid_schema', 'LoopX quota capture selection digest did not match its bytes', false)
+  }
   let body: Record<string, unknown> | undefined
   try {
-    body = record(JSON.parse(parts.join('')))
+    body = record(JSON.parse(selectedBody))
   } catch {
     throw new LoopXCliError('invalid_json', 'LoopX quota capture returned invalid selection JSON', false)
   }
@@ -521,8 +554,8 @@ function exactHeartbeat(
     || payload.agent_id !== binding.agentId
     || payload.turn_instance_id !== turnInstanceId) return undefined
   const taskBody = typeof payload.task_body === 'string' ? payload.task_body : ''
-  const assignments = [...taskBody.matchAll(/\bLOOPX_TURN=([^\s`'";]+)/gu)]
-    .map(match => match[1])
+  const assignments = [...taskBody.matchAll(/\bLOOPX_TURN=([^\s`'";]+)|\$LOOPX_TURN\s*=\s*"([^\s`'";]+)"/gu)]
+    .map(match => match[1] ?? match[2])
   return taskBody.length > 0
     && taskBody.length <= 32_000
     && assignments.length === 1
@@ -782,7 +815,7 @@ export class LoopXContinuationDriver {
       this.restoreOtherMessages(agent, messages, submitted)
       return { kind: 'reject' }
     }
-    if (messages.some(message => message.id !== submitted.id)) {
+    if (messages.some(message => message.id !== submitted.id && !isHostContextMessage(message))) {
       this.retireReservation(state)
       this.restoreOtherMessages(agent, messages, submitted)
       return { kind: 'reject' }
@@ -814,7 +847,7 @@ export class LoopXContinuationDriver {
       return decision
     }
     const admitted = decision.messages.find(message => message.id === reservation.messageId)
-    if (decision.messages.length !== 1
+    if (decision.messages.filter(message => !isHostContextMessage(message)).length !== 1
       || admitted === undefined
       || !sameReservation(admitted, reservation)) {
       this.retireReservation(state)

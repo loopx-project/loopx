@@ -379,9 +379,15 @@ export async function resolveLoopXCommand(
           maxOutputBytes: 16 * 1024,
         },
       )
+      if (options.signal?.aborted) {
+        throw new LoopXCliError('aborted', 'operation was cancelled', false)
+      }
       const version = result.exitCode === 0 ? supportedLoopXVersion(result.stdout) : undefined
       if (version) return { ...candidate, version }
     } catch (error: unknown) {
+      if (options.signal?.aborted) {
+        throw new LoopXCliError('aborted', 'operation was cancelled', false)
+      }
       if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
     }
   }

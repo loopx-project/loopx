@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (49)
+## 已接受 (50)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -52,7 +52,7 @@
 | [RFC：团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Harness Benchmark 与研究计划 v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
-| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [3 条](ledger/loopx-overall-roadmap-v0/) |
+| [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [4 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Monorepo 发行拆分与小内核运行时装配（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -62,6 +62,7 @@
 | [RFC：Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | 已接受 | none | — |
 | [RFC：研究型探索控制面 v0](research-exploration-control-plane-v0.zh-CN.md) | 已接受 | 无 | — |
+| [回滚全程保留所选运行目录](self-update-explicit-runtime-route-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：语义词表收敛与提交期漂移检查（v0）](semantic-vocabulary-convergence-v0.zh-CN.md) | 已接受 | 无 | [7 条](ledger/semantic-vocabulary-convergence-v0/) |
 | [RFC：共享 Goal 对齐与受治理 Amendment 协议（v0）](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md) | 已接受 | 无 | [2 条](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC：LoopX 共享控制面权威与可插拔状态 Provider（v0）](shared-goal-authority-state-provider-v0.zh-CN.md) | 已接受 | 无 | [24 条](ledger/shared-goal-authority-state-provider-v0/) |

@@ -579,6 +579,10 @@ The Driver resolves the current project registry with
 session, and rechecks binding plus quota before and after downstream pre-step
 listeners. A human message removes an unclaimed automatic reservation; a
 mixed batch rejects the automatic message and restores the human work.
+DSH's built-in `runtime-context`, `time-context`, and `skill-catalog` producers
+may share the step with that continuation, including after downstream listeners.
+The source's `kind` identifies those producers; a plugin's snapshot or catalog
+`form` alone does not make its message host-owned context.
 The Driver queues at most one Driver-owned followup per automatic admission.
 Initialization messages use the distinct `dsh-loopx-plugin/init-command`
 source and never satisfy a Driver reservation.
