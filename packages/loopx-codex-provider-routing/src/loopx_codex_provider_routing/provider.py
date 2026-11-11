@@ -8,9 +8,23 @@ import subprocess
 import sys
 
 from .native import NativeAccounts, policy
-from .native_host import HostError
+from .native_host import HostError, checked_adapter
 
 SCHEMA = "loopx_native_account_provider_v1"
+
+
+def adapter_readiness(owner: NativeAccounts) -> dict:
+    state = owner._load()
+    adapter = state.get("adapter")
+    if adapter is None or state["policy"].get("enabled") is not True:
+        return {"state": "not_required", "ready": True}
+    try:
+        checked_adapter(adapter, Path.home())
+    except HostError as error:
+        return {"state": error.code, "ready": False}
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return {"state": "native_unavailable", "ready": False}
+    return {"state": "ready", "ready": True}
 
 
 def doctor(owner):
@@ -22,10 +36,12 @@ def doctor(owner):
     worker, steward = consumers["worker"], consumers["steward"]
     worker_runtime, steward_runtime = worker.get("runtime"), steward.get("runtime")
     same = same_instance(worker_runtime, steward_runtime) if worker_runtime and steward_runtime else None
-    ready = worker["state"] in ("not_started", "ready") and (
+    adapter = adapter_readiness(owner)
+    ready = adapter["ready"] and worker["state"] in ("not_started", "ready") and (
         steward["state"] == "not_configured" or (steward["ready"] and same is True))
     return {"ok": ready, "schema_version": SCHEMA, "provider_id": "loopx-native-account-provider",
-            "installation_ready": ready, "relay": worker, "consumer_readiness": consumers,
+            "installation_ready": ready, "adapter_readiness": adapter,
+            "relay": worker, "consumer_readiness": consumers,
             "same_relay_instance": same, "message_delivery_verified": False}
 
 

@@ -72,6 +72,15 @@ and steward independently. An unconfigured steward route does not block the
 worker. If a configured route is unavailable, or the two health responses
 identify different relay instances, installation verification fails and each
 route keeps its own status. The legacy `relay` field still reports the worker.
+
+Version 0.15.8 reports `adapter_readiness` alongside relay readiness. With an
+enabled account policy and a saved adapter, the local probe verifies the same
+owner-file pins and native route as Chat model preparation. A stale pin reports
+`adapter_changed` and fails installation readiness even when both relays answer.
+After adoption of the reviewed package, use the existing **Reconnect** action
+with the current policy and check the live status again. For package-only
+verification before adoption, pass a disposable `--runtime-root` to `--doctor`.
+
 Keep original-message acceptance as a separate end-to-end check.
 
 For upgrades, install the reviewed target into a new immutable environment and
