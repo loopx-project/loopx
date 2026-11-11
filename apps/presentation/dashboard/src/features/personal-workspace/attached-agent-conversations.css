@@ -60,7 +60,7 @@
 @media (max-width: 640px) {.agent-work-navigation {width: 100%;} .agent-work-navigation select {flex: 1; min-width: 0;} .goal-agent-work-page .attached-conversation-messages {min-height: 120px;}}
 
 .attached-connection-status {display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding-block: 8px; padding-inline-end: 4px;}
-.attached-connection-status p {margin: 0;}
+.attached-connection-status p {margin: 0; overflow-wrap: anywhere;}
 .attached-connection-status .attached-conversation-open {display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 6px; color: var(--pw-muted);}
 .attached-connection-status .attached-conversation-open:hover {background: var(--pw-hover); color: var(--pw-text);}
 @media (max-width: 640px) {.goal-agent-work-page .attached-conversation-heading h2 {font-size: var(--text-lead);} .agent-work-navigation {width: auto; flex: 1;} .agent-work-navigation select {max-width: 140px;} .attached-conversation-heading button {padding-inline: 8px;}}

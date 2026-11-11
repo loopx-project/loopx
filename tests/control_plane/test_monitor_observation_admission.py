@@ -225,20 +225,22 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
 )
 def test_completed_advancement_retains_auxiliary_monitor_admission(
     settlement_budget_root: Path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     writeback: bool,
     spend_first: bool,
 ) -> None:
-    tmp_path = settlement_budget_root
     from canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.control_plane.coordination.local_authority import (
         read_canonical_todos_if_promoted,
     )
 
     if provider == "sqlite":
+        # The Effect process uses the temporary directory as its cwd. Keep
+        # it outside the measured fixture, which is removed before it exits.
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry_path = _write_fixture(tmp_path, provider=provider)
+    project, runtime, registry_path = _write_fixture(settlement_budget_root, provider=provider)
     turn = "turn-completed-advancement-with-auxiliary-monitor"
     binding = (
         "--goal-id",

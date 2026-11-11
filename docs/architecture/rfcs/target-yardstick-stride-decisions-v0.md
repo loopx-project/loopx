@@ -567,6 +567,8 @@ population-selection operators remain `advisory_only`
 (`execution_authority_granted=false`) until matched-budget evidence qualifies
 promotion.
 
+<a id="policy-evolution"></a>
+
 ### 5.9 Policy evolution through the same owner
 
 | Stage | Useful next result | Retained boundary |
@@ -582,6 +584,33 @@ they do not reveal unchosen outcomes. Use prospective matched continuations or
 explicitly justified off-policy assumptions for policy-value claims. Preserve
 failed, cancelled and unknown results. Raw task data stays within the research
 boundary and cannot become a production memory or training corpus by default.
+
+When consuming these records for later learning, use the
+[action-value evidence model](../../research/budgeted-research-planning.md#action-value-evidence)
+to separate observed progress, value predicted under a continuation and remaining
+budget, and the causal contrast against a feasible alternative. A gain after
+`switch` directly supports only the first. An action name does not replace a
+concrete method, and an unchosen route is not a zero-score label.
+
+For selected decision episodes, existing provenance/followthrough should recover:
+
+- State/evidence visible at selection and remaining budget, compared routes,
+  concrete selected method, continuation revision and forecast horizon.
+- Key predictions, their basis or unknowns, and observations supporting continuation
+  or revision, recorded before outcomes are visible; keep original forecasts on revision.
+- Actual method, revision, resources and deviations; the observation's original
+  candidate/evaluator, availability time, and resulting next decision.
+- Related prerequisite and subsequent work, and the terminal outcome under the
+  frozen horizon/selection rule; preserve failure, cancellation, pending and missing coverage.
+
+These are proposed training-example semantics, not new mandatory fields on every
+Turn. Mark facts unrecoverable from existing references as missing; do not backfill
+them from later summaries or trigger evaluations to complete a form. Test forecast
+calibration, actual adoption, local paired contrasts and frozen-policy new-task
+benefit separately. Hold out shared tasks/source runs or whole branch families,
+not randomly mixed adjacent Turns. Continuing a route supported by evidence also
+counts as adoption; cue delivery, complete labels or a direction change alone
+do not establish policy benefit.
 
 No new policy registry, plan database, scheduler or universal scalar rank is
 needed for the first caller. Before any later schema change, demonstrate the
@@ -675,6 +704,8 @@ These are implementation acceptance requirements, not tests already passed.
 | C14 | Same evidence, different remaining horizons | Compare feasible terminal outcomes, including confirmation; do not require the same route or use a fixed per-candidate score. |
 | C15 | A prerequisite has no immediate gain but enables a plausible later improvement | Consider the conditional sequence and a bounded discriminating first slice; count dependent milestones once as state evidence, not independent rewards. |
 | C16 | Confirmation is pending or cannot finish under the terminal protocol | Retain immutable result attribution and honest unknowns; consider independent work or a feasible validated route without resetting cooldown or inventing gain. |
+| C17 | The next measurement improves, but the alternative is unobserved and earlier work also contributed | Record observed progress only; qualify predicted action value by continuation/budget, leave the causal contrast unknown, and link prerequisites instead of labeling the last action with all gain. |
+| C18 | A forecast is revised after the outcome, feedback arrives late, or related episodes cross training/evaluation | Recover forecasts/evidence from before result visibility; revisions preserve originals, local measurements do not stand for terminal outcomes, and evaluation isolates tasks/source runs or branch families. |
 
 Replay typed scenarios with synthetic evidence against real File/SQLite owners
 where persistence is touched. Use actual host/CLI settlement and packaged
