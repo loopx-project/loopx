@@ -92,6 +92,13 @@ async function runCli(fixture: Fixture, args: readonly string[]): Promise<CliRes
   return { exitCode: result.exitCode, payload: record(payload) }
 }
 
+async function setAllowedSlots(testFixture: Fixture, allowedSlots: number): Promise<void> {
+  const registry = record(JSON.parse(await readFile(testFixture.registry, 'utf8')))
+  const goal = record(array(registry.goals)[0])
+  goal.quota = { ...record(goal.quota), allowed_slots: allowedSlots }
+  await writeFile(testFixture.registry, JSON.stringify(registry))
+}
+
 async function fixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-'))
   const project = join(root, 'project')
@@ -274,7 +281,7 @@ function executablePlanArgs(
 describe('DSH admission-to-closeout integration', () => {
   it.each([
     { route: 'compatibility', version: 'loopx 1.2.4', setting: 'on', readerCalls: 0 },
-    { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 6 },
+    { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 4 },
     { route: 'configured off', version: 'loopx 2.3.0', setting: 'off', readerCalls: 0 },
   ])('settles the queued exact receipt once through $route admission', async ({
     route, version, setting, readerCalls,
@@ -465,16 +472,56 @@ describe('DSH admission-to-closeout integration', () => {
     await driver.dispose()
   }, 90_000)
 
+  it('rejects queued work when quota closes during the next pre-step hook', async () => {
+    const testFixture = await fixture()
+    const warnings: string[] = []
+    let guards = 0
+    const runner: FileRunner = (file, args, options) => {
+      if (args.includes('should-run')) guards += 1
+      return realLoopXRunner(file, args, { ...options, env: {
+        ...options.env, LOOPX_CONTEXT_DELIVERY: 'on',
+      } })
+    }
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
+      resolveCommand: async () => ({
+        file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+      }),
+      makeTurnInstanceId: () => turnInstanceId,
+      warn: message => { warnings.push(message) },
+    })
+    try {
+      driver.observeAgent(testFixture.agent)
+      const queued = await waitForQueued(testFixture, warnings)
+      testFixture.queued.splice(0, 1)
+      ;(testFixture.agent as unknown as { setStatus(value: 'running'): void })
+        .setStatus('running')
+      driver.onInboxClaimed(testFixture.agent, queued)
+
+      let reachedNext = false
+      const admission = await driver.onPreStep(
+        testFixture.agent, [queued], new AbortController().signal, async () => {
+          reachedNext = true
+          await setAllowedSlots(testFixture, 0)
+          return { kind: 'enter', messages: [queued] }
+        },
+      )
+
+      expect(reachedNext).toBe(true)
+      expect(admission).toEqual({ kind: 'reject' })
+      expect(guards).toBe(3)
+      expect(warnings).toEqual([])
+      expect(testFixture.queued).toHaveLength(0)
+    } finally {
+      await driver.dispose()
+    }
+  }, 45_000)
+
   it.each(['held', 'digest mismatch', 'paged'] as const)(
     'keeps one guard when the progressive capture is %s',
     async scenario => {
       const testFixture = await fixture()
-      if (scenario === 'held') {
-        const registry = record(JSON.parse(await readFile(testFixture.registry, 'utf8')))
-        const goal = record(array(registry.goals)[0])
-        goal.quota = { ...record(goal.quota), allowed_slots: 0 }
-        await writeFile(testFixture.registry, JSON.stringify(registry))
-      }
+      if (scenario === 'held') await setAllowedSlots(testFixture, 0)
       let finishEvaluation: () => void = () => {}
       const evaluated = new Promise<void>(resolveWait => { finishEvaluation = resolveWait })
       const warnings: string[] = []

@@ -332,8 +332,9 @@ const QUOTA_NAVIGATION_SCHEMA = 'context_capture_navigation_v1'
 const QUOTA_SELECTION_PAGE_SCHEMA = 'context_capture_selection_page_v1'
 const QUOTA_INDEX_SCHEMA = 'context_capture_index_v1'
 const QUOTA_SELECTION_SCHEMA = 'context_capture_selection_v1'
-const QUOTA_REQUIRED_FIELDS = ['ok', 'mode', 'goal_id', 'should_run', 'agent_identity']
-const QUOTA_OPTIONAL_FIELDS = ['heartbeat_receipt', 'scheduler_hint', 'reward_memory_recall']
+const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/agent_identity']
+const QUOTA_RECEIPT_POINTER = '/heartbeat_receipt'
+const QUOTA_OPTIONAL_POINTERS = [QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall']
 
 type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal'>
 
@@ -396,20 +397,25 @@ async function readQuotaCapture(
   command: LoopXCommand,
   reference: string,
   options: QuotaReadOptions,
+  revalidateOnly: boolean,
 ): Promise<Record<string, unknown>> {
-  // Discover optional fields on the same verified capture. A waiting decision
-  // can omit reward memory, and the ordinary selector rejects missing paths.
-  const index = await readQuotaSelections(command, reference, ['--list'], QUOTA_INDEX_SCHEMA, options)
-  const root = record(index[0])
-  if (index.length !== 1 || root?.pointer !== '' || !Array.isArray(root.fields)) {
-    throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid field index', false)
+  // Entering a queued step requires the original Turn receipt. The scheduler
+  // and reward memory are only used when first deciding whether to queue work.
+  let pointers = [...QUOTA_REQUIRED_POINTERS, QUOTA_RECEIPT_POINTER]
+  if (!revalidateOnly) {
+    // The ordinary selector rejects missing paths. Discover which optional
+    // fields exist on the same verified capture before preparing the step.
+    const index = await readQuotaSelections(command, reference, ['--list'], QUOTA_INDEX_SCHEMA, options)
+    const root = record(index[0])
+    if (index.length !== 1 || root?.pointer !== '' || !Array.isArray(root.fields)) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture returned an invalid field index', false)
+    }
+    const present = new Set(root.fields.map(field => record(field)?.pointer))
+    if (!QUOTA_REQUIRED_POINTERS.every(pointer => present.has(pointer))) {
+      throw new LoopXCliError('invalid_schema', 'LoopX quota capture lacks admission fields', false)
+    }
+    pointers = [...QUOTA_REQUIRED_POINTERS, ...QUOTA_OPTIONAL_POINTERS.filter(pointer => present.has(pointer))]
   }
-  const present = new Set(root.fields.map(field => record(field)?.pointer))
-  const required = QUOTA_REQUIRED_FIELDS.map(field => '/' + field)
-  if (!required.every(pointer => present.has(pointer))) {
-    throw new LoopXCliError('invalid_schema', 'LoopX quota capture lacks admission fields', false)
-  }
-  const pointers = [...required, ...QUOTA_OPTIONAL_FIELDS.map(field => '/' + field).filter(pointer => present.has(pointer))]
   const selected = await readQuotaSelections(
     command, reference, pointers.flatMap(pointer => ['--select', pointer]), QUOTA_SELECTION_SCHEMA, options,
   )
@@ -1048,7 +1054,7 @@ export class LoopXContinuationDriver {
     }
 
     const turnInstanceId = this.makeTurnInstanceId()
-    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, signal)
+    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
       throw new LoopXCliError(
@@ -1121,7 +1127,7 @@ export class LoopXContinuationDriver {
         state.agent,
         reservation,
         reservation.turnInstanceId,
-        signal,
+        { signal, revalidateOnly: true },
       )
       return this.reservationIsCurrent(state, reservation, signal)
         && (reservation.preserveAcrossPause
@@ -1195,7 +1201,7 @@ export class LoopXContinuationDriver {
     agent: Agent,
     binding: Binding,
     turnInstanceId: string,
-    signal: AbortSignal,
+    { signal, revalidateOnly = false }: { signal: AbortSignal; revalidateOnly?: boolean },
   ): Promise<Record<string, unknown>> {
     // The 2.3 CLI supplies immutable navigation and its bounded reader. Older
     // supported CLIs continue to answer this Host-only call with raw JSON.
@@ -1212,7 +1218,7 @@ export class LoopXContinuationDriver {
         '--goal-id', binding.goalId,
         '--agent-id', binding.agentId,
         '--runtime-profile', 'generic_cli',
-        '--include-detail', 'scheduler',
+        ...(progressive && revalidateOnly ? [] : ['--include-detail', 'scheduler']),
         '--turn-instance-id', turnInstanceId,
       ],
       {
@@ -1226,7 +1232,7 @@ export class LoopXContinuationDriver {
     const reference = progressive ? quotaNavigationReference(quota) : undefined
     if (reference === undefined) return quota
     // Reading a saved capture is outside the guard's transport retry.
-    const decision = await readQuotaCapture(command, reference, options)
+    const decision = await readQuotaCapture(command, reference, options, revalidateOnly)
     if (!rawAdmission(decision)) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
     }
