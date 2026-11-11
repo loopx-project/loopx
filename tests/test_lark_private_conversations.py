@@ -2692,6 +2692,54 @@ def test_app_projection_recovers_original_receipt_and_revocation_blocks_remainin
         runtime.close()
 
 
+@pytest.mark.parametrize("unreadable", [b'{"status":', b"\xff"])
+def test_unreadable_app_mirror_does_not_hold_other_private_replies(ordinary, unreadable):  # noqa: F811
+    store, runtime, provider, transport, original, turns, _ = _app_projection_journey(ordinary)
+    try:
+        transport._web_projection_scan_at = 0
+        [mirror] = transport._web_projection_paths()
+        complete_receipt = mirror.read_bytes()
+        mirror.write_bytes(unreadable)
+
+        event = provider.event("steward-app", "independent-private-reply", "An independent original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(transport._binding("steward-app")["provider_ref"], event["message_id"])
+        native = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=native["session_id"], turn_id=native["turn_id"], timeout_sec=10)["status"] == "completed"
+        healthy = transport.root / f"{ref}.json"
+        for discover in (transport.pending_body_paths, transport.pending_delivery_paths):
+            paths = discover()
+            assert healthy in paths and mirror not in paths
+
+        # A previously scheduled worker can still see damage after discovery.
+        before = list(provider.writes)
+        assert transport.reconcile_request(mirror) == 0
+        assert mirror.read_bytes() == unreadable
+        assert provider.writes == before
+
+        requests = ordinary[4].read_bytes()
+        transport.reconcile()
+        terminal = json.loads(healthy.read_text())["deliveries"]["terminal"]
+        assert terminal["verified"]
+        assert provider.messages[terminal["attempt"]["message_ref"]]["chat_id"] == event["chat_id"]
+        assert mirror.read_bytes() == unreadable
+        assert not any("（App）" in text for _, text in provider.writes)
+
+        # Restoring the exact receipt in the disposable fixture makes the
+        # original App work available to a newly constructed worker again.
+        mirror.write_bytes(complete_receipt)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        expected = [row for row in store.messages(original["session_id"]) if row.get("turn_id") in turns]
+        _drain_app_projection(restarted, lambda: sum("（App）" in text for _, text in provider.writes) == len(expected))
+        sent = list(provider.writes)
+        restarted.reconcile()
+        assert provider.writes == sent
+        assert ordinary[4].read_bytes() == requests
+    finally:
+        runtime.close()
+
+
 def test_app_long_return_keeps_all_parts_and_does_not_repeat_identical_parts(ordinary):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     text = ("A repeated output paragraph with its complete evidence.\n" * 4000) + "UNIQUE FINAL END"
