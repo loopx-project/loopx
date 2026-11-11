@@ -300,7 +300,25 @@ use `--clear-blocks-agent --global-gate`. Merely clearing scope in a multi-agent
 Goal is rejected; it must not turn an ambiguous gate into a global one.
 
 When a user gate only blocks one concrete action, add the blocked todo id with
-`unblocks_todo_id=<todo_id>`. When multiple todos share the same broad
+`unblocks_todo_id=<todo_id>`. If the gate was created first, its registered bound
+agent can attach the initial link while the gate is open:
+
+```bash
+loopx todo update --goal-id <goal-id> --role user --todo-id <gate-id> \
+  --agent-id <bound-agent> --unblocks-todo-id <agent-todo-id>
+```
+
+This is an administrative provider-CAS edit, including in `hard_lease`; it does
+not claim work or approve the gate. Optional note/evidence/reason may accompany
+the link. Existing links, gate scope, actor bindings and explicit or unreleased
+lease proofs retain their ordinary admission. Complete the linked gate with the
+actual decision and evidence to consume the target's covered decision scopes.
+`todo_done:<gate-id>` checks dependency readiness only; it does not consume those
+scopes. If an unlinked gate was already completed, reconcile its decision through
+an explicit linked gate using the original owner evidence rather than treating
+dependency completion as approval.
+
+When multiple todos share the same broad
 `action_kind`, use the schema-backed decision-scope fields instead of relying
 on title/body token overlap:
 

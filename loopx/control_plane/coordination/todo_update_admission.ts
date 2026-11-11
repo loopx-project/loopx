@@ -219,11 +219,20 @@ export function todoUpdateAdmissionRejection(
     const repositoryRejection = leaseRepositoryRejection(todo, lease);
     return repositoryRejection === null ? null : reject(repositoryRejection, "Evidence association must retain the completed work repository");
   }
-  // User reminders use an administrative provider-CAS edit. Retained released
+  // An initial gate link is planning, not execution or an owner decision.
+  const boundUserGateLink = todo.role === "user" && todo.task_class === "user_gate" &&
+    todo.status === "open" && todo.claimed_by == null && todo.unblocks_todo_id == null &&
+    input.actor_agent_id !== null && todo.bound_agent === input.actor_agent_id &&
+    todo.blocks_agent === input.actor_agent_id &&
+    typeof intent.unblocks_todo_id === "string" && intent.unblocks_todo_id.length > 0 &&
+    Object.keys(input.patch).every(field => field === "note") &&
+    input.clear_fields.every(field => field === "note") &&
+    Object.keys(intent).every(field => ["unblocks_todo_id", "evidence", "reason"].includes(field));
+  // User planning uses an administrative provider-CAS edit. Retained released
   // history is not an execution grant; active/expired history needs exact
   // release first. Explicit or partial proof never grants this exception.
   const boundUserActionMetadata = isBoundUserActionMetadataUpdate(todo, input);
-  if (boundUserActionMetadata && (lease === undefined || lease.status === "released") &&
+  if ((boundUserActionMetadata || boundUserGateLink) && (lease === undefined || lease.status === "released") &&
       input.lease_idempotency_key == null && input.lease_expected_version == null) {
     try {
       if (lease !== undefined) canonicalTaskLease(lease, input.goal_id, input.todo_id);

@@ -367,6 +367,64 @@ async function boundUserAction(overrides: Record<string, unknown> = {}, leases: 
     planning_intent: {evidence: "Synthetic disposition receipt"}}};
 }
 
+test("bound user-gate initial unblock link is administrative and retains provider CAS", async () => {
+  for (const retained of [false, true]) {
+    const leases = retained ? [{todo_id: "todo_a", owner: "agent-a", status: "released", idempotency_key: "history",
+      version: 2, lease_epoch: 1, write_scopes: [], expires_at: "2026-09-06T00:00:00Z"}] : [];
+    const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"}, leases);
+    const before = await store.loadAuthority();
+    if (before.status !== "loaded") assert.fail("missing fixture");
+    const edit = {...request, expected_provider_revision: before.provider_revision,
+      patch: {note: "Link the existing file gate"}, planning_intent: {unblocks_todo_id: "todo_value", evidence: "File requested"}};
+    const preview = await executeCoordinationTodoUpdate(store, {...edit, dry_run: true});
+    assert.equal(preview.status, "planned", JSON.stringify(preview));
+    assert.deepEqual(await store.loadAuthority(), before);
+    const applied = await executeCoordinationTodoUpdate(store, edit);
+    assert.equal(applied.status, "applied", JSON.stringify(applied));
+    const after = await store.loadAuthority();
+    if (after.status !== "loaded") assert.fail("missing fixture");
+    const gate = (after.head.todos as Record<string, unknown>[])[0]!;
+    assert.equal(gate.unblocks_todo_id, "todo_value");
+    assert.equal(gate.status, "open");
+    assert.equal(gate.decision_outcome, undefined);
+    assert.equal(gate.claimed_by, undefined);
+    assert.deepEqual(after.head.leases, before.head.leases);
+    assert.equal((await executeCoordinationTodoUpdate(store, edit)).status, "replayed");
+    assert.equal((await executeCoordinationTodoUpdate(store, {...edit, operation_id: "stale-link"})).reason_code,
+      "provider_revision_mismatch");
+    assert.equal((await executeCoordinationTodoUpdate(store, {...edit, planning_intent: {unblocks_todo_id: "todo_other"}})).reason_code,
+      "coordination_operation_identity_mismatch");
+    assert.deepEqual(await store.loadAuthority(), after);
+  }
+});
+
+test("user-gate linking cannot retarget, approve, bypass binding or consume execution proof", async () => {
+  const cases: {facts?: Record<string, unknown>; input?: Partial<CoordinationTodoUpdateInput>; leases?: Record<string, unknown>[]}[] = [
+    {input: {actor_agent_id: "agent-b"}}, {input: {actor_agent_id: null}},
+    {facts: {bound_agent: null, blocks_agent: null}}, {facts: {excluded_agents: ["agent-a"]}},
+    {facts: {unblocks_todo_id: "todo_original"}}, {facts: {task_class: "user_action", blocks_agent: null}},
+    {input: {patch: {text: "Replace the gate while linking"}}},
+    {input: {planning_intent: {unblocks_todo_id: "todo_value", status: "done"}}},
+    {input: {planning_intent: {unblocks_todo_id: "todo_value", decision_outcome: "approve"}}},
+    {input: {planning_intent: {unblocks_todo_id: "todo_value", decision_scope: "resource:action:other"}}},
+    {input: {lease_idempotency_key: "stale", lease_expected_version: 1}},
+    {input: {lease_expected_version: 1}},
+    ...["2026-09-05T22:00:00Z", "2026-09-06T00:00:00Z"].map(expires_at => ({leases: [{
+      todo_id: "todo_a", owner: "agent-a", status: "active", idempotency_key: "execution",
+      version: 1, lease_epoch: 1, write_scopes: [], expires_at,
+    }]})),
+  ];
+  for (const entry of cases) {
+    const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a", ...entry.facts}, entry.leases);
+    const before = await store.loadAuthority();
+    const result = await executeCoordinationTodoUpdate(store, {...request, patch: {},
+      planning_intent: {unblocks_todo_id: "todo_value"}, ...entry.input});
+    assert.equal(result.status, "failed", JSON.stringify({entry, result}));
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+  }
+});
+
 test("bound user-action copy/evidence edit uses provider CAS without inventing execution authority", async () => {
   const {store, request} = await boundUserAction();
   const before = await store.loadAuthority();
