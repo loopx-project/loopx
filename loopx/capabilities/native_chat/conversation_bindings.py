@@ -6,8 +6,9 @@ This file stores no conversation text and creates no Goal or model thread.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 import uuid
@@ -167,6 +168,106 @@ class ChatConversationBindings:
             if self.read() != result["state"]:
                 raise OSError("App steward selection did not verify")
             return dict(result["state"])
+
+    def reconcile_steward_executors(self) -> None:
+        """Publish a previously adopted machine executor at Chat startup."""
+        from ...chat_manager import steward_machine_defaults
+
+        controller = self.controller
+        if controller is None:
+            return
+        defaults = steward_machine_defaults(controller)
+        if (not defaults or defaults.get("status") != "ready"
+                or defaults.get("source") != "machine_configuration"
+                or defaults.get("selection_policy") not in {"preferred", "pinned"}
+                or defaults.get("executor_endpoint") not in {"antigravity", "codex"}):
+            return
+        try:
+            rows = self.read()["bindings"]
+            if not isinstance(rows, list):
+                raise ValueError("invalid conversation bindings state")
+        except (OSError, ValueError, KeyError) as exc:
+            logging.getLogger(__name__).warning("Steward bindings unavailable for reconciliation (%s)", type(exc).__name__)
+            return
+        for row in rows:
+            if (not isinstance(row, dict) or row.get("context_kind") != "steward"
+                    or row.get("audience", "owner") != "owner"
+                    or row.get("enabled") is not True
+                    or row.get("executor_endpoint_id") not in {"antigravity", "codex"}
+                    or row.get("executor_endpoint_id") == defaults["executor_endpoint"]):
+                continue
+            try:
+                self._reconcile_steward_executor(row, defaults)
+            except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+                logging.getLogger(__name__).warning("Steward executor reconciliation held (%s)", type(exc).__name__)
+
+    def _reconcile_steward_executor(self, row: dict[str, Any], defaults: Mapping[str, Any]) -> None:
+        from ...chat_manager import manager_executor_allocation, steward_machine_defaults
+        from ..machine_configuration.builtins import build_builtin_machine_configuration_registry
+        from ..machine_configuration.store import machine_configuration_revision, read_machine_configuration
+        from ..steward_executor.allocation import normalize_manager_executor_allocation
+        from ..steward_executor.machine_defaults import effective_steward_executor_defaults
+
+        store = self.controller.store
+        binding_id = row["binding_id"]
+        endpoint = defaults["executor_endpoint"]
+        channel_prefix = f"manager.external.native.{binding_id}."
+        candidates = [s for s in store.list_sessions()
+                      if s.get("channel_id", "").startswith(channel_prefix) and s.get("status") != "closed"]
+        if len(candidates) != 1 or candidates[0].get("agent_id") != endpoint or candidates[0].get("status") != "ready":
+            return  # Defaults alone do not retarget an existing session.
+        observation = self.observe(row["transport_ref"])
+        with exclusive_file_lock(self.path, operation="reconcile_steward_executor"):
+            current = self.read()
+            if row not in current["bindings"] or steward_machine_defaults(self.controller) != defaults:
+                return
+            session = store.load_session(candidates[0]["session_id"])
+            saved = (session or {}).get("steward_context")
+            stored = (session or {}).get("manager_executor_allocation")
+            if (not session or not isinstance(saved, dict) or not isinstance(stored, dict)
+                    or session.get("status") != "ready" or session.get("active_turn_id") is not None
+                    or session.get("agent_id") != endpoint or session.get("executor_endpoint_id") != endpoint
+                    or stored.get("selection_policy") != defaults["selection_policy"]
+                    or store.queued_turns(session["session_id"], strict=True, include_reserved=True)):
+                return
+            allocation = None
+            if stored.get("configuration_revision") == defaults.get("configuration_revision"):
+                try:
+                    allocation = normalize_manager_executor_allocation(stored)
+                except (TypeError, ValueError):
+                    pass
+            else:
+                # A machine configuration transaction records the revision of
+                # the whole document. Match that exact basis before projecting
+                # it to the narrower revision used by steward allocations.
+                configuration = read_machine_configuration(store.root.parent,
+                    registry=build_builtin_machine_configuration_registry())
+                if (not configuration or machine_configuration_revision(configuration) != stored.get("configuration_revision")
+                        or effective_steward_executor_defaults(configuration) != defaults):
+                    return
+            if allocation is None:
+                allocation = manager_executor_allocation(self.controller, machine_defaults=defaults)
+            expected = {**self._session_observation(session), "manager_executor_allocation": allocation,
+                        "active_turn_id": session.get("active_turn_id"), "agent_model_id": session.get("agent_model_id"),
+                        "agent_reasoning_effort": session.get("agent_reasoning_effort")}
+            result = self._core("collaboration.conversation.binding", {
+                "current": current, "expected_revision": current["revision"], "operation": "reconcile_steward_executor",
+                "binding_id": binding_id, "observation": observation, "available_projects": self.projects.available(),
+                "available_goal_ids": self.goal_scope_ids(row), "machine_defaults": dict(defaults),
+                "session": expected, "queue_empty": True,
+            })
+            if stored != allocation:
+                store.update_session(session["session_id"], expected_statuses={"ready"},
+                    expected_upstream_thread_id=session.get("upstream_thread_id"), manager_executor_allocation=allocation)
+            fresh = store.load_session(session["session_id"])
+            if (not fresh or any(fresh.get(key) != value for key, value in expected.items())
+                    or store.queued_turns(session["session_id"], strict=True, include_reserved=True)
+                    or steward_machine_defaults(self.controller) != defaults):
+                return
+            if result["changed"]:
+                _atomic_write_json(self.path, result["state"], preserve_mode=True)
+            if self.read() != result["state"]:
+                raise OSError("steward executor binding publication did not verify")
 
     def app_steward_target(self) -> dict[str, Any]:
         """Discover within the selected source; opening creates no execution."""
