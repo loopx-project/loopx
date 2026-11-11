@@ -272,17 +272,35 @@ function executablePlanArgs(
 }
 
 describe('DSH admission-to-closeout integration', () => {
-  it('settles the queued exact receipt once through the raw generic CLI plan', async () => {
+  it.each([
+    { route: 'compatibility', version: 'loopx 1.2.4', setting: 'on', readerCalls: 0 },
+    { route: 'progressive', version: 'loopx 2.3.0', setting: 'on', readerCalls: 6 },
+    { route: 'configured off', version: 'loopx 2.3.0', setting: 'off', readerCalls: 0 },
+  ])('settles the queued exact receipt once through $route admission', async ({
+    route, version, setting, readerCalls,
+  }) => {
     const testFixture = await fixture()
     const warnings: string[] = []
+    let guardCalls = 0
+    let reads = 0
+    const runner: FileRunner = (file, args, options) => {
+      if (args.includes('context-read')) reads += 1
+      if (args.includes('should-run')) {
+        guardCalls += 1
+        expect(options.env?.LOOPX_CONTEXT_DELIVERY).toBe(route === 'compatibility' ? 'off' : undefined)
+      }
+      return realLoopXRunner(file, args, { ...options, env: {
+        LOOPX_CONTEXT_DELIVERY: setting, ...options.env,
+      } })
+    }
     const driver = new LoopXContinuationDriver({
       isLiveAgent: () => true,
-      runner: realLoopXRunner,
+      runner,
       resolveCommand: async () => ({
         file: 'loopx',
         prefix: [],
         skillCommand: 'loopx',
-        version: 'loopx integration checkout',
+        version,
       }),
       makeTurnInstanceId: () => turnInstanceId,
       retryDelaysMs: [0, 0],
@@ -313,6 +331,9 @@ describe('DSH admission-to-closeout integration', () => {
       async () => ({ kind: 'enter', messages: [queued] }),
     )
     expect(admission.kind).toBe('enter')
+    // The Driver intentionally revalidates before and after the next pre-step hook.
+    expect(guardCalls).toBe(3)
+    expect(reads).toBe(readerCalls)
 
     const unselected = await runCli(testFixture, [
       'quota', 'should-run', '--context-delivery', 'off',
@@ -443,4 +464,86 @@ describe('DSH admission-to-closeout integration', () => {
 
     await driver.dispose()
   }, 90_000)
+
+  it.each(['held', 'digest mismatch', 'paged'] as const)(
+    'keeps one guard when the progressive capture is %s',
+    async scenario => {
+      const testFixture = await fixture()
+      if (scenario === 'held') {
+        const registry = record(JSON.parse(await readFile(testFixture.registry, 'utf8')))
+        const goal = record(array(registry.goals)[0])
+        goal.quota = { ...record(goal.quota), allowed_slots: 0 }
+        await writeFile(testFixture.registry, JSON.stringify(registry))
+      }
+      let finishEvaluation: () => void = () => {}
+      const evaluated = new Promise<void>(resolveWait => { finishEvaluation = resolveWait })
+      const warnings: string[] = []
+      let guards = 0
+      let reads = 0
+      const runner: FileRunner = async (file, args, options) => {
+        const child = { ...options, env: { ...options.env, LOOPX_CONTEXT_DELIVERY: 'on' } }
+        if (args.includes('context-read')) {
+          reads += 1
+          const readerArgs = [...args]
+          if (scenario === 'paged') {
+            readerArgs[readerArgs.indexOf('--page-bytes') + 1] = '700'
+          }
+          return realLoopXRunner(file, readerArgs, child)
+        }
+        if (!args.includes('should-run')) return realLoopXRunner(file, args, child)
+        guards += 1
+        const result = await realLoopXRunner(file, args, child)
+        if (scenario !== 'digest mismatch') return result
+        const navigation = record(JSON.parse(result.stdout))
+        expect(navigation.schema_version).toBe('context_capture_navigation_v1')
+        const recovery = record(navigation.recovery)
+        const reference = String(recovery.reference_file)
+        const descriptor = record(JSON.parse(await readFile(reference, 'utf8')))
+        const wrong = join(dirname(reference), 'test-wrong-digest.reader.json')
+        await writeFile(wrong, JSON.stringify({ ...descriptor, sha256: '0'.repeat(64) }),
+          { mode: 0o600, flag: 'wx' })
+        return { ...result, stdout: JSON.stringify({
+          ...navigation, recovery: { ...recovery, reference_file: wrong },
+        }) }
+      }
+
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: () => true, runner, retryDelaysMs: [0, 0],
+        resolveCommand: async () => ({
+          file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.3.0',
+        }),
+        makeTurnInstanceId: () => turnInstanceId,
+        runDetached: async operation => {
+          try { return await operation() } finally { finishEvaluation() }
+        },
+        warn: message => { warnings.push(message) },
+      })
+      try {
+        driver.observeAgent(testFixture.agent)
+        await evaluated
+        expect(guards).toBe(1)
+        if (scenario === 'digest mismatch') {
+          expect(reads).toBe(1)
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toEqual([expect.stringContaining('invalid page')])
+        } else if (scenario === 'held') {
+          expect(reads).toBe(2)
+          expect(testFixture.queued).toHaveLength(0)
+          expect(warnings).toEqual([])
+        } else {
+          expect(reads).toBeGreaterThan(2)
+          const queued = testFixture.queued[0]
+          expect(record(queued?.source).turnInstanceId).toBe(turnInstanceId)
+          expect(warnings).toEqual([])
+        }
+        const path = join(testFixture.runtime, 'goals', goalId, 'rollout-event-log.jsonl')
+        const events = (await readFile(path, 'utf8')).trim().split('\n')
+          .map(line => record(JSON.parse(line)))
+        expect(events.filter(event => event.event_kind === 'quota_should_run'
+          && event.run_id === turnInstanceId && event.agent_id === agentId)).toHaveLength(1)
+      } finally {
+        await driver.dispose()
+      }
+    }, 45_000,
+  )
 })

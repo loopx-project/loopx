@@ -66,6 +66,10 @@ includes the Windows peer-file fix. Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
 owner. Older plugin releases retain their original CLI requirements.
+The continuation driver follows LoopX's context delivery setting on CLI 2.3
+and later. When the guard returns a capture reference, the driver reads the
+admission fields from that same capture. The driver requests raw admission
+JSON from older supported CLIs.
 Install the prebuilt release into the web profile:
 
 ```bash
