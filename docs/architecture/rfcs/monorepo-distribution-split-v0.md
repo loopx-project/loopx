@@ -3352,3 +3352,56 @@ required validation and fresh ready=true still govern merge. The original task
 and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, PostgreSQL host/wheel, full-cost and adoption gaps
 remain open.
+
+### 2026-11-11 — Integrated main packaged release qualification
+
+The complete Linux Release Artifacts
+[run 42905934918](https://github.com/loopx-project/loopx/actions/runs/42905934918)
+(attempt 1, from [#8531](https://github.com/loopx-project/loopx/pull/8531))
+qualifies the integrated source at `main@b89a574b05a3e7d5920a8e7184476dfb7b041790`.
+The bundle's product, browser-fixture and workflow commit are all
+`3606315c86f907961b0c26d4f1a1dad6bbaed8cf`, with no fixture overrides; its
+complete tracked tree equals that merged main tree. This supplies the missing
+packaged qualification after the kernel and release-pipeline integration.
+
+Offline verification of final artifact `13807484684` checks the downloaded ZIP
+against GitHub's SHA-256, every package/runtime file against `RELEASE-SOURCES.json`,
+and the checksum manifest against both packages. All three browser receipts bind
+to candidate artifact `13806066680` and the same release-source digest. Comparing
+them with the actual source catalog and partition selector confirms exactly
+86 unique passing scenarios across 29/29/28 entries. Team, craft, command-palette
+and navigation companions pass. The producer also passes clean-wheel install,
+sdist rebuild, installed frontend, DSH install shape and runtime qualification,
+including upgrade, doctor, skills, frontend HTTP, license notices, operation
+without frontend build tools and restoration after activation failure.
+
+The completed ordinary packaged M2 observation retains 200 items, five switches
+with three samples each and 15 long-task windows. Its five medians are
+336.34/313.05/441.09/200.01/194.94 ms; the maximum is 601.68 ms, with no sample
+over the 1,000 ms target. The existing ordinary median <1,000 ms and every-sample
+<2,000 ms rules pass without a threshold change. This is neither a new
+coverage-enabled measurement nor a cost or kernel-attribution comparison;
+historical frozen failures and their raw observations retain their original status.
+
+This evidence qualifies the named integrated Linux packaged source, not later
+product changes. The pull-request run skips attestation, release upload and PyPI
+publication; no public release or current installed-host upgrade is established.
+It does not establish all other CI results or complete CI/marginal cost. The
+original task and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, installed-host and adoption
+gaps remain open. The next qualification stays with those original owners and
+acceptance boundaries; the minimal-kernel effort is not complete.
+
+### 2026-11-11 — Canonical snapshot failure provenance
+
+Paged and complete snapshot reads distinguish a rejected persisted Todo contract
+(`canonical_snapshot_projection_invalid`) from malformed request arguments. The
+existing typed validator still rejects unknown manifests and invalid record
+digests, preserves the original reason and returns no partial rows or legacy
+fallback. Historical supported manifests remain readable. This is a diagnostic
+correction in the existing source transport owner; it grants no forward
+compatibility to older readers and does not upgrade an installed runtime.
+
+Real File/SQLite RPC and CLI regressions, plus an isolated PostgreSQL read,
+qualify the failure boundary without rewriting authority. The original
+installed-host qualification and full-cost/adoption gaps remain open.

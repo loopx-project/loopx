@@ -30,6 +30,38 @@ async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   return {store: new Store(root, "goal-a"), contender: new Store(root, "goal-a")};
 }
 const qualifiedSqlite = sqliteRuntimeIdentity().sqlite_authority_qualified;
+for (const provider of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
+  for (const defect of ["manifest", "digest"] as const) {
+    test(`${provider}: invalid projection is distinct from an invalid snapshot request (${defect})`, async t => {
+      const root = await mkdtemp(join(tmpdir(), "snapshot-invalid-projection-"));
+      t.after(() => rm(root, {recursive: true, force: true}));
+      await engageCanonicalRoute(root);
+      const Store = provider === "file" ? FileAuthorityStore : SqliteAuthorityStore;
+      const store = new Store(join(root, "store"), "goal-a");
+      const projection = productionScaleCoordinationFixture("goal-a", "native").projection;
+      const model = projection.todo_read_model as JsonObject;
+      if (defect === "manifest") (model.contract_fields as string[]).push("future_field");
+      else model.records_sha256 = "0".repeat(64);
+      await seedSnapshot(store, projection);
+      const before = await store.loadAuthority();
+      const dependencies = {createStore: () => store};
+      for (const read of [readCanonicalSnapshotPage, readCanonicalSnapshot]) {
+        const request = snapshotRequest({runtime_root: root});
+        const invalidRequest = await read({...request, include_leases: "true"}, dependencies);
+        assert.equal(invalidRequest.reason_code, "canonical_snapshot_request_invalid");
+        const result = await read(request, dependencies);
+        assert.equal(result.status, "failed");
+        assert.equal(result.reason_code, "canonical_snapshot_projection_invalid");
+        assert.match(String(result.reason), defect === "manifest" ? /field contract mismatch/ : /digest mismatch/);
+        assert.equal(result.decision_read_from_provider, true);
+        assert.equal(result.legacy_fallback_used, false);
+        assert.equal("todos" in result, false);
+        assert.equal("next" in result, false);
+      }
+      assert.deepEqual(await store.loadAuthority(), before, "rejected reads must not rewrite authority");
+    });
+  }
+}
 if (qualifiedSqlite) {
   test("selected SQLite snapshot retains the complete independent read contract", async t => {
     const {store} = await fixture(t, "sqlite");
