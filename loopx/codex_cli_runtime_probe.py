@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping
 
+from .command_invocation import command_argv, resolve_command_path
 from .control_plane.projects.identity import default_goal_id
 
 
@@ -269,10 +270,11 @@ def run_codex_cli_session_probe(
     outputs: dict[str, str] = {}
     errors: dict[str, str] = {}
     available = True
+    command_path = resolve_command_path(codex_bin) or Path(codex_bin)
     for name, extra_args in HELP_COMMANDS.items():
         try:
             result = subprocess.run(
-                [codex_bin, *extra_args],
+                command_argv(command_path, extra_args),
                 check=False,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
