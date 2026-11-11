@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from ...control_plane.effect_runtime import (
+    EffectRuntimeRejected,
+    EffectRuntimeStartupError,
+    effect_runtime_result,
+)
 from .ownership import MaterialProjectScope, material_owner_fields
 
 from ._validation import (
@@ -15,6 +21,7 @@ from ._validation import (
     compact_text,
     compact_token,
     iso_timestamp,
+    nonnegative_int,
     packet_ref,
     positive_int,
     token_list,
@@ -22,7 +29,40 @@ from ._validation import (
 
 MATERIAL_RERANK_PROPOSAL_SCHEMA_VERSION = "material_rerank_proposal_v0"
 MATERIAL_RERANK_APPLY_RECEIPT_SCHEMA_VERSION = "material_rerank_apply_receipt_v0"
+MATERIAL_WAVE_RERANK_PLAN_SCHEMA_VERSION = "material_wave_rerank_plan_v0"
 MATERIAL_RERANK_RECEIPT_MAX_REFS = 100
+
+MATERIAL_HORIZON_WAVES = (
+    "imminent_gate",
+    "active_sprint",
+    "foundational_track",
+    "orthogonal_backlog",
+)
+MATERIAL_EFFORT_BANDS = (
+    "quick_slice",
+    "focused_study",
+    "deep_monograph",
+)
+MATERIAL_EVIDENCE_ROLES = (
+    "load_bearing_primary",
+    "method_comparator",
+    "foundational_reference",
+    "secondary_or_commentary",
+    "orthogonal_signal",
+)
+
+_WAVE_ANNOTATION_FIELDS = {
+    "blocks_active_deliverable",
+    "decision_gain_score",
+    "effort_band",
+    "evidence_refs",
+    "evidence_role",
+    "horizon_wave",
+    "material_ref",
+    "primary_source_refs",
+    "reason_code",
+    "scoped_slice_ready",
+}
 
 _MOVE_FIELDS = {
     "evidence_refs",
@@ -94,6 +134,192 @@ def plan_material_single_move(
         "max_rank_displacement": max(1, displacement),
         "protected_material_refs": protected,
     }
+
+
+def _deduplicated_tokens_preserving_order(
+    values: Sequence[Any] | None,
+    *,
+    field: str,
+    max_items: int = 10_000,
+) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError(f"{field} must be a sequence of compact tokens")
+    if len(values) > max_items:
+        raise ValueError(f"{field} must contain at most {max_items} items")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        token = compact_token(value, field=f"{field}[]")
+        if token not in seen:
+            seen.add(token)
+            ordered.append(token)
+    return ordered
+
+
+def _normalize_wave_annotations(
+    annotations: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if annotations is None:
+        return []
+    if isinstance(annotations, (str, bytes)) or not isinstance(annotations, Sequence):
+        raise TypeError("annotations must be a sequence of objects")
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(annotations):
+        field = f"annotations[{index}]"
+        check_record_keys(
+            raw,
+            field=field,
+            allowed=_WAVE_ANNOTATION_FIELDS,
+            required={"material_ref"},
+        )
+        entry: dict[str, Any] = {
+            "material_ref": compact_token(
+                raw["material_ref"],
+                field=f"{field}.material_ref",
+            )
+        }
+        if raw.get("horizon_wave") is not None:
+            wave = compact_token(raw["horizon_wave"], field=f"{field}.horizon_wave")
+            if wave not in MATERIAL_HORIZON_WAVES:
+                raise ValueError(f"unsupported horizon_wave: {wave}")
+            entry["horizon_wave"] = wave
+        if raw.get("effort_band") is not None:
+            effort = compact_token(raw["effort_band"], field=f"{field}.effort_band")
+            if effort not in MATERIAL_EFFORT_BANDS:
+                raise ValueError(f"unsupported effort_band: {effort}")
+            entry["effort_band"] = effort
+        if raw.get("scoped_slice_ready") is not None:
+            scoped_ready = raw["scoped_slice_ready"]
+            if not isinstance(scoped_ready, bool):
+                raise ValueError(f"{field}.scoped_slice_ready must be a boolean")
+            entry["scoped_slice_ready"] = scoped_ready
+        if raw.get("decision_gain_score") is not None:
+            score = raw["decision_gain_score"]
+            if (
+                isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or not math.isfinite(score)
+                or not 0.0 <= float(score) <= 100.0
+            ):
+                raise ValueError(
+                    f"{field}.decision_gain_score must be a finite number between 0 and 100"
+                )
+            entry["decision_gain_score"] = float(score)
+        if raw.get("evidence_role") is not None:
+            role = compact_token(raw["evidence_role"], field=f"{field}.evidence_role")
+            if role not in MATERIAL_EVIDENCE_ROLES:
+                raise ValueError(f"unsupported evidence_role: {role}")
+            entry["evidence_role"] = role
+        if raw.get("blocks_active_deliverable") is not None:
+            blocks = raw["blocks_active_deliverable"]
+            if not isinstance(blocks, bool):
+                raise ValueError(f"{field}.blocks_active_deliverable must be a boolean")
+            entry["blocks_active_deliverable"] = blocks
+        if raw.get("primary_source_refs") is not None:
+            entry["primary_source_refs"] = _deduplicated_tokens_preserving_order(
+                raw["primary_source_refs"],
+                field=f"{field}.primary_source_refs",
+                max_items=20,
+            )
+        if raw.get("reason_code") is not None:
+            entry["reason_code"] = compact_token(
+                raw["reason_code"],
+                field=f"{field}.reason_code",
+            )
+        if raw.get("evidence_refs") is not None:
+            entry["evidence_refs"] = token_list(
+                raw["evidence_refs"],
+                field=f"{field}.evidence_refs",
+                max_items=10,
+            )
+        normalized.append(entry)
+    return normalized
+
+
+def plan_material_wave_rerank(
+    ordered_material_refs: Sequence[str],
+    annotations: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    top_window_size: int = 30,
+    protected_material_refs: Sequence[str] | None = None,
+    required_load_bearing_refs: Sequence[str] | None = None,
+    max_orthogonal_in_top_window: int = 0,
+    default_evidence_refs: Sequence[str] | None = None,
+) -> tuple[list[str], dict[str, Any]]:
+    """Preview a deterministic multi-item wave rerank via the shared TS owner.
+
+    Stratifies ranked items across horizon waves and effort bands, enforces
+    primary-over-secondary lineage precedence and active-deliverable shortlist
+    guarantees, caps orthogonal signals inside ``top_window_size``, preserves
+    exact set membership, protected anchor positions, and untouched backlog
+    relative order, and returns moves plus bounds ready for
+    ``build_material_rerank_proposal``. Never authorizes or executes a write.
+    """
+    refs = _ordered_material_refs(ordered_material_refs, field="ordered_material_refs")
+    if not refs:
+        raise ValueError("ordered_material_refs must contain at least one item")
+    window = positive_int(top_window_size, field="top_window_size")
+    max_orthogonal = nonnegative_int(
+        max_orthogonal_in_top_window,
+        field="max_orthogonal_in_top_window",
+    )
+    protected = token_list(
+        protected_material_refs,
+        field="protected_material_refs",
+    )
+    required_primaries = _deduplicated_tokens_preserving_order(
+        required_load_bearing_refs,
+        field="required_load_bearing_refs",
+    )
+    default_evidence = token_list(
+        default_evidence_refs,
+        field="default_evidence_refs",
+        max_items=10,
+    )
+    normalized_annotations = _normalize_wave_annotations(annotations)
+
+    request_payload: dict[str, Any] = {
+        "ordered_material_refs": refs,
+        "annotations": normalized_annotations,
+        "top_window_size": window,
+        "protected_material_refs": protected,
+        "required_load_bearing_refs": required_primaries,
+        "max_orthogonal_in_top_window": max_orthogonal,
+        "default_evidence_refs": default_evidence,
+    }
+    try:
+        result = effect_runtime_result(
+            "material_lifecycle.plan_wave_rerank",
+            request_payload,
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    except EffectRuntimeStartupError as exc:
+        raise ValueError(
+            "material wave ranking runtime unavailable; run loopx doctor before retrying"
+        ) from exc
+    if (
+        not isinstance(result, Mapping)
+        or result.get("schema_version") != MATERIAL_WAVE_RERANK_PLAN_SCHEMA_VERSION
+    ):
+        raise TypeError("typed material wave rerank result mismatch")
+    reordered = [str(ref) for ref in result["reordered_material_refs"]]
+    summary: dict[str, Any] = {
+        "schema_version": result["schema_version"],
+        "top_window_size": result["top_window_size"],
+        "max_orthogonal_in_top_window": result["max_orthogonal_in_top_window"],
+        "no_change": result["no_change"],
+        "constraints": dict(result["constraints"]),
+        "moves": [dict(move) for move in result["moves"]],
+        "wave_counts": dict(result["wave_counts"]),
+        "top_window_orthogonal_count": result["top_window_orthogonal_count"],
+        "demoted_monograph_refs": list(result["demoted_monograph_refs"]),
+        "shifted_orthogonal_refs": list(result["shifted_orthogonal_refs"]),
+        "lineage_promoted_refs": list(result["lineage_promoted_refs"]),
+    }
+    return reordered, summary
 
 
 def material_rerank_receipt_chunks(
