@@ -652,6 +652,15 @@ def main() -> None:
         audit = quota["interaction_contract"]["agent_channel"][
             "vision_continuation_audit"
         ]
+        if "projection_ref" in audit:
+            # Complete decisions retain the full audit once in the same capture.
+            assert quota["schema_version"] == "loopx_turn_envelope_v1"
+            assert audit["projection_ref"] == "$.vision_continuation_audit"
+            owner = quota["vision_continuation_audit"]
+            assert "projection_ref" not in owner
+            assert audit["required"] == owner["required"]
+            assert audit["decision"] == owner["decision"]
+            audit = owner
         assert audit["acceptance_gaps"][0]["acceptance_summary"] == VISION_ACCEPTANCE
 
     print("refresh-state shared-runtime projection smoke passed")
