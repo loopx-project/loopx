@@ -119,6 +119,39 @@ def test_objective_and_acceptance_guidance_share_real_inline_goal_read(acceptanc
         "ordinary reads must not proactively direct objective revision")
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("reason", "Explicit current direction"),
+    ("source_ref", "message:current"),
+])
+def test_same_objective_with_changed_provenance_prepares_a_distinct_proposal(acceptance_goal, field, value):
+    project, _, cli, _ = acceptance_goal
+    prepare_source(project)
+    document = project / "objective.json"
+    objective = "Maintain reliable exports and recovery"
+    original = {"objective": objective, "reason": "Earlier direction", "source_ref": "message:earlier"}
+    current = {**original, field: value}
+
+    def prepare(revision, operation_id):
+        document.write_text(json.dumps(revision), encoding="utf-8")
+        code, result = cli("prepare-objective", "--agent-id", "agent-a", "--document", str(document),
+            "--operation-id", operation_id, "--execute")
+        assert code == 0 and result["proposal"]["status"] == "preview_ready", result
+        return result["proposal"]
+
+    before = cli("inspect")[1]
+    earlier = prepare(original, "prepare-earlier-direction")
+    updated = prepare(current, "prepare-current-direction")
+    assert updated["proposal_id"] != earlier["proposal_id"]
+    assert updated["normalized_parameters"][field] == value
+    assert prepare(current, "prepare-current-direction") == updated
+    assert cli("inspect")[1] == before, "preparation leaves the canonical objective unchanged"
+
+    code, applied = cli("apply-proposal", "--proposal-id", updated["proposal_id"], "--execute")
+    assert code == 0 and applied["executed"], applied
+    revised = cli("inspect")[1]["goal_acceptance_contract"]["goal_objective"]
+    assert {key: revised[key] for key in current} == current
+
+
 def test_native_proposal_owner_apply_and_separate_peer_adoption(acceptance_goal, monkeypatch):
     project, _, cli, run = acceptance_goal
     prepare_source(project)
