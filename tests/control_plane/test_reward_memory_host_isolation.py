@@ -88,6 +88,16 @@ def test_recall_and_reflection_are_independently_opted_in(recall: bool, ingest: 
     prompt = _prompt(request)
     assert ("When reward_memory_recall contains guidance" in prompt) is recall
     assert ("Set reward_memory_reflection_json" in prompt) is ingest
+    assert ("compare current independent task evidence" in prompt) is (recall and ingest)
+    for consolidation_rule in (
+        "any comparable procedural_experience",
+        "If no comparable procedural experience was delivered",
+        "only confirms the same future behavior and limitations",
+        "establishes distinct reusable applicability or materially changes",
+        "Keep distinct applicability conditions separate",
+        "Do not claim to merge, update, retire, or supersede provider records",
+    ):
+        assert (consolidation_rule in prompt) is (recall and ingest)
     assert ("reward_memory_reflection_json" in codex_cli_result_schema(request)["properties"]) is ingest
     assert bool(request["reward_memory_recall"].get("context")) is recall
     if ingest:

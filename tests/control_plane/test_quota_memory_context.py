@@ -86,6 +86,10 @@ def test_real_app_guard_delivers_scoped_memory_once(
     assert project_turn_context(first)["reward_memory_recall"]["context"]["guidance"] == guidance
     assert contribution["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
     assert "private, non-authoritative" in contribution["instructions"][0]
+    assert any(
+        "compare current independent task evidence" in item
+        for item in contribution["instructions"]
+    )
     repeated = run_cli(args)
     assert repeated["ok"] and memory.calls == 1
     assert not repeated.get("reward_memory_recall", {}).get("external_writes_performed")
@@ -206,6 +210,10 @@ def test_quota_recall_size_limit_preserves_independently_enabled_ingest(size: in
     delivered = result["context_fields"]["reward_memory_recall"]
     assert (delivered["context"] is not None) is (size == 40_000)
     assert result["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
+    assert any(
+        "compare current independent task evidence" in item
+        for item in result["instructions"]
+    ) is (size == 40_000)
     assert len(json.dumps(result, separators=(",", ":")).encode()) <= 65536
 
 
