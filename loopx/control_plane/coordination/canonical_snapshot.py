@@ -25,8 +25,12 @@ def read_canonical_snapshot(
     include_leases: bool,
     projection_readback: Mapping[str, Any] | None,
     timeout: float,
+    lease_todo_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Read all pages at one revision, or return a typed failure without rows."""
+    lease_selection = (
+        {} if lease_todo_ids is None else {"lease_todo_ids": sorted(lease_todo_ids)}
+    )
     after: dict[str, Any] | None = None
     snapshot: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
@@ -53,6 +57,7 @@ def read_canonical_snapshot(
                     if projection_readback is not None
                     else None,
                     "after": after,
+                    **lease_selection,
                 },
                 timeout=timeout,
                 large_local_snapshot=True,
@@ -128,6 +133,12 @@ def read_canonical_snapshot(
                 include_leases or current["lease_count"] == 0,
                 "unexpected lease population",
             )
+            if lease_todo_ids is not None:
+                require(
+                    current["todo_count"] == 0
+                    and current["lease_count"] <= len(lease_todo_ids),
+                    "snapshot population exceeds the lease selection",
+                )
             current_metadata = page.get("metadata")
             require(isinstance(current_metadata, dict), "snapshot metadata is missing")
             require(
@@ -168,6 +179,11 @@ def read_canonical_snapshot(
                         isinstance(identity, str) and bool(identity),
                         "snapshot record identity is missing",
                     )
+                    if lease_todo_ids is not None:
+                        require(
+                            name == "leases" and identity in lease_todo_ids,
+                            "snapshot record escaped the lease selection",
+                        )
                     previous = last_ids[name]
                     require(
                         previous is None or identity > previous,
