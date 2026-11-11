@@ -467,6 +467,31 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('same-session LoopX driver', () => {
+  it('does not report a cancelled maintenance probe as a missing CLI', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    let probes = 0
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      runner: async () => {
+        probes += 1
+        maintenance.abort()
+        return { exitCode: 1, stdout: '', stderr: '' }
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => probes > 0)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(warnings).toEqual([])
+      expect(host.nextTurn).toHaveLength(0)
+      expect(probes).toBe(1)
+    } finally { await driver.dispose() }
+  })
+
   it('retries admission after attach-time maintenance becomes free without an idle event', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
