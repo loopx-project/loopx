@@ -1323,9 +1323,20 @@ def test_observed_usage_preserves_incomplete_cost_and_default_gate(pack):
     assert inspect_pack(**scope)["solver_usage"]["reason_code"] == "source_unavailable"
 
 
-def test_observed_usage_real_cli_without_model_dispatch(pack):
+@pytest.mark.parametrize("resumed", [False, True])
+def test_observed_usage_real_cli_without_model_dispatch(pack, resumed):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import read_usage_turn
+
     scope, _, old, input_path, sources, _ = pack
-    (sources / 'usage.jsonl').write_text('\n'.join(_usage_fixture().splitlines()[:-1]) + '\n')
+    rows = [json.loads(line) for line in (_request_usage_fixture() if resumed else _usage_fixture()).splitlines()]
+    if resumed:
+        first_end = next(row for row in rows if row["payload"].get("type") == "task_complete")
+        first_end["payload"].update(type="turn_aborted", reason="SYNTHETIC-PRIVATE-ABORT-REASON")
+    else:
+        rows.pop()
+    path = sources / "usage.jsonl"
+    path.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    original = path.read_bytes()
     registry = sources.parent / 'registry-observed.json'
     registry.write_text('{"projects":{}}')
     prefix = [sys.executable, '-m', 'loopx.entrypoint', '--registry', str(registry),
@@ -1334,15 +1345,30 @@ def test_observed_usage_real_cli_without_model_dispatch(pack):
             '--input-json', str(input_path), '--source-root', str(sources), '--title', old['title'],
             '--usage-jsonl', 'usage.jsonl', '--usage-session-id', 'solver-session']
     default = subprocess.run([*prefix, *args], text=True, capture_output=True)
-    assert default.returncode != 0 and 'completed Turn' in default.stdout + default.stderr
+    reason = 'aborted Turn' if resumed else 'completed Turn'
+    assert default.returncode != 0 and reason in default.stdout + default.stderr
     observed = subprocess.run([*prefix, *args, '--include-incomplete-usage'], text=True, capture_output=True)
     assert observed.returncode == 0, observed.stdout + observed.stderr
     record = json.loads(observed.stdout)
     discovery = subprocess.run([*prefix, 'trajectory-packs', '--goal-id', scope['owner_goal_id']], text=True, capture_output=True)
     assert discovery.returncode == 0
     view = next(x for x in json.loads(discovery.stdout)['packs'] if x['pack_id'] == record['pack_id'])
-    assert view['solver_usage']['projection']['input_tokens'] == 140
-    assert view['solver_usage']['projection']['incomplete_turn']['usage']['input_tokens'] == 40
+    projection = view['solver_usage']['projection']
+    assert projection['input_tokens'] == 140 and projection['completed_turns'] == 1
+    if resumed:
+        assert projection['incomplete_turn'] is None
+        [interrupted] = projection['interrupted_turns']
+        assert interrupted['turn_id'] == 'a' and interrupted['usage']['input_tokens'] == 100
+        assert projection['request_coverage']['compaction_requests'] == 1
+        assert projection['request_coverage']['all_requests']['input_tokens'] == 160
+        evidence = read_usage_turn(**scope, pack_id=record['pack_id'],
+                                   analysis_key=record['analysis_key'], turn_id='a')
+        boundary = json.loads(evidence['text'])['events'][-1]['payload']
+        assert boundary == {'type': 'turn_aborted', 'turn_id': 'a'}
+        assert 'SYNTHETIC-PRIVATE-ABORT-REASON' not in evidence['text']
+    else:
+        assert projection['incomplete_turn']['usage']['input_tokens'] == 40
+    assert path.read_bytes() == original
     assert inspect_pack(**scope, pack_id=record['pack_id'])['job'] is None
     assert not list(scope['runtime_root'].rglob('receipt.json'))
 

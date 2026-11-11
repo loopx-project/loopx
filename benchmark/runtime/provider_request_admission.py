@@ -88,7 +88,9 @@ class ProviderRequestAdmission:
             "session_id": self._invocation.session_id, "requests": 0,
             "pending": 0, "sent": 0, "unknown": 0, "refused": 0,
         }
-        receipt.setdefault("provider_request_invocations", []).append(self._summary)
+        self._receipt_invocations = receipt.setdefault("provider_request_invocations", [])
+        self._receipt_index = len(self._receipt_invocations)
+        self._receipt_invocations.append(self._summary)
 
     def started(self, process):
         with self._lock:
@@ -213,3 +215,7 @@ class ProviderRequestAdmission:
                     self.retire()
         finally:
             self.retire()
+            with self._lock:
+                # In-flight upstream handlers can still observe a late reply.
+                # The wake receipt records the counters at invocation exit.
+                self._receipt_invocations[self._receipt_index] = self._summary.copy()

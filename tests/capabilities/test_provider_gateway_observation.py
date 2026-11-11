@@ -153,6 +153,34 @@ def test_provider_observes_dispatch_while_upstream_response_is_pending(tmp_path,
         assert "synthetic-provider-key" not in json.dumps(events)
 
 
+def test_invocation_exit_keeps_pending_snapshot_after_late_response(tmp_path, monkeypatch):
+    with _waiting_upstream() as (upstream, received, release, _observed):
+        guard, receipt = _guard(tmp_path, upstream, _Admission())
+        dispatched = threading.Event()
+        finished = threading.Event()
+        observe = guard.observe
+
+        def record(event):
+            observe(event)
+            if event["event"] == "dispatch":
+                dispatched.set()
+            elif event["event"] == "finished":
+                finished.set()
+
+        monkeypatch.setattr(guard, "observe", record)
+        with guard.serve(["codex", "exec", "-"]):
+            client, _result = _request(guard.base_url)
+            assert received.wait(timeout=5) and dispatched.wait(timeout=5)
+        [snapshot] = receipt["provider_request_invocations"]
+        assert snapshot["requests"] == snapshot["sent"] == snapshot["pending"] == 1
+        try:
+            release.set()
+            assert finished.wait(timeout=5)
+            assert receipt["provider_request_invocations"][0]["pending"] == 1
+        finally:
+            client.join(timeout=5)
+
+
 def test_blocked_request_log_does_not_hold_invocation_or_admission_lock(tmp_path, monkeypatch):
     log_blocked = threading.Event()
     release_log = threading.Event()

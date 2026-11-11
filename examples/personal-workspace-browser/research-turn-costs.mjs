@@ -36,7 +36,7 @@ for i in range(10):
  totals={key:totals[key]+counts[key] for key in totals}
  seconds+=120 if i==6 else 1
  append('event_msg',dict(type='token_count',info=dict(total_token_usage=totals.copy(),last_token_usage=counts)))
- seconds+=1;append('event_msg',dict(type='task_complete',turn_id=f'turn-{i+1}'))
+ seconds+=1;append('event_msg',dict(type='turn_aborted' if i==6 else 'task_complete',turn_id=f'turn-{i+1}'))
 seconds+=1;append('event_msg',dict(type='task_started',turn_id='unfinished'))
 analysis=dict(title='Observed session',input=pack,artifacts={'facts.txt':text,'usage.jsonl':'\\n'.join(map(json.dumps,rows))},outputs={},usage_jsonl='usage.jsonl',usage_session_id='session',include_incomplete_usage=True)
 Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Synthetic cost study',events=[build_explore_node_event(goal_id=goal,node_id='question',title=text,recorded_at='2026-01-01T00:00:00Z')],analyses=[analysis])))
@@ -60,11 +60,12 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       assert.match(await items.first().innerText(), /3,000/);
       assert.match(await items.first().innerText(), /2,000/);
       await costs.getByRole('combobox').selectOption('elapsed');
-      assert.match(await items.first().innerText(), /第 7 轮/);
+      assert.match(await items.first().innerText(), /第 7 轮.*未完成/s);
       await items.first().getByRole('button').click();
       const source = page.getByRole('region', {name: '引用原文', exact: true});
       await source.locator('pre').waitFor();
       assert.match(await source.innerText(), /turn-7/);
+      assert.match(await source.innerText(), /turn_aborted/);
       assert.match(await source.innerText(), /token_count/);
       assert.ok(!(await source.innerText()).includes('SENSITIVE_TEXT_NOT_FOR_BROWSER'));
       await source.focus(); await page.keyboard.press('Escape');
@@ -82,7 +83,7 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       const firstTurn = costs.getByRole('spinbutton', {name: '起始轮次', exact: true});
       const lastTurn = costs.getByRole('spinbutton', {name: '结束轮次', exact: true});
       const selection = costs.locator('.research-usage-range-summary');
-      assert.match(await selection.innerText(), /已选 11 \/ 11 轮.*完成 10 轮.*无计数 1 轮/);
+      assert.match(await selection.innerText(), /已选 11 \/ 11 轮.*完成 9 轮.*无计数 1 轮/);
       const download = async () => {
         const waiting = page.waitForEvent('download');
         await costs.getByRole('button', {name: '下载所选用量', exact: true}).click();
@@ -92,6 +93,7 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       const all = await download();
       assert.equal(all.selection.turns.length, 11, 'Download includes every selected Turn beyond the eight-row page');
       assert.equal(all.selection.observed_input_tokens, 5900);
+      assert.equal(all.selection.turns.find(turn => turn.turn_id === 'turn-7').incomplete, true);
       assert.equal(all.goal_id, 'synthetic-cost-study');
       assert.equal(all.artifact_sha256.length, 64);
       assert.ok(!JSON.stringify(all).includes('SENSITIVE_TEXT_NOT_FOR_BROWSER'));
@@ -140,6 +142,10 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
         assert.equal(await helpButton.evaluate(element => element === document.activeElement), true);
         await costs.locator('legend').evaluate(element => element.scrollIntoView({block: 'center'}));
         await page.screenshot({path: resolve(outputDir, `research-usage-range-${width}.png`), animations: 'disabled'});
+        await costs.getByRole('combobox').selectOption('elapsed');
+        await items.first().evaluate(element => element.scrollIntoView({block: 'center'}));
+        await page.screenshot({path: resolve(outputDir, `research-interrupted-turn-${width}.png`), animations: 'disabled'});
+        await costs.getByRole('combobox').selectOption('input');
       }
       await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
       await page.reload({waitUntil: 'networkidle'});
@@ -150,7 +156,7 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       await costs.locator('summary').click();
       await costs.getByRole('spinbutton', {name: 'First Turn', exact: true}).fill('3');
       await costs.getByRole('spinbutton', {name: 'Last Turn', exact: true}).fill('7');
-      assert.match(await selection.innerText(), /5 \/ 11 Turns selected.*5 completed.*0 without counters/);
+      assert.match(await selection.innerText(), /5 \/ 11 Turns selected.*4 completed.*0 without counters/);
       assert.match(await selection.innerText(), /5,400/);
       const englishDownload = page.waitForEvent('download');
       await costs.getByRole('button', {name: 'Download selected usage', exact: true}).click();

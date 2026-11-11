@@ -181,6 +181,7 @@ def _usage_event(line_number: int, event: dict) -> dict | None:
     elif event.get("type") == "event_msg" and payload.get("type") in {
         "task_started",
         "task_complete",
+        "turn_aborted",
         "token_count",
     }:
         payload = {
@@ -787,7 +788,7 @@ def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
     if not captured:
         raise PackUnavailable("usage_not_captured")
     projection = captured["projection"]
-    turns = [*projection["turns"]]
+    turns = [*projection["turns"], *projection.get("interrupted_turns", [])]
     if projection.get("incomplete_turn"):
         turns.append(projection["incomplete_turn"])
     matches = [turn for turn in turns if turn["turn_id"] == turn_id]
@@ -815,7 +816,7 @@ def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
                 start = observed
             elif kind == "token_count" and observed["payload"].get("info"):
                 counter = observed
-            elif kind == "task_complete":
+            elif kind in ("task_complete", "turn_aborted"):
                 end = observed
         if digest.hexdigest() != captured["artifact_sha256"]:
             raise PackUnavailable("source_changed")
