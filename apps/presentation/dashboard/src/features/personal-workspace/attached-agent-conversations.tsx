@@ -457,6 +457,13 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
   const turnProfile = turnModel
     ? [`${zh ? "本轮模型" : "Turn model"} ${turnModel.model}`, turnModel.reasoning_effort].filter(Boolean).join(" · ")
     : (zh ? "本轮模型未读取" : "Turn model unavailable");
+  const connectionStatus = !snapshot
+    ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable")
+    : snapshot.can_reply
+      ? (zh ? "原会话可回复" : "Original conversation accepts replies")
+      : activeRevision !== null
+        ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App")
+        : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed");
   const connectionMessage = bindingReadRejected
     ? (zh ? "无法验证原会话的绑定或访问权限。" : "This conversation's binding or access could not be verified.")
     : error;
@@ -465,7 +472,17 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
 
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
-        <div className="attached-connection-status"><div><div className="attached-conversation-source">Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}><p>{zh ? "已保存消息与工具记录自动更新。实时内容和本轮模型来自原宿主。" : "Saved messages and tools update automatically. Live content and the turn model come from the original host."}</p></ContextHelp></div>{!bindingReadRejected ? <p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}{activeRevision !== null ? <>{" · "}{turnProfile}</> : null}</p> : null}</div>
+        <div className="attached-connection-status"><div>
+          <div className="attached-conversation-source">
+            Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}>
+              <p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p>
+            </ContextHelp>
+          </div>
+          {!bindingReadRejected ? <p role="status">
+            <span>{connectionStatus}</span>
+            {activeRevision !== null ? <>{" · "}<span>{turnProfile}</span></> : null}
+          </p> : null}
+        </div>
         <button type="button" className="attached-conversation-open" aria-label={zh ? "在 Codex App 中打开" : "Open in Codex App"}
           title={zh ? "在 Codex App 中打开" : "Open in Codex App"} aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}><ExternalLink size={18} aria-hidden="true" /></button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
