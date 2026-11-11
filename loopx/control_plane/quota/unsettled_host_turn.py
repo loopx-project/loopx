@@ -20,10 +20,11 @@ from ..effect_runtime import (
     effect_runtime_result,
 )
 from ..scheduler.execution_context import SchedulerExecutionContextResolution
+from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..todos.todo_semantics import todo_item_task_class
 from ..work_items.interaction_contract import (
     _scoped_cli_args,
-    build_interaction_contract,
+    _build_interaction_contract_projection,
 )
 from .error_codes import (
     CloseoutQueryUnavailableError,
@@ -171,7 +172,8 @@ def _prior_closeout_preflight(
     current_turn_instance_id: str | None,
     registry_path: Path | None = None,
     goal_ref: Mapping[str, Any] | None = None,
-) -> tuple[dict[str, Any], list[str], dict[str, Any]] | None:
+    owner_action_id: str | None = None,
+) -> tuple[dict[str, Any], list[str], dict[str, Any], dict[str, Any]] | None:
     """Ask the typed owner which prior Turn must still be closed out.
 
     The preflight reads the goal's persisted guards and the selected Turn's
@@ -203,6 +205,7 @@ def _prior_closeout_preflight(
                     "goal_id": goal_id,
                     "agent_id": agent_id,
                     "exclude_turn_instance_id": current_turn_instance_id,
+                    "owner_action_id": owner_action_id,
                     **(
                         {"goal_ref": dict(goal_ref)}
                         if goal_ref is not None
@@ -253,6 +256,7 @@ def _prior_closeout_preflight(
     return (
         dict(candidate), [str(name) for name in missing_receipts],
         dict(monitor_poll) if isinstance(monitor_poll, Mapping) else {},
+        dict(result["recovery_admissions"]),
     )
 
 
@@ -264,6 +268,7 @@ def _unsettled_host_turn_recovery(
     agent_id: str | None,
     current_turn_instance_id: str | None,
     goal_ref: Mapping[str, Any] | None = None,
+    owner_action_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id or not current_turn_instance_id:
         return None
@@ -274,10 +279,11 @@ def _unsettled_host_turn_recovery(
         current_turn_instance_id=current_turn_instance_id,
         registry_path=registry_path,
         goal_ref=goal_ref,
+        owner_action_id=owner_action_id,
     )
     if preflight is None:
         return None
-    selected, missing_receipts, monitor_poll = preflight
+    selected, missing_receipts, monitor_poll, recovery_admissions = preflight
     # A candidate carries exactly one binding: the Todo it must read, or the
     # autonomous replan obligation that has no Todo to read.
     todo_id = (
@@ -307,6 +313,7 @@ def _unsettled_host_turn_recovery(
             "candidate": selected,
             "missing_receipts": missing_receipts,
             "binding_facts": binding_facts,
+            "recovery_admissions": recovery_admissions,
         },
     )
     if not isinstance(verdict, Mapping) or (
@@ -316,7 +323,7 @@ def _unsettled_host_turn_recovery(
     status = verdict.get("status")
     if status == "none":
         return None
-    if status != "recovery_required":
+    if status not in ("recovery_required", "attention_required"):
         raise RuntimeError("TypeScript recovery result shape mismatch")
     recovery = verdict.get("recovery")
     obligation = verdict.get("obligation")
@@ -343,6 +350,11 @@ def apply_unsettled_host_turn_recovery_if_required(
 ) -> bool:
     """Preempt ordinary selection when the preceding host Turn lacks closeout."""
 
+    from ...agent_registry import load_goal_from_registry
+
+    goal = load_goal_from_registry(registry_path, goal_id) or {}
+    activation = goal.get("activation") or {}
+
     verdict = _unsettled_host_turn_recovery(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -350,6 +362,8 @@ def apply_unsettled_host_turn_recovery_if_required(
         agent_id=agent_id,
         current_turn_instance_id=current_turn_instance_id,
         goal_ref=goal_ref,
+        owner_action_id=(activation.get("updated_at")
+                         if activation.get("actor_kind") == "owner" else None),
     )
     if verdict is None:
         return False
@@ -449,16 +463,21 @@ def _apply_recovery_projection(
 ) -> bool:
     recovery = verdict["recovery"]
     obligation = verdict["obligation"]
+    attention = recovery.get("state") == "attention_required"
+    if attention:
+        from .settlement_precedence import clear_quota_action_projections
+
+        clear_quota_action_projections(payload)
     payload.pop("selected_todo", None)
     payload.pop("todo_id", None)
     payload.pop("action_portfolio", None)
     payload.update(
         {
-            "decision": "unsettled_host_turn_recovery",
-            "should_run": True,
-            "state": "eligible",
+            "decision": "blocked_wait" if attention else "unsettled_host_turn_recovery",
+            "should_run": obligation["must_attempt_work"],
+            "state": "waiting" if attention else "eligible",
             "effective_action": EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value,
-            "actionable_by_codex": True,
+            "actionable_by_codex": obligation["must_attempt_work"],
             "normal_delivery_allowed": False,
             "recovery_delivery_allowed": False,
             "self_repair_allowed": False,
@@ -468,6 +487,7 @@ def _apply_recovery_projection(
             "safe_bypass_kind": None,
             "safe_bypass_policy": None,
             "reason": obligation["reason"],
+            **({"reason_code": obligation["reason_code"], "requires_user_action": True} if attention else {}),
             "recommended_action": obligation["recommended_action"],
             "unsettled_host_turn_recovery": recovery,
             "heartbeat_recommendation": {
@@ -476,10 +496,10 @@ def _apply_recovery_projection(
                 "notify": obligation["notify"],
                 "spend_policy": obligation["spend_policy"],
                 "reason": obligation["recommendation_reason"],
-                "agent_must_attempt": True,
+                "agent_must_attempt": obligation["must_attempt_work"],
             },
             "execution_obligation": {
-                "must_attempt_work": True,
+                "must_attempt_work": obligation["must_attempt_work"],
                 "kind": "unsettled_host_turn_recovery",
                 "contract": obligation["contract"],
                 "contract_obligation": obligation["contract_obligation"],
@@ -500,15 +520,18 @@ def _apply_recovery_projection(
             "automation_liveness": {
                 "schema_version": "automation_liveness_v0",
                 "keep_active": True,
-                "pause_allowed": False,
-                "automation_action": "execute_bounded_recovery",
+                "pause_allowed": attention,
+                "automation_action": "wait_for_owner" if attention else "execute_bounded_recovery",
                 "reason": obligation["unsettled_reason"],
                 "spend_policy": obligation["spend_policy"],
             },
         }
     )
-    interaction_contract = build_interaction_contract(
+    if attention:
+        payload["effective_action"] = EffectiveAction.BLOCKED_WAIT.value
+    interaction_contract, arbitration = _build_interaction_contract_projection(
         payload,
+        agent_scope_frontier_actions=[action.value for action in AgentScopeFrontierAction],
         available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=current_turn_instance_id,
@@ -526,4 +549,11 @@ def _apply_recovery_projection(
         cli_channel["spend_allowed_now"] = obligation.get("spend_allowed_now") is True
         cli_channel["recovery_ref"] = "$.unsettled_host_turn_recovery"
     payload["interaction_contract"] = interaction_contract
+    if attention:
+        from ..scheduler.scheduler_hint import build_scheduler_hint
+
+        payload["scheduler_hint"] = build_scheduler_hint(
+            payload, arbitration=arbitration, scheduler_execution_context=scheduler_execution_context,
+            available_capabilities=available_capabilities,
+        )
     return True
