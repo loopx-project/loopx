@@ -104,7 +104,7 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
         fixture.close()
 
 
-@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication"])
+@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication", "closed"])
 def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
     from test_native_steward_private import finish, steward
     from loopx import chat_ingress
@@ -149,6 +149,8 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
                     bindings.path.write_text(json.dumps(published))
                 elif change == "second_publication":
                     bindings.path.write_text(json.dumps({**stale, "revision": adopted["revision"] + 2}))
+                elif change == "closed":
+                    assert runtime.close_session(sid)
             return exclusive_file_lock(path, **kwargs)
 
         monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
@@ -165,7 +167,9 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
             assert request["status"] == "rejected" and request["turn_id"] is None
             assert not store.turn_for_client(sid, f"external-{pending_ref}")
             assert capture.read_bytes() == calls_before and provider.writes == writes_before
-            assert observed_endpoints == (["antigravity", "codex"] if change == "second_publication" else ["antigravity"])
+            assert observed_endpoints == (["antigravity", "codex"] if change in {"second_publication", "closed"} else ["antigravity"])
+            if change == "closed":
+                assert request["session_id"] == sid and "response_code" not in request
         else:
             assert admission["status"] == "durably_accepted"
             assert observed_endpoints == ["antigravity", "codex"]

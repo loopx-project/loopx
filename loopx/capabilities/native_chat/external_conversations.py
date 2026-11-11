@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...chat_actions import goal_workspace_ref
-from ...chat_ingress import ensure_external_admission_scope, resolve_external_admission_source
+from ...chat_ingress import STEWARD_BINDING_ADOPTION_PENDING, ensure_external_admission_scope, resolve_external_admission_source
 from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.quota.automation_cadence_readback import (
@@ -33,7 +33,6 @@ from .file_discovery import FileChatDiscovery
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
-STEWARD_BINDING_ADOPTION_PENDING = "steward_executor_binding_pending"
 
 
 def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
@@ -1439,6 +1438,8 @@ class ChatExternalConversations:
     @staticmethod
     def _reject_prepared(path: Path, row: dict[str, Any]) -> None:
         # Definitive command/grant denials must not retry indefinitely.
+        if row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+            row.pop("response_code")
         row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
         _atomic_write_json(path, row)
 
@@ -1446,12 +1447,10 @@ class ChatExternalConversations:
                         *, recovering_request: bool = False,
                         source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         controller = self.controller
+        selected = ensure_external_admission_scope(self.bindings, selected, path, row, source_preflight=source_preflight)
         held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
         if held_for_binding:
             row.pop("response_code")
-        selected = ensure_external_admission_scope(
-            self.bindings, selected, row["source"], source_preflight=source_preflight,
-            refresh_steward_executor=row["command"] is None and row.get("agent_target") is None)
         if not row.get("routing_recorded"):
             choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
