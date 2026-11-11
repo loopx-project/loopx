@@ -104,6 +104,88 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
         fixture.close()
 
 
+@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication"])
+def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
+    from test_native_steward_private import finish, steward
+    from loopx import chat_ingress
+    from loopx.capabilities.native_chat import conversation_bindings
+    from loopx.file_lock import exclusive_file_lock
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        original_event = provider.event("steward-app", "original-before-adoption", "Read the original conversation")
+        assert transport.admit("steward-app", original_event)["status"] == "durably_accepted"
+        original_ref = identity_ref(binding["provider_ref"], original_event["message_id"])
+        original = transport.core.read_request(original_ref)
+        assert finish(runtime, original)["status"] == "completed"
+        original_path = transport.root / f"{original_ref}.json"
+        assert transport.reconcile_request(original_path) == 1
+        original_delivery = original_path.read_bytes()
+        sid = original["session_id"]
+
+        bindings = transport.bindings
+        bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        adopted = bindings.read()
+        stale = {**adopted, "bindings": [
+            {**row, "executor_endpoint_id": "antigravity"} if row["binding_id"] == binding["binding_id"] else row
+            for row in adopted["bindings"]]}
+        bindings.path.write_text(json.dumps(stale))
+        published = {**adopted, "revision": adopted["revision"] + 1}
+        if change == "scope":
+            published["bindings"] = [
+                {**row, "goal_scope": "selected"} if row["binding_id"] == binding["binding_id"] else row
+                for row in adopted["bindings"]]
+        if change == "revoked":
+            published = {**published, "app_steward_binding_id": None, "bindings": [
+                row for row in adopted["bindings"] if row["binding_id"] != binding["binding_id"]]}
+        observed_endpoints = []
+
+        def publish_at_scope_fence(path, **kwargs):
+            if path == bindings.path and kwargs.get("operation") == "configure_bound_delivery_scope":
+                previous = next(row for row in bindings.read()["bindings"] if row["binding_id"] == binding["binding_id"])
+                observed_endpoints.append(previous["executor_endpoint_id"])
+                if len(observed_endpoints) == 1:
+                    bindings.path.write_text(json.dumps(published))
+                elif change == "second_publication":
+                    bindings.path.write_text(json.dumps({**stale, "revision": adopted["revision"] + 2}))
+            return exclusive_file_lock(path, **kwargs)
+
+        monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
+        monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
+        pending_event = provider.event("steward-app", "original-during-adoption", "Continue in this conversation")
+        pending_ref = identity_ref(binding["provider_ref"], pending_event["message_id"])
+        pending_path = transport.root / f"{pending_ref}.json"
+        calls_before = capture.read_bytes()
+        writes_before = list(provider.writes)
+        admission = transport.admit("steward-app", pending_event)
+        request = transport.core.read_request(pending_ref)
+        if change != "executor":
+            assert admission["status"] == "command_rejected"
+            assert request["status"] == "rejected" and request["turn_id"] is None
+            assert not store.turn_for_client(sid, f"external-{pending_ref}")
+            assert capture.read_bytes() == calls_before and provider.writes == writes_before
+            assert observed_endpoints == (["antigravity", "codex"] if change == "second_publication" else ["antigravity"])
+        else:
+            assert admission["status"] == "durably_accepted"
+            assert observed_endpoints == ["antigravity", "codex"]
+            assert request["status"] == "accepted" and request["session_id"] == sid
+            assert request["binding_id"] == binding["binding_id"] and request["source"] == original["source"]
+            assert finish(runtime, request)["status"] == "completed"
+            assert transport.reconcile_request(pending_path) == 1
+            delivered = json.loads(pending_path.read_text())
+            assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
+            assert delivered["event"]["message_id"] == pending_event["message_id"]
+            assert store.turn_for_client(sid, f"external-{pending_ref}")["turn_id"] == request["turn_id"]
+            writes_after = list(provider.writes)
+            assert transport.reconcile_request(pending_path) == 0 and provider.writes == writes_after
+            assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+        assert [row["session_id"] for row in store.list_sessions()] == [sid]
+        assert original_path.read_bytes() == original_delivery
+    finally:
+        fixture.close()
+
+
 def test_historical_context_is_explicitly_bounded_and_never_decodes_unread_attachments():
     rows = [{"message_id": f"m-{i}", "created_at": f"2026-01-01T00:00:{i:02}+00:00",
         "role": "agent", "text": f"Complete original answer {i}"} for i in range(14)]
