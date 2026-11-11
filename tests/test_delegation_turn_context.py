@@ -248,10 +248,43 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
         assert rows[queued["request_id"]]["step"] == "await_return_delivery"
         assert rows[queued["request_id"]]["pending_return_count"] == 1
         assert rows[peer["request_id"]]["step"] == "consume_peer_result"
-        assert any("manager-inbox read" in item["command"] for item in required_reads)
+        manager_read = next(item for item in required_reads if item["hook_id"] == "manager.context_inbox")
+        assert "manager-inbox read" in manager_read["command"]
+        assert ("--format markdown" in manager_read["command"]) == (delivery == "native_files")
         assert "Continue the linked work" not in json.dumps(content)
         assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
+    if delivery == "native_files":
+        result = subprocess.run(shlex.split(manager_read["command"]), cwd=tmp_path, env=environment,
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert result.returncode == 0, result.stderr
+        body = result.stdout.split("\n```json\n", 1)[1].removesuffix("\n```\n")
+        rendered = json.loads(body)
+        common = rendered.pop("shared_item_guidance", {})
+        rendered["items"] = [{**common, **row} for row in rendered["items"]]
+        # Both commands perform the same scoped read. Each reports its own
+        # observation clock; all supplied values and cursor facts must agree.
+        for view in (inbox, rendered):
+            view["unfinished_delegations"].pop("observed_at")
+        assert rendered == inbox
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
+
+
+def test_inbox_markdown_keeps_different_or_missing_guidance_on_each_item():
+    from loopx.cli_commands.manager_inbox import _read_markdown
+
+    items = [
+        {"instruction": "Read the complete source.", "next_action": "Continue this request.", "message": "Original."},
+        {"instruction": "Read the complete source.", "next_action": "Wait for the original return.", "revision": 2},
+        {"instruction": "Read the complete source.", "unavailable": True},
+    ]
+    source = {"ok": True, "items": items, "has_more": True, "next_cursor": "scoped-next"}
+    body = _read_markdown(source).split("\n```json\n", 1)[1].removesuffix("\n```")
+    view = json.loads(body)
+    common = view.pop("shared_item_guidance")
+    assert common == {"instruction": "Read the complete source."}
+    assert all("instruction" not in item for item in view["items"])
+    view["items"] = [{**common, **item} for item in view["items"]]
+    assert view == source
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

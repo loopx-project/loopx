@@ -248,7 +248,11 @@ def _dispatch_quota_turn_start_hooks(
             agent_id=args.agent_id,
             available=args.available_capabilities,
         )
-        context_dispatch = dispatch_turn_start_hooks((turn_start_hook(root, registry_path, args.goal_id, args.agent_id),))
+        model_read = (not getattr(args, "scheduler_observation", False)
+                      and native_context_activation(args)["progressive_enabled"])
+        context_dispatch = dispatch_turn_start_hooks((
+            turn_start_hook(root, registry_path, args.goal_id, args.agent_id, model_read=model_read),
+        ))
         from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
         context_dispatch = extend_preferences(context_dispatch, runtime_root=root, registry_path=registry_path,
             goal_id=args.goal_id, agent_id=args.agent_id)

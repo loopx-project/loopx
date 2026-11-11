@@ -129,11 +129,11 @@ def verified_context_selection(
     # batch without a previously observed terminal range cannot complete it.
     # The empty map still marks this as a selected page for range tracking.
     sections = {}
+    inherited = {}
     if not defer_section_digests or _terminal_range_seen(state, view_digest, total):
         # A display edit is not an observation of its literal source text.
         literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
         if literal_pointers:
-            inherited = {}
             if isinstance(observation, dict):
                 from .native_first_read import observation_current
 
@@ -145,4 +145,5 @@ def verified_context_selection(
                 consumed_pointers=inherited,
                 **({"observed_text_append": text_append} if inherited and text_append is not None else {}))["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
-        "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}
+        "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections,
+        **({"read_sections_inherited": True} if inherited else {})}

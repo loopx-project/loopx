@@ -447,8 +447,10 @@ def _turn_scoped_cli_settlement_context(
     agent_id = str(agent_identity.get("agent_id") or "").strip()
     selected_todo_id = normalize_todo_id(selected_todo.get("todo_id"))
     receipt = payload.get("heartbeat_receipt")
-    if ((payload.get("replan_action_packet") or {}).get("settlement_only") is True
-            and isinstance(receipt, Mapping) and receipt.get("settlement_identity") is not None):
+    replan_packet = payload.get("replan_action_packet")
+    replan_settlement_only = isinstance(replan_packet, Mapping) and replan_packet.get("settlement_only") is True
+    if (replan_settlement_only and isinstance(receipt, Mapping)
+            and receipt.get("settlement_identity") is not None):
         identity = SettlementIdentity.from_runtime_payload(receipt["settlement_identity"])
         if (identity.goal_id, identity.agent_id, identity.turn_instance_id) != (goal_id, agent_id, turn_instance_id):
             raise ValueError("receipt settlement projection does not match the original Goal/Agent/Turn")
@@ -504,10 +506,20 @@ def _turn_scoped_cli_settlement_context(
             else None
         ),
     )
-    return (
-        plan.as_dict() if plan is not None else None,
-        replan_settlement_contract,
-    )
+    if plan is None:
+        return None, replan_settlement_contract
+    cli_plan = plan.as_dict()
+    owed = payload.get("settlement_owed")
+    if (replan_settlement_only and isinstance(owed, Mapping)
+            and owed.get("effect_id") == plan.identity.effect_id
+            and owed.get("kind") == SettlementStepKind.QUOTA_SPEND.value):
+        # Verified receipt progress already owns the remaining step. Keep
+        # its original command and any conditional terminal closeout.
+        cli_plan["ordered_steps"] = [
+            step for step in cli_plan["ordered_steps"]
+            if step["kind"] not in {SettlementStepKind.VALIDATION.value, SettlementStepKind.DURABLE_WRITEBACK.value}
+        ]
+    return cli_plan, replan_settlement_contract
 
 
 def _terminal_cli_actions(

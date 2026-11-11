@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   LoopXCliError,
+  cliErrorFields,
   resolveLoopXCommand,
   runFile,
   runJsonCommand,
@@ -14,6 +15,77 @@ const command: LoopXCommand = {
   skillCommand: 'loopx',
   version: 'loopx 0.5.0',
 }
+
+describe('safe command diagnostics', () => {
+  it('preserves the primary timeout and final exit among nine candidates', async () => {
+    let attempts = 0
+    const failure = await resolveLoopXCommand({
+      env: { LOOPX_BIN: '', PYTHON_BIN: undefined },
+      managedLauncher: {
+        path: '/fixture/private-launcher.py',
+        pythonBins: Array.from({ length: 6 }, (_, index) => `fixture-python-${index}`),
+      },
+      runner: (_file, _args, options) => {
+        attempts += 1
+        // Use real child processes behind the candidate adapter on every platform.
+        return runFile(process.execPath, ['-e', attempts === 1
+          ? 'setTimeout(() => {}, 10_000)'
+          : 'process.stderr.write("PRIVATE process output"); process.exitCode = 1'], {
+          ...options, timeoutMs: attempts === 1 ? 50 : 5_000,
+        })
+      },
+    }).catch(error => error)
+    expect(attempts).toBe(9)
+    expect(failure.diagnostics.probes).toHaveLength(9)
+    const record = cliErrorFields(failure)
+    const probes = record.split(' probes=')[1]!.split(' ')[0]!.split(';')
+    expect(probes).toHaveLength(8)
+    expect(probes[0]).toContain('kind=timeout,cause_kind=timeout')
+    expect(probes[0]).toContain('candidate=managed-launcher')
+    expect(probes.at(-1)).toContain('kind=exit,cause_kind=exit')
+    expect(probes.at(-1)).toContain('candidate=python-module')
+    expect(record).toContain('probes_omitted=1')
+    for (const privateValue of ['PRIVATE', 'fixture-python', 'private-launcher', process.cwd(), process.execPath, '--version']) {
+      expect(record).not.toContain(privateValue)
+    }
+  })
+
+  it('retains the primary probe failure as well as the final Windows fallback exit', async () => {
+    const failure = await resolveLoopXCommand({
+      env: { LOOPX_BIN: '', PYTHON_BIN: '' },
+      runner: async file => {
+        if (file === 'loopx') throw new LoopXCliError('timeout', 'PRIVATE output', true)
+        return { exitCode: 1, stdout: '', stderr: 'PRIVATE module diagnostic' }
+      },
+    }).catch(error => error)
+    expect(failure).toMatchObject({ kind: 'missing', diagnostics: {
+      candidate: 'python-module', causeKind: 'exit', cwdExists: true,
+    } })
+    const record = cliErrorFields(failure)
+    expect(record).toContain('kind=missing cause_kind=exit code=none exit_code=1 candidate=python-module cwd_exists=true')
+    expect(record).toContain('kind=timeout,cause_kind=timeout,code=none,exit_code=none,candidate=path-loopx')
+    expect(record).not.toContain('PRIVATE')
+  })
+
+  it('records a missing spawn cwd without exposing it', async () => {
+    const failure = await runJsonCommand({
+      ...command, file: process.execPath, prefix: ['-e', 'process.stdout.write("{}")'], candidate: 'path-loopx',
+    }, [], { cwd: `${process.cwd()}/absent-diagnostic-cwd/child` }).catch(error => error)
+    expect(failure).toMatchObject({ kind: 'missing', diagnostics: {
+      osCode: 'ENOENT', candidate: 'path-loopx', cwdExists: false,
+    } })
+    expect(cliErrorFields(failure)).toContain('code=ENOENT exit_code=none candidate=path-loopx cwd_exists=false')
+    expect(cliErrorFields(failure)).not.toContain('absent-diagnostic-cwd')
+  })
+
+  it('excludes paths, text and unrecognised labels from the record', () => {
+    const failure = new LoopXCliError('transport', 'PRIVATE command output', true, 7, {
+      osCode: 'PRIVATE/path', candidate: 'PRIVATE/path' as 'path-loopx', cwdExists: true,
+    })
+    expect(cliErrorFields(failure)).toContain('code=none exit_code=7 candidate=unknown cwd_exists=true')
+    expect(cliErrorFields(failure)).not.toContain('PRIVATE')
+  })
+})
 
 describe('runJsonCommand', () => {
   it.each(['valid-version', 'nonzero-exit', 'rejected-probe'])(

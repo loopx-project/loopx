@@ -550,6 +550,112 @@ def test_idle_native_error_keeps_only_unsettled_work_cancellable(
     assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
 
 
+def _native_frames_after_cleared_error(*, answer_at=20, show_error=False):
+    from test_antigravity_steward_adapter import _native_frames
+
+    original, answer = _native_frames()[-1]["steps"]
+    error = {
+        "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_CLEARED",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "errorMessage": {
+            "shouldShowUser": show_error,
+            "error": {"shortError": "Synthetic upstream EOF"},
+        },
+    }
+    answer["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+    idle = "CASCADE_RUN_STATUS_IDLE"
+    return [
+        {"at": 10, "status": idle, "steps": [original, error]},
+        {"at": answer_at if answer_at is not None else 311, "status": idle,
+         "steps": [original, error, answer] if answer_at is not None else [original, error]},
+    ]
+
+
+def test_steward_returns_original_reply_after_cleared_native_error(steward, language_server, monkeypatch):
+    from test_antigravity_steward_adapter import _native_clock
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    _, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(
+        transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward",
+    )
+    _native_clock(monkeypatch, language_server, _native_frames_after_cleared_error())
+    source = provider.event("steward-app", "cleared-native-error", "Complete this original request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    completed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+    assert completed["status"] == "completed"
+    assert completed["response"]["message"] == "native final"
+    assert transport.reconcile() == 1
+    saved = json.loads((transport.root / f"{ref}.json").read_text())
+    terminal = saved["deliveries"]["terminal"]
+    assert terminal["verified"]
+    reply = provider.messages[terminal["attempt"]["message_ref"]]
+    assert reply["chat_id"] == source["chat_id"]
+    assert "native final" in json.dumps(reply["body"])
+    assert transport.reconcile() == 0
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert "CancelCascadeInvocation" not in methods
+
+
+@pytest.mark.parametrize("answer_at, hard_limit, timeout_kind", [
+    (None, None, "idle"),
+    (20, 15, "hard"),
+])
+def test_cleared_native_error_does_not_extend_deadline(
+    tmp_path, language_server, monkeypatch, answer_at, hard_limit, timeout_kind,
+):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.capabilities.native_chat import antigravity_adapter
+    from loopx.chat_agent import CodexChatAgentError
+
+    frames = _native_frames_after_cleared_error(answer_at=answer_at)
+    idle_boundary = frames[-1]["at"]
+    _native_clock(monkeypatch, language_server, frames)
+    rpc_post = antigravity_adapter._rpc_post
+    final_reads = 0
+
+    def bounded_read(url, token, method, args, **kwargs):
+        nonlocal final_reads
+        if (timeout_kind == "idle" and method == "GetCascadeTrajectory"
+                and language_server["active"] and language_server["now"] >= idle_boundary):
+            final_reads += 1
+            if final_reads > 1:
+                pytest.fail("An unchanged cleared error started another final idle observation")
+        return rpc_post(url, token, method, args, **kwargs)
+
+    monkeypatch.setattr(antigravity_adapter, "_rpc_post", bounded_read)
+    adapter = adapter_for(tmp_path, hard_timeout_sec=hard_limit)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("Complete this original request", lambda kind, data: events.append((kind, data)))
+    assert raised.value.error_code == "response_timeout"
+    assert raised.value.native_error_info["timeout"]["kind"] == timeout_kind
+    assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == 1
+
+
+def test_user_visible_cleared_native_error_keeps_failure(tmp_path, language_server, monkeypatch):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    _native_clock(monkeypatch, language_server, _native_frames_after_cleared_error(show_error=True))
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("Complete this original request")
+    assert raised.value.error_code == "antigravity_step_error"
+    assert raised.value.native_error_info == {"shortError": "Synthetic upstream EOF"}
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == 1
+
+
 def test_settled_native_error_releases_core_for_independent_input(tmp_path, language_server):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore

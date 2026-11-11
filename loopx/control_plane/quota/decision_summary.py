@@ -12,6 +12,7 @@ from ..goals.goal_frontier import (
     goal_frontier_is_terminal_no_followup,
 )
 from ..effect_runtime import effect_runtime_result
+from .effect_program import ReceiptBoundReplayPhase
 from ..todos.contract import normalize_todo_claimed_by
 from ..work_items.work_lane import work_lane_contract_is_due_monitor_attempt
 
@@ -263,10 +264,12 @@ def resolve_quota_run_decision(
     registered_agent_ids: list[str],
     goal_frontier_projection: dict[str, Any] | None,
     task_orchestration_contract: dict[str, Any] | None,
+    receipt_bound_replan_phase: ReceiptBoundReplayPhase | None = None,
 ) -> QuotaRunDecision:
     """Apply the ordered final guards for one quota run decision."""
 
     replan_required = autonomous_replan_is_required(replan_obligation)
+    settlement_packet = (replan_obligation or {}).get("settlement_action_packet")
     # Scope evaluation can synthesize a legacy identity; preserve its lazy read boundary.
     scope = autonomous_replan_scope_decision(
         replan_obligation, agent_id=agent_frontier_id,
@@ -294,6 +297,13 @@ def resolve_quota_run_decision(
         "automation_prompt_upgrade_required": automation_prompt_upgrade_required,
         "replan_required": replan_required,
         "replan_applies": bool(scope.get("applies")),
+        "replan_settlement_pending": (
+            receipt_bound_replan_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
+            and (replan_obligation or {}).get("selection_binding") == "heartbeat_receipt"
+            and isinstance(settlement_packet, dict)
+            and settlement_packet.get("settlement_only") is True
+            and settlement_packet.get("decision") == receipt_bound_replan_phase.value
+        ),
         "goal_health_ok": goal_health_ok,
         "inbox_reply_due": inbox_reply_due,
         "inbox_material_review_due": inbox_material_review_due,

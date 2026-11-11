@@ -1,4 +1,5 @@
 import {EffectiveAction} from "./effective_action.generated.ts";
+import {AgentScopeFrontierAction} from "../agents/agent_scope_frontier.generated.ts";
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
@@ -49,6 +50,42 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
     && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
     ? identity : undefined;
+}
+
+/** Reorder the opening for an exact dated Todo reentry. The saved capture
+ * still supplies its original settlement obligations. */
+function hasBoundDatedTodoReentry(context: JsonObject, interaction: JsonObject, plan: JsonObject | undefined): boolean {
+  const action = AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED;
+  const cli = jsonObject(interaction.cli_channel), channel = jsonObject(interaction.agent_channel);
+  const frontier = jsonObject(context.agent_scope_frontier), selected = jsonObject(context.selected_todo);
+  const condition = jsonObject(selected?.resume_condition), resume = jsonObject(condition?.resume_receipt);
+  const receipt = jsonObject(context.heartbeat_receipt), identity = jsonObject(plan?.identity);
+  const scheduled = jsonObject(context.contract_binding)?.scheduler_execution_args;
+  const [first] = Array.isArray(frontier?.deferred_resume_candidates) ? frontier.deferred_resume_candidates : [];
+  const alternateRoute = ["dependency_cycle_candidates", "monitor_blocked_resume_candidates",
+    "route_continuation_replan_candidates"].some(key => {
+      const candidates = frontier?.[key];
+      return candidates !== undefined && (!Array.isArray(candidates) || candidates.length > 0);
+    });
+  return context.schema_version === "loopx_turn_envelope_v1" && context.ok === true && context.should_run === true
+    && context.effective_action === action && interaction.mode === action && frontier?.action === action && !alternateRoute
+    && context.normal_delivery_allowed === false && channel?.delivery_allowed === false && channel.must_attempt === true
+    && jsonObject(interaction.user_channel)?.action_required === false && cli?.turn_binding_required !== true
+    && cli?.spend_allowed_now === false && Array.isArray(cli.next_cli_actions) && cli.next_cli_actions.length === 3
+    && cli.next_cli_actions.every(value => typeof value === "string" && value.length > 0)
+    && typeof scheduled === "string" && scheduled.length > 0
+    && typeof selected?.todo_id === "string" && selected.todo_id === jsonObject(first)?.todo_id
+    && selected.status === "deferred" && selected.resume_ready === true
+    && condition?.schema_version === "todo_resume_condition_v0" && condition.kind === "resume_at"
+    && condition.satisfied === true && condition.resume_when === selected.resume_when
+    && resume?.schema_version === "todo_resume_receipt_v0" && resume.condition_kind === condition.kind
+    && resume.todo_id === selected.todo_id && resume.resume_when === selected.resume_when
+    && receipt?.status === "committed" && orderedSettlementSteps(plan) !== undefined
+    && identity?.schema_version === "quota_settlement_identity_v0" && identity.todo_id === selected.todo_id
+    && identity.goal_id === context.goal_id && identity.agent_id === jsonObject(context.agent_identity)?.agent_id
+    && typeof identity.effect_id === "string" && typeof receipt.turn_instance_id === "string"
+    && identity.turn_instance_id === receipt.turn_instance_id
+    && isDeepStrictEqual(identity, receipt.settlement_identity);
 }
 
 function reusableWritebackPrecondition(context: JsonObject): ReusableReadField | undefined {
@@ -849,7 +886,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
 }
 
 /** A pending Manager Inbox read already delivers these scoped request rows. */
-function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolean {
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -857,18 +894,25 @@ function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolea
       || read.ordering !== "before_work" || typeof read.command !== "string" || !read.command
       || source?.ok !== true || source.read_complete !== false
       || !agenda || agenda.read_command !== read.command || agenda.count_unit !== "request"
-      || agenda.scan_complete !== true || agenda.omitted_count !== 0 || agenda.unavailable_count !== 0
+      || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
         "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
-      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return false;
-  const {incoming_count: incoming, outgoing_count: outgoing, items} = agenda;
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
-      || incoming + outgoing !== items.length) return false;
-  // Keep small agendas inline. Three pointers retain the starting counts and
-  // scan status without repeating the required read's details or guidance.
-  return Buffer.byteLength(JSON.stringify(items), "utf8") >= 2048;
+      || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
+      || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
+  const fields = ["incoming_count", "outgoing_count", "scan_complete"];
+  if (omitted === 0) return fields;
+  // A complete scan can have a bounded display. Preserve the omission count
+  // and reconciliation guidance while leaving the rows to the required read.
+  if (typeof agenda.instruction === "string" && agenda.instruction.trim()) {
+    return [...fields, "omitted_count", "instruction"];
+  }
+  return undefined;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -933,13 +977,21 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed", "next_task_action"])
     include("interaction_contract", "agent_channel", field);
-  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  const cli = object(interaction.cli_channel), planPath = SETTLEMENT_PLAN_PATH;
+  const plan = object(cli?.settlement_plan);
+  const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
+  const turnBindingRequired = cli?.turn_binding_required === true;
+  const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
   if (turnBindingRequired)
-    for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
+    for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  if (deferredReentry) {
+    // Surface the owner's reopen and same-Turn guard before the long read.
+    for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
+  }
   const channel = object(interaction.agent_channel);
   const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
     && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
@@ -1007,8 +1059,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include(...source, "content", field);
     include(...source, "content", "read_complete");
     const agendaPath = [...source, "content", "unfinished_delegations"];
-    if (canDeferManagerAgenda(_source, requiredInboxReads)) {
-      for (const field of ["incoming_count", "outgoing_count", "scan_complete"]) include(...agendaPath, field);
+    const agendaFields = managerAgendaOpeningFields(_source, requiredInboxReads);
+    if (agendaFields) {
+      for (const field of agendaFields) include(...agendaPath, field);
     } else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.
@@ -1060,9 +1113,6 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  const cli = object(interaction.cli_channel);
-  const planPath = SETTLEMENT_PLAN_PATH;
-  const plan = object(cli?.settlement_plan);
   const steps = orderedSettlementSteps(plan);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
   const [writeback, spend] = settlementSteps ?? [];
@@ -1083,7 +1133,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
       "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-      if (field !== "next_cli_actions" || !repeatsSettlement) {
+      if ((field !== "next_cli_actions" || !repeatsSettlement) && !(deferredReentry && admissionFields.includes(field))) {
         const before = pointers.length;
         include("interaction_contract", "cli_channel", field);
         // A task-facing operation and its declared continuation belong in the
@@ -1099,6 +1149,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
+  const planStart = pointers.length;
   if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
     steps.forEach((value, stepIndex) => {
@@ -1127,6 +1178,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       }
     });
   } else include(...planPath); // Unknown plan versions keep their complete obligations.
+  if (deferredReentry) opening.push(...pointers.splice(planStart));
   // Keep the pinned supporting-read route and its obligations inline.
   // The complete index is available at the same captured address.
   if (inlineSupportingDetails) {

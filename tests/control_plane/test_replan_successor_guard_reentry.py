@@ -392,14 +392,18 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     assert packet["obligation_id"] == obligation_id
     assert packet["successor_todo_id"] == added["todo_id"]
     assert packet["writeback_contract"]["preferred_input"] == "canonical_successor_transition"
-    actions = reread["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    cli = reread["interaction_contract"]["cli_channel"]
+    assert [step["kind"] for step in cli["settlement_plan"]["ordered_steps"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    actions = cli["next_cli_actions"]
     assert len(actions) == 2
     assert all("todo add" not in command for command in actions)
     assert all("--replan-obligation-id " + obligation_id in command for command in actions)
     assert all("--turn-instance-id " + TURN in command for command in actions)
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
-    def check_off_capture(name, expected_commands):
+    def check_off_capture(name, expected_commands, expected_plan):
         directory = tmp_path / name
         envelope = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", TURN, "--turn-envelope",
@@ -408,14 +412,16 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"
         assert envelope["replan_action_packet"]["settlement_only"] is True
         assert envelope["writeback"]["next_cli_actions"] == expected_commands
+        assert envelope["writeback"]["settlement_plan"] == expected_plan
         assert envelope["action_signature"]["matches"] is True
         assert envelope["action_signature"]["source_decision_hash"] == complete["contract_binding"]["content_hash"]
         assert complete["schema_version"] == "loopx_turn_envelope_v1"
         assert complete["heartbeat_receipt"]["settlement_identity"] == identity
         assert complete["interaction_contract"]["cli_channel"]["next_cli_actions"] == expected_commands
+        assert complete["interaction_contract"]["cli_channel"]["settlement_plan"] == expected_plan
         assert_complete_turn_decision(complete)
 
-    check_off_capture("replan-before-writeback", actions)
+    check_off_capture("replan-before-writeback", actions, cli["settlement_plan"])
     premature_spend = call(*shlex.split(actions[1])[1:], expected_code=1)
     assert premature_spend.get("appended") is not True
     assert not any(json.loads(line).get("classification") == "quota_slot_spent"
@@ -430,9 +436,15 @@ def test_successor_guard_returns_original_settlement_not_repeated_planning(
     pending = _guard(call)
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
     assert pending["settlement_progress"]["state"] == "spend_required"
-    spend_actions = pending["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert pending["settlement_owed"]["effect_id"] == identity["effect_id"]
+    pending_cli = pending["interaction_contract"]["cli_channel"]
+    spend_actions = pending_cli["next_cli_actions"]
     assert spend_actions == [actions[1]]
-    check_off_capture("replan-after-writeback", spend_actions)
+    assert pending["settlement_owed"]["command"] == actions[1]
+    pending_plan = pending_cli["settlement_plan"]
+    assert pending_plan["identity"] == identity
+    assert pending_plan["ordered_steps"] == [cli["settlement_plan"]["ordered_steps"][-1]]
+    check_off_capture("replan-after-writeback", spend_actions, pending_plan)
     spent = call(*shlex.split(spend_actions[0])[1:])
     assert spent["settlement_progress"]["state"] == "settled"
     assert spent["appended"] is True
@@ -556,7 +568,15 @@ def test_later_vision_replan_can_close_covered_frontier_and_settle_once(
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
     assert pending["settlement_progress"]["state"] == "spend_required"
     assert pending.get("selected_todo") is None
-    spent = call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
+    assert pending["should_run"] is True
+    assert pending["normal_delivery_allowed"] is False
+    cli = pending["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
+    assert plan["identity"] == identity
+    assert [step["kind"] for step in plan["ordered_steps"]] == ["quota_spend"]
+    command = pending["settlement_owed"]["command"]
+    assert cli["next_cli_actions"] == [command]
+    spent = call(*shlex.split(command)[1:])
     assert spent["appended"] is True
     assert spent["settlement_progress"]["state"] == "settled"
     assert call("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")["appended"] is False

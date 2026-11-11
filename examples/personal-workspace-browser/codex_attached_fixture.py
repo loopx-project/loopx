@@ -330,12 +330,29 @@ with (
                                         "payload": {
                                             "type": "task_complete"
                                             if finished
-                                            else "task_started"
+                                            else "task_started",
+                                            "turn_id": "live-workspace-fixture",
                                         },
                                     }
                                 )
                                 + "\n"
                             )
+                            if not finished:
+                                stream.write(
+                                    json.dumps(
+                                        {
+                                            "type": "turn_context",
+                                            "timestamp": "2026-01-01T00:00:04Z",
+                                            "payload": {
+                                                "turn_id": "live-workspace-fixture",
+                                                "model": "codex-synthetic-attached-workspace-verification-model",
+                                                "model_provider": "openai",
+                                                "effort": "max",
+                                            },
+                                        }
+                                    )
+                                    + "\n"
+                                )
                     if finished:
                         append_message(rollout, "assistant", text)
                     request.publish_live(

@@ -736,7 +736,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, restore_context_delivery
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
     from tests.control_plane.codex_checkpoint_fixture import (
         delivered_context, last_context_page, local_inference_provider, native_process_continuation,
         selected_context_values,
@@ -1141,10 +1142,26 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert _spend_run_count(runtime) == 1  # only the explicit inter-wake settlement above
     else:
         assert _heartbeat_receipt_count(runtime, "saved-native-turn") == receipts and _spend_run_count(runtime) == 0
+    def checked_body(reference):
+        return read_context_capture_file(reference["path"], reference["sha256"], private=True)[2]
+
     cold = observed["cold"][0]
-    baseline = None
-    for published, descriptor in observed.values():
-        projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
+    previous = None
+    signed_sources = {}
+    for name, (published, descriptor) in observed.items():
+        projected = checked_body(descriptor["recovery"])
+        if projected.get("schema_version") == "loopx_turn_envelope_v1":
+            details = projected.get("context_details", {})
+            reference = details.get("unread_context_index", {}).get("source")
+            if reference is None and (reader := details.get("command_template")):
+                argv = shlex.split(reader)
+                reference = {"path": argv[argv.index("--capture-file") + 1],
+                             "sha256": argv[argv.index("--capture-sha256") + 1]}
+            signed = checked_body(reference) if reference else projected
+            assert_complete_turn_decision(signed)
+            assert signed["contract_binding"] == projected["contract_binding"]
+            assert signed["heartbeat_receipt"] == projected["heartbeat_receipt"]
+            signed_sources[name] = signed
         if large_capture:
             assert descriptor["mode"] == "full"
             if "target" in descriptor:
@@ -1154,42 +1171,54 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             assert projected["retained_material"] == {
                 "requirement": unicode_requirement, "supporting": supporting_material}
             continue
-        current = prepare_context_delivery(projected,
-            scope={key: descriptor["target"][key] for key in
-                ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in descriptor["target"]},
-            capture_id=descriptor["target"]["capture_id"],
-            surface="complete_turn" if projected.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet")
-        # Full presentation publishes the original document; only deltas have
-        # a separate wire target. Both retain the same typed recovery check.
-        wire = current if descriptor["mode"] == "full" else published
-        assert current["target"] == descriptor["target"]
-        restored = restore_context_delivery(wire, baseline=baseline, current=current)
-        assert restored["context"] == projected
+        # The pinned full presentation has its own digest and target; a signed
+        # decision authenticates the source, not the transported presentation.
+        current = {"schema_version": "context_delivery_v1", "mode": "full", "target": descriptor["target"],
+                   "ancestry": 0, "context": projected}
+        if descriptor["mode"] == "full":
+            assert published == projected
+            wire, base = current, None
+        else:
+            wire, base = published, previous
+            if wire.get("continuity_basis") == "captured_file":
+                base = {**current, "target": wire["base"], "context": checked_body(descriptor["baseline_reference"])}
+        restored = restore_context_delivery(wire, baseline=base, current=current)
+        assert restored["target"] == descriptor["target"] and restored["context"] == projected
+        assert restored["mode"] == descriptor["mode"]  # Full fallback would hide a broken delta.
         if wire["mode"] == "delta":
-            assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
-        # Match the native journal's exact prior full capture and depth. The
-        # reconstructed mapping need not preserve that capture's field order.
-        baseline = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
+            corrupted = {**wire, "changes": {"value": {}}}
+            for rejected, candidate in ((wire, None), (corrupted, base)):
+                fallback = restore_context_delivery(rejected, baseline=candidate, current=current)
+                assert fallback["mode"] == "full" and fallback["reason"] == "automatic_full_recovery"
+                assert fallback["target"] == current["target"] and fallback["context"] == projected
+        previous = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
     if benchmark:
-        for name, (_, raw) in zip(("cold", "warm"), sources):
-            presentation = json.loads(Path(observed[name][1]["recovery"]["path"]).read_text())
+        for name, (source_path, raw) in zip(("cold", "warm"), sources, strict=True):
+            presentation = checked_body(observed[name][1]["recovery"])
             original = json.loads(raw)
+            if original.get("schema_version") == "loopx_turn_envelope_v1":
+                assert signed_sources[name] == original
             selected = presentation["interaction_contract"]["cli_channel"]["selection_command"]
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
+            output_root = source_path.parents[1] if "--decision-output-root" in original_words else home / "loopx-context"
             transport = {
-                "--decision-output-root": str(home / "loopx-context"),
+                "--decision-output-root": str(output_root),
                 "--context-delivery": "on",
                 "--delta-delivery": "auto",
                 "--codex-context-dir": str(home / "loopx-context"),
                 "--max-page-output-bytes": "32000",
             }
             for option, value in transport.items():
-                assert option not in original_words and words.count(option) == 1
+                assert words.count(option) == 1
                 index = words.index(option)
                 assert words[index + 1] == value
-                del words[index:index + 2]
+                if option in original_words:
+                    assert original_words.count(option) == 1
+                    assert original_words[original_words.index(option) + 1] == value
+                else:
+                    del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
             # Main already deduplicates identical Todo rows within this exact
