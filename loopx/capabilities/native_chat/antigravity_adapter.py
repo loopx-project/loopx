@@ -1239,7 +1239,13 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
-                    detail = (final.get("errorMessage") or {}).get("error") or {}
+                    error_message = final.get("errorMessage") or {}
+                    if (final.get("status") == "CORTEX_STEP_STATUS_CLEARED"
+                            and isinstance(error_message, dict)
+                            and error_message.get("shouldShowUser") is not True):
+                        # The host can clear a retry error before exposing its next step.
+                        continue
+                    detail = error_message.get("error") or {}
                     summary = (detail.get("userErrorMessage") or detail.get("shortError")
                                if isinstance(detail, dict) else str(detail))
                     error = CodexChatAgentError(summary or "Antigravity cascade step error",
