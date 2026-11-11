@@ -372,7 +372,10 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     """
     from ..quota.turn_envelope import update_native_context_lifecycle
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-    from .codex_context_history import checkpoint_native_read, native_resume_verified, observe_native_read
+    from .codex_context_history import (
+        checkpoint_native_read, checkpoint_native_selection, native_resume_sections, native_resume_verified,
+        observe_native_read,
+    )
 
     if directory is None:
         return {}
@@ -382,6 +385,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     if not native_context_event_eligible(event):
         return {}  # no parent recovery reference may escape to a subagent
     pages = _context_pages(event.get("tool_response")) if name == "PostToolUse" else []
+    raw_pages = pages
     if name == "PostToolUse" and not pages:
         return {}  # ordinary tool use neither invalidates nor rewrites the journal
     recovery = None
@@ -404,12 +408,15 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     pages = _verified_context_pages(state, pages, selected_only=True)
                     if not pages or not isinstance(event.get("cwd"), str) or not event["cwd"]:
                         return {}
+                resume_verified = name == "SessionStart" and native_resume_verified(state, event)
                 updated = update_native_context_lifecycle(read_state, event,
                     new_epoch=uuid.uuid4().hex, pages=pages, pages_verified=True,
-                    resume_verified=name == "SessionStart" and native_resume_verified(state, event))
+                    resume_verified=resume_verified,
+                    resume_sections=native_resume_sections(state, event) if name == "SessionStart" and not resume_verified else None)
                 if name == "PostToolUse" and same:
                     checkpoint_native_read(read_state, updated, event,
                         [page for page in pages if "read_sections" not in page])
+                    checkpoint_native_selection(state, updated, event, raw_pages, pages)
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
@@ -800,7 +807,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 read_scope = {**scope, "surface": surface,
                     "todo_id": selected.get("todo_id") if isinstance(selected, dict) else None}
                 if state.get("read_scope") != read_scope:
-                    for key in ("consumed_pointers", "confirmed_read_sections", "section_reads"):
+                    for key in ("consumed_pointers", "confirmed_read_sections", "section_reads", "selected_resume"):
                         state.pop(key, None)
                 state["read_scope"] = read_scope
                 request = _native_context_request(state, scope, capture_id)
