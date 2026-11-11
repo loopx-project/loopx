@@ -2,20 +2,91 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 import os
 import json
 from pathlib import Path
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from .chat import require_matching_message_replay, require_matching_replay
 from .file_lock import exclusive_file_lock
 from .capabilities.native_chat.file_discovery import FileChatDiscovery
 
+if TYPE_CHECKING:
+    from .capabilities.native_chat.conversation_bindings import ChatConversationBindings
+
 
 SESSION_QUEUE_MAX_PENDING = 20
 SESSION_QUEUE_TTL_SECONDS: int | None = None
+STEWARD_BINDING_ADOPTION_PENDING = "steward_executor_binding_pending"
+
+
+def resolve_external_admission_source(
+    bindings: ChatConversationBindings, binding_id: str, source: dict[str, Any],
+    source_preflight: Callable[[dict[str, Any]], None] | None, *,
+    session: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    observation_args = {**source}
+    if source_preflight is not None:
+        observation_args["include_observation"] = True
+    if session is not None:
+        observation_args.update(session=session, session_context=session["steward_context"])
+    selected = bindings.resolve(binding_id=binding_id, **observation_args)
+    if source_preflight is not None and source_preflight(deepcopy(selected)) is not None:
+        raise ValueError("source preflight must complete verification or raise")
+    return selected
+
+
+def ensure_external_admission_scope(
+    bindings: ChatConversationBindings, selected: dict[str, Any], path: Path, request: dict[str, Any], *,
+    source_preflight: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    source = request["source"]
+    previous = selected["binding"]
+    if (request["command"] is not None or request.get("agent_target") is not None
+            or source.get("private_human_message") is not True
+            or previous["context_kind"] != "steward" or previous.get("audience", "owner") != "owner"
+            or previous.get("goal_scope") not in {"all_registered", "selected"} or bindings.controller is None):
+        bindings.ensure_delivery_scope(selected)
+        return selected
+
+    with exclusive_file_lock(bindings.path, operation="configure_bound_delivery_scope"):
+        current = next((binding for binding in bindings.read()["bindings"]
+                        if binding["binding_id"] == previous["binding_id"]), None)
+        if current == previous:
+            bindings._ensure_delivery_scope(selected)  # This caller retains the binding fence.
+            return selected
+        if (current is None
+                or {previous.get("executor_endpoint_id"), current.get("executor_endpoint_id")} != {"antigravity", "codex"}
+                or current != {**previous, "executor_endpoint_id": current["executor_endpoint_id"]}):
+            raise ValueError("conversation binding is no longer authorized")
+        endpoint = current["executor_endpoint_id"]
+        candidates = bindings.controller.store.resumable_session_candidates(
+            goal_id="loopx-manager", agent_id=endpoint, channel_id=selected["channel_id"])
+        if len(candidates) != 1:
+            raise ValueError("the original steward Session is unavailable for admission")
+        original = candidates[0]
+        session_id = original["session_id"]
+        if (original.get("executor_endpoint_id") != endpoint
+                or not isinstance(original.get("steward_context"), dict)
+                or request.get("session_id") not in (None, session_id)):
+            raise ValueError("the original steward Session changed during admission")
+        # Preserve the original Session across provider IO, service interruption
+        # or Close. The existing prepared-request path owns subsequent admission.
+        from .chat_store import _atomic_write_json
+        request.update(session_id=session_id, response_code=STEWARD_BINDING_ADOPTION_PENDING)
+        _atomic_write_json(path, request)
+
+    # No delivery effect has run. Reverify the same original source outside
+    # the binding fence, then require the exact refreshed binding at the fence.
+    fresh = resolve_external_admission_source(bindings, previous["binding_id"], source, source_preflight, session=original)
+    if (fresh["binding"] != current or fresh["context"] != selected["context"]
+            or fresh["channel_id"] != selected["channel_id"]):
+        raise ValueError("conversation binding changed during identity verification")
+    bindings.ensure_delivery_scope(fresh)
+    return fresh
 
 
 def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float | None = None):
