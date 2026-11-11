@@ -31,9 +31,30 @@ from .scheduler import worker_command
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
-PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
+PROFILE_MODES = {
+    "official": "plain",
+    "single": "plain",
+    "native-goal": "native-goal",
+    "heartbeat-resume": "heartbeat",
+    "heartbeat-explore": "heartbeat",
+    "turn-resume": "turn",
+}
+PROFILES = tuple(PROFILE_MODES)
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
 _RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
+
+
+def profile_execution(profile, *, task_entry=None, context_delivery=None,
+                      turn_envelope=False, complete_turn=False,
+                      validation_command=None, native_child_limit=None):
+    """Resolve the native experiment arm through the shared runtime contract."""
+    if profile not in PROFILE_MODES:
+        raise ValueError("Unknown benchmark worker profile")
+    return Execution(
+        mode=PROFILE_MODES[profile], task_entry=task_entry, context_delivery=context_delivery,
+        turn_envelope=turn_envelope, complete_turn=complete_turn, native_child_limit=native_child_limit,
+        validation_command=() if validation_command is None else validation_command,
+    )
 
 
 class SForgeEnvironment:
@@ -93,6 +114,7 @@ class SForgeWorker(CodexAgent):
                  workspace_instructions: str | None = None,
                  task_objective: str | None = None,
                  task_entry: str | None = None,
+                 validation_command: list[str] | tuple[str, ...] | None = None,
                  turn_envelope: bool = False,
                  context_delivery: str | None = None,
                  execution_observation: str | None = None,
@@ -108,28 +130,26 @@ class SForgeWorker(CodexAgent):
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
                  warm_start=None, research_sidecar: bool = False,
-                 native_result_scope: dict | None = None):
+                 native_result_scope: dict | None = None, complete_turn: bool = False):
         super().__init__(config)
-        if profile not in PROFILES:
-            raise ValueError("Unknown benchmark worker profile")
+        self.execution = profile_execution(
+            profile, task_entry=task_entry,
+            context_delivery=context_delivery, turn_envelope=turn_envelope,
+            complete_turn=complete_turn, validation_command=validation_command,
+            native_child_limit=native_child_limit,
+        )
+        self.turn_envelope = self.execution.turn_envelope
+        self.context_delivery = self.execution.context_delivery
+        self.task_entry = self.execution.task_entry
+        self.native_child_limit = self.execution.native_child_limit
         self.native_readiness_budget = native_readiness_budget(
             native_readiness_total_seconds, native_readiness_attempt_seconds)
         if self.native_readiness_budget is not None and (
             profile in {"official", "single"} or config.agent_api_base_url or warm_start is not None
         ):
             raise ValueError("Native readiness budget requires a fresh native Goal or heartbeat worker")
-        if not isinstance(turn_envelope, bool) or (
-            turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
-        ):
-            raise ValueError("turn_envelope requires a heartbeat worker")
-        self.turn_envelope = turn_envelope
-        self.native_child_limit = Execution(mode="plain", native_child_limit=native_child_limit).native_child_limit
         if self.native_child_limit is not None and (not feedback_prompt or not workspace_instructions):
             raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
-        self.context_delivery = Execution(
-            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
-            context_delivery=context_delivery,
-        ).context_delivery
         self.execution_observation = resolve_execution_observation(execution_observation)
         if self.execution_observation is not None and not profile.startswith("heartbeat-"):
             raise ValueError("execution_observation requires a heartbeat worker")
@@ -155,42 +175,36 @@ class SForgeWorker(CodexAgent):
             raise ValueError("Custom model provider requires an API credential")
         if not config.agent_api_base_url and not os.environ.get("CODEX_AUTH_JSON_PATH"):
             raise ValueError("Set CODEX_AUTH_JSON_PATH to the trial credential source")
-        if task_entry == "loopx-planned" and not profile.startswith("heartbeat-"):
-            raise ValueError("loopx-planned requires a heartbeat profile")
-        self.task_entry = Execution(
-            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
-            task_entry=task_entry,
-        ).task_entry
         if replan_after_turns is not None and replan_after_todos is not None:
             raise ValueError("Choose replan_after_turns or replan_after_todos, not both")
         if replan_after_todos is not None:
             if type(replan_after_todos) is not int or not 1 <= replan_after_todos <= 5:
                 raise ValueError("replan_after_todos must be an integer between 1 and 5")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("replan_after_todos requires a heartbeat profile")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_todos requires a heartbeat profile or turn-resume")
         if replan_after_turns is not None:
             if (type(replan_after_turns) is not int or
                     not 1 <= replan_after_turns <= 6):
                 raise ValueError("replan_after_turns must be an integer between 1 and 6")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("replan_after_turns requires a heartbeat profile")
+            if not self.execution.uses_loopx:
+                raise ValueError("replan_after_turns requires a heartbeat profile or turn-resume")
         if (replan_after_turns is None and replan_after_todos is None
-                and profile.startswith("heartbeat-")):
+                and self.execution.uses_loopx):
             replan_after_turns = DEFAULT_REPLAN_AFTER_TURNS
         self.replan_after_turns = replan_after_turns
         self.replan_after_todos = replan_after_todos
-        if stride_strategy is not None and not profile.startswith("heartbeat-"):
-            raise ValueError("stride_strategy requires a heartbeat profile")
+        if stride_strategy is not None and not self.execution.uses_loopx:
+            raise ValueError("stride_strategy requires a heartbeat profile or turn-resume")
         if stride_strategy is not None:
             from loopx.control_plane.work_items.stride_policy_codec import normalize_stride_strategy
             stride_strategy = normalize_stride_strategy(stride_strategy)
         if planning_horizon_goal is not None:
             if not isinstance(planning_horizon_goal, bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
-            if not profile.startswith("heartbeat-"):
-                raise ValueError("planning_horizon_goal requires a heartbeat profile")
+            if not self.execution.uses_loopx:
+                raise ValueError("planning_horizon_goal requires a heartbeat profile or turn-resume")
         self.planning_horizon_goal = (
-            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and profile.startswith("heartbeat-")
+            DEFAULT_PLANNING_HORIZON_GOAL if planning_horizon_goal is None and self.execution.uses_loopx
             else planning_horizon_goal
         )
         self.stride_strategy = stride_strategy
@@ -400,14 +414,15 @@ class SForgeWorker(CodexAgent):
             if self.profile == "official":
                 super().install_stop_hook(backend, handle, log_dir, logger)
         else:
-            mode = "native-goal" if self.profile == "native-goal" else "heartbeat"
             self.runtime = BenchmarkCodex(
-                **common, execution_mode=mode,
-                iteration_context="resume" if mode == "heartbeat" else "fresh",
+                **common, execution_mode=self.execution.mode,
+                iteration_context=self.execution.context,
+                validation_command=self.execution.validation_command,
                 turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                **({"complete_turn": True} if self.execution.complete_turn else {}),
                 context_delivery=self.context_delivery,
                 **({"execution_observation": self.execution_observation}
                    if self.execution_observation is not None else {}),
@@ -503,6 +518,7 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Best-only Codex delivery hooks are unreadable by worker")
         (log_dir / "worker-profile.json").write_text(json.dumps({
             "profile": self.profile, "model": self._config.agent_model,
+            **self.execution.validation_receipt(),
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
@@ -530,7 +546,7 @@ class SForgeWorker(CodexAgent):
             **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
                if self.feedback == "best-only" else {}),
             **(self.runtime._replan_receipt() if self.runtime and
-               self.profile.startswith("heartbeat-") else {}),
+               self.execution.uses_loopx else {}),
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):

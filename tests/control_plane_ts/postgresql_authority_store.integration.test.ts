@@ -19,7 +19,7 @@ import {
 } from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
-import {CANONICAL_SNAPSHOT_PAGE_REQUEST, readCanonicalSnapshotFromStore} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
+import {CANONICAL_SNAPSHOT_PAGE_REQUEST, readCanonicalSnapshotFromStore, readCanonicalSnapshotPage} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
 import {projectTodoContextPage} from "../../loopx/control_plane/todos/context_projection.ts";
 import {readCanonicalTodoProjection, readCanonicalQuotaProjection} from "../../loopx/control_plane/todos/read_transaction.ts";
 import {canonicalReadRoot} from "./local_promotion_fixture.ts";
@@ -268,6 +268,28 @@ if (database && installed) {
     assert.equal((await readLocalCoordinationTodoSource({...request,
       source: {...source, store_identity: "foreign"}}, {createStore: () => store})).reason_code,
     "todo_source_lineage_mismatch");
+  });
+
+  test("PostgreSQL snapshot reports a rejected field contract without changing authority", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, []);
+    ((projection.todo_read_model as JsonObject).contract_fields as string[]).push("future_field");
+    const committed = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "seed-unsupported-contract", events: [], receipts: [], next_projection: projection});
+    assert.equal(committed.status, "applied");
+    const before = await store.loadAuthority();
+    const result = await readCanonicalSnapshotPage({schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST,
+      runtime_root: await canonicalReadRoot(t, options.goal_id), goal_id: options.goal_id,
+      include_leases: true, projection_readback: null, after: null}, {createStore: () => store});
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "canonical_snapshot_projection_invalid");
+    assert.match(String(result.reason), /field contract mismatch/);
+    assert.equal(result.legacy_fallback_used, false);
+    assert.equal("todos" in result, false);
+    assert.deepEqual(await store.loadAuthority(), before);
   });
 
   test("PostgreSQL canonical snapshot feeds complete display views without becoming a fresh authority read", async t => {

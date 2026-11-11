@@ -26,7 +26,7 @@ from loopx.cli_commands.todo_argument_validation import (
     validate_shared_todo_options,
     validate_todo_add_options,
 )
-from loopx.control_plane import effect_runtime
+from loopx.control_plane import effect_program, effect_runtime
 from loopx.slash_commands import build_slash_command_catalog
 
 GOAL_ID = "guided-projection-goal"
@@ -324,6 +324,46 @@ def test_cli_reports_effect_runtime_startup_failure_without_traceback(
         assert "loopx doctor --deep" not in action
         assert "reinstall" not in action
     assert "Traceback" not in raw_output
+
+
+@pytest.mark.parametrize(
+    "host_args",
+    [("--host-surface", "codex-app"), ()],
+    ids=["guided_start", "host_selection_gate"],
+)
+def test_start_goal_markdown_reuses_the_rendered_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    host_args: tuple[str, ...],
+) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    args = [
+        "--runtime-root", str(tmp_path / "runtime"),
+        "start-goal", "--guided", "--project", str(project),
+        "--goal-text", GOAL_TEXT, *host_args,
+    ]
+    render_calls = 0
+    request = effect_program.effect_runtime_result
+
+    def count_render(method, params, **kwargs):
+        nonlocal render_calls
+        if method == "effect.program_from_ordered_steps":
+            render_calls += 1
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", count_render)
+
+    assert cli_main(["--format", "markdown", *args]) == 0
+    markdown = capsys.readouterr().out
+    assert render_calls == 1
+
+    assert cli_main(["--format", "json", *args]) == 0
+    packet = json.loads(capsys.readouterr().out)
+    assert render_calls == 2
+    assert markdown == packet["message"] + "\n"
 
 
 def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(

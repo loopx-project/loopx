@@ -215,6 +215,7 @@ def handle_heartbeat_prompt_command(
             context_delivery=args.context_delivery,
             delta_delivery=args.delta_delivery,
             turn_envelope=args.turn_envelope,
+            complete_turn=getattr(args, "complete_turn", False),
             reward_memory_enabled=reward_memory_enabled,
         )
         if args.bootstrap and payload.get("ok"):

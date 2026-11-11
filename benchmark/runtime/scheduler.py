@@ -130,7 +130,9 @@ def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
                                 states: list[Path], digest: str, env: dict[str, str],
                                 wake_log_dir: str) -> None:
     from .interruption_recovery import _physical_read, verify_failed_host_replay_witness
-    from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+    from loopx.control_plane.turn_driver.host_failure import (
+        explicit_host_failure_retry_available, normalize_host_failure_record,
+    )
     from scripts.external_scheduler_worker import _host_attempt
 
     original_ref = state.get("resume_from")
@@ -153,7 +155,8 @@ def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
     session = prior.get("session_id")
     if (prior.get("status") != "failed" or saved.get("last_wake_status") != "wake_failed"
             or type(saved.get("last_wake_rc")) is not int or saved["last_wake_rc"] != 1
-            or failure["kind"] != "quota_exhausted" or failure != recovery.get("host_failure")
+            or not explicit_host_failure_retry_available(failure, retry_failed=True)
+            or failure != recovery.get("host_failure")
             or recovery.get("retry_failed") is not True or native.get("status") != "failed"
             or not isinstance(session, str) or not session or native.get("session_id") != session
             or state.get("recovered_session_id") != session
@@ -379,7 +382,7 @@ def main() -> int:
     parser.add_argument("--state-file", required=True)
     parser.add_argument("--host-timeout", required=True, type=float)
     parser.add_argument('--retry-failed-state-sha256',
-        help='Explicitly continue only this exact returned quota failure after provider allowance repair')
+        help='Explicitly continue only this exact returned failure after operator repair')
     parser.add_argument('--idle-host-state-sha256',
         help='Explicitly hand off this sealed legacy empty-output Host to its verified idle native session')
     args = parser.parse_args()

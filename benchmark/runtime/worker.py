@@ -14,7 +14,7 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
-from benchmark.runtime.codex import Execution, prepare_codex_home, process_environment
+from benchmark.runtime.codex import Execution, explicit_turn_display, prepare_codex_home, process_environment
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
 from benchmark.runtime.scheduler import phase_work_reserve
@@ -95,18 +95,19 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     ]
     if not native_goal:
         command += ["--turn-instance-id", turn_id]
-    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
-        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    display = explicit_turn_display(env)
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
-    if env.get("LOOPX_TURN_ENVELOPE") == "1" or decision_handoff_socket is not None or context_dir:
+    if display.complete_turn or display.turn_envelope or decision_handoff_socket is not None or context_dir:
         if native_goal:
             raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
-        if env.get("LOOPX_TURN_ENVELOPE") == "1":
+        if display.turn_envelope:
             command += ["--turn-envelope"]
+        if display.complete_turn:
+            command += ["--complete-turn"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
@@ -234,22 +235,27 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
 
 def _reap_child_process(process, *, process_observation=None):
     """Reap the process group created by child_process, including descendants."""
-    try:
+    def signal_group(number):
         if process_observation is not None:
-            process_observation.signal_requested(signal.SIGINT)
-        os.killpg(process.pid, signal.SIGINT)
-    except ProcessLookupError:
-        pass
+            process_observation.signal_requested(number)
+        try:
+            os.killpg(process.pid, number)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            from loopx.extensions.process_runtime import _darwin_owned_group_has_exited
+
+            # Darwin may refuse a signal to a reaped group. The shared
+            # observer checks descendants before accepting that as cleanup.
+            if not _darwin_owned_group_has_exited(process):
+                raise
+
+    signal_group(signal.SIGINT)
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         pass
-    try:
-        if process_observation is not None:
-            process_observation.signal_requested(signal.SIGKILL)
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    signal_group(signal.SIGKILL)
     process.wait(timeout=10)
 
 
@@ -276,16 +282,38 @@ def interrupt_checkpoint_process(process, *, timeout: float = 10) -> int:
         _reap_child_process(process)
 
 
+def pending_turn(path: Path, turn_id: str, execution: Execution) -> dict:
+    """The caller holds the trial lock until the product returns or the wake exits."""
+    from loopx.control_plane.runtime.document_io import atomic_write_private_json
+
+    validator = execution.validation_receipt()
+    if not path.exists():
+        pending = {"turn_instance_id": turn_id, **validator}
+        atomic_write_private_json(path, pending)
+        return pending
+    pending = read_json(path.read_text())
+    if pending.get("validation_argv_sha256") != validator["validation_argv_sha256"]:
+        raise ValueError("Pending Turn requires its original validation command")
+    return pending
+
+
 def turn_command(
     env: dict[str, str],
     execution: Execution,
     turn_id: str,
     resume_turn_key: str | None = None,
+    *, recover_instance: bool = False,
 ) -> list[str]:
+    address = ["--turn-instance-id", turn_id]
+    if resume_turn_key:
+        address = ["--resume-turn-key", resume_turn_key, "--retry-failed-turn"]
+    elif recover_instance:
+        address = ["--resume-turn-instance-id", turn_id, "--retry-failed-turn"]
     return loopx_command(env) + [
         "turn",
         "run-once",
         "--execute",
+        "--no-global-sync",
         "--host",
         "codex-cli",
         "--project",
@@ -296,11 +324,7 @@ def turn_command(
         env["LOOPX_AGENT_ID"],
         "--scheduler-owner",
         "outer_controller",
-        *(
-            ["--resume-turn-key", resume_turn_key, "--retry-failed-turn"]
-            if resume_turn_key
-            else ["--turn-instance-id", turn_id]
-        ),
+        *address,
         "--iteration-context",
         execution.context,
         "--session-scope",
@@ -497,8 +521,7 @@ def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
-    if env.get("LOOPX_TURN_ENVELOPE", "0") not in {"0", "1"}:
-        raise ValueError("LOOPX_TURN_ENVELOPE must be 0 or 1")
+    display = explicit_turn_display(env)
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
@@ -507,10 +530,11 @@ def run_once(env: dict[str, str]) -> dict:
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY"),
-        turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
+        turn_envelope=display.turn_envelope,
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
+        complete_turn=display.complete_turn,
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -551,12 +575,15 @@ def run_once(env: dict[str, str]) -> dict:
     receipt = {
         "turn_id": turn_id,
         "mode": execution.mode,
+        **execution.validation_receipt(),
         "context": execution.context,
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
+        **({"complete_turn": True, "complete_turn_source": "explicit"}
+           if execution.complete_turn else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
@@ -573,7 +600,7 @@ def run_once(env: dict[str, str]) -> dict:
             phase_deadline_epoch=env.get("LOOPX_PHASE_DEADLINE_EPOCH"))
     session_wake = None
     phase_work_deadline = None
-    checkpoint_context = ExitStack()
+    wake_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
     )
@@ -617,7 +644,7 @@ def run_once(env: dict[str, str]) -> dict:
             # heartbeat workers stage; other modes must not import it.
             from benchmark.runtime.checkpoint_wake import CheckpointWake
 
-            checkpoint_wake = checkpoint_context.enter_context(CheckpointWake(env, receipt))
+            checkpoint_wake = wake_context.enter_context(CheckpointWake(env, receipt))
         else:
             checkpoint_wake = _InertCheckpointWake()
         if execution.context_delivery != "off":
@@ -683,18 +710,20 @@ def run_once(env: dict[str, str]) -> dict:
             else:
                 pending = {}
                 if execution.mode == "turn" and stage == "execute":
-                    pending_path.parent.mkdir(parents=True, exist_ok=True)
-                    if pending_path.exists():
-                        pending = read_json(pending_path.read_text())
-                    else:
-                        pending = {"turn_instance_id": turn_id}
-                        pending_path.write_text(json.dumps(pending))
+                    from loopx.file_lock import try_exclusive_file_lock
+
+                    lock = wake_context.enter_context(try_exclusive_file_lock(pending_path))
+                    if lock is None:
+                        raise RuntimeError("Another benchmark wake owns the pending Turn")
+                    pending = pending_turn(pending_path, turn_id, execution)
+                    receipt["turn_instance_id"] = pending["turn_instance_id"]
                 command = (
                     turn_command(
                         env,
                         execution,
                         pending["turn_instance_id"],
                         pending.get("resume_turn_key"),
+                        recover_instance=pending["turn_instance_id"] != turn_id,
                     )
                     if execution.mode == "turn" and stage == "execute"
                     else native_command(env, execution, stage, wake, session_wake)
@@ -751,9 +780,9 @@ def run_once(env: dict[str, str]) -> dict:
                         # Product recovery owns eligibility and retry limits.
                         # Never disguise a failed transaction as a fresh Turn.
                         pending["resume_turn_key"] = result["resume_turn_key"]
-                        temporary = pending_path.with_suffix(".tmp")
-                        temporary.write_text(json.dumps(pending))
-                        temporary.replace(pending_path)
+                        from loopx.control_plane.runtime.document_io import atomic_write_private_json
+
+                        atomic_write_private_json(pending_path, pending)
     except subprocess.TimeoutExpired:
         receipt["ok"] = False
         receipt["timed_out"] = True
@@ -762,7 +791,7 @@ def run_once(env: dict[str, str]) -> dict:
         receipt.update(_error_tail(exc))
         raise
     finally:
-        checkpoint_context.close()
+        wake_context.close()
         try:
             if session_wake is not None and receipt.get("host_invoked") is True:
                 session_wake.observe(stdout_path)

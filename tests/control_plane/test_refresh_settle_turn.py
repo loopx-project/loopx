@@ -17,20 +17,35 @@ from test_quota_settlement_cli import (
 )
 
 
-def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, progressive, *, claim_after_guard):
+def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, progressive, *, claim_after_guard,
+                            complete=False):
     from test_codex_context_lifecycle import setup
 
     journal = tmp_path / "journal"
     journal.mkdir(mode=0o700)
     setup(journal, monkeypatch)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+    host = ["--codex-app"]
+    if complete:
+        host = ["--runtime-profile", "generic_cli", "--complete-turn"]
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", "9876543210.125")
 
     def guard(directory):
-        rc, nav = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+        rc, nav = _run_cli(registry, runtime, "quota", "should-run", *host, *binding,
             "--turn-instance-id", TURN_ID, "--context-delivery", progressive, "--decision-output-dir", str(directory),
             "--codex-context-dir", str(journal), cwd=project)
         assert rc == 0 and nav["ok"], nav
-        return nav, json.loads((directory / "decision.json").read_bytes())
+        saved = json.loads((directory / "decision.json").read_bytes())
+        if complete:
+            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+            assert saved["schema_version"] == "loopx_turn_envelope_v1"
+            assert_complete_turn_decision(saved)
+            assert "9876543210.125" not in json.dumps(saved)
+            assert saved["goal_boundary"]["stop_condition"]
+        return nav, saved
 
     if claim_after_guard:
         _, before = guard(tmp_path / "before-claim")
@@ -52,7 +67,8 @@ def _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry, p
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("case", ["combined", "after_claim", "after_claim_off", "interrupted"])
-def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monkeypatch, provider, case):
+@pytest.mark.parametrize("complete", [False, True])
+def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monkeypatch, provider, case, complete):
     from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -60,7 +76,7 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     off = case == "after_claim_off"
     guard, original = _ready_settlement_guard(tmp_path, monkeypatch, project, runtime, registry,
-        "off" if off else "on", claim_after_guard=case.startswith("after_claim"))
+        "off" if off else "on", claim_after_guard=case.startswith("after_claim"), complete=complete)
     cli = original["interaction_contract"]["cli_channel"]
     plan = cli["settlement_plan"]
     identity = original["heartbeat_receipt"]["settlement_identity"]
@@ -69,14 +85,15 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     validate, writeback, spend, terminal = plan["ordered_steps"]
     assert validate["command_condition"] == "todo_deliverable_complete"
     assert terminal["conditional"] is True and terminal["owner"] == "agent"
-    if not off:
+    if not off or complete:
         assert plan["schema_version"] == "quota_settlement_plan_v2"
         assert "--settle-turn --settlement-receipt" in writeback["semantic_closeout_command_template"]
         assert spend["owner"] == "runtime" and "command_template" not in spend
         assert cli["next_cli_actions"] == [writeback["command_template"]]
-        _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
-        projected = json.loads(Path(recovery["path"]).read_bytes())
-        assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+        if not off:
+            _, recovery = read_context_read_reference(guard["recovery"]["reference_file"])
+            projected = json.loads(Path(recovery["path"]).read_bytes())
+            assert projected["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
         if case in {"combined", "after_claim"}:
             from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
@@ -135,7 +152,7 @@ def test_ready_native_guard_publishes_a_runnable_settlement_plan(tmp_path, monke
     else:
         rc, result = _run_generated_cli(command, registry_path=registry, cwd=project)
     assert rc == 0 and result["ok"] and result["settlement_identity"] == identity, result
-    if off:
+    if off and not complete:
         assert result["settlement_owed"]["kind"] == "quota_spend" and _spend_run_count(runtime) == 0
         rc, result = _run_generated_cli(spend["command_template"], registry_path=registry, cwd=project)
         assert rc == 0 and result["ok"], result
@@ -177,6 +194,85 @@ def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_pa
     assert replay["settlement_identity"] == failed["settlement_identity"]
     assert len(replay["settlement_result"]["receipts"]) == 3
     assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_turn_composition_failure_preserves_original_guard_and_recovers(tmp_path, monkeypatch, capsys, provider):
+    import hashlib
+    from loopx.cli import main
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+    from loopx.control_plane.quota import turn_envelope
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+    assert _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)[0] == 0
+    command = ["quota", "should-run", *binding, "--turn-instance-id", TURN_ID,
+        "--runtime-profile", "generic_cli", "--complete-turn", "--context-delivery", "off"]
+    directory = tmp_path / "failed-capture"
+    def unavailable(*args, **kwargs):
+        raise EffectRuntimeStartupError("synthetic complete-context transport unavailable", diagnostic_code="fixture_unavailable")
+    with monkeypatch.context() as fault:
+        fault.chdir(project)
+        fault.setattr(turn_envelope, "compose_turn_decision", unavailable)
+        assert main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            *command, "--decision-output-dir", str(directory)]) == 1
+        failed = json.loads(capsys.readouterr().out)
+    saved = directory / "decision.json"
+    original = saved.read_bytes()
+    original_packet = json.loads(original)
+    assert original_packet.get("schema_version") is None
+    assert failed["heartbeat_receipt"]["settlement_identity"] == original_packet["heartbeat_receipt"]["settlement_identity"]
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+    recovered_bytes, page_count = b"", 0
+    while True:
+        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(saved),
+            "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", "8000",
+            "--max-page-output-bytes", "12000", "--offset", str(len(recovered_bytes)), cwd=project)
+        assert rc == 0 and page["ok"], page
+        assert page["offset"] == len(recovered_bytes)
+        recovered_bytes += page["content"].encode()
+        page_count += 1
+        if page["eof"]:
+            break
+    assert page_count > 1 and recovered_bytes == original
+    rc, recovered = _run_cli(registry, runtime, *command, "--decision-output-dir", str(tmp_path / "recovered"), cwd=project)
+    assert rc == 0 and recovered["schema_version"] == "loopx_turn_envelope_v1", recovered
+    assert recovered["heartbeat_receipt"]["settlement_identity"] == failed["heartbeat_receipt"]["settlement_identity"]
+    assert saved.read_bytes() == original
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("command", ["status", "context-read", "spend-slot"])
+def test_complete_turn_rejects_other_routes_before_authority_io(tmp_path, command):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    rc, failed = _run_cli(registry, runtime, "quota", command, "--complete-turn")
+    assert rc == 1 and failed["reason"] == "--complete-turn requires JSON quota should-run"
+    assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_complete_soft_claim_reuses_the_original_legacy_receipt(tmp_path, provider):
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="soft_claim")
+    command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, legacy = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc == 0 and legacy.get("schema_version") is None
+    original_cli = legacy["interaction_contract"]["cli_channel"]
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
+    rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
+    assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
+    cli = complete["interaction_contract"]["cli_channel"]
+    assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
+    assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"
+    assert cli["settlement_plan"]["identity"] == legacy["heartbeat_receipt"]["settlement_identity"]
+    assert complete["goal_boundary"] == legacy["goal_boundary"]
+    assert complete["normal_delivery_allowed"] == legacy["normal_delivery_allowed"]
+    assert len(cli["next_cli_actions"]) == 1
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+    assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
 
 
 def _read_selected_result(command):

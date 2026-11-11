@@ -23,6 +23,9 @@ from benchmark.runtime.worker import run_once
         {"task_entry": "unknown"},
         {"mode": "plain", "task_entry": "loopx-planned"},
         {"mode": "native-goal", "task_entry": "loopx-planned"},
+        {"mode": "plain", "complete_turn": True},
+        {"complete_turn": True, "turn_envelope": True},
+        {"complete_turn": "true"},
     ],
 )
 def test_invalid_entry_rejected_before_model_call(kwargs):
@@ -978,12 +981,19 @@ def test_shared_harbor_rejects_retired_planning_limit(tmp_path, legacy_limit):
     BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", planning_timeout_sec=None)
 
 
-@pytest.mark.parametrize("planning_elapsed", [400, 850])
-def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, monkeypatch, planning_elapsed):
+@pytest.mark.parametrize("mode,planning_elapsed,host_timeout", [
+    ("heartbeat", 400, 500), ("heartbeat", 850, 150), ("heartbeat", 1000, None),
+    ("turn", 400, 440), ("turn", 840, None), ("turn", 850, None),
+])
+def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(
+    tmp_path, monkeypatch, mode, planning_elapsed, host_timeout,
+):
     pytest.importorskip("harbor")
     from benchmark.runtime import harbor
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 execution_mode=mode,
+                                 validation_command=["trusted-validator"] if mode == "turn" else (),
                                  turn_timeout_sec=500, scheduler_timeout_sec=1000)
     clock = [0.0]
     planning = []
@@ -1011,7 +1021,9 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_populate_context", lambda *args: None)
     invocation = agent.run("Synthetic task", SimpleNamespace(exec=result, is_mounted=True), SimpleNamespace())
-    if planning_elapsed == 850:
+    # Heartbeat retains the whole solver window; Turn reserves 160 seconds.
+    # These expected budgets are independent of the helper under test.
+    if host_timeout is None:
         with pytest.raises(TimeoutError, match="before execution handoff"):
             asyncio.run(invocation)
         assert len(planning) == 1 and not execution
@@ -1023,8 +1035,8 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     assert "LOOPX_PLANNING_TIMEOUT_SEC" not in env
     assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
     assert options["timeout_sec"] >= 1000
-    assert "--kill-after=30 600s" in execution[0][0]
-    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 500
+    assert f"--kill-after=30 {1000 - planning_elapsed}s" in execution[0][0]
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == host_timeout
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
@@ -1173,13 +1185,27 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
 
 @pytest.mark.parametrize("context", ["fresh", "resume"])
 @pytest.mark.parametrize("producer", [None, "local_probe"])
-def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_env, context, producer):
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
+def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
+        planning_env, context, producer, complete, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
     from benchmark.runtime.research_probe import execution_observation_guidance
 
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
+    if complete:
+        env["LOOPX_COMPLETE_TURN"] = "1"
     if producer is not None:
         env["LOOPX_EXECUTION_OBSERVATION"] = producer
+    if checkpoint_preflight:
+        root = Path(env["LOOPX_WAKE_LOG_DIR"]).parent
+        root.mkdir(parents=True, exist_ok=True)
+        request = root / "checkpoint-request.json"
+        request.write_text(json.dumps({"destination": str(root / "checkpoints"),
+            "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
+            "evaluation_opportunity": True, "controller_handoff": True,
+            "components": [{"id": "workspace", "source_path": env["LOOPX_PROJECT"]}], "point_metadata": {}}))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(request)
     assert run_once(env)["ok"]
     binary = Path(env["CODEX_BIN"])
     binary.write_text(
@@ -1210,6 +1236,13 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(planning_
         assert "Research-loop execution evidence:" not in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
+        assert receipt.get("complete_turn") is (True if complete else None)
+        assert ("--complete-turn" in body) is complete
+        if checkpoint_preflight:
+            original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
+            assert json.loads(original.read_bytes()).get("schema_version") == (
+                "loopx_turn_envelope_v1" if complete else None)
+            assert "Do not repeat the initial guard below" in body
         assert current["LOOPX_PHASE_DEADLINE_EPOCH"] == deadline
     # Runtime clocks remain internal and never change task/completion authority.
     assert Path(env["LOOPX_REGISTRY"]).with_name("state.md").read_bytes() == before

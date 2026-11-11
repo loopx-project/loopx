@@ -209,7 +209,7 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
         "begin_turn", "turn_instance_id", "todo_id", "execute", "record_host_poll",
         "available_capabilities", "decision_output_dir", "decision_output_root",
         "decision_handoff_socket", "codex_context_dir", "codex_context_root",
-        "context_delivery", "delta_delivery", "turn_envelope", "include_details",
+        "context_delivery", "delta_delivery", "turn_envelope", "complete_turn", "include_details",
         "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
         "defer_context_presentation",
         "capture_file", "decision_file", "outcome_ref", "source_hash",

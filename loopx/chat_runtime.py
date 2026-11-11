@@ -650,7 +650,7 @@ class ChatRuntimeController:
             if (agent_id == "codex" and goal_id != MANAGER_AGENT_GOAL_ID
                 and conversation_scope(selected_scope)["kind"] == "owner_goal"
                 and not (latest and (latest.get("active_turn_id") or latest.get("upstream_mode") == CODEX_GOAL_CHAT_MODE))):
-                codex_defaults = load_codex_chat_defaults(self.coordination_runtime_root)
+                codex_defaults = load_codex_chat_defaults(self.store.root.parent)
                 selected_codex_home = codex_profile_home(self.codex_home, codex_defaults)
                 if latest is not None and (latest.get("codex_chat_configuration") or {}) != codex_defaults:
                     # New defaults get a new ordinary Session. Resolve them only

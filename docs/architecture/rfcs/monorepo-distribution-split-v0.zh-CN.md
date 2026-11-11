@@ -2441,7 +2441,7 @@ M0 pin 修复已在 CI 通过，同一记录中的提案 head 也通过真实 Po
 kernel、TypeScript、浏览器和 Stage 2C 检查。组合源码现已接入目标 main
 `1cba745f5`，并保留原提案祖先。报告 calendar CLI smoke 在组合源码上仍失败，
 因为它直接读取已退役的 `turn_envelope` 字段。replan 必须为 `None` 的断言也属于
-旧 projection adapter：完整源保留竞争建议，最终 capability 优先级由 typed
+旧 projection adapter：完整源保留竞争建议；最终 capability 优先级仍由现有 typed
 controller 决定。
 
 smoke 现在将单一 `work_contract` 直接交给现有 controller，在 plan、dry-run、
@@ -2612,3 +2612,49 @@ artifact id 将最终 `build` 门绑定到成功的分片回执。门禁导入�
 I3/minor-release、M1/#8011、R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、PostgreSQL host/wheel、完整成本和 adoption
 缺口继续开放。
+
+### 2026-11-11 — 整合主线的打包发行资格
+
+完整 Linux Release Artifacts
+[run 42905934918](https://github.com/loopx-project/loopx/actions/runs/42905934918)
+（attempt 1，来自 [#8531](https://github.com/loopx-project/loopx/pull/8531)）
+验证了整合源码 `main@b89a574b05a3e7d5920a8e7184476dfb7b041790`。
+Bundle 的 product、browser-fixture 与 workflow commit 均为
+`3606315c86f907961b0c26d4f1a1dad6bbaed8cf`，没有 fixture override；其完整
+tracked tree 与该已合入 main 相同。这补上了内核和发行流水线整合后的 packaged
+资格缺口。
+
+对最终产物 `13807484684` 的离线核验将下载 ZIP 与 GitHub 的 SHA-256 比较，
+将每个 package/runtime 文件与 `RELEASE-SOURCES.json` 比较，并校验两份包的
+checksum manifest。三个 browser receipt 均绑定 candidate artifact
+`13806066680` 和同一个 release-source digest。与真实源码 catalog 和分片
+selector 比较后，确认 29/29/28 条目恰好覆盖 86 个唯一通过场景。
+Team、craft、command-palette 和 navigation companion 通过。Producer 还通过
+干净 wheel 安装、sdist 重建、已安装 frontend、DSH 安装形态和 runtime 资格，
+覆盖 upgrade、doctor、skills、frontend HTTP、license notices、无需 frontend
+build tools 运行，以及 activation 失败后的恢复。
+
+这次已完成的普通 packaged M2 观察保留 200 项、五种切换各三个样本和十五个
+long-task window。五个中位数为 336.34/313.05/441.09/200.01/194.94 ms，
+最大值 601.68 ms，没有样本超过 1,000 ms 目标。现有普通 median <1,000 ms
+和每个样本 <2,000 ms 的规则通过，未修改阈值。这不是新的带覆盖率测量，
+也不是成本或内核归因对照；历史冻结失败及其原始观察保留原有状态。
+
+该证据验证指定整合源码的 Linux packaged 路径，不覆盖后续产品改动。
+此次 pull-request 运行跳过 attestation、release upload 和 PyPI 发布，
+不能据此宣称已公开发布或当前 installed-host 已升级，也不证明其他全部 CI
+结果或完整 CI／边际成本。原任务以及 I3/minor-release、M1/#8011、R0/V10/R1、
+D2/D5/D6/D3、context/model/split-install、PostgreSQL host/wheel、
+installed-host 和 adoption 缺口继续开放。后续资格仍由这些原 owner 和验收
+边界承接；最小化内核工作尚未全部完成。
+
+### 2026-11-11 — Canonical snapshot 失败来源
+
+分页和完整 snapshot 读取将持久化 Todo 契约被拒绝
+（`canonical_snapshot_projection_invalid`）与请求参数无效区分开。现有 typed
+validator 仍拒绝未知字段清单和无效记录摘要，保留原始原因，不返回部分记录或
+legacy fallback；已支持的历史字段清单仍可读取。这是既有源传输入口的诊断
+修正，不授予旧 reader 前向兼容能力，也不升级已安装 runtime。
+
+真实 File/SQLite RPC 与 CLI 回归，以及隔离 PostgreSQL 读取，验证该失败边界
+且不重写 authority。原 installed-host 资格、完整成本和 adoption 缺口继续开放。
