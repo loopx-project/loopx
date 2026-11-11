@@ -324,6 +324,7 @@ def create_fastmcp_server(
         from mcp.server.fastmcp import FastMCP
         from mcp.server.fastmcp.exceptions import ToolError
         from mcp.types import CallToolResult, TextContent
+        from pydantic import BaseModel
     except Exception as exc:  # pragma: no cover - exercised by real adapter startup
         raise SystemExit(
             "MCP SDK v1 is required. Install the adapter with loopx-kunluncode install.\n"
@@ -341,15 +342,27 @@ def create_fastmcp_server(
                 raise ToolError("Unsupported complete_task arguments; use its current schema and the claim_operation_id returned by claim_task")
             return await super().call_tool(name, arguments)
 
+    class GuardToolOutput(BaseModel):
+        result: str
+        mcp_channel: dict[str, Any] | None = None
+
     server = GoalModeServer(config.server_name)
 
     def guard_content(source: str) -> CallToolResult:
-        result = project_host_interaction(source)
-        content = [TextContent(type="text", text=result.source if isinstance(result, McpGuardContent) else result)]
-        if isinstance(result, McpGuardContent):
-            content.append(TextContent(type="text", text=json.dumps(result.channel, ensure_ascii=False)))
-        # Keep the SDK's existing string result contract as well as native text.
-        return CallToolResult(content=content, structuredContent={"result": content[0].text})
+        projected = project_host_interaction(source)
+        if isinstance(projected, McpGuardContent):
+            channel = dict(projected.channel)
+            return CallToolResult(
+                content=[
+                    TextContent(type="text", text=projected.source),
+                    TextContent(type="text", text=json.dumps(channel, ensure_ascii=False)),
+                ],
+                structuredContent={"result": projected.source, "mcp_channel": channel},
+            )
+        return CallToolResult(
+            content=[TextContent(type="text", text=projected)],
+            structuredContent={"result": projected},
+        )
 
     if config.legacy_host_surface == "claude_code":
         @server.tool()
@@ -365,11 +378,10 @@ def create_fastmcp_server(
         """Read visible Todo decisions; MCP guidance is separate in complete-v1, inline in legacy results."""
         return guard_content(control._read_guard())
 
-    # The SDK is optional and imported inside this factory. Supply its evaluated
-    # native-result annotation before registration; postponed annotations cannot
-    # otherwise resolve these local SDK types. The string output schema is stable.
+    # Supply the evaluated SDK annotation before registration. The signed source
+    # remains a required string and older results omit the separate channel.
     for read_guard in (should_run, list_todos):
-        read_guard.__annotations__["return"] = Annotated[CallToolResult, str]
+        read_guard.__annotations__["return"] = Annotated[CallToolResult, GuardToolOutput]
         server.tool()(read_guard)
 
     @server.tool()

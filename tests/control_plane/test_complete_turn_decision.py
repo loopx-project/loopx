@@ -779,6 +779,7 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
+                tools = {tool.name: tool for tool in (await session.list_tools()).tools}
                 for name in ("should_run", "list_todos"):
                     response = await session.call_tool(name, {})
                     original = source_file.read_text()
@@ -786,12 +787,12 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
                     assert_complete_turn_decision(source)
                     if source_fault:
                         assert response.isError
+                        assert "mcp_channel" not in (response.structuredContent or {})
                         error = response.content[0].text
                         assert ("integrity mismatch" if source_fault == "binding"
                                 else "unsupported complete Turn decision version") in error
                         continue
                     assert not response.isError
-                    assert response.structuredContent == {"result": response.content[0].text}
                     received = json.loads(response.content[0].text)
                     assert_complete_turn_decision(received)
                     assert response.content[0].text == original
@@ -801,6 +802,11 @@ def test_real_mcp_preserves_complete_source_at_final_stdio_boundary(tmp_path, mo
                     assert "mcp_channel" not in received["interaction_contract"]
                     assert len(response.content) == 2
                     channel = json.loads(response.content[1].text)
+                    assert response.structuredContent == {"result": original, "mcp_channel": channel}
+                    output_schema = tools[name].outputSchema
+                    assert output_schema["properties"]["result"]["type"] == "string"
+                    assert "mcp_channel" in output_schema["properties"]
+                    assert output_schema["required"] == ["result"]
                     assert channel["schema_version"] == "host_mcp_interaction_v0"
                     assert channel["delivery_executor"] == "complete_task"
                     assert channel["delivery_todo_id"] == (TODO_ID if bound_turn else None)
