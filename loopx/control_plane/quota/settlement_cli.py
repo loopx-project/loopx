@@ -403,6 +403,11 @@ def quota_rollout_details(
         # readiness and an absent timer remain explicit null facts here.
         details["admission_resume_when"] = selected_todo.get("resume_when")
         details["admission_resume_ready"] = selected_todo.get("resume_ready")
+    recovery = payload.get("unsettled_host_turn_recovery")
+    if isinstance(recovery, Mapping) and recovery.get("state") == "recovery_required":
+        checkpoint = recovery.get("admission_checkpoint")
+        if isinstance(checkpoint, Mapping):
+            details.update(checkpoint)
     replan_packet = payload.get("replan_action_packet")
     obligation = payload.get("autonomous_replan_obligation")
     if semantic_replan_obligation_id and isinstance(obligation, Mapping) and obligation.get("obligation_id") == semantic_replan_obligation_id:

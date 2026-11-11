@@ -476,7 +476,7 @@
         "terminal_no_followup": "The Goal is terminal with no follow-up. The controller reads it as the terminal_action partition, so with no prior receipt the disposition is terminal, and the scheduler stops.",
         "throttled_skip": "Existing result of quotaEffectiveAction; previously missed because the literal scan did not inspect declared return functions.",
         "todo_decision_scope_projection_repair": "A Todo user-gate scope is missing from the decision-scope projection; trigger user_gate_scope_projection_drift.",
-        "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, should_run is set, and normal, recovery and self-repair delivery are all refused."
+        "unsettled_host_turn_recovery": "A host Turn is unsettled and must be recovered before anything else: the selected Todo and action portfolio are dropped, and normal, recovery and self-repair delivery are refused. Three unchanged admissions for the same owed identity exhaust the allowance; the typed recovery owner then projects blocked_wait until receipt progress or explicit owner resume, without erasing the original debt."
       },
       "producers": [
         "loopx/control_plane/work_items/action_selection_contract.py::build_action_selection_recovery_fields",
