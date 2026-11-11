@@ -400,7 +400,7 @@ test("worker pauses visibly when the unchanged-poll limit stops the loop", async
     scheduler_hint: {
       action: "backoff_waiting_for_user",
       reset_policy: { reset_token: "stop-token" },
-      unchanged_poll: {
+      cold_path_detail: {
         local_scheduler: {
           recommended_interval_minutes: 3,
           example_progression_minutes: [3, 6],

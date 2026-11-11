@@ -380,10 +380,9 @@ export function buildQuotaArgs(binding) {
     binding.goalId,
     "--runtime-profile",
     "generic_cli",
-    "--include-detail",
-    "scheduler",
   )
-  if (binding.agentId) args.push("--agent-id", binding.agentId)
+  if (binding.agentId) args.push("--agent-id", binding.agentId, "--scheduler-observation")
+  else args.push("--include-detail", "scheduler", "--context-delivery", "off")
   for (const capability of binding.availableCapabilities || []) {
     args.push("--available-capability", capability)
   }

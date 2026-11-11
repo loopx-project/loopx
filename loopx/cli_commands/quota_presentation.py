@@ -33,7 +33,7 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
     view = select(
         payload, "ok", "goal_id", "goal_ref", "runtime_root", "state",
-        "error", "error_code", "reason", "status", "recommended_action", "effective_action",
+        "error", "error_code", "reason", "status", "recommended_action", "effective_action", "should_run",
     )
     if payload.get("ok") is not True:
         return view
@@ -41,19 +41,29 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
     view["interaction_contract"] = {"agent_channel": select(contract.get("agent_channel"), "must_attempt")}
     hint = select(payload.get("scheduler_hint"), "action", "cadence_class", "reason")
     if isinstance(source := payload.get("scheduler_hint"), Mapping):
-        for key, field in (
-            ("unchanged_poll", "local_scheduler"),
-            ("reset_policy", "reset_token"),
-            ("cold_path_detail", "local_scheduler"),
-        ):
+        for key, field in (("reset_policy", "reset_token"), ("cold_path_detail", "local_scheduler")):
             if key in source:
                 hint[key] = select(source[key], field)
+        if isinstance(unchanged := source.get("unchanged_poll"), Mapping):
+            hint["unchanged_poll"] = {
+                **select(unchanged, "local_scheduler", "final_quota_replan_check_enabled",
+                         "final_quota_replan_check_action"),
+                **{key: select(unchanged[key], "local_scheduler")
+                   for key in ("limits", "after_limits") if key in unchanged},
+            }
     view["scheduler_hint"] = hint
+    if isinstance(frontier := payload.get("goal_frontier_projection"), Mapping):
+        view["goal_frontier_projection"] = {
+            "terminal_state": select(frontier.get("terminal_state"), "schema_version", "kind", "derived", "source"),
+            "source_completeness": select(frontier.get("source_completeness"),
+                "schema_version", "user_todos", "agent_todos"),
+        }
     for key, fields in (
         ("selected_todo", ("todo_id",)),
         ("agent_identity", ("agent_id",)),
         ("autonomous_replan_obligation", ("required", "obligation_id", "agent_id", "resolution_mode")),
         ("heartbeat_receipt", ("settlement_identity",)),
+        ("host_poll_receipt", ("recorded", "poll_count", "last_poll_at", "expected_continuation", "error")),
     ):
         if key in payload:
             view[key] = select(payload[key], *fields)

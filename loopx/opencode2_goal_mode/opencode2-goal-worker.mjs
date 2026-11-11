@@ -226,8 +226,10 @@ export function shouldRunNow(decision) {
 
 
 export function waitPlan(decision, state) {
-  const local = decision?.scheduler_hint?.unchanged_poll?.local_scheduler
-  if (!local || local === "stop") return { stop: true }
+  const hint = decision?.scheduler_hint
+  const directive = hint?.unchanged_poll?.local_scheduler
+  const local = hint?.cold_path_detail?.local_scheduler ?? directive
+  if (!local || directive === "stop") return { stop: true }
   const token = decision?.scheduler_hint?.reset_policy?.reset_token || ""
   const sameIdentity = token && token === state.schedulerToken
   const unchangedPolls = sameIdentity ? Number(state.unchangedPolls || 0) : 0
@@ -314,11 +316,10 @@ export function buildQuotaArgs(state) {
     state.goalId,
     "--runtime-profile",
     "generic_cli",
-    "--include-detail",
-    "scheduler",
     "--record-host-poll",
   )
-  if (state.agentId) args.push("--agent-id", state.agentId)
+  if (state.agentId) args.push("--agent-id", state.agentId, "--scheduler-observation")
+  else args.push("--include-detail", "scheduler", "--context-delivery", "off")
   for (const capability of state.availableCapabilities || []) {
     args.push("--available-capability", capability)
   }

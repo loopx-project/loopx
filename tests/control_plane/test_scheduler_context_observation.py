@@ -11,7 +11,9 @@ import sys
 import pytest
 
 from scripts import external_scheduler_worker as worker
-from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from loopx.control_plane.goals.activation_service import set_goal_activation_state
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+from tests.control_plane.test_dated_vision_wait_cli import AGENT as WAIT_AGENT, GOAL as WAIT_GOAL, fixture as wait_fixture
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _spend_run_count, _write_fixture,
 )
@@ -114,3 +116,83 @@ def test_scheduler_observation_preserves_native_wake_context(
         assert payload["selected_todo"]["todo_id"] == TODO_ID
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0
+
+
+_VISIBLE_HOST_PROBE = """
+import {execFile} from "node:child_process";
+import {pathToFileURL} from "node:url";
+import {join} from "node:path";
+import {promisify} from "node:util";
+
+const [root, cli, registryPath, directory, goalId, agentId, capability] = process.argv.slice(1);
+const host = path => import(pathToFileURL(join(root, "loopx", path)).href);
+const pi = await host("pi_goal_mode/pi-goal-loop-runtime.mjs");
+const openCode = await host("opencode_goal_mode/goal-bridge-runtime.mjs");
+const openCode2 = await host("opencode2_goal_mode/opencode2-goal-worker.mjs");
+const binding = {registryPath, directory, goalId, agentId,
+  availableCapabilities: capability ? [capability] : []};
+const exec = promisify(execFile);
+process.env.LOOPX_BIN = cli;
+console.log(JSON.stringify({
+  pi: JSON.parse((await exec(cli, pi.buildQuotaArgs(binding), {cwd: directory})).stdout),
+  openCode: await openCode.probeLoopxQuota(binding, {directory}),
+  openCode2: await openCode2.createQuotaProbe({bin: cli})(binding, {directory}),
+}));
+"""
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.skipif(os.name != "posix", reason="Exercises the CLI through a POSIX launcher")
+def test_visible_hosts_keep_runnable_wait_and_stop_facts(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    repository = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("PYTHONPATH", str(repository))
+    cli = tmp_path / "loopx-cli"
+    cli.write_text(f"#!{sys.executable}\nfrom loopx.entrypoint import main\nraise SystemExit(main())\n")
+    cli.chmod(0o700)
+
+    def probe(registry, project, goal, agent, capability=""):
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", _VISIBLE_HOST_PROBE,
+             str(repository), str(cli), str(registry), str(project), goal, agent, capability],
+            cwd=project, capture_output=True, text=True, check=True, timeout=90,
+        )
+        views = json.loads(result.stdout)
+        for view in views.values():
+            assert view["goal_id"] == goal
+            assert not {"reference_file", "goal_boundary", "heartbeat_receipt"}.intersection(view)
+        return views
+
+    project, runtime, registry = _write_fixture(tmp_path / "runnable", required_capability="network", provider=provider)
+    views = probe(registry, project, GOAL_ID, AGENT_ID, "network")
+    for view in views.values():
+        assert view["should_run"] is True
+        assert view["selected_todo"] == {"todo_id": TODO_ID}
+        assert view["scheduler_hint"]["action"] == "run_now"
+    assert "host_poll_receipt" not in views["pi"]
+    assert [views[host]["host_poll_receipt"]["poll_count"] for host in ("openCode", "openCode2")] == [1, 2]
+
+    wait_registry, wait_runtime, wait_state = wait_fixture(tmp_path / "wait")
+    initialize_canonical_source_fixture(wait_runtime, WAIT_GOAL, state_path=wait_state, provider=provider)
+    waiting = probe(wait_registry, wait_state.parents[3], WAIT_GOAL, WAIT_AGENT)
+    for view in waiting.values():
+        assert view["should_run"] is False
+        assert view["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        hint = view["scheduler_hint"]
+        assert hint["action"] == "backoff_until_state_change"
+        assert hint["cold_path_detail"]["local_scheduler"]["example_progression_minutes"] == [10, 20, 30, 60]
+        assert hint["unchanged_poll"]["after_limits"]["local_scheduler"] == "continue"
+
+    stop = set_goal_activation_state(registry_path=wait_registry, goal_id=WAIT_GOAL, state="stopped",
+                                    reason="The fixture owner stopped this Goal.", actor_kind="owner", execute=True)
+    assert stop["readback"]["verified"]
+    stopped = probe(wait_registry, wait_state.parents[3], WAIT_GOAL, WAIT_AGENT)
+    for view in stopped.values():
+        assert view["should_run"] is False
+        assert view["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+        assert view["scheduler_hint"]["unchanged_poll"]["local_scheduler"] == "stop"
+    for root in (runtime, wait_runtime):
+        assert not (root / "context-delivery").exists()
+        assert _spend_run_count(root) == 0

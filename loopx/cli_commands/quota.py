@@ -367,6 +367,8 @@ def _emit_scheduler_observation_result(
 ) -> int:
     """Emit the bounded observer without entering native capture or settlement."""
     if context is not None:
+        _export("attach_host_poll_receipt")(context.status_payload, args, payload,
+            registry_path=registry_path)
         observe_quota_result(
             args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),

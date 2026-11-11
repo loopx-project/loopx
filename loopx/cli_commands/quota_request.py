@@ -206,8 +206,8 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
             "--scheduler-observation requires quota should-run with JSON and --agent-id"
         )
     for name in (
-        "begin_turn", "turn_instance_id", "todo_id", "execute", "record_host_poll",
-        "available_capabilities", "decision_output_dir", "decision_output_root",
+        "begin_turn", "turn_instance_id", "todo_id", "execute",
+        "decision_output_dir", "decision_output_root",
         "decision_handoff_socket", "codex_context_dir", "codex_context_root",
         "context_delivery", "delta_delivery", "turn_envelope", "complete_turn", "include_details",
         "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
@@ -218,7 +218,6 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
     ):
         if getattr(args, name, None):
             option = {
-                "available_capabilities": "available-capability",
                 "include_details": "include-detail",
                 "list_fields": "list",
             }.get(name, name.replace("_", "-"))
