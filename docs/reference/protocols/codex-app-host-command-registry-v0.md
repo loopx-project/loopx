@@ -252,8 +252,10 @@ cannot expose its automation tools, so the visible `/goal` owns continuation.
 used alongside an editor. The legacy `codex-ide` value remains accepted as a
 compatibility alias but is not offered by the selection gate. If the option is
 omitted, the command returns a read-only `host_surface_selection` gate with
-exact rerun commands; it must not connect a project, write todos, activate a
-host, or spend quota.
+compact default choices and exact rerun commands for common hosts. Omitted
+surfaces remain discoverable through `full_choices_detail_command`, which
+reruns the same read-only gate with `--include-command-pack-detail`; neither
+projection may connect a project, write todos, activate a host, or spend quota.
 
 ## Permission Boundary
 

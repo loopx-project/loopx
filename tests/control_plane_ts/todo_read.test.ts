@@ -134,6 +134,26 @@ for (const provider of ["file", "sqlite"] as const) {
     const bounded = (await readTodo({...fullQuery, query: {...fullQuery.query, full_text: false}})).payload as JsonObject;
     assert.equal(bounded.full_text, undefined);
     assert.notEqual((bounded.todos as JsonObject[])[0].text, body);
+    const {query: _query, ...summaryRequest} = {...request, kind: "canonical_fields"};
+    const summary = await readTodo(summaryRequest);
+    const statusRequest = {...summaryRequest, canonical_contract_fields: ["todo_id", "status", "archive_state"]};
+    const status = await readTodo(statusRequest);
+    const compact = status.canonical as JsonObject;
+    assert.equal(compact.provider_revision, committed.provider_revision);
+    assert.ok(!Object.hasOwn(compact, "todos") && !Object.hasOwn(compact, "todo_ids"));
+    assert.deepEqual(compact.todo_contract_rows, [
+      {todo_id: "todo_archived", status: "done", archive_state: "archive"},
+      {todo_id: "todo_waiting", status: "deferred", archive_state: "active"},
+    ]);
+    assert.deepEqual(status.fields, summary.fields);
+    assert.deepEqual(status.field_evaluations, summary.field_evaluations);
+    const {replay_read: replay, ...provenance} = status.source_projection as JsonObject;
+    assert.deepEqual(provenance, summary.source_projection);
+    assert.deepEqual(replay, summaryRequest);
+    await assert.rejects(() => readTodo({...statusRequest, source: {...request.source, include_leases: true}}),
+      /read-only canonical summary/);
+    await assert.rejects(() => readTodo({...statusRequest, canonical_contract_fields: ["status", "status"]}),
+      /read-only canonical summary/);
     await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, thin: true}}), /compact presentation/);
     await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, summary: true}}), /compact presentation/);
     await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, full_text: "true"}}), /full_text/);
