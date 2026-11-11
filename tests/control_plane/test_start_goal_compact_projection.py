@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -15,7 +16,6 @@ from loopx.bootstrap_command_pack import (
     GUIDED_COMMAND_PACK_PROJECTION_SCHEMA_VERSION,
     build_loopx_bootstrap_command_pack,
     build_start_goal_guided_packet,
-    render_start_goal_guided_markdown,
 )
 from loopx.capabilities.issue_fix.candidate_preflight import (
     build_issue_fix_candidate_preflight_packet,
@@ -237,17 +237,17 @@ def _block_effect_runtime_startup(
     diagnostic_code: str = "node_unavailable",
     message: str = "TypeScript Effect runtime could not serve the request",
 ) -> None:
-    def unavailable(*_args: object, **_kwargs: object) -> object:
-        raise effect_runtime.EffectRuntimeStartupError(
-            message,
-            diagnostic_code=diagnostic_code,
-        )
+    request = effect_program.effect_runtime_result
 
-    monkeypatch.setattr(
-        command_pack_module,
-        "effect_program_from_ordered_steps",
-        unavailable,
-    )
+    def unavailable(method, params, **kwargs):
+        if method == "effect.program_from_ordered_steps":
+            raise effect_runtime.EffectRuntimeStartupError(
+                message,
+                diagnostic_code=diagnostic_code,
+            )
+        return request(method, params, **kwargs)
+
+    monkeypatch.setattr(effect_program, "effect_runtime_result", unavailable)
 
 
 @pytest.mark.parametrize(
@@ -328,8 +328,12 @@ def test_cli_reports_effect_runtime_startup_failure_without_traceback(
 
 @pytest.mark.parametrize(
     "host_args",
-    [("--host-surface", "codex-app"), ()],
-    ids=["guided_start", "host_selection_gate"],
+    [
+        ("--host-surface", "codex-app"),
+        (),
+        ("--host-surface", "codex-app", "--fine-grained", "--capability-route", "issue-fix"),
+    ],
+    ids=["guided_start", "host_selection_gate", "fine_issue_fix"],
 )
 def test_start_goal_markdown_reuses_the_rendered_message(
     tmp_path: Path,
@@ -345,25 +349,65 @@ def test_start_goal_markdown_reuses_the_rendered_message(
         "start-goal", "--guided", "--project", str(project),
         "--goal-text", GOAL_TEXT, *host_args,
     ]
-    render_calls = 0
+    render_requests: list[dict[str, Any]] = []
     request = effect_program.effect_runtime_result
 
     def count_render(method, params, **kwargs):
-        nonlocal render_calls
         if method == "effect.program_from_ordered_steps":
-            render_calls += 1
+            render_requests.append(params)
         return request(method, params, **kwargs)
 
     monkeypatch.setattr(effect_program, "effect_runtime_result", count_render)
 
     assert cli_main(["--format", "markdown", *args]) == 0
     markdown = capsys.readouterr().out
-    assert render_calls == 1
+    assert len(render_requests) == 1
 
     assert cli_main(["--format", "json", *args]) == 0
     packet = json.loads(capsys.readouterr().out)
-    assert render_calls == 2
+    assert len(render_requests) == 2
     assert markdown == packet["message"] + "\n"
+    assert render_requests[0] == render_requests[1]
+    assert render_requests[0]["include_raw"] is False
+    transaction = packet["guided_transaction"]
+    rpc_steps = render_requests[1]["ordered_steps"]
+    assert [step["id"] for step in rpc_steps] == [step["id"] for step in transaction["ordered_steps"]]
+    if not host_args:
+        gate = transaction["host_surface_selection_gate"]
+        assert gate["choices"][0]["rerun_command"] in markdown
+        assert all("choices" not in step for step in rpc_steps)
+        return
+
+    sources = {step["id"]: step for step in transaction["ordered_steps"]}
+    projected = {step["id"]: step for step in rpc_steps}
+    connect = sources["connect_if_needed"]["command"]
+    assert len(connect.splitlines()) > 1
+    assert projected["connect_if_needed"]["command"] == connect
+    planning = sources["plan_ranked_todos"]
+    assert "Goal requirements and Todos:" in planning["prompt"]
+    assert planning["goal_requirements"]["inspect_command"]
+    assert "goal_requirements" not in projected["plan_ranked_todos"]
+    assert projected["plan_ranked_todos"]["prompt"] == planning["prompt"].splitlines()[0]
+    assert "overall requirements: reuse existing or declare missing requirements" in markdown
+    if "--capability-route" in host_args:
+        assert "candidate_preflight" in sources["qualify_selected_capability"]
+        assert "candidate_preflight" not in projected["qualify_selected_capability"]
+        assert "preflight: refresh" in markdown
+
+
+def test_guided_markdown_keeps_a_present_command_with_an_empty_first_line() -> None:
+    step = MappingProxyType({
+        "id": "preview",
+        "kind": "read_only",
+        "purpose": "Read a saved preview",
+        "command": "\nRead only the original evidence.",
+        "command_template": "fallback must stay unused",
+    })
+    rendered = command_pack_module.render_start_goal_guided_markdown({
+        "guided_transaction": {"ordered_steps": [step]},
+    })
+    assert "1. `preview` (read_only): Read a saved preview\n   - ``\n" in rendered
+    assert "fallback must stay unused" not in rendered
 
 
 def test_cli_reports_effect_runtime_startup_failure_in_default_markdown(
@@ -701,7 +745,7 @@ def test_issue_fix_goal_projects_capability_guard_without_todo_fields(
     assert commands[route["admission_command_key"]].startswith(
         "loopx issue-fix feasibility "
     )
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "authority: open public issue; source clues are evidence only" in rendered
     assert "discover: `gh issue list " in rendered
     assert (
@@ -2355,7 +2399,7 @@ def test_guided_takeover_with_runnable_frontier_projects_todo_delta(
     # The takeover continues through the normal refresh/host-loop/quota tail.
     assert step_ids.index("apply_todo_delta") < step_ids.index("read_back_authored_todos") < step_ids.index("refresh_state")
     assert "quota_guard" in step_ids
-    rendered = render_start_goal_guided_markdown(payload)
+    rendered = command_pack_module.render_start_goal_guided_markdown(payload)
     assert "apply_todo_delta" in rendered
     assert "reuse" in rendered
     assert "todo_delta:" in rendered

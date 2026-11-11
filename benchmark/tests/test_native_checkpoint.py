@@ -881,9 +881,11 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert settled.progress["state"] == "settled"
 
 
-@pytest.mark.parametrize("turn_envelope", [None, False, True], ids=["legacy", "ordinary", "envelope"])
+@pytest.mark.parametrize("turn_envelope,complete_turn", [(None, None), (False, False), (True, False), (False, True)],
+                         ids=["legacy", "ordinary", "envelope", "complete"])
 @pytest.mark.parametrize("context_option", [None, "codex_context_dir", "codex_context_root"])
-def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope, context_option):
+def test_interrupted_cursor_requires_exact_unreleased_final_guard(
+        tmp_path, monkeypatch, turn_envelope, complete_turn, context_option):
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
@@ -901,6 +903,10 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         guard["turn_envelope"] = turn_envelope
     if turn_envelope is False:
         argv.remove("--turn-envelope")
+    if complete_turn is not None:
+        guard["complete_turn"] = complete_turn
+    if complete_turn:
+        argv.append("--complete-turn")
     if context_option:
         guard[context_option] = "/fixture/context"
         argv += ["--" + context_option.replace("_", "-"), guard[context_option]]
@@ -914,7 +920,7 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     captured = native_session_checkpoint(env, "fixture-session", timeout=10, interrupted_guard=guard)
     assert captured["metadata"]["turn_ids"] == ["retained-compaction", "pending"]
     assert "completed_turn_id" not in captured["metadata"]
-    assert captured["metadata"]["interrupted_guard"]["native_call_id"] == "guard-call"
+    assert captured["metadata"]["interrupted_guard"] == {**guard, "native_call_id": "guard-call"}
     assert "thread/fork" not in calls
 
     rendered = copy.deepcopy(turns)
@@ -941,14 +947,33 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     if "--turn-envelope" in opposite:
         opposite.remove("--turn-envelope")
     else:
+        if "--complete-turn" in opposite:
+            opposite.remove("--complete-turn")
         opposite.append("--turn-envelope")
     changed = copy.deepcopy(turns)
     changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(opposite)])
     with pytest.raises(ValueError, match="routes or identity"):
         _verify_interrupted_guard(changed, guard)
+    if turn_envelope is False:
+        # Complete and ordinary commands have the same old envelope flag but
+        # different settlement routes. Neither may stand in for the other.
+        alternate = [word for word in argv if word != "--complete-turn"] if complete_turn else [*argv, "--complete-turn"]
+        switched = copy.deepcopy(turns)
+        switched[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(alternate)])
+        with pytest.raises(ValueError, match="routes or identity"):
+            _verify_interrupted_guard(switched, guard)
+        # A previous invocation of the other mode is not this held command.
+        switched[-1]["items"].append(item)
+        _verify_interrupted_guard(switched, guard)
+    if complete_turn:
+        with pytest.raises(ValueError, match="incompatible"):
+            _verify_interrupted_guard(turns, {**guard, "turn_envelope": True})
+        with pytest.raises(ValueError, match="routes or identity"):
+            _verify_interrupted_guard(turns, {k: v for k, v in guard.items() if k != "complete_turn"})
     for invalid in [None, 0, 1, "false"]:
-        with pytest.raises(ValueError, match="must be boolean"):
-            _verify_interrupted_guard(turns, {**guard, "turn_envelope": invalid})
+        for flag in ("turn_envelope", "complete_turn"):
+            with pytest.raises(ValueError, match="must be boolean"):
+                _verify_interrupted_guard(turns, {**guard, flag: invalid})
     variants = []
     for option in ("--codex-context-dir", "--codex-context-root"):
         altered = list(argv)
@@ -988,3 +1013,108 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
             _verify_interrupted_guard(changed, guard)
     with pytest.raises(ValueError, match="call identity"):
         _verify_interrupted_guard(turns, {**guard, "native_call_id": "different"})
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Exercises the private Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("mode_matches", [True, False], ids=["retained", "switched"])
+def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path, monkeypatch, provider, mode_matches):
+    """Exercise the worker, real quota guard and checkpoint store with fixed native history."""
+    from copy import deepcopy
+    from pathlib import Path
+    import shlex
+    import subprocess
+    import sys
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from benchmark.runtime.checkpoint_wake import CheckpointWake
+    from benchmark.runtime.codex import turn_envelope_receipt
+    from benchmark.runtime.worker import heartbeat_body
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+    from loopx.hosts.codex_checkpoint import _guard_cli_arguments
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _configure_autonomous_replan_fixture, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    code = project / "candidate.txt"
+    code.write_text("synthetic candidate\n")
+    source = Path(sys.modules["loopx"].__file__).resolve().parent.parent
+    cli = source / "scripts/loopx"
+    pages = []
+    native, calls = fixture(project, monkeypatch, pages)
+    declaration = tmp_path / "request.json"
+    declaration.write_text(json.dumps({
+        "destination": str(tmp_path / "checkpoints"), "trigger": "fresh_replan",
+        "point_metadata": {}, "native_session": True,
+        "components": [{"id": "candidate", "source_path": str(code)}],
+    }))
+    env = {**os.environ, **native, "CODEX_BIN": sys.executable, "MODEL_NAME": "fixture",
+           "REASONING_EFFORT": "high", "LOOPX_CODEX_SANDBOX": "read-only",
+           "LOOPX_PYTHON": sys.executable, "PYTHONPATH": str(source),
+           "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_CLI": str(cli),
+           "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
+           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "0",
+           "LOOPX_COMPLETE_TURN": "1"}
+    session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
+    _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
+        session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
+    receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
+        "session": {"session_id": "fixture-session"},
+        **turn_envelope_receipt(explicit=False, complete=True)}
+    (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
+
+    with CheckpointWake(env, receipt) as host:
+        body = heartbeat_body(env, TURN_ID, native_goal=False, decision_handoff_socket=host.socket_path)
+        block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+        command = shlex.join(["/bin/bash", "-lc", block])
+        original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
+        assert "--complete-turn" in original and "--turn-envelope" not in original
+        observed = original if mode_matches else [word for word in original if word != "--complete-turn"]
+        item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
+                "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
+                "status": "failed", "exitCode": 137, "aggregatedOutput": None}
+        history = {"data": [{"id": "interrupted-turn", "status": "interrupted", "items": [item]}],
+                   "nextCursor": None}
+        pages.extend((history, deepcopy(history)))
+        host.listener.settimeout(30)
+        with subprocess.Popen([str(cli), *original], cwd=project, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as command_process:
+            with held_quota_decision(host.listener, host.capture_root, goal_id=GOAL_ID,
+                    agent_id=AGENT_ID, turn_instance_id=TURN_ID,
+                    deadline=time.monotonic() + 30) as held:
+                assert held["quota"]["ok"] is True and held["intent"]["capture"] is True
+                quota = held["quota"]["heartbeat_receipt"]
+                assert quota["turn_instance_id"] == TURN_ID
+                digest = hashlib.sha256(held["path"].read_bytes()).hexdigest()
+                assert digest == held["sha256"]
+                point = host.root / held["intent"]["obligation_id"]
+                if mode_matches:
+                    captured = host._capture(held, time.monotonic() + 30)
+                    result = effect_runtime_result("runtime.checkpoint_artifacts", {
+                        "action": "verify", "root": str(point), "expected_sha256": captured["sha256"],
+                    })
+                    assert result["sha256"] == captured["sha256"]
+                    manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
+                    stored = manifest["native_session"]["interrupted_guard"]
+                    assert stored["complete_turn"] is True and stored["turn_envelope"] is False
+                    assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
+                    assert stored["decision_sha256"] == digest
+                    assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()
+                else:
+                    with pytest.raises(ValueError, match="routes or identity"):
+                        host._capture(held, time.monotonic() + 30)
+                    assert not point.exists()
+            stdout, stderr = command_process.communicate(timeout=30)
+            assert command_process.returncode == 0, (stdout, stderr)
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+    assert "thread/fork" not in calls
