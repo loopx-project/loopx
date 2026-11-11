@@ -983,6 +983,7 @@ def handle_todo_command(
                 authority_reason=args.authority_reason,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
+                claim_operation_id=args.claim_operation_id,
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
