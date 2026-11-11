@@ -126,8 +126,10 @@ def test_saved_complete_quota_projection_rejects_invalid_source_without_legacy_f
         assert "content" not in rejected and "first_read_command" not in rejected
         assert rejected["heartbeat_receipt"] == receipt
         assert rejected["recovery"]["path"] == str(capture) and rejected["recovery"]["sha256"] == digest
-        rc, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(capture),
-            "--capture-sha256", digest, "--select", "/heartbeat_receipt", cwd=project)
+        recovery = shlex.split(rejected["recovery"]["command"])
+        assert "--list" not in recovery and "--initial-read" not in recovery
+        assert "diagnostic" in rejected["instruction"] and "retry context-project" in rejected["instruction"]
+        rc, page = _run_cli(registry, runtime, *recovery[recovery.index("quota"):], cwd=project)
         assert rc == 0 and page["eof"]
         assert json.loads(page["content"])["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
     journal_state = journal / "session.json"
@@ -474,7 +476,7 @@ def test_saved_projection_recovery_failure_returns_typed_error_and_current_refer
     assert not registry.exists() and not runtime.exists()
 
 
-def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
+def test_preflight_instruction_pins_projection_and_diagnostic_receipt(tmp_path):
     from benchmark.runtime.context_delivery import preflight_context_instruction
     from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
 
@@ -496,6 +498,9 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
     assert commands[0][commands[0].index("--turn-instance-id") + 1] == "original-turn"
     assert "--initial-read" in commands[0]
     assert "--decision-output-root" not in commands[0]
+    assert commands[1][commands[1].index("--select") + 1:] == ["/heartbeat_receipt"]
+    assert "--list" not in commands[1]
+    assert "retry the same context-project" in body
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

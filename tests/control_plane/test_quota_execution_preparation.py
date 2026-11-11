@@ -367,7 +367,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("replace_stage", ["guard", "record"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record", "version"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
@@ -398,11 +398,22 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
         source.write_bytes(verified["bytes"] + b" ")
 
     def observe_guard(command, **kwargs):
+        prepared = "--prepared-capture-reference" in command
+        if prepared and replace_stage == "version":
+            command = [*command, "--complete-turn"]
         result = run(command, **kwargs)
-        if "--prepared-capture-reference" in command:
+        if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
                 replace_capture()
+            elif replace_stage == "version":
+                source, = native.glob("prepared-*/ready/decision.json")
+                payload = json.loads(source.read_bytes())
+                assert payload["schema_version"] == "loopx_turn_envelope_v1"
+                payload["schema_version"] = "loopx_turn_envelope_v999"
+                source.write_text(json.dumps(payload))
+                verified["writer"]["capture_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+                result.stdout = json.dumps(verified["writer"])
         return result
 
     monkeypatch.setattr(codex_execution_preparation, "_default_runner", observe_guard)
@@ -429,8 +440,30 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     assert receipt["claim_operation_id"].startswith("todo-claim:")
     context = receipt["context"]
     assert context["ok"] is False
-    assert "digest mismatch" in context["reason"]
     recovery = shlex.split(context["recovery_command"])
+    if replace_stage == "version":
+        assert "Unsupported" in context["reason"]
+        assert context["recovery_command"] == context["recovery"]["command"]
+        assert [recovery[index + 1] for index, word in enumerate(recovery) if word == "--select"] == ["/heartbeat_receipt"]
+        log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
+        after_claim = log.read_bytes()
+        diagnostic = subprocess.run(recovery, cwd=tmp_path, check=True, text=True, capture_output=True)
+        diagnostic_page = json.loads(diagnostic.stdout)
+        assert json.loads(diagnostic_page["content"])["selections"] == [
+            {"pointer": "/heartbeat_receipt", "value": context["heartbeat_receipt"]},
+        ]
+        response = hook(diagnostic_page)
+        readback = json.loads(response["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+        assert readback["event"] == "host_execution_preparation_readback_required"
+        assert readback["claim_operation_id"] == receipt["claim_operation_id"]
+        retry = shlex.split(readback["context"]["recovery_command"])
+        assert "context-project" in retry and "--turn-instance-id" in retry
+        refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
+        error = json.loads(refusal.stdout)
+        assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
+        assert "content" not in error and log.read_bytes() == after_claim
+        return
+    assert "digest mismatch" in context["reason"]
     digest = hashlib.sha256(verified["bytes"]).hexdigest()
     writer = verified["writer"]
     assert writer["capture_sha256"] == digest and writer["execution_preparation"] == receipt["execution_preparation"]

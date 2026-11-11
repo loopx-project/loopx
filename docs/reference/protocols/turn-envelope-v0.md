@@ -58,11 +58,13 @@ existing complete captures remain readable through their original digest-bound
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
-An unknown version, mixed legacy and complete binding, or invalid signature
-returns the recorded receipt and a digest-bound `context-read` locator.
-Native recovery publishes the capture as the current session source only
-after the existing typed check succeeds. The original file remains available
-for explicit recovery if that check is interrupted.
+If the saved source cannot be verified, the returned digest-bound
+`context-read` command selects only its recorded `heartbeat_receipt` for
+diagnosis. Restore the intact, supported source and retry `context-project`
+with the original Goal, Agent, Turn and digest before using it for work.
+Native recovery publishes the current session source after the same typed
+check succeeds. Optional presentation failures after verification can still
+refer to the verified capture.
 
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
@@ -90,9 +92,11 @@ model context. Actual live adoption and efficiency still require separate proof.
 旧 CLI 在 guard 前拒绝新选项，回滚时移除该选项；旧完整 capture 仍用原 reader。
 
 `quota context-project` 先校验已保存的完整决定，再将它呈现为当前上下文。仅开启差分
-或关闭上下文交付时同样校验。未知版本、混用旧格式和完整绑定或签名损坏时，返回原
-记录回执及绑定摘要的 `context-read` 入口。原生会话仅在现有 typed 校验通过后才
-发布当前恢复来源。校验中断时，可按原文件和摘要显式读取。
+或关闭上下文交付时同样校验。来源校验失败或中断时，返回的摘要绑定
+`context-read` 命令只选取原记录的 `heartbeat_receipt` 用于诊断。恢复完整且受支持
+的来源后，以原 Goal、Agent、Turn 和摘要重试 `context-project`，通过后再作为工作
+上下文。原生会话通过同一校验后发布当前来源。校验成功后如遇可选呈现失败，仍可
+读取已验证的捕获。
 这只是 Host 开发协议入口，不新增设置、模型/子 worker、预算或权限，也不证明
 已运行的 Host 采用或效率收益。
 
