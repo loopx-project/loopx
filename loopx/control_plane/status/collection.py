@@ -188,8 +188,7 @@ def collect_status(
         registry_path=registry_path,
         include_goal_channel_projection=include_presentation_projections,
     )
-    # No later projection consumes canonical rows; release retained archive
-    # data before assembling the rest of the display.
+    # No later projection consumes the shared status snapshot.
     del todo_snapshot
     queue = overlay_status_turn_retries(history, queue, observed_at=now_utc_iso())
     runtime_summaries = context.build_runtime_summaries(

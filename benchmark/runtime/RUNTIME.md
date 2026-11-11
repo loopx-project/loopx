@@ -170,8 +170,11 @@ native projector present full/delta for an uninterrupted tool. A refused/lost
 release remains the original typed transport failure, without publishing an
 optimized result or rerunning the guard. An interrupted guard continues with
 the original full packet; no delta is required for checkpoint recovery. Native
-cursor verification also binds the context-directory/root option. The existing
-Darwin native-checkpoint refusal remains in force.
+cursor verification binds the context-directory/root option and the worker's
+original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
+a complete-mode binding cannot verify a pending command that uses
+`--complete-turn`. Historical ordinary and envelope guards remain readable.
+The existing Darwin native-checkpoint refusal remains in force.
 
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`

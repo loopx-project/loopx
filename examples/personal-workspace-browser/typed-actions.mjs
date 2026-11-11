@@ -2107,6 +2107,7 @@ export const typedActionsScenario = {
       await currentRuntimeRun.click();
       await page.getByRole("tab", { name: "详情与操作" }).click();
       const interruptionQuestion = "保持运行，等我检查中断控制。";
+      let correctionStreamRequests = 0;
       // This assertion needs a running correction, independent of how long
       // drawer navigation takes. Hold only its exact Session/Turn stream;
       // completion races remain covered by conversation-activity.
@@ -2114,12 +2115,32 @@ export const typedActionsScenario = {
         const path = new URL(route.request().url()).pathname.split("/");
         const correction = api.turnRequests.find((turn) => turn.message === interruptionQuestion
           && turn.sessionId === path[4] && turn.turnId === path[6]);
-        if (correction) await interruptedCorrectionStream.promise;
+        if (correction) {
+          // Terminal proposal readback uses this endpoint too; only a live
+          // Turn subscription can compete for its running row and controls.
+          if (page.__loopxRuntime.sessions.get(correction.sessionId)?.active_turn_id === correction.turnId) {
+            correctionStreamRequests += 1;
+          }
+          await interruptedCorrectionStream.promise;
+        }
         return route.fallback();
       });
       const runningCorrection = page.getByLabel("输入纠偏信息");
       await runningCorrection.fill(interruptionQuestion);
-      await page.getByRole("button", { name: "发送纠偏" }).click();
+      await Promise.all([
+        page.waitForRequest(request => {
+          const path = new URL(request.url()).pathname.split("/");
+          return path[7] === "events" && api.turnRequests.some(turn => turn.message === interruptionQuestion
+            && turn.sessionId === path[4] && turn.turnId === path[6]);
+        }, { timeout: 8_000 }),
+        page.getByRole("button", { name: "发送纠偏" }).click(),
+      ]);
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await goalNavigation.getByRole("button", { name: /^(Overview|概览)$/ }).click();
+      await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
+      await currentRuntimeRun.click();
+      await page.getByRole("tab", { name: "详情与操作" }).click();
       await page.getByText("更多运行操作").click();
       const interruptButton = page.getByRole("button", { name: "中断本次运行" });
       try {
@@ -2146,6 +2167,9 @@ export const typedActionsScenario = {
       }
       await page.getByRole("button", { name: /关闭详情/ }).click();
       await page.locator('[data-goal-panel="chat"]').getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      assert.equal(correctionStreamRequests, 1, "Returning to a running correction reuses its original observer");
+      assert.equal(await page.locator('[data-goal-panel="chat"]').getByRole("button", { name: "中断本轮", exact: true }).count(),
+        0, "An interrupted correction leaves no pending duplicate in the conversation");
 
       if (!await currentRuntimeRun.isVisible()) await page.locator(".personal-activity-summary > summary").click();
       await currentRuntimeRun.click();

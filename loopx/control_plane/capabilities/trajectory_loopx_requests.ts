@@ -3,6 +3,7 @@
  * Turn. This conservative order association is not provider input attribution,
  * pure-control classification, complete workflow cost or a savings estimate. */
 import type {TrajectoryLoopXRequests, TrajectoryRequestCoverage, TrajectoryRequestTokens} from './trajectory_assessment_types.ts';
+import {isIdentifiedTurnAbort} from './trajectory_request_usage.ts';
 import {trajectoryLoopXOperation} from './trajectory_tool_context.ts';
 
 type Row = {line: number; type?: string; payload?: Record<string, any>};
@@ -24,7 +25,8 @@ export function summarizeTrajectoryLoopXRequests(rows: Row[], tools: unknown,
   try {
     if (!Array.isArray(tools) || coverage?.status !== 'verified') throw new Error('Reconciled request and tool observations required.');
     const ordered = [...rows.filter(r => r.type === 'token_usage_record'
-      || r.type === 'event_msg' && ['task_started', 'task_complete'].includes(r.payload?.type)),
+      || r.type === 'event_msg' && (['task_started', 'task_complete'].includes(r.payload?.type)
+        || isIdentifiedTurnAbort(r.payload))),
       ...tools.map(r => ({...r, tool: true}))].sort((a, b) => a.line - b.line);
     const calls = new Map<string, Call>(), seen = new Set<string>(), outputs = new Set<string>();
     const compactions = new Set(rows.filter(r => r.type === 'compacted').map(r => r.payload?.compaction_response_id));

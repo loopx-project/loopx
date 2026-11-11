@@ -1227,7 +1227,7 @@ def returned_history(flow):
 
 
 @pytest.fixture
-def returned_file_history(flow):
+def returned_file_history(flow, request):
     import os
 
     if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"):
@@ -1252,12 +1252,18 @@ def returned_file_history(flow):
             return {"ok": True, "reply_verified": True}
 
     sender = Sender()
-    assert drain(root, registry, store, sender) == 1
+    delivery_root = root
+    if getattr(request, "param", False):
+        delivery_root = root.with_name(f"{root.name}-alias")
+        delivery_root.symlink_to(root.resolve(), target_is_directory=True)
+    assert drain(delivery_root, registry, store, sender) == 1
+    assert sender.calls == 1
     message = next(row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup")
     assert not message.get("attachments"), "Reproduce an existing delivered answer whose transcript lost its files"
     return root, registry, store, session, turn, receipt, message, sources, sender
 
 
+@pytest.mark.parametrize("returned_file_history", [False, True], indirect=True, ids=["direct", "runtime-alias"])
 def test_existing_return_files_project_without_resending_or_rewriting(returned_file_history):
     from loopx.capabilities.manager_context.roundtrip import read_chat_return_file
 
@@ -1470,6 +1476,42 @@ def test_history_fallback_reads_only_visible_result_states(returned_history, mon
     assert set(reads) == {replies / rid / "conclusion.json", replies / rid / "conclusion.delivery.json"}
     assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
     assert store.messages(sid) == messages
+
+
+def test_dense_return_history_reads_routes_once_without_opening_each_turn(frozen_private_reply, monkeypatch):
+    store, session, *_ = frozen_private_reply
+    root, sid = store.root.parent, session["session_id"]
+    messages = []
+    for i in range(202):
+        rid, tid = f"{i:064x}", f"{i:032x}"
+        source = root if i != 201 else root / "other-chat-host"
+        _write(_root(root) / "roundtrips" / f"{rid}.json", {
+            "request_id": rid, "session_id": sid, "source_chat_runtime_root": str(source),
+        })
+        replies = _root(root) / "replies" / rid
+        _write(replies / "conclusion.json", {"text": f"Original result {i}"})
+        _write(replies / "conclusion.delivery.json", {"status": "delivered"})
+        messages.append({
+            "message_id": "handoff." + _hash([rid, "conclusion"]),
+            "turn_id": tid, "role": "agent", "origin": "manager_followup", "text": f"Original result {i}",
+        })
+    load_turn, opened = store.load_turn, []
+
+    def track_turn(session_id, turn_id):
+        opened.append(turn_id)
+        return load_turn(session_id, turn_id)
+
+    monkeypatch.setattr(store, "load_turn", track_turn)
+    projected = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert [row["text"] for row in projected] == [row["text"] for row in messages]
+    assert all(row["return_delivery"]["status"] == "delivered" for row in projected[:-1])
+    assert projected[-1] == messages[-1]
+    assert not opened
+
+    first = _root(root) / "replies" / ("0" * 64) / "conclusion.delivery.json"
+    _write(first, {"status": "verification_required", "error": "provider_delivery_unverified"})
+    reread = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert reread[0]["return_delivery"]["status"] == "verification_required"
 
 
 def test_paged_history_filters_result_io_and_rereads_late_state(frozen_private_reply, private_snapshot, monkeypatch):

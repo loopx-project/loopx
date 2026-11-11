@@ -22,6 +22,51 @@ def _terminal_range_seen(state: dict[str, Any], digest: str, total: int) -> bool
     )
 
 
+def _context_selection_target(
+    page: dict[str, Any], references: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    reference_file = page.get("reference_file")
+    selected = None
+    observation = None
+    selection_paths = None
+    initial_read = False
+    if isinstance(reference_file, str):
+        _, metadata = read_context_read_reference(reference_file)
+        selected = metadata.get("selection")
+        observation = metadata.get("observed_read")
+        selection_paths = metadata.get("selection_paths")
+        if not isinstance(selected, dict) or selected.get("list_fields") is not False:
+            return None
+        path, source_digest = metadata["path"], metadata["sha256"]
+        pointers, view_digest = selected.get("select"), selected.get("sha256")
+        initial_read = selected.get("initial_read") is True
+    else:
+        path = next((entry["path"] for entry in references if entry.get("sha256") == page.get("sha256")), None)
+        source_digest = page.get("sha256")
+        if path is None or page.get("list_fields"):
+            return None
+        pointers, view_digest = page.get("selected_pointers"), page.get("selection_sha256")
+        # An inline initial read deliberately omits the pointer vector. Keep
+        # its selection digest when metadata IO fell back to the legacy cursor;
+        # the existing selector must reconstruct and verify that exact view.
+        if "selected_pointers" not in page and "selection_sha256" in page:
+            initial_read = True
+        elif "selected_pointers" not in page:
+            # A whole original-source read covers sections without pretending
+            # it was the separate native required-view delivery.
+            pointers, view_digest = [""], source_digest
+    return {
+        "initial_read": initial_read,
+        "observation": observation,
+        "path": path,
+        "pointers": pointers,
+        "selected": selected,
+        "selection_paths": selection_paths,
+        "source_digest": source_digest,
+        "view_digest": view_digest,
+    }
+
+
 def verified_context_selection(
     state: dict[str, Any], page: dict[str, Any], *, defer_section_digests: bool = False,
 ) -> dict[str, Any] | None:
@@ -32,34 +77,21 @@ def verified_context_selection(
         return None
     references = [entry for key in ("source_recovery", "recovery")
                   if isinstance(entry := state.get(key), dict)]
-    reference_file = page.get("reference_file")
-    selected = None
-    observation = None
-    selection_paths = None
-    if isinstance(reference_file, str):
-        _, metadata = read_context_read_reference(reference_file)
-        selected = metadata.get("selection")
-        observation = metadata.get("observed_read")
-        selection_paths = metadata.get("selection_paths")
-        if not isinstance(selected, dict) or selected.get("list_fields") is not False:
-            return None
-        path, source_digest = metadata["path"], metadata["sha256"]
-        pointers, view_digest = selected.get("select"), selected.get("sha256")
-    else:
-        path = next((entry["path"] for entry in references if entry.get("sha256") == page.get("sha256")), None)
-        source_digest = page.get("sha256")
-        if path is None or page.get("list_fields"):
-            return None
-        pointers, view_digest = page.get("selected_pointers"), page.get("selection_sha256")
-        if pointers is None:
-            # A whole original-source read covers sections without pretending
-            # it was the separate native required-view delivery.
-            pointers, view_digest = [""], source_digest
+    target = _context_selection_target(page, references)
+    if target is None:
+        return None
+    path = target["path"]
+    source_digest = target["source_digest"]
+    pointers = target["pointers"]
+    view_digest = target["view_digest"]
+    selected = target["selected"]
+    observation = target["observation"]
+    selection_paths = target["selection_paths"]
+    initial_read = target["initial_read"]
     physical = Path(path).expanduser().absolute()
     physical = physical.parent.resolve(strict=True) / physical.name
     trusted = next((entry for entry in references if entry.get("sha256") == source_digest
         and Path(entry["path"]).parent.resolve(strict=True) / Path(entry["path"]).name == physical), None)
-    initial_read = selected is not None and selected.get("initial_read") is True
     if trusted is None or (initial_read and pointers is not None) or (not initial_read and (
             not isinstance(pointers, list) or not pointers or not all(isinstance(p, str) for p in pointers))):
         return None
@@ -73,19 +105,20 @@ def verified_context_selection(
     _, raw, source = read_context_capture_file(str(physical), source_digest, private=True)
     actual_digest = source_digest
     presentation_pointers: set[str] = set()
-    if selected is not None or "selected_pointers" in page:
+    text_append = observation.get("text_append") if isinstance(observation, dict) else None
+    if initial_read or selected is not None or "selected_pointers" in page:
         selection, selected_raw, actual_digest = context_selection_view(source, select=pointers,
             initial_read=initial_read, list_fields=False,
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
-            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True),
-            selection_paths=selection_paths)
+            present_goal_narrative=selected.get("present_goal_narrative") is True if selected else None,
+            selection_paths=selection_paths, text_append=text_append)
         if selected_raw is None:
             return None
         raw = selected_raw
         pointers = [item["pointer"] for item in selection["selections"]]
         presentation_pointers = set(selection.get("presentation_pointers", []))
-    if actual_digest != view_digest or len(raw) != total or raw[offset:offset + len(actual)] != actual:
+    if pointers is None or actual_digest != view_digest or len(raw) != total or raw[offset:offset + len(actual)] != actual:
         return None
     end = offset + len(actual)
     if ((page.get("eof") is True and (end != total or page.get("next_offset") is not None))
@@ -109,6 +142,7 @@ def verified_context_selection(
                 if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
                     inherited = observation["fields"]
             sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
-                consumed_pointers=inherited)["sections"]
+                consumed_pointers=inherited,
+                **({"observed_text_append": text_append} if inherited and text_append is not None else {}))["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
         "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}

@@ -1,8 +1,8 @@
 # Preserve the selected runtime during rollback
 
-Status: implementation proposal.
-
-[中文](self-update-explicit-runtime-route-v0.zh-CN.md)
+- **RFC status:** Accepted (bounded rollback route repair implemented in #8470; installed qualification separate)
+- **Supersedes / closes:** none
+- **Language:** [中文版](self-update-explicit-runtime-route-v0.zh-CN.md) is the semantic mirror.
 
 ## Problem and ownership
 
