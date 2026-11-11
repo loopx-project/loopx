@@ -12,8 +12,10 @@ import {PostgreSqlAuthorityStore, rotatePostgreSqlAuthorityStoreIdentity, type P
 import {remoteAuthorityOperationId, type RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {postgresRemoteFixture, claimRequest, credentials, serviceIdentity, servicePolicy} from "./remote_authority_fixture.ts";
+import {registerRemoteAuthorityModeConformance} from "./remote_authority_mode_conformance.ts";
 
 const connectionString = process.env.LOOPX_TEST_POSTGRES_URL;
+registerRemoteAuthorityModeConformance(connectionString);
 test("remote authority real TLS/PostgreSQL task journey and recovery", {skip: !connectionString}, async t => {
   const fixture = await postgresRemoteFixture(t, connectionString!);
   let running = await fixture.start();

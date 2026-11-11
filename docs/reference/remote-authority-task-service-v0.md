@@ -77,6 +77,10 @@ maintain that execution and advance its lease version. Before a later lifecycle
 command, use `read` to confirm the same owner/epoch and obtain the current version
 while retaining the original lease key. Stale versions fail without an automatic
 rebase. Progress cannot adopt another execution generation.
+Remote claims require `hard_lease` in the canonical observation used to prepare
+the commit, including every CAS retry. A concurrent switch to `soft_claim` rejects
+the remote claim without assigning work or recording a claim receipt; ordinary
+local soft claims retain their existing behavior.
 Read responses retain current lease facts even when a canonical task has a long
 note. If the note's JSON encoding exceeds 4 KiB, the response omits `note` and
 sets `todo.note_omitted: true`; the stored note remains unchanged. The overall

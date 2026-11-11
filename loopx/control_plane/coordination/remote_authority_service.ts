@@ -170,7 +170,7 @@ export class RemoteAuthorityService {
       dispatched = true;
       if (request.operation === "claim") result = await executeCoordinationTodoClaim(store, {...common,
         operation_id: operationId, claimed_by: request.actor_id, actor_agent_id: request.actor_id,
-        expected_role: "agent", manage_execution: true, dry_run: false});
+        expected_role: "agent", manage_execution: true, required_handoff_mode: "hard_lease", dry_run: false});
       else if (request.operation === "progress") result = await executeCoordinationTodoUpdate(store, {...common,
         operation_id: operationId, actor_agent_id: request.actor_id, expected_role: "agent", dry_run: false,
         claim_operation_id: remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id),
