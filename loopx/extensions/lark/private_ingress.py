@@ -25,6 +25,53 @@ from .inbox_reply import _message
 from .private_json import write_private_json_atomic
 
 
+class PrivateSourceUnavailable(OSError):
+    """Keep the captured request for its existing delivery worker."""
+
+
+def private_source_text(message: Mapping[str, Any]) -> str | None:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    try:
+        text = json.loads(message["body"]["content"])["text"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return text if isinstance(text, str) else None
+
+
+def _private_source_input(message: Mapping[str, Any]) -> tuple[Any, ...]:
+    kind = message.get("msg_type", message.get("message_type"))
+    content = private_source_text(message) if kind == "text" else message.get("content")
+    ancestry = tuple(message.get(field) or None for field in ("parent_id", "root_id", "thread_id"))
+    return kind, content, message.get("create_time"), ancestry
+
+
+def steward_source_preflight(
+    binding: Mapping[str, Any], original: Mapping[str, Any],
+    read_source: Callable[[dict[str, Any]], Mapping[str, Any] | None],
+) -> Callable[[dict[str, Any]], None] | None:
+    """Require fresh Lark content if Core observes a different executor."""
+    if binding.get("context_kind") != "steward" or binding.get("audience", "owner") != "owner":
+        return None
+    observed_executor = binding["executor_endpoint_id"]
+
+    def verify(fresh: dict[str, Any]) -> None:
+        nonlocal observed_executor
+        executor = fresh["binding"]["executor_endpoint_id"]
+        if executor == observed_executor:
+            return
+        current = read_source(fresh)
+        if current is None:
+            raise PrivateSourceUnavailable("original Lark source could not be verified")
+        if (current.get("deleted") is True or original.get("deleted") is True
+                or _private_source_input(current) != _private_source_input(original)):
+            raise ValueError("original Lark source changed during executor adoption")
+        observed_executor = executor
+
+    return verify
+
+
 class IngressObservationStatus(str, Enum):
     """Lark observation vocabulary; it grants no Core action or permission."""
 

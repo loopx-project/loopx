@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...chat_actions import goal_workspace_ref
+from ...chat_ingress import STEWARD_BINDING_ADOPTION_PENDING, ensure_external_admission_scope, resolve_external_admission_source
 from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.quota.automation_cadence_readback import (
@@ -32,7 +33,6 @@ from .file_discovery import FileChatDiscovery
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
-STEWARD_BINDING_ADOPTION_PENDING = "steward_executor_binding_pending"
 
 
 def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
@@ -1397,17 +1397,9 @@ class ChatExternalConversations:
         # it must not hold up other messages while native cancellation runs.
         with exclusive_file_lock(path, operation="admit_external_chat_request"):
             with exclusive_file_lock(self.root / "source-fences" / f"{binding_id}.{source['source_ref']}.json", operation="route_external_chat_request"):
-                # Resolve after waiting for both fences, including exact replay.
-                # A lock-external provider probe cannot authorize the write and
-                # would duplicate this fresh authority check on every request.
-                selected = self.bindings.resolve(binding_id=binding_id, **source,
-                    **({"include_observation": True} if source_preflight is not None else {}))
-                # Earlier provider IO and App observations cannot authorize
-                # admission. Validate against this fresh selection inside both fences,
-                # before creating or replaying any canonical request.
-                if source_preflight is not None:
-                    if source_preflight(deepcopy(selected)) is not None:
-                        raise ValueError("source preflight must complete verification or raise")
+                # Resolve and verify the source inside both fences before
+                # creating or replaying any canonical request.
+                selected = resolve_external_admission_source(self.bindings, binding_id, source, source_preflight)
                 expected = {"binding_id": binding_id, "source": source, "message": message, "command": command,
                             "attachments": normalize_chat_image_attachments(attachments) or None, "origin": origin}
                 recovering_request = path.exists()
@@ -1427,7 +1419,8 @@ class ChatExternalConversations:
                            "created_at": datetime.now(timezone.utc).isoformat()}
                     _atomic_write_json(path, row)
                 try:
-                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request)
+                    row = self._admit_prepared(path, row, selected, recovering_request=recovering_request,
+                                              source_preflight=source_preflight)
                 except ValueError:
                     self._reject_prepared(path, row)
                     raise
@@ -1445,16 +1438,19 @@ class ChatExternalConversations:
     @staticmethod
     def _reject_prepared(path: Path, row: dict[str, Any]) -> None:
         # Definitive command/grant denials must not retry indefinitely.
+        if row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING:
+            row.pop("response_code")
         row.update(status="rejected", response="原授权或命令格式不可用，本条未进入执行队列；请用 /agents 或 /project 查看可用入口。")
         _atomic_write_json(path, row)
 
     def _admit_prepared(self, path: Path, row: dict[str, Any], selected: dict[str, Any],
-                        *, recovering_request: bool = False) -> dict[str, Any]:
+                        *, recovering_request: bool = False,
+                        source_preflight: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         controller = self.controller
+        selected = ensure_external_admission_scope(self.bindings, selected, path, row, source_preflight=source_preflight)
         held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
         if held_for_binding:
             row.pop("response_code")
-        self.bindings.ensure_delivery_scope(selected)
         if not row.get("routing_recorded"):
             choices = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
                 and item["source"]["source_ref"] == row["source"]["source_ref"]
