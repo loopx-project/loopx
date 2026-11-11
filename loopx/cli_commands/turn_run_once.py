@@ -110,6 +110,27 @@ def execute_turn_run_once(
         )
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
+        if args.execute and args.host == "codex-cli" and selected_todo:
+            if not args.resume_turn_key:
+                from ..control_plane.work_items.task_lease import inspect_task_lease
+
+                inspected = inspect_task_lease(
+                    registry_path=registry_path, runtime_root=runtime_root,
+                    goal_id=args.goal_id, todo_id=str(selected_todo["todo_id"]),
+                )
+                lease = inspected.get("lease")
+                if inspected["active"]:
+                    if not isinstance(lease, Mapping) or lease.get("owner") != args.agent_id:
+                        raise ValueError("Turn completion requires the selected Agent's execution lease")
+                    # Retain the launch generation across cached-result recovery;
+                    # a later same-Agent claim must not authorize old work.
+                    payload["completion_lease_proof"] = {
+                        "task_lease_idempotency_key": lease["idempotency_key"],
+                        "task_lease_expected_version": lease["version"],
+                    }
+            completion_lease_proof = dict(payload.get("completion_lease_proof") or {})
+        else:
+            completion_lease_proof = {}
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -366,7 +387,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else completion_lease_proof),
             )
             if completion.get("ok") is not True:
                 return completion

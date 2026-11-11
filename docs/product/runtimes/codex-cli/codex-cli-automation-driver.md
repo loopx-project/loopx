@@ -93,6 +93,21 @@ and `--host-adapter-command-json ...` for a compatible Trae or
 another CLI after its wrapper implements the typed stdin/stdout contract in the
 host-neutral protocol.
 
+The built-in Codex result schema accepts `validated_completion` for a fully
+delivered selected Todo. After independent validation, the adapter invokes the
+existing Todo lifecycle, including its controller-declared validator, before
+accountable refresh and one quota debit. It retains the original launch lease
+generation in the Turn journal for completion and cached-result recovery;
+lease loss or a newer same-Agent generation cannot authorize the old result.
+`validated_progress` remains partial progress and never silently completes work.
+Goal acceptance and terminal closeout remain separate owner checks.
+
+内置 Codex 的结果格式支持 `validated_completion`，用于已满足全部要求的已选 Todo。
+独立验证通过后，adapter 先调用现有 Todo 生命周期及 controller 声明的完成验证器，
+再写回可核算进展并扣额一次。Turn journal 保留启动时的原租约代次，完成和缓存结果
+恢复都使用该代次；租约丢失或同 Agent 的新代次不能授权旧结果。`validated_progress`
+仍表示部分进展，不会被静默升级为完成；Goal 验收和终态关闭仍由各自 owner 检查。
+
 That wrapper is deliberately thin: it translates one Turn request into one
 bounded Agent CLI invocation, preserves only an opaque local resume handle, and
 returns one typed candidate result. LoopX remains responsible for the control
