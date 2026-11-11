@@ -82,14 +82,6 @@ def _dedupe_exact_paths(values: list[str]) -> list[str]:
     return deduped
 
 
-def _display_git_path(record: bytes) -> str:
-    """Render a raw pathname without losing bytes that Git emitted."""
-    try:
-        return record.decode("utf-8")
-    except UnicodeDecodeError:
-        return repr(record)
-
-
 def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     # `-z` frames each pathname on NUL. LF framing is only unambiguous while
     # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
@@ -99,19 +91,30 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     completed = subprocess.run(
         command,
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
-    files = [
-        _display_git_path(record)
-        for record in completed.stdout.split(b"\0")
-        if record
-    ]
+    records = [record for record in completed.stdout.split(b"\0") if record]
+    files: list[str] = []
+    undecodable_count = 0
+    for record in records:
+        try:
+            files.append(record.decode("utf-8"))
+        except UnicodeDecodeError:
+            undecodable_count += 1
+
+    path_error = None
+    if undecodable_count:
+        path_error = (
+            f"Git returned {undecodable_count} changed pathname(s) that are not valid UTF-8; "
+            "canary cannot preserve their identity in the selector output"
+        )
     return {
-        "ok": completed.returncode == 0,
+        "ok": completed.returncode == 0 and path_error is None,
         "returncode": completed.returncode,
         "command": command,
-        "changed_files": files,
+        "changed_files": files if path_error is None else [],
+        "undecodable_path_count": undecodable_count,
+        "path_error": path_error,
         "stderr_tail": completed.stderr.decode("utf-8", "replace")[-800:],
     }
 
@@ -161,17 +164,30 @@ def collect_git_diff_changed_files(
             "source": name,
             "returncode": source.get("returncode"),
             "stderr_tail": source.get("stderr_tail"),
+            **({"error": source["path_error"]} if source.get("path_error") else {}),
         }
         for name, source in sources.items()
         if not source.get("ok")
     ]
+    undecodable_path_count = sum(
+        int(source.get("undecodable_path_count") or 0)
+        for source in sources.values()
+    )
+    path_error = (
+        "Git returned changed pathnames that are not valid UTF-8; canary "
+        "cannot preserve their identity in the selector output"
+        if undecodable_path_count
+        else None
+    )
     return {
-        "ok": bool(successful_sources),
+        "ok": bool(successful_sources) and path_error is None,
         "base_ref": base_ref,
         "repo_root": str(repo_root),
-        "changed_files": changed_files,
+        "changed_files": [] if path_error is not None else changed_files,
         "changed_file_count": len(changed_files),
         "successful_sources": successful_sources,
+        "undecodable_path_count": undecodable_path_count,
+        **({"error": path_error} if path_error else {}),
         "warnings": warnings,
     }
 
@@ -194,6 +210,33 @@ def _resolve_canary_changed_files(args: argparse.Namespace) -> tuple[list[str], 
     return changed_files, git_diff_selector
 
 
+def _git_diff_selector_error(git_diff_selector: dict[str, Any] | None) -> str | None:
+    if git_diff_selector is None or git_diff_selector.get("ok"):
+        return None
+    return str(
+        git_diff_selector.get("error")
+        or "Git changed-path selection failed; refusing to return an incomplete path set"
+    )
+
+
+def _reject_git_diff_selector(
+    git_diff_selector: dict[str, Any] | None,
+    args: argparse.Namespace,
+    print_payload: PrintPayload,
+    format_selector: FormatSelector,
+) -> bool:
+    error = _git_diff_selector_error(git_diff_selector)
+    if error is None or git_diff_selector is None:
+        return False
+    payload = {
+        "ok": False,
+        "error": error,
+        "selector_sources": {"git_diff": git_diff_selector},
+    }
+    print_payload(payload, format_selector(args), lambda value: str(value["error"]) + "\n")
+    return True
+
+
 def _attach_selector_sources(
     payload: dict[str, Any],
     *,
@@ -202,6 +245,10 @@ def _attach_selector_sources(
     if git_diff_selector is None:
         return
     payload["selector_sources"] = {"git_diff": git_diff_selector}
+    error = _git_diff_selector_error(git_diff_selector)
+    if error is not None:
+        payload["ok"] = False
+        payload["error"] = error
 
 
 def _print_smoke_suite_progress(event: dict[str, Any]) -> None:
@@ -611,6 +658,10 @@ def handle_canary_command(
         renderer = render_exact_release_commit_qualification_markdown
     elif args.canary_command == "plan":
         changed_files, git_diff_selector = _resolve_canary_changed_files(args)
+        if _reject_git_diff_selector(
+            git_diff_selector, args, print_payload, output_format
+        ):
+            return 1
         payload = build_catalog_canary_plan(
             catalog_path=args.catalog,
             changed_files=changed_files,
@@ -625,6 +676,10 @@ def handle_canary_command(
         renderer = render_catalog_canary_plan_markdown
     elif args.canary_command == "run":
         changed_files, git_diff_selector = _resolve_canary_changed_files(args)
+        if _reject_git_diff_selector(
+            git_diff_selector, args, print_payload, output_format
+        ):
+            return 1
         payload = build_catalog_canary_run(
             repo_root=_resolve_git_repo_root(Path.cwd()),
             catalog_path=args.catalog,
@@ -643,6 +698,10 @@ def handle_canary_command(
         renderer = render_catalog_canary_run_markdown
     elif args.canary_command == "smoke-suite":
         changed_files, git_diff_selector = _resolve_canary_changed_files(args)
+        if _reject_git_diff_selector(
+            git_diff_selector, args, print_payload, output_format
+        ):
+            return 1
         payload = build_canary_smoke_suite_run(
             repo_root=_resolve_git_repo_root(Path.cwd()),
             suite=str(args.suite or "default-public"),
@@ -685,6 +744,10 @@ def handle_canary_command(
         renderer = render_quality_surface_catalog_audit_markdown
     elif args.canary_command == "premerge":
         changed_files, git_diff_selector = _resolve_canary_changed_files(args)
+        if _reject_git_diff_selector(
+            git_diff_selector, args, print_payload, output_format
+        ):
+            return 1
         target_repo_root = _resolve_git_repo_root(Path.cwd())
         try:
             catalog_path = resolve_canary_catalog_path(args.catalog, repo_root=target_repo_root)

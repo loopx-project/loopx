@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from loopx.canary.maintainability_ratchet import tracked_python_paths
 from loopx.canary.runner import _tracked_change_paths
 from loopx.cli_commands.canary import _run_git_name_only, collect_git_diff_changed_files
+from tests.source_cli import run_source_cli
 
 NEL = "\x85"
 
@@ -108,3 +113,64 @@ def test_run_git_name_only_preserves_cr_and_surrounding_spaces(tmp_path: Path) -
     selector = collect_git_diff_changed_files(repo_root=repo, base_ref="HEAD~1")
     assert selector["changed_files"] == sorted(names)
     assert selector["changed_file_count"] == len(names)
+
+@pytest.mark.skipif(os.name != "posix", reason="non-UTF-8 Git paths are POSIX-only")
+def test_git_byte_paths_fail_closed_before_display_and_dedupe(tmp_path: Path) -> None:
+    """An undecodable name must not collide with a literal repr-like name."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    (repo / "base.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "base.py")
+    _git(repo, "commit", "-m", "base")
+
+    literal_repr = "b'\\xff.py'"
+    (repo / literal_repr).write_text("literal\n", encoding="utf-8")
+    _git(repo, "add", literal_repr)
+    blob = subprocess.run(
+        ["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+        input=b"raw\n", stdout=subprocess.PIPE, check=True,
+    ).stdout.strip()
+    raw_path = b"\xff.py"
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "-z", "--index-info"],
+        input=b"100644 " + blob + b" 0\t" + raw_path + b"\0", check=True,
+    )
+    _git(repo, "commit", "-m", "literal and raw byte paths")
+
+    raw_records = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--name-only", "-z", "HEAD~1...HEAD"],
+        stdout=subprocess.PIPE, check=True,
+    ).stdout
+    assert {record for record in raw_records.split(b"\0") if record} == {
+        literal_repr.encode("utf-8"),
+        raw_path,
+    }
+
+    source = _run_git_name_only(repo, ["diff", "--name-only", "HEAD~1...HEAD"])
+    assert source["ok"] is False
+    assert source["undecodable_path_count"] == 1
+    assert source["changed_files"] == []
+
+    selector = collect_git_diff_changed_files(repo_root=repo, base_ref="HEAD~1")
+    assert selector["ok"] is False
+    assert selector["undecodable_path_count"] >= 1
+    assert "not valid UTF-8" in selector["error"]
+    assert selector["changed_files"] == []
+
+    response = run_source_cli(
+        [
+            "--format", "json", "canary", "plan", "--from-git-diff",
+            "--git-diff-base", "HEAD~1",
+        ],
+        cwd=repo, check=False, timeout=60,
+    )
+    assert response.returncode != 0
+    assert response.stdout, response.stderr
+    payload = json.loads(response.stdout)
+    assert payload["ok"] is False
+    assert "not valid UTF-8" in payload["error"]
+    assert payload["selector_sources"]["git_diff"]["undecodable_path_count"] >= 1
+    assert "selection_inputs" not in payload
