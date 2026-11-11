@@ -185,6 +185,7 @@ class _QuotaDecisionPreparation:
     resolved_scheduler_context: SchedulerExecutionContextResolution
     delivery_continuity_anchor: dict[str, Any] | None
     delivery_continuity_todo: dict[str, Any] | None
+    vision_initialization_context: dict[str, Any] | None = None
 
     @property
     def inbox_priority_due(self) -> bool:
