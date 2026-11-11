@@ -253,10 +253,217 @@ def _read_facts(value: Any, *, progress: bool = False, history: bool = False) ->
     return result
 
 
+def _copy_present_keys(
+    source: dict[str, Any],
+    keys: tuple[str, ...],
+) -> dict[str, Any]:
+    return {key: source[key] for key in keys if key in source}
+
+
+def _todo_item_source_facts(todo: dict[str, Any]) -> dict[str, Any]:
+    projected = _copy_present_keys(
+        todo,
+        (
+            "todo_id",
+            "index",
+            "title",
+            "text",
+            "role",
+            "claimed_by",
+            "agent_id",
+            "status",
+            "priority",
+            "unblocks_todo_id",
+            "decision_scope",
+            "required_decision_scopes",
+        ),
+    )
+    if todo and not projected:
+        projected["_present"] = True
+    return projected
+
+
+def _item_source_facts(item: dict[str, Any]) -> dict[str, Any]:
+    projected = _copy_present_keys(
+        item,
+        (
+            "goal_id",
+            "status",
+            "waiting_on",
+            "recommended_action",
+            "operator_question",
+        ),
+    )
+    raw_asset = item.get("project_asset")
+    if isinstance(raw_asset, dict):
+        asset = _copy_present_keys(raw_asset, ("next_action",))
+        raw_owner = raw_asset.get("owner")
+        if isinstance(raw_owner, dict):
+            owner = _copy_present_keys(raw_owner, ("agent_id",))
+            if owner:
+                asset["owner"] = owner
+        if asset:
+            projected["project_asset"] = asset
+    return projected
+
+
+def _quota_source_facts(quota: dict[str, Any]) -> dict[str, Any]:
+    projected = _copy_present_keys(
+        quota,
+        (
+            "ok",
+            "goal_id",
+            "state",
+            "waiting_on",
+            "source",
+            "status",
+            "gate_id",
+            "normal_delivery_allowed",
+            "recommended_action",
+            "operator_question",
+            "gate_prompt",
+        ),
+    )
+    raw_identity = quota.get("agent_identity")
+    if isinstance(raw_identity, dict):
+        identity = _copy_present_keys(raw_identity, ("agent_id",))
+        if identity:
+            projected["agent_identity"] = identity
+    raw_rollout = quota.get("rollout_event")
+    if isinstance(raw_rollout, dict):
+        rollout = _copy_present_keys(raw_rollout, ("event_id",))
+        if rollout:
+            projected["rollout_event"] = rollout
+    for todo_key in ("selected_todo", "agent_lane_next_action"):
+        raw_todo = quota.get(todo_key)
+        if isinstance(raw_todo, dict):
+            projected[todo_key] = _todo_item_source_facts(raw_todo)
+    raw_agent_summary = quota.get("agent_todo_summary")
+    if isinstance(raw_agent_summary, dict):
+        agent_summary: dict[str, Any] = {}
+        for list_key in (
+            "first_open_items",
+            "first_executable_items",
+            "items",
+            "open_items",
+            "backlog_items",
+            "executable_backlog_items",
+        ):
+            raw_rows = raw_agent_summary.get(list_key)
+            if isinstance(raw_rows, list):
+                agent_summary[list_key] = [
+                    _todo_item_source_facts(row)
+                    for row in raw_rows
+                    if isinstance(row, dict)
+                ]
+        if agent_summary:
+            projected["agent_todo_summary"] = agent_summary
+    raw_user_summary = quota.get("user_todo_summary")
+    if isinstance(raw_user_summary, dict):
+        user_summary = _copy_present_keys(raw_user_summary, ("open_count", "count"))
+        raw_scope_filter = raw_user_summary.get("agent_scope_filter")
+        if isinstance(raw_scope_filter, dict):
+            scope_filter = _copy_present_keys(
+                raw_scope_filter,
+                (
+                    "agent_id",
+                    "current_agent_blocking_open_count",
+                    "other_agent_scoped_open_count",
+                ),
+            )
+            if scope_filter:
+                user_summary["agent_scope_filter"] = scope_filter
+        for list_key in ("first_open_items", "items", "open_items"):
+            raw_rows = raw_user_summary.get(list_key)
+            if isinstance(raw_rows, list):
+                user_summary[list_key] = [
+                    _todo_item_source_facts(row)
+                    for row in raw_rows
+                    if isinstance(row, dict)
+                ]
+        if user_summary:
+            projected["user_todo_summary"] = user_summary
+    raw_contract = quota.get("interaction_contract")
+    if isinstance(raw_contract, dict):
+        raw_channel = raw_contract.get("user_channel")
+        if isinstance(raw_channel, dict):
+            channel = _copy_present_keys(raw_channel, ("action_required", "question"))
+            if channel:
+                projected["interaction_contract"] = {"user_channel": channel}
+    return projected
+
+
+def _status_source_facts(
+    status: dict[str, Any],
+    *,
+    include_history: bool,
+) -> dict[str, Any]:
+    projected = _copy_present_keys(status, ("ok",))
+    raw_envelope = status.get("projection_envelope")
+    if isinstance(raw_envelope, dict) and raw_envelope:
+        projected["projection_envelope"] = raw_envelope
+    raw_registry = status.get("global_registry")
+    if isinstance(raw_registry, dict):
+        registry = _copy_present_keys(
+            raw_registry,
+            (
+                "available",
+                "global_goal_count",
+                "current_registry_excluded_goal_count",
+                "current_registry_excluded_goal_ids",
+            ),
+        )
+        if include_history:
+            raw_findings = raw_registry.get("findings")
+            if isinstance(raw_findings, list):
+                registry["findings"] = [
+                    _copy_present_keys(
+                        row,
+                        ("kind", "severity", "goal_id", "recommended_action", "message"),
+                    )
+                    for row in raw_findings
+                    if isinstance(row, dict)
+                ]
+        if registry:
+            projected["global_registry"] = registry
+    raw_queue = status.get("attention_queue")
+    if isinstance(raw_queue, dict):
+        raw_items = raw_queue.get("items")
+        if isinstance(raw_items, list):
+            projected["attention_queue"] = {
+                "items": [
+                    _copy_present_keys(row, ("goal_id",))
+                    for row in raw_items
+                    if isinstance(row, dict)
+                ]
+            }
+    if include_history:
+        raw_history = status.get("run_history")
+        if isinstance(raw_history, dict):
+            raw_runs = raw_history.get("recent_runs")
+            if isinstance(raw_runs, list):
+                projected["run_history"] = {
+                    "recent_runs": [
+                        _copy_present_keys(
+                            row,
+                            (
+                                "goal_id",
+                                "generated_at",
+                                "classification",
+                                "recommended_action",
+                            ),
+                        )
+                        for row in raw_runs
+                        if isinstance(row, dict)
+                    ]
+                }
+    return projected
+
+
 def _gate_source_facts(item: dict[str, Any], quota: dict[str, Any],
                        agent_id: str | None) -> dict[str, Any]:
     formal_gates = open_user_gate_todo_items(_as_dict(quota.get("user_todo_summary")))
-    formal_gate = formal_gates[0] if formal_gates else None
+    formal_gate = _todo_item_source_facts(formal_gates[0]) if formal_gates else None
     channel = _as_dict(_as_dict(quota.get("interaction_contract")).get("user_channel"))
     routed = str(item.get("waiting_on") or "").strip() in {"controller", "user_or_controller"}
     return {
@@ -279,8 +486,12 @@ def _read_samples(status: dict[str, Any], *, agent_id: str | None,
             continue
         seen.add(goal_id)
         quotas, scoped_reads = _build_goal_quotas(status, goal_id=goal_id, agent_id=agent_id)
+        projected_item = _read_facts(_item_source_facts(item))
         for quota in quotas:
-            sample = {"item": _read_facts(item), "quota": _read_facts(quota)}
+            sample = {
+                "item": projected_item,
+                "quota": _read_facts(_quota_source_facts(quota)),
+            }
             scoped_agent = (_as_dict(quota.get("agent_identity")).get("agent_id")
                             if scoped_reads else agent_id)
             facts = (_gate_source_facts(item, quota, scoped_agent)
@@ -306,13 +517,14 @@ def build_summary_all(*, registry_path: Path, runtime_root_override: str | None,
     read_at = _now_iso()
     samples = _read_samples(status, agent_id=agent_id, limit=limit, gates_only=False)
     return effect_runtime_result("presentation.global_summary.project", {
-        "schema_version": "global_manager_read_request_v0", "status": _read_facts(status, history=True),
+        "schema_version": "global_manager_read_request_v0",
+        "status": _read_facts(_status_source_facts(status, include_history=True), history=True),
         "samples": samples, "agent_id": agent_id, "limit": limit,
         "source_surfaces": SOURCE_SURFACES, "time_range": normalized_range,
         "since": int(since.timestamp() * 1_000_000) if since else None,
         "quota_read_at": read_at, "observed_at": _now_iso(), "generated_at": _now_iso(),
         "boundary": BOUNDARY,
-    })
+    }, large_local_snapshot=True)
 
 
 def build_global_gates(*, registry_path: Path, runtime_root_override: str | None,
@@ -327,8 +539,9 @@ def build_global_gates(*, registry_path: Path, runtime_root_override: str | None
     samples = (_read_samples(status, agent_id=agent_id, limit=normalized_limit, gates_only=True)
                if healthy else [])
     return effect_runtime_result("presentation.global_gates.project", {
-        "schema_version": "global_manager_read_request_v0", "status": _read_facts(status),
+        "schema_version": "global_manager_read_request_v0",
+        "status": _read_facts(_status_source_facts(status, include_history=False)),
         "samples": samples, "agent_id": agent_id, "limit": normalized_limit,
         "quota_read_at": read_at, "observed_at": _now_iso(),
         "generated_at": error_at or _now_iso(), "boundary": BOUNDARY,
-    })
+    }, large_local_snapshot=True)

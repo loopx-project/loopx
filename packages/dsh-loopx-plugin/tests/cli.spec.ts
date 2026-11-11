@@ -16,6 +16,23 @@ const command: LoopXCommand = {
 }
 
 describe('runJsonCommand', () => {
+  it.each(['valid-version', 'nonzero-exit', 'rejected-probe'])(
+    'honours cancellation at the %s probe completion boundary', async outcome => {
+      const controller = new AbortController()
+      let probes = 0
+      await expect(resolveLoopXCommand({
+        signal: controller.signal, env: { LOOPX_BIN: 'fixture-loopx' },
+        runner: async () => {
+          probes += 1
+          controller.abort()
+          if (outcome === 'rejected-probe') throw new Error('probe closed during cancellation')
+          return { exitCode: outcome === 'valid-version' ? 0 : 1, stdout: 'loopx 1.2.4\n', stderr: '' }
+        },
+      })).rejects.toMatchObject({ kind: 'aborted', retryable: false })
+      expect(probes).toBe(1)
+    },
+  )
+
   it.each(['0.5.4', '1.2.3', '1.2.4rc1', '1.2.4.dev1', 'smoke', '1.2.4unknown'])(
     'rejects unavailable or pre-fix CLI version %s', async version => {
       await expect(resolveLoopXCommand({

@@ -108,6 +108,33 @@ def _copy(container, observer, remote: str, immutable_roots=()) -> None:
             raise RuntimeError("Observer source transport was not confirmed")
 
 
+def _prepare_observer_native_home(observer, *, python: str, home: str, user: str) -> bool:
+    """Provision the native reader's writable root in the disposable observer."""
+    identity = observer.exec_run(
+        [python, "-I", "-B", "-c", "import os; print(os.geteuid(), os.getegid())"], user=user,
+    )
+    owner = re.fullmatch(rb"([0-9]+) ([0-9]+)", identity.output.strip()) if identity.exit_code == 0 else None
+    if not owner:
+        return False
+    # Only approved store members are copied later. Creating their parent as
+    # root via _copy would leave the native reader unable to initialize.
+    prepare = (
+        "import os, sys\nfrom pathlib import Path\n"
+        "home = Path(sys.argv[1])\n"
+        "if home.resolve() != home: raise ValueError('Observer native home must be physical')\n"
+        "home.mkdir(mode=0o700, parents=True, exist_ok=True)\n"
+        "if home.resolve() != home: raise ValueError('Observer native home must be physical')\n"
+        "os.chown(home, int(sys.argv[2]), int(sys.argv[3]), follow_symlinks=False)\n"
+        "home.chmod(0o700)\n"
+    )
+    result = observer.exec_run(
+        [python, "-I", "-B", "-c", prepare, str(_guest_path(home)),
+         owner[1].decode("ascii"), owner[2].decode("ascii")],
+        user="root",
+    )
+    return result.exit_code == 0
+
+
 def _file_bytes(container, path):
     with _archive_response(container, path) as (chunks, _), tempfile.TemporaryFile() as spool:
         for block in chunks:
@@ -180,7 +207,7 @@ class PausedSourceProbe:
             _guest_path(row["source_path"])
         for path in immutable_roots:
             _guest_path(path)
-        home = PurePosixPath(declaration["native_home"])
+        home = _guest_path(declaration["native_home"])
         # Copy only the native owner's declared stores/config/hooks, never auth
         # or the entire credential home, even if the caller supplied that root.
         paths = [PurePosixPath(r["source_path"]) for r in components] + list(map(PurePosixPath, immutable_roots))
@@ -278,6 +305,12 @@ class PausedSourceProbe:
         try:
             for path in self.immutable_roots:
                 _copy(container, observer, path, self.immutable_roots)
+            if not _prepare_observer_native_home(
+                observer, python=self.declaration["python"], home=self.declaration["native_home"], user=self.user,
+            ):
+                facts["observer_error_kind"] = "ObserverNativeHomeUnavailable"
+                facts["source_witness_after"] = self.witness(container, plan)
+                return facts
             reads = [self.declaration[key] for key in ("registry", "runtime_root", "scheduler_state")]
             reads += self.declaration["authority_paths"]
             reads += [self.declaration["scheduler_state"] + ".host-attempt",

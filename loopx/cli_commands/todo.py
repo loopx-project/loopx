@@ -444,6 +444,38 @@ def _render_todo_receipt(payload: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _thin_claim_projection(payload: dict[str, object], route: Sequence[str]) -> None:
+    """Omit per-Todo display diagnostics from a successfully delivered claim."""
+    outbox = payload.get("projection_outbox")
+    if (
+        not isinstance(outbox, dict)
+        or outbox.get("schema_version") != "loopx_todo_projection_delivery_v0"
+        or outbox.get("status") not in ("delivered", "current")
+        or outbox.get("next_action") != "finish"
+        or outbox.get("parse_render_parity") is not True
+        or outbox.get("narrative_preserved") is not True
+        or outbox.get("legacy_fallback_used") is not False
+    ):
+        return
+    rows = outbox.get("omitted_active_records")
+    revision = outbox.get("provider_revision")
+    goal_id = payload.get("goal_id")
+    if (
+        not isinstance(rows, list) or not rows or outbox.get("active_fields_omitted") != len(rows)
+        or not isinstance(revision, str) or not revision or not isinstance(goal_id, str) or not goal_id
+    ):
+        return
+    command = [*route, "todo", "project-markdown", "--goal-id", goal_id, "--provider-revision", revision]
+    for field in ("project", "state_file"):
+        path = outbox.get(field)
+        if isinstance(path, str) and path:
+            command.extend(["--" + field.replace("_", "-"), path])
+    payload["projection_outbox"] = {
+        **{key: value for key, value in outbox.items() if key != "omitted_active_records"},
+        "detail_command": shlex.join(command),
+    }
+
+
 def handle_todo_command(
     args: argparse.Namespace,
     *,
@@ -674,6 +706,8 @@ def handle_todo_command(
                 # counters or a second inline copy of the native receipt.
                 for internal in ("lease", "lease_changed", "lease_idempotent", "original_receipt"):
                     payload.pop(internal, None)
+                if args.todo_thin:
+                    _thin_claim_projection(payload, route)
         elif args.todo_command == "update":
             validate_todo_update_options(args)
             update_operation = partial(

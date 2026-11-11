@@ -107,6 +107,9 @@ def _effect_runtime_startup_failure_payload(
 
 def _render_start_goal_markdown(payload: dict[str, object]) -> str:
     if payload.get("ok") is not False:
+        message = payload.get("message")
+        if isinstance(message, str):
+            return message
         return render_start_goal_guided_markdown(payload)
     lines = ["# Guided Start Goal", "", f"- error: `{payload.get('error')}`"]
     for field in (
