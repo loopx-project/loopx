@@ -27,6 +27,25 @@ test("interrupted Goal bootstrap retries its original identity before downstream
   }
 });
 
+test("an interrupted Task start retries only its original saved Task", () => {
+  const canonicalReceipt = {todo_id: "todo-original", goal_id: "report", preview_id: "reviewed", status: "applied"};
+  const created = {todo_id: "todo-original", canonical_receipt: canonicalReceipt};
+  const proposal = {proposal_id: "start-task", expected_state_fingerprint: "reviewed", action_kind: "todo.create",
+    permission_classification: "durable_write", status: "failed", failure: {retry_safe: true},
+    normalized_parameters: {goal_id: "report", start_execution: true},
+    checkpoint: {steps: {todo_created: created}}};
+  const plan = compileActionReviewPlan(proposal);
+  assert.equal(plan.reason, "task_start_retry");
+  assert.equal(plan.retryOriginal, true);
+  assert.equal(plan.canApply, true);
+  for (const change of [{checkpoint: null}, {status: "gated"}, {failure: {retry_safe: false}},
+    {normalized_parameters: {goal_id: "report", start_execution: false}},
+    {checkpoint: {steps: {todo_created: {...created, todo_id: "todo-other"}}}},
+    {expected_state_fingerprint: "another-review"}, {normalized_parameters: {goal_id: "other", start_execution: true}}]) {
+    assert.equal(compileActionReviewPlan({...proposal, ...change}).retryOriginal, undefined);
+  }
+});
+
 test("post-commit creation projects its effects without certifying Goal completion", () => {
   const steps = {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)},
     goal_bootstrapped: {outcome: "goal_bootstrapped", goal_id: "new-goal"},

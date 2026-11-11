@@ -2146,14 +2146,15 @@ export function PersonalWorkspacePage({
       const returned = error instanceof ChatApiError
         ? typedActionProposalSchema.safeParse(error.payload.proposal) : null;
       let stored = returned?.success ? returned.data : undefined;
-      if (!stored && ["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) && !readbackMismatch) {
+      const scopedReadback = ["team.plan", "goal.create", "todo.update", "todo.create"].includes(proposal.actionKind);
+      if (!stored && scopedReadback && !readbackMismatch) {
         const readback = await actionReadback.refetch();
         // Query errors retain cached data; it cannot certify this attempt.
         if (readback.isSuccess) stored = readback.data?.find(item => item.proposal_id === proposal.previewId);
       }
       if (stored?.proposal_id === proposal.previewId && stored.action_kind === proposal.actionKind
         && matchesTodoTarget(stored)
-        && (!["team.plan", "goal.create", "todo.update"].includes(proposal.actionKind) || stored.normalized_parameters.goal_id === proposal.goalId)) {
+        && (!scopedReadback || stored.normalized_parameters.goal_id === proposal.goalId)) {
         await actionReadback.acceptProposal(stored);
         const observed = workspaceProposal(stored, t);
         const reconciled = { ...observed, errorMessage: observed.status === "error"

@@ -16,7 +16,7 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry" | "task_start_retry";
 
 export type OperationReviewContent = {
   title: string;
@@ -573,6 +573,18 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
+  }
+  if (proposal.action_kind === "todo.create" && parameters?.start_execution === true
+      && proposal.permission_classification === "durable_write" && identity.proposalId && identity.sourceFingerprint
+      && (proposal.status === "applying" || (proposal.status === "failed" && objectValue(proposal.failure)?.retry_safe === true))) {
+    const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
+    const created = objectValue(steps?.todo_created);
+    const receipt = objectValue(created?.canonical_receipt);
+    if (textValue(created?.todo_id) && created?.todo_id === receipt?.todo_id
+        && textValue(parameters.goal_id) && receipt?.goal_id === parameters.goal_id
+        && receipt?.preview_id === identity.sourceFingerprint && receipt.status === "applied") {
+      return {...finish({interaction: "review", canApply: true, reason: "task_start_retry"}), retryOriginal: true};
+    }
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null
