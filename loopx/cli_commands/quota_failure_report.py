@@ -329,6 +329,7 @@ def quota_decision_transport_failure_payload(
     error: QuotaDecisionTransportError | EffectRuntimeRemoteError | EffectRuntimeStartupError,
     *,
     capture_directory: Path | None,
+    capture_sha256: str | None = None,
 ) -> dict[str, object]:
     """Report a post-guard failure using the receipt and any actual capture."""
     saved = capture_directory / "decision.json" if capture_directory is not None else None
@@ -361,10 +362,14 @@ def quota_decision_transport_failure_payload(
     if composition_error is not None:
         payload.update(error=reason, diagnostic_code=composition_error.diagnostic_code)
     if saved is not None and saved.is_file():
-        payload["captured_decision"] = {"path": str(saved)}
+        reference = {"path": str(saved)}
+        if capture_sha256 is not None:
+            reference["sha256"] = capture_sha256
+        payload["captured_decision"] = reference
         payload["recommended_action"] = (
-            "The guard already ran. Read the saved composition diagnostic and this Turn's "
-            "receipt before resolving the failure. Do not rerun admission."
+            "The guard already ran. Use quota context-read with the saved composition "
+            "diagnostic path and SHA-256. Inspect this Turn's receipt before resolving "
+            "the failure. Do not rerun admission."
             if composition_error is not None
             else "The guard already ran. Read the saved decision and this Turn's receipt "
             "instead of rerunning the guard. If the handoff endpoint belongs to an "

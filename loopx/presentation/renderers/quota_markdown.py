@@ -813,8 +813,11 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"- diagnostic_code: {markdown_scalar(code)}")
         if turn := as_dict(payload.get("heartbeat_receipt")).get("turn_instance_id"):
             lines.append(f"- turn_instance_id: {markdown_scalar(turn)}")
-        if saved := as_dict(payload.get("captured_decision")).get("path"):
+        capture = as_dict(payload.get("captured_decision"))
+        if saved := capture.get("path"):
             lines.append(f"- captured_decision: {markdown_scalar(saved)}")
+            if digest := capture.get("sha256"):
+                lines.append(f"- capture_sha256: {markdown_scalar(digest)}")
     handoff_readiness = as_dict(payload.get("handoff_readiness"))
     if handoff_readiness:
         lines.append(

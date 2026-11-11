@@ -87,10 +87,13 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert "composition_error" not in failed and "source_diagnostic" not in failed
     assert failed["heartbeat_receipt"] == original["heartbeat_receipt"]
     saved = capture / "decision.json"
-    assert failed["captured_decision"] == {"path": str(saved)}
+    captured = failed["captured_decision"]
+    assert captured["path"] == str(saved)
+    digest = captured["sha256"]
     markdown = render_quota_should_run_markdown(failed)
-    assert all(value in markdown for value in (str(saved), TURN_ID, failed["diagnostic_code"], failed["error"]))
+    assert all(value in markdown for value in (str(saved), digest, TURN_ID, failed["diagnostic_code"], failed["error"]))
     raw = saved.read_bytes()
+    assert digest == hashlib.sha256(raw).hexdigest()
     diagnostic = json.loads(raw)
     assert diagnostic["ok"] is False and diagnostic["should_run"] is False
     assert diagnostic["error_code"] == failed["error_code"]
@@ -108,8 +111,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert (native / "session.json").read_bytes() == original_journal
     assert not (native / "claim-source.json").exists()
 
-    digest = hashlib.sha256(raw).hexdigest()
-    reference = ["--capture-file", str(saved), "--capture-sha256", digest]
+    reference = ["--capture-file", captured["path"], "--capture-sha256", digest]
     for setting in ("off", "on"):
         rc, refused = cli("context-project", *identity, *reference, "--context-delivery", setting,
             "--codex-app", "--codex-context-dir", str(native))
@@ -117,8 +119,8 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         assert "command" not in refused and "first_read_command" not in refused
     content = bytearray()
     eof = False
-    read_args = ["context-read", *reference, "--select", "/source_diagnostic",
-        "--page-bytes", "16000", "--max-page-output-bytes", "64000"]
+    read_args = ["context-read", *reference, "--select", "/composition_error",
+        "--select", "/source_diagnostic", "--page-bytes", "16000", "--max-page-output-bytes", "64000"]
     while not eof:
         rc, page = cli(*read_args)
         assert rc == 0, page
@@ -129,7 +131,17 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         if not eof:
             continuation = shlex.split(page["next_command"])
             read_args = continuation[continuation.index("quota") + 1:]
-    assert json.loads(content)["selections"] == [{"pointer": "/source_diagnostic", "value": original}]
+    assert json.loads(content)["selections"] == [
+        {"pointer": "/composition_error", "value": diagnostic["composition_error"]},
+        {"pointer": "/source_diagnostic", "value": original},
+    ]
+    saved.write_bytes(raw + b"\n")
+    try:
+        rc, refused = cli("context-read", *reference, "--select", "/composition_error")
+        assert rc == 1 and refused["ok"] is False
+        assert "capture digest mismatch" in refused["reason"] and "content" not in refused
+    finally:
+        saved.write_bytes(raw)
     # No callback, projection or diagnostic read acquires work or spends twice.
     assert codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse"}) == {}
     assert not (native / "claim-source.json").exists()
