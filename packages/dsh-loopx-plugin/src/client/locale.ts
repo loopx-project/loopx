@@ -1,5 +1,6 @@
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 
+import type { GoalBarAdmissionFailureCategoryV1 } from '../goalbar/protocol.ts'
 import type { GoalBarUiErrorCode } from './useGoalBar.ts'
 
 export const GOALBAR_LOCALE_NAMESPACE = 'loopx.goalbar' as const
@@ -16,6 +17,13 @@ const en = {
   'action.refreshing': 'Refreshing',
   'progress.label': 'Agent-lane todos: {processed} of {total} processed',
   'progress.empty': 'No agent-lane todos',
+  'continuation.blocked': 'Automatic continuation is not admitted.',
+  'continuation.category.cli_unavailable': 'The LoopX CLI is unavailable.',
+  'continuation.category.cli_unreachable': 'The LoopX CLI could not be reached.',
+  'continuation.category.admission_rejected': 'LoopX rejected the continuation request.',
+  'continuation.category.invalid_response': 'LoopX returned an incompatible response.',
+  'continuation.category.driver_error': 'The continuation driver failed unexpectedly.',
+  'continuation.recovery': 'Pause, then Start, to retry automatic continuation.',
   'error.session_unavailable': 'The session is unavailable. Refresh to retry.',
   'error.cli_unavailable': 'LoopX is unavailable. Refresh to retry.',
   'error.binding_read_failed': 'The LoopX binding could not be read. Refresh to retry.',
@@ -47,6 +55,13 @@ const zh: Record<GoalBarLocaleKey, string> = {
   'action.refreshing': '刷新中',
   'progress.label': 'Agent 通道待办：已处理 {processed} / {total}',
   'progress.empty': '没有 Agent 通道待办',
+  'continuation.blocked': '自动续跑未被准入。',
+  'continuation.category.cli_unavailable': 'LoopX CLI 不可用。',
+  'continuation.category.cli_unreachable': '无法连接 LoopX CLI。',
+  'continuation.category.admission_rejected': 'LoopX 拒绝了续跑请求。',
+  'continuation.category.invalid_response': 'LoopX 返回了不兼容的响应。',
+  'continuation.category.driver_error': '续跑驱动意外失败。',
+  'continuation.recovery': '请先暂停再启动，以重试自动续跑。',
   'error.session_unavailable': '会话不可用。请刷新后重试。',
   'error.cli_unavailable': 'LoopX 当前不可用。请刷新后重试。',
   'error.binding_read_failed': '无法读取 LoopX 绑定。请刷新后重试。',
@@ -116,4 +131,20 @@ const ERROR_KEYS: Readonly<Record<GoalBarUiErrorCode, GoalBarLocaleKey>> = {
 
 export function goalBarErrorKey(code: GoalBarUiErrorCode): GoalBarLocaleKey {
   return ERROR_KEYS[code]
+}
+
+const ADMISSION_CATEGORY_KEYS: Readonly<
+  Record<GoalBarAdmissionFailureCategoryV1, GoalBarLocaleKey>
+> = {
+  cli_unavailable: 'continuation.category.cli_unavailable',
+  cli_unreachable: 'continuation.category.cli_unreachable',
+  admission_rejected: 'continuation.category.admission_rejected',
+  invalid_response: 'continuation.category.invalid_response',
+  driver_error: 'continuation.category.driver_error',
+}
+
+export function goalBarAdmissionCategoryKey(
+  category: GoalBarAdmissionFailureCategoryV1,
+): GoalBarLocaleKey {
+  return ADMISSION_CATEGORY_KEYS[category]
 }

@@ -251,7 +251,17 @@ function coordinatorHarness() {
   let activateCalls = 0
   let cancelCalls = 0
   let abortedWaits = 0
+  let admission = { state: 'clear' }
   return {
+    setAdmission(change) {
+      admission = change.value
+      for (const waiter of [...waiters]) {
+        if (waiter.session !== change.session) continue
+        waiter.finish(waiter.options.isSessionCurrent()
+          ? { kind: 'admission_changed', sessionId: String(change.session.id) }
+          : { kind: 'session_unavailable' })
+      }
+    },
     openWatchService() {
       let disposed = false
       return {
@@ -338,6 +348,9 @@ function coordinatorHarness() {
     async cancelQueued() {
       cancelCalls += 1
       return { kind: 'applied' }
+    },
+    readContinuationAdmission() {
+      return admission
     },
     counts: () => ({ activateCalls, cancelCalls, waiters: waiters.size }),
     abortedWaits: () => abortedWaits,
@@ -562,6 +575,50 @@ async function exercisePackedService(installed) {
   binding = 'bound'
   const current = await read()
   assert.deepEqual(current.snapshot.progress, progress)
+
+  // A driver admission failure is projected into the snapshot with a safe
+  // category, wakes an exact-Session watcher without new events, and is
+  // cleared by the next admitted evaluation.
+  assert.deepEqual(
+    current.snapshot.continuationAdmission,
+    { state: 'clear' },
+    'clean admission state crossed the wire',
+  )
+  const admissionWatch = call('goalbar/watch', {
+    v: requestVersion,
+    op: 'watch',
+    sessionId,
+    afterSessionEventSeq: current.baseSessionEventSeq,
+    sourceRevision: current.sourceRevision,
+    expected: { goalId, loopxAgentId },
+    agentStatus: 'running',
+  })
+  await waitUntil(
+    () => coordinator.counts().waiters === 1,
+    'admission watch never became pending',
+  )
+  coordinator.setAdmission({
+    session,
+    value: { state: 'failed', category: 'invalid_response' },
+  })
+  assert.deepEqual((await admissionWatch).value.result, {
+    kind: 'source_changed', sessionEventSeq: current.baseSessionEventSeq,
+  })
+  const failed = await read()
+  assert.equal(failed.kind, 'present')
+  assert.deepEqual(
+    failed.snapshot.continuationAdmission,
+    { state: 'failed', category: 'invalid_response' },
+  )
+  const failedWire = JSON.stringify(failed)
+  assert(!failedWire.includes('transient diagnostic'))
+  assert(!failedWire.includes(installed))
+  coordinator.setAdmission({ session, value: { state: 'clear' } })
+  assert.deepEqual(
+    (await read()).snapshot.continuationAdmission,
+    { state: 'clear' },
+    'admitted evaluation cleared the projected failure',
+  )
 
   const abortedBefore = coordinator.abortedWaits()
   const cancelledWatch = disconnectableRpc(

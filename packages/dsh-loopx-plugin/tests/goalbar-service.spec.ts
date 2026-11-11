@@ -22,7 +22,10 @@ import {
   createGoalBarService,
   decodeGoalBarLifecycleExecutionV1,
 } from '../src/goalbar/service.ts'
-import type { GoalBarRequestV1 } from '../src/goalbar/protocol.ts'
+import type {
+  GoalBarContinuationAdmissionV1,
+  GoalBarRequestV1,
+} from '../src/goalbar/protocol.ts'
 
 const sessionId = 'session-fixture'
 const goalId = 'goal-fixture'
@@ -233,6 +236,7 @@ interface Harness {
   bindingMode: 'bound' | 'missing' | 'ambiguous'
   activation: 'active' | 'stopped'
   currentAgent: Agent | undefined
+  driverAdmission: GoalBarContinuationAdmissionV1
   mutation?: ((args: readonly string[]) => Promise<FileResult>) | undefined
   onBinding?: (() => void) | undefined
   onActivation?: (() => Promise<void>) | undefined
@@ -245,6 +249,7 @@ type HarnessMutableState = Pick<
   | 'bindingMode'
   | 'activation'
   | 'currentAgent'
+  | 'driverAdmission'
   | 'mutation'
   | 'onBinding'
   | 'onActivation'
@@ -273,6 +278,7 @@ function harness(options: {
     bindingMode: 'bound',
     activation: 'stopped',
     currentAgent: host.agent as Agent | undefined,
+    driverAdmission: { state: 'clear' },
     mutation: undefined as Harness['mutation'],
     onBinding: undefined as Harness['onBinding'],
     onActivation: undefined as Harness['onActivation'],
@@ -329,6 +335,7 @@ function harness(options: {
         driverCalls.push('cancelQueued')
         return receipt
       },
+      readContinuationAdmission: () => state.driverAdmission,
     })
   }
   const service = createGoalBarService({
@@ -462,6 +469,110 @@ describe('GoalBar Host read/watch', () => {
       baseSessionEventSeq: null,
       sourceRevision: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
     })
+    await fixture.service.dispose()
+  })
+
+  it('projects a latched driver admission failure into the read snapshot', async () => {
+    const fixture = harness()
+    fixture.driverAdmission = { state: 'failed', category: 'invalid_response' }
+    const response = await fixture.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    expect(response.result).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        goalActivation: 'stopped',
+        agentStatus: 'idle',
+        continuationAdmission: { state: 'failed', category: 'invalid_response' },
+      },
+    })
+    const serialized = JSON.stringify(response.result)
+    expect(serialized).not.toContain('/private')
+    expect(serialized).not.toContain('stderr')
+    await fixture.service.dispose()
+
+    const clean = harness()
+    const negative = await clean.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    expect(negative.result).toMatchObject({
+      kind: 'present',
+      snapshot: { continuationAdmission: { state: 'clear' } },
+    })
+    await clean.service.dispose()
+  })
+
+  it('wakes a registered watcher when the driver admission state changes', async () => {
+    const fixture = harness({ watchTimeoutMs: 200 })
+    const anchor = await fixture.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    if (anchor.result.kind !== 'present') throw new Error('expected present anchor')
+    const watching = fixture.service.handle(
+      watchRequest(anchor.result.baseSessionEventSeq, {
+        sourceRevision: anchor.result.sourceRevision,
+        expected: { goalId, loopxAgentId },
+        agentStatus: 'idle',
+      }),
+      new AbortController().signal,
+    )
+    await Promise.resolve()
+    fixture.driverAdmission = { state: 'failed', category: 'admission_rejected' }
+    fixture.coordinator.publishAdmissionChange(fixture.host.agent.session)
+
+    expect((await watching).result).toEqual({ kind: 'source_changed', sessionEventSeq: null })
+    const reread = await fixture.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    expect(reread.result).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        continuationAdmission: { state: 'failed', category: 'admission_rejected' },
+      },
+    })
+    await fixture.service.dispose()
+  })
+
+  it('detects an admission change that landed while no watcher was registered', async () => {
+    const fixture = harness({ watchTimeoutMs: 50 })
+    const anchor = await fixture.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    if (anchor.result.kind !== 'present') throw new Error('expected present anchor')
+    const anchorRequest = watchRequest(anchor.result.baseSessionEventSeq, {
+      sourceRevision: anchor.result.sourceRevision,
+      expected: { goalId, loopxAgentId },
+      agentStatus: 'idle',
+    })
+
+    // The driver latched a failure after the read, but its notification found
+    // no in-flight watcher; the next watch must still force exactly one read.
+    fixture.driverAdmission = { state: 'failed', category: 'cli_unreachable' }
+    expect((await fixture.service.handle(
+      anchorRequest,
+      new AbortController().signal,
+    )).result).toEqual({ kind: 'source_changed', sessionEventSeq: null })
+    const served = await fixture.service.handle(
+      readRequest(),
+      new AbortController().signal,
+    )
+    expect(served.result).toMatchObject({
+      snapshot: {
+        continuationAdmission: { state: 'failed', category: 'cli_unreachable' },
+      },
+    })
+
+    // With the served value caught up, watching settles into a normal lease
+    // boundary instead of looping re-reads.
+    expect((await fixture.service.handle(
+      anchorRequest,
+      new AbortController().signal,
+    )).result).toEqual({ kind: 'timeout', sessionEventSeq: null })
     await fixture.service.dispose()
   })
 
@@ -902,6 +1013,7 @@ describe('GoalBar Host lifecycle authority', () => {
       cancelQueued: async () => ({
         kind: 'unavailable', reason: 'session_unavailable',
       }),
+      readContinuationAdmission: () => fixture.driverAdmission,
     })
     let mutationCalls = 0
     fixture.mutation = async () => {

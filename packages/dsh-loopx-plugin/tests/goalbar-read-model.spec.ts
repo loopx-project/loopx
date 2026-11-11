@@ -541,6 +541,7 @@ describe('GoalBar read orchestration', () => {
         goalActivation: 'active',
         agentStatus: 'running',
         progress: { processed: 17, remaining: 4, total: 21 },
+        continuationAdmission: { state: 'clear' },
       },
     })
     expect(JSON.stringify(result)).not.toContain(hostilePath)
