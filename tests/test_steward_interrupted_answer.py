@@ -611,9 +611,25 @@ def test_cleared_native_error_does_not_extend_deadline(
     tmp_path, language_server, monkeypatch, answer_at, hard_limit, timeout_kind,
 ):
     from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.capabilities.native_chat import antigravity_adapter
     from loopx.chat_agent import CodexChatAgentError
 
-    _native_clock(monkeypatch, language_server, _native_frames_after_cleared_error(answer_at=answer_at))
+    frames = _native_frames_after_cleared_error(answer_at=answer_at)
+    idle_boundary = frames[-1]["at"]
+    _native_clock(monkeypatch, language_server, frames)
+    rpc_post = antigravity_adapter._rpc_post
+    final_reads = 0
+
+    def bounded_read(url, token, method, args, **kwargs):
+        nonlocal final_reads
+        if (timeout_kind == "idle" and method == "GetCascadeTrajectory"
+                and language_server["active"] and language_server["now"] >= idle_boundary):
+            final_reads += 1
+            if final_reads > 1:
+                pytest.fail("An unchanged cleared error started another final idle observation")
+        return rpc_post(url, token, method, args, **kwargs)
+
+    monkeypatch.setattr(antigravity_adapter, "_rpc_post", bounded_read)
     adapter = adapter_for(tmp_path, hard_timeout_sec=hard_limit)
     events = []
     with pytest.raises(CodexChatAgentError) as raised:

@@ -1299,13 +1299,12 @@ class AntigravityAdapter:
                             and now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC)
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
-                if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
-                    error_message = final.get("errorMessage") or {}
-                    if (final.get("status") == "CORTEX_STEP_STATUS_CLEARED"
-                            and isinstance(error_message, dict)
-                            and error_message.get("shouldShowUser") is not True):
-                        # The host can clear a retry error before exposing its next step.
-                        continue
+                final_is_error = final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                error_message = final.get("errorMessage") or {}
+                cleared_retry = (final_is_error and final.get("status") == "CORTEX_STEP_STATUS_CLEARED"
+                                 and isinstance(error_message, dict)
+                                 and error_message.get("shouldShowUser") is not True)
+                if final_is_error and not cleared_retry:
                     detail = error_message.get("error") or {}
                     summary = (detail.get("userErrorMessage") or detail.get("shortError")
                                if isinstance(detail, dict) else str(detail))
@@ -1328,11 +1327,12 @@ class AntigravityAdapter:
                     self._active_turn_id = None
                     raise CodexChatAgentError("Antigravity ended with a cancelled step; execution may have occurred.",
                                               gate=None, error_code="upstream_transport_failure")
-                # Native IDLE can occur between input, tool and planner steps.
+                # Native IDLE can occur between input, tool and planner steps,
+                # including after the host clears an error before retrying.
                 # Keep observing this invocation; only a finished answer after
                 # all current work settles can close it. The existing idle and
                 # hard deadlines, permission gates and cancellation still apply.
-                if (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
+                if cleared_retry or (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
                         and (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
                         or (planner.get("stopReason") is None and not self._read_only_review)
                         or any(step.get("status") in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}
