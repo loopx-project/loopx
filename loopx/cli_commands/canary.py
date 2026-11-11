@@ -70,6 +70,26 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
+def _dedupe_exact_paths(values: list[str]) -> list[str]:
+    """Deduplicate Git-derived paths without rewriting their identity."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _display_git_path(record: bytes) -> str:
+    """Render a raw pathname without losing bytes that Git emitted."""
+    try:
+        return record.decode("utf-8")
+    except UnicodeDecodeError:
+        return repr(record)
+
+
 def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     # `-z` frames each pathname on NUL. LF framing is only unambiguous while
     # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
@@ -79,17 +99,20 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     completed = subprocess.run(
         command,
         check=False,
-        text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    files = [name for name in completed.stdout.split("\0") if name]
+    files = [
+        _display_git_path(record)
+        for record in completed.stdout.split(b"\0")
+        if record
+    ]
     return {
         "ok": completed.returncode == 0,
         "returncode": completed.returncode,
         "command": command,
         "changed_files": files,
-        "stderr_tail": completed.stderr[-800:],
+        "stderr_tail": completed.stderr.decode("utf-8", "replace")[-800:],
     }
 
 
@@ -121,7 +144,7 @@ def collect_git_diff_changed_files(
         "unstaged": _run_git_name_only(repo_root, ["diff", "--name-only"]),
         "untracked": _run_git_name_only(repo_root, ["ls-files", "--others", "--exclude-standard"]),
     }
-    changed_files = _dedupe_preserving_order(
+    changed_files = _dedupe_exact_paths(
         [
             file
             for source in sources.values()
@@ -154,7 +177,7 @@ def collect_git_diff_changed_files(
 
 
 def _resolve_canary_changed_files(args: argparse.Namespace) -> tuple[list[str], dict[str, Any] | None]:
-    changed_files = list(args.changed_file or [])
+    changed_files = _dedupe_preserving_order(list(args.changed_file or []))
     git_diff_selector = None
     if bool(getattr(args, "from_git_diff", False)):
         repo_root = _resolve_git_repo_root(Path.cwd())
@@ -162,12 +185,13 @@ def _resolve_canary_changed_files(args: argparse.Namespace) -> tuple[list[str], 
             repo_root=repo_root,
             base_ref=str(getattr(args, "git_diff_base", "origin/main") or "origin/main"),
         )
-        changed_files.extend(
+        derived = [
             file
             for file in (git_diff_selector.get("changed_files") or [])
             if isinstance(file, str)
-        )
-    return _dedupe_preserving_order(changed_files), git_diff_selector
+        ]
+        changed_files = _dedupe_exact_paths([*changed_files, *derived])
+    return changed_files, git_diff_selector
 
 
 def _attach_selector_sources(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loopx.canary.maintainability_ratchet import tracked_python_paths
 from loopx.canary.runner import _tracked_change_paths
-from loopx.cli_commands.canary import _run_git_name_only
+from loopx.cli_commands.canary import _run_git_name_only, collect_git_diff_changed_files
 
 NEL = "\x85"
 
@@ -77,3 +77,34 @@ def test_tracked_change_paths_keeps_one_record_per_path(tmp_path: Path) -> None:
 
     assert ok is True, detail
     assert paths == sorted([committed.encode("utf-8"), staged.encode("utf-8")])
+
+
+def test_run_git_name_only_preserves_cr_and_surrounding_spaces(tmp_path: Path) -> None:
+    """Text decoding must not rewrite a valid Git pathname.
+
+    Universal-newline translation turns a literal carriage return into LF, and
+    trimming removes valid leading or trailing filename spaces. Both altered
+    the canary selector's path identity before it could match changed files.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    (repo / "base.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "base.py")
+    _git(repo, "commit", "-m", "base")
+
+    names = [" leading.py", "cr\rname.py", "trailing.py "]
+    for name in names:
+        (repo / name).write_text("x = 2\n", encoding="utf-8")
+        _git(repo, "add", "--", name)
+    _git(repo, "commit", "-m", "add exact path records")
+
+    result = _run_git_name_only(repo, ["diff", "--name-only", "HEAD~1...HEAD"])
+    assert result["ok"] is True
+    assert result["changed_files"] == sorted(names)
+
+    selector = collect_git_diff_changed_files(repo_root=repo, base_ref="HEAD~1")
+    assert selector["changed_files"] == sorted(names)
+    assert selector["changed_file_count"] == len(names)
