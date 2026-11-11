@@ -35,8 +35,12 @@ export function qualifyCliSourceActivation(value: unknown): JsonObject {
     throw new Error("invalid CLI source activation scope");
   }
   for (const key of ["goal_id", "agent_id", "todo_id", "turn_instance_id", "session_id", "started_at"]) requireNonEmptyString(scope[key], key);
-  for (const [key, width] of [["activation_id", 32], ["container_id", 64], ["target_revision", 40]] as const) {
-    if (!new RegExp(`^[a-f0-9]{${width}}$`).test(requireNonEmptyString(scope[key], key))) throw new Error(`invalid ${key}`);
+  for (const [key, pattern] of [
+    ["activation_id", /^[a-f0-9]{32}$/],
+    ["container_id", BARE_SHA256_PATTERN],
+    ["target_revision", /^[a-f0-9]{40}$/],
+  ] as const) {
+    if (!pattern.test(requireNonEmptyString(scope[key], key))) throw new Error(`invalid ${key}`);
   }
   sha(scope.target_archive_sha256, "target source archive");
   for (const key of ["launcher_uid", "launcher_gid"]) {

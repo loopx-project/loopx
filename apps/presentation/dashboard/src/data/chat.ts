@@ -1022,8 +1022,19 @@ export type ChatQueuedTurn = z.infer<typeof chatQueueSchema>["turns"][number];
 
 /** Bounded metadata from the existing persistent queue, never a local queue. */
 export async function fetchChatQueue(sessionId: string, signal?: AbortSignal) {
-  const result = chatQueueSchema.safeParse(await requestJson<unknown>(
-    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue`, {signal}));
+  const read = () => requestJson<unknown>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/queue`, {signal});
+  let payload: unknown;
+  try {
+    payload = await read();
+  } catch (error) {
+    if (signal?.aborted || !(error instanceof ChatApiError)) throw error;
+    const {error_code: code, http_status: status} = error.payload;
+    const connectionInterrupted = code === "chat_api_unavailable" && (status === undefined || status === 200);
+    if (status !== 503 && !connectionInterrupted) throw error;
+    // Reuse the original Session and caller signal for one read-only retry.
+    payload = await read();
+  }
+  const result = chatQueueSchema.safeParse(payload);
   if (!result.success || result.data.session_id !== sessionId
     || new Set(result.data.turns.map(row => row.turn_id)).size !== result.data.turns.length) {
     throw new Error("The original Session queue could not be verified.");

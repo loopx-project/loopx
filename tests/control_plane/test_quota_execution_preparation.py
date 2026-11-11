@@ -186,6 +186,43 @@ def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provide
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_execution_preparation_transports_only_the_selected_provider_facts(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.todos.goal_todo_projection import project_todo_read
+
+    other = {**_todo(), "todo_id": "todo_unrelated", "index": 2, "claimed_by": "agent-b",
+             "text": "[P1] Unrelated work", "note": "Unrelated durable evidence " * 200}
+    own_lease = _lease()
+    foreign_lease = {**_lease(owner="agent-b"), "todo_id": other["todo_id"]}
+    packet = _run(tmp_path, monkeypatch, provider, [own_lease, foreign_lease],
+                  todos=[_todo(), other])
+    assert packet["execution_preparation"]["state"] == "ready"
+    runtime = tmp_path / "runtime"
+    provider_head = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL, include_leases=True)
+
+    def read(todo_id, source_root=runtime):
+        return project_todo_read({
+            "kind": "execution_preparation_source",
+            "source": {"runtime_root": str(source_root), "goal_id": GOAL}, "todo_id": todo_id,
+        })["execution_preparation_source"]
+
+    observed = read(TODO)
+    assert observed["goal_id"] == GOAL and observed["todo_id"] == TODO
+    assert observed["provider_revision"] == provider_head["provider_revision"]
+    assert observed["source_authority"] == provider_head["source_authority"]
+    assert observed["decision_read_from_provider"] and not observed["legacy_fallback_used"]
+    assert observed["todo"] == {"todo_id": TODO, "status": "open", "claimed_by": AGENT}
+    assert [row["todo_id"] for row in observed["leases"]] == [TODO]
+    assert observed["leases"][0]["expires_at"] == own_lease["expires_at"]
+    assert other["todo_id"] not in json.dumps(observed) and len(json.dumps(observed)) < 2048
+    assert read("todo_missing") is None
+    absent = tmp_path / "unbound-runtime"
+    assert read(TODO, absent) is None
+    assert not absent.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     tmp_path, monkeypatch, provider,
 ):
