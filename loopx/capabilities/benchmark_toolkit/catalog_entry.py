@@ -983,6 +983,14 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "feedback": "declared",
                 "timing": "during_solving",
             },
+            "mixed_background_opt_in": {
+                "feedback": "declared",
+                "timing": "during_solving",
+                "background_evaluation": {
+                    "feedback": "blinded",
+                    "timing": "during_solving",
+                },
+            },
             "required_runner_attestations": [
                 "evaluation_protocol_enforced",
                 "evaluation_log_complete",
@@ -994,10 +1002,13 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "ordered_submissions",
                 "declared_channel_deliveries",
                 "acknowledged_feedback_transport",
+                "complete_blinded_background_evaluation_log_when_declared",
             ],
             "boundary": (
                 "Only a preregistered policy plus complete private runner evidence "
-                "replaces the blind-protocol attestations; prose or partial score "
+                "replaces the blind-protocol attestations. Mixed protocols keep "
+                "background results blinded and bind their complete evaluation "
+                "log separately from declared deliveries; prose or partial score "
                 "logs remain unqualified."
             ),
         },

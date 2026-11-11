@@ -55,6 +55,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     delete state.consumed_pointers;
     delete state.confirmed_read_sections;
     delete state.section_reads;
+    delete state.selected_resume;
   };
   if (name === "SessionStart") {
     // The provider may qualify the native-selected replay source against the
@@ -73,9 +74,21 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
       delete state.candidate;
       delete state.pending;
       delete state.active_call;
-      delete state.consumed_pointers;
-      delete state.confirmed_read_sections;
       delete state.section_reads;
+      // Selected outputs can establish their own literal sections on a
+      // qualified replay. They never establish a whole-input candidate.
+      const previous = jsonObject(state.consumed_pointers);
+      const replayed = jsonObject(request.resume_sections);
+      const retained = Object.fromEntries(Object.entries(replayed ?? {}).filter(([address, digest]) =>
+        typeof digest === "string" && previous?.[address] === digest));
+      if (Object.keys(retained).length > 0) {
+        state.consumed_pointers = retained;
+        state.confirmed_read_sections = Object.keys(retained);
+      } else {
+        delete state.consumed_pointers;
+        delete state.confirmed_read_sections;
+        delete state.selected_resume;
+      }
       return state;
     }
     invalidate();

@@ -298,6 +298,7 @@ function requireFailureKind(value: unknown): SettlementFailureKind {
 export function effectProgramFromOrderedSteps(
   orderedSteps: unknown,
   executionMode: unknown = null,
+  includeRaw = true,
 ): EffectProgram {
   const steps: EffectStep[] = [];
   if (Array.isArray(orderedSteps)) {
@@ -317,7 +318,7 @@ export function effectProgramFromOrderedSteps(
         kind: nullableTruthyString(step.kind),
         command: nullableTruthyString(commandValue),
         purpose: nullableTruthyString(step.purpose),
-        raw: { ...step },
+        raw: includeRaw ? { ...step } : {},
       });
     }
   }

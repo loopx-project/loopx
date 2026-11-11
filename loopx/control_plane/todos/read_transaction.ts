@@ -22,7 +22,15 @@ const includesArchivedRows = (query: JsonObject): boolean =>
 const canonicalSourceRows = new Set<string>([...SUMMARY_SOURCES, ...PLANNING_SOURCES, ...RESUME_SOURCES]);
 
 export async function readCanonicalTodoProjection(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
-  const canonical = await collectCanonicalTodoSource(requireJsonObject(input.source, "canonical Todo read source"), dependencies);
+  const source = requireJsonObject(input.source, "canonical Todo read source");
+  const contractFields: unknown = input.canonical_contract_fields;
+  if (contractFields !== undefined && (
+    input.kind !== "canonical_fields" || input.query != null || input.read_pipeline !== undefined ||
+    input.return_projection === true || source.include_leases === true || source.projection_readback != null ||
+    !Array.isArray(contractFields) || !contractFields.length || new Set(contractFields).size !== contractFields.length ||
+    contractFields.some(key => typeof key !== "string" || !/^[a-z][a-z0-9_]*$/.test(key))
+  )) throw new EffectRuntimeRequestError("Todo contract fields require a read-only canonical summary");
+  const canonical = await collectCanonicalTodoSource(source, dependencies);
   if (canonical.status !== "loaded") return {schema_version: TODO_READ_RESULT, canonical};
   const todos = canonical.todos;
   const guards = canonical.goal_acceptance_work_guards ?? {};
@@ -58,14 +66,26 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
       projected = {...selected, fields: requireJsonObject(selected.projection, "native Todo selection").summaries};
     }
   }
-  if (input.query == null || projected.rejection) return {
-    ...(input.return_projection === true && projected.projection
-      ? {schema_version: TODO_READ_RESULT, projection: projected.projection, field_evaluations: projected.field_evaluations}
-      : {...projected, canonical}),
-    ...(projected.fields && !projected.rejection ? {source_projection: {source_row_fields: [...canonicalSourceRows],
-      source: Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]])),
-      field_digests: Object.fromEntries(Object.entries(requireJsonObject(projected.fields, "Todo fields"))
-        .map(([key, field]) => [key, canonicalAuthoritySha256(field)]))}} : {})};
+  if (input.query == null || projected.rejection) {
+    // Both the summary and contract facts come from the complete checked
+    // population. Only the diagnostic facts need to leave this transaction.
+    let canonicalResult = canonical, replay = {};
+    if (Array.isArray(contractFields)) {
+      const {todos: rows, todo_ids: _ids, ...metadata} = canonical;
+      canonicalResult = {...metadata, todo_contract_rows: originalRecords(rows).map(row =>
+        Object.fromEntries(contractFields.map(key => [key, Object.hasOwn(row, key) ? row[key] : null])))};
+      const {canonical_contract_fields: _contractFields, read_observed_at: _readObserved, ...replayRead} = input;
+      replay = {replay_read: replayRead};
+    }
+    return {
+      ...(input.return_projection === true && projected.projection
+        ? {schema_version: TODO_READ_RESULT, projection: projected.projection, field_evaluations: projected.field_evaluations}
+        : {...projected, canonical: canonicalResult}),
+      ...(projected.fields && !projected.rejection ? {source_projection: {source_row_fields: [...canonicalSourceRows],
+        source: Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]])),
+        ...replay, field_digests: Object.fromEntries(Object.entries(requireJsonObject(projected.fields, "Todo fields"))
+          .map(([key, field]) => [key, canonicalAuthoritySha256(field)]))}} : {})};
+  }
   return todoListPayload(input, originalRecords(canonical.todos), projected, canonical);
 }
 
@@ -149,7 +169,7 @@ export async function readCanonicalQuotaProjection(input: JsonObject, dependenci
     if (summary.source_reference !== undefined) {
       const reference = requireJsonObject(summary.source_reference, "quota source reference");
       const read = requireJsonObject(reference.read, "quota source read");
-      if (read.kind !== "canonical_fields" || read.query != null) {
+      if (read.kind !== "canonical_fields" || read.query != null || read.canonical_contract_fields !== undefined) {
         throw new EffectRuntimeRequestError("quota source requires the original complete canonical read");
       }
       const expected = requireJsonObject(reference.expected_source, "quota source identity");
@@ -202,6 +222,32 @@ async function collectCanonicalTodoSource(source: JsonObject, dependencies: Loca
 }
 
 const originalRecords = (value: unknown): JsonObject[] => Array.isArray(value) ? value.map(row => requireJsonObject(row, "Todo source row")) : [];
+
+/** Read the selected Todo and lease facts at one checked provider revision.
+ * Reuse full collection validation; only the fields used by preparation cross
+ * the caller boundary. This read acquires no lease and grants no readiness. */
+export async function readExecutionPreparationSource(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  const source = requireJsonObject(input.source, "execution preparation source");
+  const goalId = requireNonEmptyString(source.goal_id, "goal_id");
+  const todoId = id(input.todo_id);
+  if (!todoId || todoId !== input.todo_id) throw new EffectRuntimeRequestError("execution preparation requires an exact Todo id");
+  const canonical = await collectCanonicalTodoSource({
+    runtime_root: source.runtime_root, goal_id: goalId, include_leases: true,
+  }, dependencies);
+  const unavailable = {schema_version: TODO_READ_RESULT, execution_preparation_source: null};
+  if (canonical.status !== "loaded") return unavailable;
+  const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
+  if (!todo) return unavailable;
+  const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
+    .map(({todo_id, schema_version, status, owner, expires_at}) => ({todo_id, schema_version, status, owner, expires_at}));
+  return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
+    goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
+    source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,
+    decision_read_from_provider: canonical.decision_read_from_provider,
+    legacy_fallback_used: canonical.legacy_fallback_used,
+    todo: {todo_id: todoId, status: todo.status, claimed_by: todo.claimed_by}, leases,
+  }};
+}
 
 export async function readHistoricalTodoProjection(input: JsonObject): Promise<JsonObject> {
   const source = requireJsonObject(input.source, "historical Todo read source");

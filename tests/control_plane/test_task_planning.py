@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -219,51 +220,92 @@ def test_public_cli_returns_a_read_only_checkpoint_and_rejects_execution(bound_g
 
 
 def test_first_plan_declares_then_links_and_reads_canonical_requirements(bound_goal):
-    def cli(*args):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            status = main(["--format", "json", "--registry", str(bound_goal["registry_path"]),
-                "--runtime-root", bound_goal["runtime_root_arg"], *args])
-        result = json.loads(out.getvalue())
-        assert status == 0, result
+    def cli(*args, expected_status=0):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = main(list(args))
+        result = json.loads(output.getvalue())
+        assert status == expected_status, result
         return result
 
+    prefix = [
+        "--format", "json", "--registry", str(bound_goal["registry_path"]),
+        "--runtime-root", bound_goal["runtime_root_arg"],
+    ]
     route = ["--goal-id", "planning-goal", "--agent-id", "planner"]
-    before = build_task_planning_packet(**bound_goal)
+    plan_args = [
+        *prefix, "todo", "plan", *route, "--project",
+        str(bound_goal["project"]), "--text", bound_goal["text"],
+    ]
+    before = cli(*plan_args)
     assert before["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == []
     assert before["existing_todos"] == []
-    document = {"outcome_id": "repair", "owner_agent_id": "planner", "objective": bound_goal["text"],
-        "requirements": [{"id": "stable-api", "description": "Keep the API stable while repairing the failure."}],
-        "source": {"ref": "user-task", "summary": bound_goal["text"]}}
+    authoring = before["ordered_steps"][0]["goal_requirements"]
     path = bound_goal["project"] / "requirements.json"
+
+    def refine_args(revision, operation):
+        bindings = {
+            "<agent-authored-file>": str(path),
+            "<current-provider-revision>": revision,
+            "<stable-original-operation-id>": operation,
+        }
+        program, *args = shlex.split(authoring["refine_command_template"])
+        assert program == "loopx"
+        return [bindings.get(arg, arg) for arg in args]
+
+    def fill(value, bindings):
+        if isinstance(value, dict):
+            return {key: fill(item, bindings) for key, item in value.items()}
+        if isinstance(value, list):
+            return [fill(item, bindings) for item in value]
+        return bindings.get(value, value)
+
+    document = fill(authoring["declaration_document_template"], {
+        "<outcome-id>": "repair",
+        "<outcome-objective>": bound_goal["text"],
+        "<requirement-id>": "stable-api",
+        "<requirement-description>": "Keep the API stable while repairing the failure.",
+        "<source-ref>": "user-task",
+        "<source-summary>": bound_goal["text"],
+    })
     path.write_text(json.dumps(document))
-    declaration = ["goal-acceptance", "refine", *route, "--document", str(path),
-        "--expected-provider-revision", before["goal_acceptance"]["provider_revision"],
-        "--operation-id", "first-declaration", "--execute"]
+    initial_revision = before["goal_acceptance"]["provider_revision"]
+    declaration = refine_args(initial_revision, "first-declaration")
     cli(*declaration)  # The write committed, but its caller lost the response.
     declared = cli(*declaration)
     assert declared["status"] in {"replayed", "recovered"}
     outcome = declared["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert outcome["todo_ids"] == []
-    assert not build_task_planning_packet(**bound_goal)["existing_todos"], "Declaration precedes task Todos"
-    written = cli("todo", "add", "--goal-id", "planning-goal", "--role", "agent", "--claimed-by", "planner",
-        "--text", "[P0] Reproduce and repair the failure.", "--task-class", "advancement_task",
-        "--action-kind", "implement", "--execute")
-    current = cli("goal-acceptance", "inspect", *route)
-    path.write_text(json.dumps({"outcome_id": "repair", "todo_ids": [written["todo_id"]]}))
-    command = ["goal-acceptance", "refine", *route, "--document", str(path),
-        "--expected-provider-revision", current["provider_revision"], "--operation-id", "link-first-work", "--execute"]
+    assert not cli(*plan_args)["existing_todos"], "Declaration precedes task Todos"
+    written = cli(
+        *prefix, "todo", "add", "--goal-id", "planning-goal", "--role", "agent",
+        "--claimed-by", "planner", "--text", "[P0] Reproduce and repair the failure.",
+        "--task-class", "advancement_task", "--action-kind", "implement", "--execute",
+    )
+
+    link = fill(authoring["link_document_template"], {
+        "<same-outcome-id>": "repair", "<actual-todo-id>": written["todo_id"],
+    })
+    path.write_text(json.dumps(link))
+    stale = cli(*refine_args(initial_revision, "stale-link"), expected_status=1)
+    assert stale["ok"] is False
+    assert stale["error"] == "goal_acceptance_provider_revision_mismatch"
+    current = cli(*shlex.split(authoring["inspect_command"])[1:])
+    command = refine_args(current["provider_revision"], "link-first-work")
     linked = cli(*command)
     replay = cli(*command)
     assert replay["status"] in {"replayed", "recovered"}
     assert replay["goal_acceptance_contract"] == linked["goal_acceptance_contract"]
-    after = build_task_planning_packet(**bound_goal)
+    after = cli(*plan_args)
     assert after["goal_acceptance"]["planning_requirements"] == {
         "agent_id": "planner", "declaration_current": True,
         "outcome_ids": ["repair"], "linked_todo_ids": [written["todo_id"]],
     }
-    assert after["goal_acceptance"]["goal_acceptance_contract"].get("criteria", []) == [], "Independent checks stay optional"
-    assert after["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["sources"] == [document["source"]]
+    contract = after["goal_acceptance"]["goal_acceptance_contract"]
+    assert contract.get("criteria", []) == [], "Independent checks stay optional"
+    outcome, = contract["outcome_requirements"]["outcomes"]
+    assert outcome["sources"] == [{"ref": "user-task", "summary": bound_goal["text"]}]
+    assert after["goal_waiting_on"] == before["goal_waiting_on"]
 
 
 def test_shared_planning_preserves_open_intent_and_stop_in_both_entries(bound_goal):

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {randomUUID} from "node:crypto";
 import {mkdtemp, rm, readdir, writeFile, rename} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {readCanonicalSnapshotFromStore, readCanonicalSnapshotPage, readCanonicalSnapshot,
@@ -29,8 +32,50 @@ async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   const Store = kind === "file" ? FileAuthorityStore : SqliteAuthorityStore;
   return {store: new Store(root, "goal-a"), contender: new Store(root, "goal-a")};
 }
+async function postgresqlFixture(t: test.TestContext): Promise<AuthorityStore> {
+  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
+  t.after(() => pool.end());
+  const database = {connect: async () => {
+    const client = await pool.connect();
+    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
+      release: () => client.release()};
+  }};
+  await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
+  return new PostgreSqlAuthorityStore(database, {tenant_id: `snapshot-${randomUUID()}`, goal_id: "goal-a"});
+}
+async function verifyLeaseSelection(store: AuthorityStore): Promise<void> {
+  const {projection} = productionScaleCoordinationFixture("goal-a", "native");
+  await seedSnapshot(store, projection);
+  const before = await store.loadAuthority();
+  const full = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+  const leases = projection.leases as JsonObject[];
+  const selected = [leases.find(lease => lease.status === "active")!, leases.find(lease => lease.status === "released")!];
+  const ids = [...selected.map(lease => lease.todo_id), "todo_without_lease"];
+  const request = snapshotRequest({lease_todo_ids: ids});
+  const page = await readCanonicalSnapshotFromStore(request, store);
+  assert.equal(page.status, "page");
+  assert.deepEqual(page.todos, []);
+  assert.deepEqual(page.leases, (full.leases as JsonObject[]).filter(lease => ids.includes(lease.todo_id)));
+  assert.equal((page.leases as JsonObject[]).length, 2);
+  const snapshot = page.snapshot as JsonObject;
+  assert.equal(snapshot.provider_revision, (full.snapshot as JsonObject).provider_revision);
+  assert.equal(snapshot.store_identity, (full.snapshot as JsonObject).store_identity);
+  assert.notEqual(snapshot.query_sha256, (full.snapshot as JsonObject).query_sha256);
+  const after = {snapshot, todo_offset: 0, lease_offset: 1};
+  const last = await readCanonicalSnapshotFromStore({...request, lease_todo_ids: ids.toReversed(), after}, store);
+  assert.deepEqual(last.leases, (page.leases as JsonObject[]).slice(1));
+  await assert.rejects(readCanonicalSnapshotFromStore({...request,
+    lease_todo_ids: [...ids.slice(0, 2), "todo_different_missing_lease"], after}, store), /canonical snapshot changed/);
+  await assert.rejects(readCanonicalSnapshotFromStore({...request, include_leases: false}, store),
+    /lease selection requires/);
+  assert.deepEqual(await store.loadAuthority(), before);
+}
 const qualifiedSqlite = sqliteRuntimeIdentity().sqlite_authority_qualified;
 for (const provider of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
+  test(`${provider}: lease selection preserves matching lease records and binds continuation scope`, async t => {
+    const {store} = await fixture(t, provider);
+    await verifyLeaseSelection(store);
+  });
   for (const defect of ["manifest", "digest"] as const) {
     test(`${provider}: invalid projection is distinct from an invalid snapshot request (${defect})`, async t => {
       const root = await mkdtemp(join(tmpdir(), "snapshot-invalid-projection-"));
@@ -62,6 +107,10 @@ for (const provider of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("fi
     });
   }
 }
+test("postgresql: lease selection preserves matching lease records and binds continuation scope",
+  {skip: !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+    await verifyLeaseSelection(await postgresqlFixture(t));
+  });
 if (qualifiedSqlite) {
   test("selected SQLite snapshot retains the complete independent read contract", async t => {
     const {store} = await fixture(t, "sqlite");

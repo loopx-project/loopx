@@ -45,7 +45,18 @@ def register_goal_acceptance_command(subparsers: Any, add_format: Any) -> None:
      Own work review/adoption needs no human reply or unanimous peer vote.
 All steps require --goal-id GOAL. Proposal preparation alone requires neither
 owner input nor adoption; only an applied objective revision needs adoption.
-Authority, budgets, stops and existing gated actions remain binding.''',
+Authority, budgets, stops and existing gated actions remain binding.
+
+Owner check-scope reconciliation (configure without --agent-id):
+  --document is the full replacement: {"scope":{"kind":"selected_work","todo_ids":["todo_current"]},
+    "objective":"Retained objective","non_goals":[],"criteria":[{"id":"result","description":"Real check", "validation_argv":["python3","check.py"]}],
+    "bindings":[{"todo_id":"todo_current","criterion_ids":["result"]}]}
+  Retain accepted/current/final work and checks; exclude obsolete work from scope
+  AND bindings. Removing a binding alone leaves all_advancement work held.
+  Use inspect's provider_revision and one stable --operation-id for preview/apply
+  and unchanged retries. Configure changes checks, not additive outcome requirements.
+  Full example, owner authority and lease-fenced supersession:
+  docs/reference/goal-acceptance-observations.md#owner-check-scope-reconciliation''',
     )
     add_format(parser)
     parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "prepare-objective", "inspect-proposal", "apply-proposal", "revise-objective", "adopt-objective"))

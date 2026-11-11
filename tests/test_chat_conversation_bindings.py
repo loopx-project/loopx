@@ -729,6 +729,115 @@ def test_app_steward_snapshot_does_not_wait_for_background_mutation(steward):  #
     assert (capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()) == before
 
 
+@pytest.mark.parametrize("hold", [None, "publication", "queue", "configuration", "operator", "default-only"])
+def test_startup_reconciles_only_an_adopted_steward_executor(steward, monkeypatch, hold):  # noqa: F811
+    from test_chat_manager_model_adoption import configure
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import machine_configuration_revision, read_machine_configuration
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    bindings = transport.bindings
+    event = provider.event("steward-app", "old-steward-request", "Read the original conversation")
+    transport.admit("steward-app", event)
+    request_ref = identity_ref(binding["provider_ref"], event["message_id"])
+    request = transport.core.read_request(request_ref)
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    transport.reconcile()
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = bindings.read()
+    stale = {**before, "bindings": [
+        {**row, "executor_endpoint_id": "antigravity"} if row["binding_id"] == binding["binding_id"] else row
+        for row in before["bindings"]]}
+    bindings.path.write_text(json.dumps(stale))
+    configure(store.root.parent, model="gpt-6.1-sol", effort="xhigh")
+    revision = runtime.steward_executor_defaults()["configuration_revision"]
+    configuration = read_machine_configuration(store.root.parent, registry=build_builtin_machine_configuration_registry())
+    transaction_revision = machine_configuration_revision(configuration)
+    assert transaction_revision != revision
+    session = store.update_session(sid, agent_model_id="gpt-6.1-sol", agent_reasoning_effort="xhigh")
+    session_path = store._session_path(sid)
+    # A partial previous adoption persisted the endpoint but did not finish the
+    # binding or write a usable allocation. The actual Session already exists.
+    session["manager_executor_allocation"] = {
+        "schema_version": 1, "configuration_revision": transaction_revision if hold != "configuration" else "old",
+        "selection_policy": "preferred",
+    }
+    if hold == "default-only":
+        session.update(agent_id="antigravity", executor_endpoint_id="antigravity")
+    session_path.write_text(json.dumps(session))
+    if hold == "queue":
+        store.create_queued_turn(sid, client_turn_id="queued-before-adoption", message="Keep the existing queue", origin="web")
+    if hold == "operator":
+        original_observe = bindings.observe
+        monkeypatch.setattr(bindings, "observe", lambda profile: {**original_observe(profile), "operator_ref": "f" * 24})
+    original_turn = store._turn_path(sid, request["turn_id"]).read_bytes()
+    messages = store.messages(sid)
+    starts = capture.read_bytes()
+    writes = list(provider.writes)
+
+    if hold in {None, "publication"}:
+        with pytest.raises(ValueError, match="canonical bound Session identity changed"):
+            bindings.app_steward_target()
+        pending = provider.event("steward-app", "prepared-before-adoption", "Continue in the same conversation")
+        pending_ref = identity_ref(binding["provider_ref"], pending["message_id"])
+
+        def interrupt_preparation(*args, **kwargs):
+            raise OSError("admission interrupted before a Turn")
+
+        with monkeypatch.context() as interruption:
+            interruption.setattr(transport.core, "_admit_prepared", interrupt_preparation)
+            with pytest.raises(OSError, match="before a Turn"):
+                transport.admit("steward-app", pending)
+        assert transport.core.read_request(pending_ref)["status"] == "prepared"
+
+    if hold == "publication":
+        from loopx.capabilities.native_chat import conversation_bindings
+
+        def interrupted_publication(*args, **kwargs):
+            raise OSError("binding publication interrupted")
+
+        with monkeypatch.context() as interruption:
+            interruption.setattr(conversation_bindings, "_atomic_write_json", interrupted_publication)
+            bindings.reconcile_steward_executors()
+        assert bindings.read() == stale
+        assert store.load_session(sid)["manager_executor_allocation"]["schema_version"] == "manager_executor_allocation_v0"
+        assert transport.core.read_request(pending_ref)["status"] == "prepared"
+
+    bindings.reconcile_steward_executors()
+
+    assert store.messages(sid) == messages
+    assert store._turn_path(sid, request["turn_id"]).read_bytes() == original_turn
+    assert capture.read_bytes() == starts and provider.writes == writes
+    if hold not in {None, "publication"}:
+        assert bindings.read() == stale
+        assert store.load_session(sid)["manager_executor_allocation"] == session["manager_executor_allocation"]
+        return
+    assert bindings.read() == {**before, "revision": before["revision"] + 1}
+    assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": sid}
+    updated = store.load_session(sid)
+    allocation = updated["manager_executor_allocation"]
+    assert allocation["schema_version"] == "manager_executor_allocation_v0"
+    assert allocation["configuration_revision"] == revision
+    assert updated["steward_context"] == session["steward_context"]
+    assert updated["upstream_thread_id"] == session["upstream_thread_id"]
+    snapshot = bindings.path.read_bytes(), session_path.read_bytes()
+    bindings.reconcile_steward_executors()
+    assert (bindings.path.read_bytes(), session_path.read_bytes()) == snapshot
+
+    path = transport.root / f"{pending_ref}.json"
+    transport.reconcile_request(path)
+    resumed = transport.core.read_request(pending_ref)
+    assert resumed["status"] == "accepted" and resumed["session_id"] == sid
+    turn = runtime.wait_for_turn(session_id=sid, turn_id=resumed["turn_id"], timeout_sec=10)
+    assert turn["status"] == "completed" and turn["client_turn_id"] == f"external-{pending_ref}"
+    transport.reconcile_request(path)
+    assert json.loads(path.read_text())["deliveries"]["terminal"]["verified"] is True
+    transport.reconcile_request(path)
+    calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    assert sum(call.get("method") == "turn/start" for call in calls) == 2
+
+
 @pytest.mark.parametrize("change", ["selection", "revocation"])
 def test_app_steward_snapshot_rechecks_grant_after_core_discovery(steward, monkeypatch, change):  # noqa: F811
     store, runtime, provider, transport, binding, capture, _ = steward

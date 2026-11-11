@@ -45,7 +45,7 @@ def test_native_cli_keeps_exact_receipt_recovery_after_lost_read_response(tmp_pa
 
     monkeypatch.setattr(inbox, "read_inbox_transaction", lost_reply)
     route = ["--registry", str(registry), "--runtime-root", str(root), "--format", "json", "manager-inbox"]
-    assert main([*route, "read", "--goal-id", "goal-a", "--agent-id", "worker"]) == 1
+    assert main([*route, "read", "--format", "markdown", "--goal-id", "goal-a", "--agent-id", "worker"]) == 1
     error = json.loads(capsys.readouterr().out)
     assert error["ok"] is False and error["error_code"] == "runtime_response_ambiguous"
     assert error["read_complete"] is False
