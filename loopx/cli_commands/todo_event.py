@@ -77,6 +77,8 @@ def _route_native_recovery(
                         if argument.startswith(flag + "="):
                             arguments[index] = flag + "=" + placeholder
                             break
+                    else:
+                        arguments.extend(cli_option_args(flag, placeholder))
         else:
             arguments = list(arguments) if isinstance(arguments, list) else command[1:]
         # The update adapter may already bind selectors. Inspect only the global

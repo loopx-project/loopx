@@ -20,6 +20,7 @@ import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {evaluateCoordinationTerminalFence, COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
 import {evaluateCoordinationTodoClaimDecision} from "./todo_claim.ts";
+import {reviewedTodoUpdateClaimRetry} from "./claim_execution_recovery.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export interface TaskLeaseProof {
@@ -309,11 +310,13 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     action: "claim_task", lease_state: leaseState, owner_relation: ownerRelation,
     todo_status: todo.status, claimed_by: todo.claimed_by ?? null,
     execution_authority_granted: false,
-    reason: "Claim this Todo through the ordinary task operation, then retry with its returned claim_operation_id. Claim rechecks current eligibility and ownership; update and completion manage execution internally. Keep the returned reference on retries; it cannot revive expired or replaced execution.",
     claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
       "--todo-id", input.todo_id, "--agent-id", input.actor_agent_id!, "--claimed-by", input.actor_agent_id!]},
-    retry: {command: "loopx todo update", requires_flags: ["--claim-operation-id"],
-      reference_source: "claim_operation_id_from_claim"},
+    ...(input.expected_provider_revision === undefined ? {
+      reason: "Claim this Todo through the ordinary task operation, then retry with its returned claim_operation_id. Claim rechecks current eligibility and ownership; update and completion manage execution internally. Keep the returned reference on retries; it cannot revive expired or replaced execution.",
+      retry: {command: "loopx todo update", requires_flags: ["--claim-operation-id"],
+        reference_source: "claim_operation_id_from_claim"},
+    } : reviewedTodoUpdateClaimRetry(input)),
   });
   const retry = {command: "loopx todo update",
     requires_flags: ["--task-lease-idempotency-key", "--task-lease-expected-version"],

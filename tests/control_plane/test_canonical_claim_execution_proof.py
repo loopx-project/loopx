@@ -232,18 +232,35 @@ def test_changed_execution_packet_never_recommends_claim_adoption(expired_manage
     assert snapshot() == before
 
 
-@pytest.mark.parametrize("intervening_edit", ["none", "before-claim", "after-read"])
+@pytest.mark.parametrize(
+    ("claim_reference", "intervening_edit"),
+    [
+        ("expired-original-claim", "none"),
+        ("expired-original-claim", "before-claim"),
+        ("expired-original-claim", "after-read"),
+        (None, "after-read"),
+    ],
+    ids=["no-race", "edit-before-claim", "edit-after-read", "omitted-proof"],
+)
 def test_expired_claim_with_cas_reconciles_only_selected_todo(
-    expired_managed_claim, intervening_edit, record_property,
+    expired_managed_claim, claim_reference, intervening_edit, record_property,
 ):
     cli, selected, snapshot, author, _ = expired_managed_claim
     original = snapshot()
-    attempt = ["todo", "update", *selected, "--agent-id", "agent-a", "--claim-operation-id",
-               "expired-original-claim", "--update-operation-id", "original-reviewed-edit",
+    attempt = ["todo", "update", *selected, "--agent-id", "agent-a",
+               "--update-operation-id", "original-reviewed-edit",
                "--update-expected-provider-revision", original[1], "--note", "Validated progress"]
+    if claim_reference is None:
+        # Clearing a wait condition requires execution even if copy edits do not.
+        attempt.append("--clear-resume-when")
+    else:
+        attempt.extend(["--claim-operation-id", claim_reference])
     before = snapshot()
     refused = cli(attempt, expected_exit=1)
-    assert refused.get("error_code") == "claim_execution_unavailable", json.dumps(refused)
+    expected_error = (
+        "handoff_mode_requires_lease" if claim_reference is None else "claim_execution_unavailable"
+    )
+    assert refused.get("error_code") == expected_error, json.dumps(refused)
     recovery = refused["recovery"]
     assert recovery["action"] == "claim_task" and recovery["execution_authority_granted"] is False
     assert snapshot() == before
@@ -251,6 +268,7 @@ def test_expired_claim_with_cas_reconciles_only_selected_todo(
     assert recovery["retry"]["requires_flags"] == ["--claim-operation-id", "--update-expected-provider-revision"]
     retry = recovery["retry"]["cli_args"]
     assert "expired-original-claim" not in retry
+    assert retry[retry.index("--claim-operation-id") + 1] == "<claim_operation_id_from_claim>"
     assert retry[retry.index("--update-expected-provider-revision") + 1] == "<provider_revision_from_reconciled_todo_read>"
     rendered = render_todo_markdown(refused)
     assert rendered.index("todo claim") < rendered.index("todo list") < rendered.index("todo update")
@@ -264,6 +282,10 @@ def test_expired_claim_with_cas_reconciles_only_selected_todo(
     assert current["todo"] == before[0]
     revision = current["authority_read"]["provider_revision"]
     assert revision != original[1]
+    if claim_reference is None:
+        stale = cli([*attempt, "--claim-operation-id", prepared["claim_operation_id"]], expected_exit=1)
+        assert stale["error_code"] == "provider_revision_mismatch"
+        assert snapshot()[0] == current["todo"]
     retry = [prepared["claim_operation_id"] if value == "<claim_operation_id_from_claim>" else
              revision if value == "<provider_revision_from_reconciled_todo_read>" else value for value in retry]
     if intervening_edit == "after-read":
@@ -280,6 +302,7 @@ def test_expired_claim_with_cas_reconciles_only_selected_todo(
     assert final[0]["text"] == current["todo"]["text"]
     assert final[0]["note"] == "Validated progress"
     assert final[0]["status"] == "open"
+    assert final[0].get("resume_when") is None
     assert cli(retry, use_fixture_route=False)["ok"] and snapshot() == final
     record_property("recovery_interaction", json.dumps({
         "commands": ["todo update (refused)", "todo claim", "todo list --todo-id", "todo update (reconciled retry)"],
