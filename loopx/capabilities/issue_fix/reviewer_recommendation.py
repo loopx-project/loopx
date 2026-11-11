@@ -79,6 +79,26 @@ def _run_git(repo_path: Path, args: Sequence[str]) -> str:
     return result.stdout
 
 
+def _run_git_bytes(repo_path: Path, args: Sequence[str]) -> bytes:
+    """Run a path-listing git command without text decoding.
+
+    ``text=True`` applies universal-newline translation before any framing
+    happens, so a pathname carrying CR or CRLF can arrive as an extra LF and
+    split one record into two. Callers that parse machine output frame the raw
+    bytes on their own separator.
+    """
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=20,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed with exit code {result.returncode}")
+    return result.stdout
+
+
 def _normalise_changed_file(value: Any) -> str:
     text = str(value or "").strip().replace("\\", "/")
     while text.startswith("./"):
@@ -87,6 +107,23 @@ def _normalise_changed_file(value: Any) -> str:
     if not text or path.as_posix() == "." or path.is_absolute() or ".." in path.parts:
         raise ValueError("changed files must be non-empty repo-relative paths")
     return path.as_posix()
+
+
+def _validate_derived_changed_file(value: Any) -> str:
+    """Validate a Git path after NUL framing without rewriting its bytes.
+
+    Git already emits a repository-relative name. Treating a POSIX literal
+    backslash as a Windows separator made a valid root file such as
+    ``\\notes.txt`` look absolute during packet validation. Keep the explicit
+    ``--changed-file`` normalization above as the compatibility boundary for
+    caller-supplied path syntax, and validate derived names as emitted.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("changed files must be non-empty repo-relative paths")
+    path = PurePosixPath(value)
+    if path.as_posix() == "." or path.is_absolute() or ".." in path.parts:
+        raise ValueError("changed files must be non-empty repo-relative paths")
+    return value
 
 
 def _normalise_changed_files(values: Sequence[Any]) -> list[str]:
@@ -624,14 +661,34 @@ def _apply_reviewer_sources_for_path(
 
 
 def _derive_changed_files(repo_path: Path, base_ref: str) -> list[str]:
-    output = _run_git(repo_path, ["diff", "--name-only", f"{base_ref}...HEAD"])
-    # `git diff --name-only` frames one pathname per LF. Under the default
-    # `core.quotePath=true` a non-ASCII pathname arrives octal-escaped, but a
-    # repository may set `core.quotePath=false`, and a pathname carrying
-    # U+0085/U+2028/U+2029 is then emitted raw. `str.splitlines()` treats those
-    # as record boundaries and would tear one path into two, so frame on LF and
-    # drop the empty trailing record instead.
-    return _normalise_changed_files([line for line in output.split("\n") if line])
+    output = _run_git_bytes(
+        repo_path,
+        ["diff", "--name-only", "-z", "--no-ext-diff", f"{base_ref}...HEAD"],
+    )
+    # `-z` frames one raw pathname per NUL byte, so the name reaches this
+    # function exactly as Git recorded it. With the default
+    # `core.quotePath=true`, Git C-quotes non-ASCII and control-character
+    # names in a line-oriented listing; normalising those quotes as literal
+    # path text produced names such as "/344/270/255/..." that match neither
+    # CODEOWNERS rules nor commit history. NUL framing avoids the quoting
+    # entirely, and decoding each record strictly keeps CR, CRLF, leading and
+    # trailing spaces and POSIX literal backslashes intact.
+    files: list[str] = []
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        try:
+            name = record.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                "changed files derived from git must be valid UTF-8"
+            ) from error
+        _validate_derived_changed_file(name)
+        if name not in files:
+            files.append(name)
+    if len(files) > 100:
+        raise ValueError("reviewer recommendation accepts at most 100 changed files")
+    return files
 
 
 def _collect_history(
@@ -641,9 +698,17 @@ def _collect_history(
     revision: str,
     history_limit: int,
 ) -> list[tuple[str, str]]:
+    # NUL framing gives an exact pathname, but ``git log -- <path>`` still
+    # interprets the argument as a pathspec. A changed file whose name
+    # contains a wildcard or starts with pathspec magic such as
+    # ``:(exclude)`` would then collect commits for other files and credit
+    # their authors as historical contributors of this path. Literal
+    # pathspecs apply to the exact changed file and to the module fallback
+    # below, which share this helper.
     output = _run_git(
         repo_path,
         [
+            "--literal-pathspecs",
             "log",
             f"--max-count={history_limit}",
             "--format=%aN%x1f%aE",
@@ -967,7 +1032,7 @@ def validate_issue_fix_reviewer_recommendation_packet(
         changed_files = []
     for path in changed_files:
         try:
-            _normalise_changed_file(path)
+            _validate_derived_changed_file(path)
         except ValueError:
             errors.append("changed_files must contain only repo-relative paths")
             break

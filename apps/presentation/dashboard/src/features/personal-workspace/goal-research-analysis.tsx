@@ -396,7 +396,7 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
-export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Controller; onHistory: () => void}) {
+export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis: Controller; active: boolean; onHistory: () => void}) {
   const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
   const p = a.pack;
   const firstStudy = packs[0]?.pack_id;
@@ -410,7 +410,7 @@ export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Control
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
       </select></label> : null}<button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
-    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
+    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
       scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
