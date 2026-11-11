@@ -2042,6 +2042,9 @@ def serve_chat(
     if open_browser:
         webbrowser.open(url)
     try:
+        bindings = server.runtime_controller.project_contexts.conversation_bindings
+        if bindings is not None:
+            bindings.reconcile_steward_executors()
         if external_conversation_factories:
             server.conversation_transports.start(server)
         background_api.register_chat_background_services(server)

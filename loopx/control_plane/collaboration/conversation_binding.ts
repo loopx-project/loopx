@@ -233,6 +233,39 @@ export function planConversationBinding(params: JsonObject): JsonObject {
     }
     if ((current.app_steward_binding_id ?? null) === id) return {changed: false, state: current};
     return {changed: true, state: state({...current, revision: current.revision + 1, app_steward_binding_id: id})};
+  } else if (params.operation === "reconcile_steward_executor") {
+    const id = ref(params.binding_id, "steward binding");
+    const previous = current.bindings.find(row => row.binding_id === id);
+    const session = requireJsonObject(params.session, "original steward Session");
+    const allocation = requireJsonObject(session.manager_executor_allocation, "steward executor allocation");
+    const defaults = requireJsonObject(params.machine_defaults, "steward machine defaults");
+    const endpoint = defaults.executor_endpoint;
+    if (!previous || previous.context_kind !== "steward" || previous.audience === "group"
+        || !["antigravity", "codex"].includes(String(previous.executor_endpoint_id))
+        || !["antigravity", "codex"].includes(String(endpoint))
+        || defaults.status !== "ready" || defaults.source !== "machine_configuration"
+        || !["preferred", "pinned"].includes(String(defaults.selection_policy))
+        || typeof defaults.configuration_revision !== "string"
+        || !/^sha256:[a-f0-9]{64}$/.test(defaults.configuration_revision)
+        || allocation.schema_version !== "manager_executor_allocation_v0"
+        || allocation.configuration_revision !== defaults.configuration_revision
+        || allocation.selection_policy !== defaults.selection_policy || allocation.available !== true
+        || allocation.configured_endpoint !== endpoint || allocation.executor_endpoint !== endpoint
+        || allocation.model !== session.agent_model_id || allocation.reasoning_effort !== session.agent_reasoning_effort
+        || (defaults.executor_model != null && defaults.executor_model !== allocation.model)
+        || (defaults.executor_reasoning_effort != null && defaults.executor_reasoning_effort !== allocation.reasoning_effort)
+        || session.agent_id !== endpoint || session.executor_endpoint_id !== endpoint
+        || session.status !== "ready" || session.active_turn_id !== null || params.queue_empty !== true) {
+      throw new EffectRuntimeRequestError("reconciliation requires the idle original steward and its adopted machine executor");
+    }
+    const saved = requireJsonObject(session.steward_context, "original steward context");
+    rows = current.bindings.map(row => row === previous ? {...row, executor_endpoint_id: endpoint} : row);
+    resolveBoundConversation({current: {...current, bindings: rows}, binding_id: id,
+      observation: params.observation, available_projects: params.available_projects,
+      available_goal_ids: params.available_goal_ids, source_ref: saved.source_ref,
+      sender_ref: previous.operator_ref, private_human_message: false, origin: "web",
+      session_context: saved, session});
+    if (previous.executor_endpoint_id === endpoint) return {changed: false, state: current};
   } else if (params.operation === "configure") {
     const candidate = binding(params.binding);
     observed(candidate, params.observation);
