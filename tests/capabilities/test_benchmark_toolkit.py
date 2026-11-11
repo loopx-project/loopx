@@ -292,8 +292,19 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
         "feedback": "declared",
         "timing": "during_solving",
     }
+    assert declared_feedback["mixed_background_opt_in"] == {
+        "feedback": "declared",
+        "timing": "during_solving",
+        "background_evaluation": {
+            "feedback": "blinded",
+            "timing": "during_solving",
+        },
+    }
     assert "exact_policy_sha256" in declared_feedback["evidence_binding"]
     assert "acknowledged_feedback_transport" in (
+        declared_feedback["evidence_binding"]
+    )
+    assert "complete_blinded_background_evaluation_log_when_declared" in (
         declared_feedback["evidence_binding"]
     )
 
@@ -547,6 +558,17 @@ def _declared_feedback_policy() -> dict[str, object]:
     }
 
 
+def _mixed_feedback_policy() -> dict[str, object]:
+    policy = _declared_feedback_policy()
+    protocol = policy["evaluation_protocol"]
+    assert isinstance(protocol, dict)
+    protocol["background_evaluation"] = {
+        "feedback": "blinded",
+        "timing": "during_solving",
+    }
+    return policy
+
+
 def _declared_feedback_attestation(
     trajectory: dict[str, object],
     policy: dict[str, object],
@@ -599,6 +621,52 @@ def _declared_feedback_attestation(
     return attestation
 
 
+def _mixed_feedback_attestation(
+    trajectory: dict[str, object],
+    policy: dict[str, object],
+    *,
+    active_submission: bool,
+) -> dict[str, object]:
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    runtime = attestation["evaluation_protocol"]
+    transport = attestation["feedback_transport"]
+    assert isinstance(runtime, dict)
+    assert isinstance(transport, dict)
+    attestation["verifier_started_after_agent"] = True
+    attestation["background_evaluation_log_complete"] = True
+    attestation["background_feedback_blinded"] = True
+    runtime["background_evaluations"] = [
+        {
+            "evaluation_id": "background-1",
+            "snapshot_sha256": "6" * 64,
+            "evaluation_sha256": "7" * 64,
+            "captured_at_ms": 170,
+            "evaluation_started_at_ms": 175,
+            "evaluation_completed_at_ms": 190,
+        },
+        {
+            "evaluation_id": "background-2",
+            "snapshot_sha256": "8" * 64,
+            "evaluation_sha256": "9" * 64,
+            "captured_at_ms": 250,
+            "evaluation_started_at_ms": 260,
+            "evaluation_completed_at_ms": 310,
+        },
+    ]
+    if not active_submission:
+        runtime["submissions"] = []
+        runtime["deliveries"] = []
+        transport.update(
+            request_count=0,
+            response_ack_count=0,
+            intent_count=0,
+            ack_count=0,
+            deliveries_sha256=_canonical_sha256([]),
+            record_digests={},
+        )
+    return attestation
+
+
 def test_declared_during_solving_feedback_uses_protocol_attestations() -> None:
     trajectory = _trajectory()
     policy = _declared_feedback_policy()
@@ -634,6 +702,101 @@ def test_declared_during_solving_feedback_uses_protocol_attestations() -> None:
             }
         ),
     }
+
+
+@pytest.mark.parametrize("active_submission", [False, True])
+def test_mixed_background_and_declared_feedback_qualifies(
+    active_submission: bool,
+) -> None:
+    trajectory = _trajectory()
+    policy = _mixed_feedback_policy()
+    attestation = _mixed_feedback_attestation(
+        trajectory, policy, active_submission=active_submission
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["runtime_attestation_checks"]["verifier_started_after_agent"]
+    assert receipt["runtime_attestation_checks"][
+        "background_evaluation_log_complete"
+    ]
+    assert receipt["runtime_attestation_checks"]["background_feedback_blinded"]
+    assert "official_feedback_blinded" not in receipt["runtime_attestation_checks"]
+    assert receipt["evaluation_protocol"]["submission_count"] == int(
+        active_submission
+    )
+    assert receipt["evaluation_protocol"]["delivery_count"] == int(
+        active_submission
+    )
+    assert receipt["evaluation_protocol"]["background_evaluation"] == {
+        "feedback": "blinded",
+        "timing": "during_solving",
+        "evaluation_count": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_blocker"),
+    [
+        (
+            lambda runtime: runtime["evaluation_protocol"].pop(
+                "background_evaluations"
+            ),
+            "evaluation_protocol_background_evaluations_invalid",
+        ),
+        (
+            lambda runtime: runtime["evaluation_protocol"][
+                "background_evaluations"
+            ][1].update(captured_at_ms=160),
+            "evaluation_protocol_background_evaluations_invalid",
+        ),
+        (
+            lambda runtime: runtime.update(background_feedback_blinded=False),
+            "runtime_attestation_background_feedback_blinded_missing",
+        ),
+    ],
+)
+def test_mixed_feedback_fails_closed_on_incomplete_background_evidence(
+    mutation: Callable[[dict[str, object]], None], expected_blocker: str
+) -> None:
+    trajectory = _trajectory()
+    policy = _mixed_feedback_policy()
+    attestation = _mixed_feedback_attestation(
+        trajectory, policy, active_submission=False
+    )
+    mutation(attestation)
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert expected_blocker in receipt["blockers"]
+
+
+def test_plain_declared_feedback_rejects_undeclared_background_log() -> None:
+    trajectory = _trajectory()
+    policy = _declared_feedback_policy()
+    attestation = _declared_feedback_attestation(trajectory, policy)
+    runtime = attestation["evaluation_protocol"]
+    assert isinstance(runtime, dict)
+    runtime["background_evaluations"] = []
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=policy,
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert "evaluation_protocol_background_evaluations_invalid" in receipt["blockers"]
 
 
 def test_declared_feedback_evidence_digest_binds_transport() -> None:

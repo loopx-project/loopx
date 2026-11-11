@@ -76,6 +76,12 @@ _DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS = (
     "evaluation_log_complete",
     "verifier_started_after_submission",
 )
+_MIXED_FEEDBACK_RUNTIME_ATTESTATIONS = (
+    *_DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS,
+    "verifier_started_after_agent",
+    "background_evaluation_log_complete",
+    "background_feedback_blinded",
+)
 
 NETWORK_ACCESS_MODES = ("denied", "loopback_only", "permitted_solving")
 DEFAULT_NETWORK_ACCESS = "denied"
@@ -243,6 +249,7 @@ def required_runtime_attestations(
     network_access: str,
     *,
     declared_feedback: bool = False,
+    background_evaluation: bool = False,
 ) -> tuple[str, ...]:
     """Return the runner attestations required for one network access mode.
 
@@ -254,7 +261,10 @@ def required_runtime_attestations(
     ``network_permitted_solving`` instead and every restricted-resource denial
     still applies. The default evaluation contract remains blinded. A validated
     declared-feedback policy replaces only its two evaluation-order attestations
-    with the protocol, log, and post-submission verifier attestations.
+    with the protocol, log, and post-submission verifier attestations. A mixed
+    protocol that also runs blinded background evaluation additionally proves
+    that every background evaluation starts after the agent, its log is
+    complete, and none of its results enter the solving context.
     """
 
     mode = (
@@ -262,11 +272,12 @@ def required_runtime_attestations(
         if network_access in NETWORK_ACCESS_MODES
         else DEFAULT_NETWORK_ACCESS
     )
-    evaluation_attestations = (
-        _DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS
-        if declared_feedback
-        else _BLINDED_EVALUATION_RUNTIME_ATTESTATIONS
-    )
+    if background_evaluation:
+        evaluation_attestations = _MIXED_FEEDBACK_RUNTIME_ATTESTATIONS
+    elif declared_feedback:
+        evaluation_attestations = _DECLARED_FEEDBACK_RUNTIME_ATTESTATIONS
+    else:
+        evaluation_attestations = _BLINDED_EVALUATION_RUNTIME_ATTESTATIONS
     if mode == "permitted_solving":
         return (
             *_COMMON_RUNTIME_ATTESTATIONS,
@@ -541,6 +552,16 @@ def _validated_evaluation_protocol(
         raise ValueError("benchmark_evaluation_protocol_feedback_invalid")
     if raw_protocol.get("timing") != "during_solving":
         raise ValueError("benchmark_evaluation_protocol_timing_invalid")
+    raw_background = raw_protocol.get("background_evaluation")
+    if raw_background is not None:
+        if not isinstance(raw_background, Mapping):
+            raise TypeError("benchmark_background_evaluation_invalid")
+        if set(raw_background) != {"feedback", "timing"}:
+            raise ValueError("benchmark_background_evaluation_fields_invalid")
+        if raw_background.get("feedback") != "blinded":
+            raise ValueError("benchmark_background_evaluation_feedback_invalid")
+        if raw_background.get("timing") != "during_solving":
+            raise ValueError("benchmark_background_evaluation_timing_invalid")
     raw_channels = raw_protocol.get("channels")
     if (
         not isinstance(raw_channels, list)
@@ -587,13 +608,19 @@ def _validated_evaluation_protocol(
                 "output_kinds": output_kinds,
             }
         )
-    return {
+    protocol = {
         "protocol_id": protocol_id,
         "feedback": "declared",
         "timing": "during_solving",
         "channels": tuple(channels),
         "policy_sha256": policy_sha256,
     }
+    if raw_background is not None:
+        protocol["background_evaluation"] = {
+            "feedback": "blinded",
+            "timing": "during_solving",
+        }
+    return protocol
 
 
 def _validated_restricted_access_adjudication(
@@ -1009,6 +1036,7 @@ def _validated_declared_feedback_runtime(
     solver_start_ms = timeline[1] if timeline is not None else 0
     solver_end_ms = timeline[2] if timeline is not None else 0
 
+    background_declared = protocol.get("background_evaluation") is not None
     raw_submissions_value = raw_runtime.get("submissions")
     submissions = (
         raw_submissions_value
@@ -1020,7 +1048,7 @@ def _validated_declared_feedback_runtime(
     post_solver_completion_indexes: list[int] = []
     submissions_valid = (
         isinstance(raw_submissions_value, list)
-        and bool(submissions)
+        and (bool(submissions) or background_declared)
         and len(submissions) <= 10_000
     )
     if submissions_valid:
@@ -1152,6 +1180,67 @@ def _validated_declared_feedback_runtime(
     if not deliveries_valid:
         failures.append("evaluation_protocol_deliveries_invalid")
 
+    raw_background_value = raw_runtime.get("background_evaluations")
+    background_evaluations = (
+        raw_background_value if isinstance(raw_background_value, list) else []
+    )
+    background_valid = not background_declared and raw_background_value is None
+    if background_declared:
+        background_valid = (
+            isinstance(raw_background_value, list)
+            and bool(background_evaluations)
+            and len(background_evaluations) <= 50_000
+        )
+        previous_background_capture: int | None = None
+        background_ids: set[str] = set()
+        if background_valid:
+            for raw_evaluation in background_evaluations:
+                if not isinstance(raw_evaluation, Mapping):
+                    background_valid = False
+                    break
+                evaluation_id = str(raw_evaluation.get("evaluation_id") or "")
+                captured_at = raw_evaluation.get("captured_at_ms")
+                evaluation_started_at = raw_evaluation.get(
+                    "evaluation_started_at_ms"
+                )
+                evaluation_completed_at = raw_evaluation.get(
+                    "evaluation_completed_at_ms"
+                )
+                if (
+                    _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(evaluation_id) is None
+                    or evaluation_id in background_ids
+                    or _SHA256_PATTERN.fullmatch(
+                        str(raw_evaluation.get("snapshot_sha256") or "")
+                    )
+                    is None
+                    or _SHA256_PATTERN.fullmatch(
+                        str(raw_evaluation.get("evaluation_sha256") or "")
+                    )
+                    is None
+                    or not _positive_int(captured_at)
+                    or not _positive_int(evaluation_started_at)
+                    or not _positive_int(evaluation_completed_at)
+                    or timeline is None
+                    or not (
+                        solver_start_ms
+                        <= captured_at
+                        <= solver_end_ms
+                        and captured_at
+                        <= evaluation_started_at
+                        <= evaluation_completed_at
+                    )
+                    or (
+                        previous_background_capture is not None
+                        and captured_at <= previous_background_capture
+                    )
+                ):
+                    background_valid = False
+                    break
+                background_ids.add(evaluation_id)
+                previous_background_capture = captured_at
+    if not background_valid:
+        failures.append("evaluation_protocol_background_evaluations_invalid")
+
     raw_transport = runtime_attestation.get("feedback_transport")
     transport = raw_transport if isinstance(raw_transport, Mapping) else None
     transport_valid = deliveries_valid and transport is not None
@@ -1162,8 +1251,8 @@ def _validated_declared_feedback_runtime(
         ack_count = transport.get("ack_count")
         record_digests = transport.get("record_digests")
         if (
-            not _positive_int(request_count)
-            or not _positive_int(response_ack_count)
+            not _nonnegative_int(request_count)
+            or not _nonnegative_int(response_ack_count)
             or not _nonnegative_int(intent_count)
             or not _nonnegative_int(ack_count)
         ):
@@ -1172,6 +1261,7 @@ def _validated_declared_feedback_runtime(
             transport_valid = bool(
                 request_count == response_ack_count
                 and request_count >= len(submissions_by_id)
+                and (request_count > 0 or background_declared)
                 and intent_count == len(deliveries)
                 and ack_count == intent_count
                 and str(transport.get("run_id") or "") == run_id
@@ -1194,24 +1284,28 @@ def _validated_declared_feedback_runtime(
 
     if failures:
         return None, failures
-    return (
-        {
-            "feedback": "declared",
+    compact_protocol: dict[str, object] = {
+        "feedback": "declared",
+        "timing": "during_solving",
+        "policy_sha256": policy_sha256,
+        "submission_count": len(submissions),
+        "delivery_count": len(deliveries),
+        "evidence_sha256": _sha256_text(
+            _canonical_text(
+                {
+                    "evaluation_protocol": raw_runtime,
+                    "feedback_transport": transport,
+                }
+            )
+        ),
+    }
+    if background_declared:
+        compact_protocol["background_evaluation"] = {
+            "feedback": "blinded",
             "timing": "during_solving",
-            "policy_sha256": policy_sha256,
-            "submission_count": len(submissions),
-            "delivery_count": len(deliveries),
-            "evidence_sha256": _sha256_text(
-                _canonical_text(
-                    {
-                        "evaluation_protocol": raw_runtime,
-                        "feedback_transport": transport,
-                    }
-                )
-            ),
-        },
-        [],
-    )
+            "evaluation_count": len(background_evaluations),
+        }
+    return compact_protocol, []
 
 
 def build_benchmark_integrity_qualification(
@@ -1413,6 +1507,10 @@ def build_benchmark_integrity_qualification(
     runtime_attestations = required_runtime_attestations(
         network_access,
         declared_feedback=evaluation_protocol is not None,
+        background_evaluation=(
+            evaluation_protocol is not None
+            and evaluation_protocol.get("background_evaluation") is not None
+        ),
     )
     for field in runtime_attestations:
         if runtime_attestation.get(field) is not True:
