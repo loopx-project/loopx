@@ -442,12 +442,25 @@ def _emit_quota_result(
                     capture_directory=capture_directory, capability_context=capability_context,
                 )
             except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-                # Preserve the already-decided guard and original receipt. The
-                # complete source has one producer, including explicit Hosts.
-                capture_decision(capture_directory, payload, args=args, native_context=native_context)
-                raise QuotaDecisionTransportError(
-                    "Complete Turn context could not be composed. Read the saved original decision and receipt; do not rerun admission."
-                ) from exc
+                error = QuotaDecisionTransportError(
+                    "Complete Turn context could not be composed. Read the saved composition "
+                    "diagnostic and original receipt; do not rerun admission."
+                )
+                # An uncomposed input has no current contract binding. Saving
+                # it as a successful root would let recovery misidentify it as
+                # a historical decision and publish an implicit claim source.
+                # Preserve every source fact under the existing failed-result
+                # contract, without registering native execution preparation.
+                diagnostic = _export("quota_decision_transport_failure_payload")(
+                    args, payload, error, capture_directory=None,
+                )
+                diagnostic["source_diagnostic"] = payload
+                diagnostic["composition_error"] = {
+                    "type": type(exc).__name__, "message": str(exc),
+                    "diagnostic_code": exc.diagnostic_code,
+                }
+                capture_decision(capture_directory, diagnostic)
+                raise error from exc
             # Validate before capture or handoff; the complete source is unchanged.
             payload = _project_quota_cli_payload(payload, args, detail_sections)
         captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)

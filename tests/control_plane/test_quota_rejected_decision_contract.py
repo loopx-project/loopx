@@ -276,11 +276,19 @@ def test_unhealthy_paused_decision_keeps_stop_policy_in_complete_capture(
             source["effective_action"] = "future_execution"
         else:
             source["interaction_contract"]["schema_version"] = "future_interaction"
-        with pytest.raises(
-            RuntimeError, match="effective_action|interaction_contract.schema_version"
-        ):
-            emit()
-        assert emitted == [] and not (capture / "decision.json").exists()
+        assert emit() == 1
+        failure = emitted[0]
+        assert failure["ok"] is False and failure["should_run"] is False
+        assert failure["error_code"] == "quota_decision_transport_failed"
+        diagnostic = json.loads((capture / "decision.json").read_text())
+        assert diagnostic["ok"] is False and diagnostic["should_run"] is False
+        assert diagnostic["source_diagnostic"] == source
+        stopped = diagnostic["source_diagnostic"]
+        assert stopped["state"] == "paused" and stopped["should_run"] is False
+        assert stopped["scheduler_hint"]["action"] == "stop_until_explicit_resume"
+        assert stopped["execution_obligation"]["must_attempt_work"] is False
+        assert diagnostic["composition_error"]["type"] == "EffectRuntimeRejected"
+        assert ("effective_action" if fault == "action" else "interaction_contract.schema_version") in diagnostic["composition_error"]["message"]
         return
     rc = emit()
     assert rc == 1
