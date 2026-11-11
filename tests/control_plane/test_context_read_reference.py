@@ -523,7 +523,7 @@ def test_inline_initial_reader_of_real_authority_preserves_original_effect(tmp_p
     assert path.read_bytes() == before and history.read_bytes() == history_before
 
 
-@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index"])
+@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index", "null_pointers"])
 def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tmp_path, damage):
     _, machine, model = fixture(tmp_path)
     reference = {"path": machine["path"], "sha256": machine["sha256"]}
@@ -538,8 +538,12 @@ def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tm
         other.mkdir(mode=0o700)
         _, _, foreign = fixture(other)
         page = read(foreign["command"], select=["/criterion"])
-    else:
+    elif damage == "index":
         page = read(model["command"], select=[""], list_fields=True)
+    else:
+        page = read(model["command"], initial_read=True)
+        page.pop("reference_file", None)
+        page["selected_pointers"] = None
     assert _verified_context_pages(state, _context_pages(page)) == []
 
 
