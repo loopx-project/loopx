@@ -6,7 +6,7 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {MAX_LOCAL_SNAPSHOT_BYTES} from "../effect_runtime_snapshot.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
 import {authorityStoreSourceAuthority, readAuthoritySnapshot, type AuthorityStore} from "./authority_store.ts";
-import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
+import {AuthorityStoreProtocolError, canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {canonicalTodoCollection} from "./local_authority_read.ts";
 import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "./local_authority_write.ts";
 import {openRuntimeAuthorityStore, requireLocalAuthorityRuntimeRoot, localAuthorityOpenFailure,
@@ -93,8 +93,16 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
     after.snapshot.provider_revision === head.provider_revision && after.snapshot.cursor === head.cursor &&
     after.snapshot.query_sha256 === query,
   "canonical_snapshot_changed", "canonical snapshot changed; restart the complete read, never append a newer page");
-  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance, oracleObservationBasis, projectWorkGuards} =
-    canonicalTodoCollection(head.head, goal, input.include_leases);
+  let collection: ReturnType<typeof canonicalTodoCollection>;
+  try {
+    collection = canonicalTodoCollection(head.head, goal, input.include_leases);
+  } catch (error) {
+    // The request is already decoded. A rejected persisted contract belongs to
+    // the reader/authority boundary, not to the caller's request arguments.
+    if (!(error instanceof AuthorityStoreProtocolError)) throw error;
+    throw new SnapshotReadError("canonical_snapshot_projection_invalid", error.message);
+  }
+  const {projection, todoReadModel: readModel, leaseIndex: leases, acceptance, oracleObservationBasis, projectWorkGuards} = collection;
   const snapshot: Snapshot = {goal_id: goal, store_identity: identity.store_identity,
     provider_revision: head.provider_revision, cursor: head.cursor, query_sha256: query,
     todo_count: projection.todo_ids.length, lease_count: leases?.lease_todo_ids.length ?? 0};

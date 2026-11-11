@@ -3391,3 +3391,17 @@ original task and I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, PostgreSQL host/wheel, installed-host and adoption
 gaps remain open. The next qualification stays with those original owners and
 acceptance boundaries; the minimal-kernel effort is not complete.
+
+### 2026-11-11 — Canonical snapshot failure provenance
+
+Paged and complete snapshot reads distinguish a rejected persisted Todo contract
+(`canonical_snapshot_projection_invalid`) from malformed request arguments. The
+existing typed validator still rejects unknown manifests and invalid record
+digests, preserves the original reason and returns no partial rows or legacy
+fallback. Historical supported manifests remain readable. This is a diagnostic
+correction in the existing source transport owner; it grants no forward
+compatibility to older readers and does not upgrade an installed runtime.
+
+Real File/SQLite RPC and CLI regressions, plus an isolated PostgreSQL read,
+qualify the failure boundary without rewriting authority. The original
+installed-host qualification and full-cost/adoption gaps remain open.
