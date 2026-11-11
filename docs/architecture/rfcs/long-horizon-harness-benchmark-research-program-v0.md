@@ -520,6 +520,17 @@ Neither scope establishes provider billing completeness or matched-study gain.
 Keep these boundaries visible in the existing Research reader rather than
 adding a parallel cost ledger or converting bytes into estimated savings.
 
+**Agent decision rule for harness and planning changes.** Judge every candidate
+harness, context or planning change by net terminal accepted outcome
+$\Delta J(B \mid s_0) = \mathbb{E}[Y_B^\pi - Y_B^{\pi_0} \mid s_0]$ under
+**complete budget accounting**—charging model/context processing, control-plane
+and protocol tax (RPC round trips, schema ceremony, governance prompts),
+checkpoint creation, yardstick build/repair, and evaluator/confirmation compute
+and cooldown waits. Preserve negative, null and inconclusive results in the
+denominator, and prioritize restorable quiescent same-state checkpoint
+counterfactuals ($\tau_B(s; a, a_0, \pi)$) over unattributed tweaks inferred
+from confounded observational action logs.
+
 ### 6.3 Long-horizon control quality
 
 - materially equivalent work-slice repetitions;
@@ -1015,13 +1026,20 @@ per task, checkpoint rule and assignment are selected before outcomes; do not
 choose favorable peaks. This small pilot screens mechanisms, not statistical
 sufficiency for a general gain claim. Freeze its resource ceilings before launch.
 
-Use the existing [matched-continuation boundary](hierarchical-agent-stride-control-v0.md#matched-research-continuation):
+Use the existing [matched-continuation boundary](hierarchical-agent-stride-control-v0.md#matched-research-continuation)
+to estimate same-state counterfactual differences
+$\tau_B(s; a, a_0, \pi) = \mathbb{E}[Y_B^{a,\pi} - Y_B^{a_0,\pi} \mid S_0 = s]$
+rather than ranking actions by confounded observational frequencies:
 a copied workspace alone is not a shared research state. Candidate/frontier,
 accepted incumbent, evidence, memory, pending results, available budget and native
 submission history/cooldown must be equivalently reconstructable, with fresh run
 identities and inherited immutable provenance. Prefer quiescent checkpoints to
 reduce ambiguity. The [adapter](../../../benchmark/edgebench/README.md) currently
-does not guarantee native judge restart/cooldown continuity; prove the required
+does not guarantee native judge restart/cooldown continuity ([#8499](https://github.com/loopx-project/loopx/pull/8499)
+on `main`—and [#8480](https://github.com/loopx-project/loopx/pull/8480) on the
+C1 integration branch—qualifies only single-worker `--worker turn-resume`
+execution with trusted `--validation-command-json` and original-wake recovery,
+not a checkpoint-fork restore); prove the required
 restore seam before admitting a pair. If unavailable, use a matched from-start
 comparison and report its actual budget rather than label a fresh registration
 as a checkpoint fork. This does not require building a general replay platform.
@@ -1324,6 +1342,16 @@ resolved runner interval, without granting feedback beyond their declared modes.
 This is a new-run behavior change to pin independently
 of feedback mode. Prompt delivery/readback qualifies the engineering boundary;
 earlier useful feedback and outcome gains remain unqualified E3 study questions.
+
+Merged [#8499](https://github.com/loopx-project/loopx/pull/8499) lands the
+explicit EdgeBench single-worker `--worker turn-resume` profile on `main` (with
+trusted `--validation-command-json` and original-wake lost-reply recovery
+through the existing journal, validation and settlement, keeping default
+runners and schemas unchanged; [#8480](https://github.com/loopx-project/loopx/pull/8480)
+records the corresponding C1 integration-branch validation). This qualifies an
+E1/E2 execution-and-recovery seam only; it does not establish quiescent
+checkpoint-fork parity for §8.7, E3/C2 matched-budget uplift
+($\Delta J(B \mid s_0) > 0$), or C1 default schema cutover.
 
 ### 11.3 Required delivery slice
 

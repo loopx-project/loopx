@@ -598,14 +598,21 @@ def _select_goal(goals: list[dict[str, Any]], goal_id: str | None) -> tuple[str,
     return "", None
 
 
+_BootstrapConnectionSnapshot = tuple[dict[str, object], dict[str, object] | None]
+
+
 def inspect_bootstrap_connection(
-    project: Path,
-    *,
-    goal_id: str | None = None,
-    resolve_linked_worktree_alias: bool = True,
+    project: Path, *, goal_id: str | None = None, resolve_linked_worktree_alias: bool = True,
 ) -> dict[str, Any]:
     """Inspect either the canonical project route or the caller's exact route."""
+    return _inspect_bootstrap_connection(project, goal_id=goal_id,
+        resolve_linked_worktree_alias=resolve_linked_worktree_alias)[0]
 
+
+def _inspect_bootstrap_connection(
+    project: Path, *, goal_id: str | None, resolve_linked_worktree_alias: bool,
+) -> _BootstrapConnectionSnapshot:
+    """Capture the connection and the registry used to build it together."""
     input_project = _resolve_project(project)
     alias = (
         resolve_canonical_project_alias(input_project, goal_id=goal_id)
@@ -642,7 +649,7 @@ def inspect_bootstrap_connection(
             registry_exists=registry_exists,
             absence_connection="registry_invalid",
             absence_reason=registry_error,
-        )
+        ), registry
 
     if not registry:
         return absent_goal_connection(
@@ -652,7 +659,7 @@ def inspect_bootstrap_connection(
             registry_exists=False,
             absence_connection="not_connected",
             absence_reason="project-local .loopx/registry.json is missing",
-        )
+        ), registry
 
     goals = registry_goals(registry)
     selected_goal_id, selected_goal = _select_goal(goals, goal_id)
@@ -674,7 +681,7 @@ def inspect_bootstrap_connection(
             absence_connection="registry_without_goal",
             absence_reason="registry exists but no matching goal entry was found",
             known_goal_ids=[str(goal.get("id")) for goal in goals],
-        )
+        ), registry
 
     if not selected_goal.get("state_file"):
         return {
@@ -687,7 +694,7 @@ def inspect_bootstrap_connection(
             "connection_state": "registry_goal_missing_state_file",
             "mutation_confirmation_required": True,
             "reason": "goal entry does not declare state_file",
-        }
+        }, registry
 
     if not state_file.exists():
         return {
@@ -700,7 +707,7 @@ def inspect_bootstrap_connection(
             "connection_state": "state_file_missing",
             "mutation_confirmation_required": True,
             "reason": "registry goal points at a state_file that is missing",
-        }
+        }, registry
 
     return {
         **base_connection,
@@ -712,7 +719,7 @@ def inspect_bootstrap_connection(
         "connection_state": "connected",
         "mutation_confirmation_required": False,
         "reason": "registry goal and active state_file are present",
-    }
+    }, registry
 
 
 def _bootstrap_command(
@@ -808,11 +815,10 @@ def build_loopx_bootstrap_command_pack(
     resolve_linked_worktree_alias: bool = True,
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
+    _connection_snapshot: _BootstrapConnectionSnapshot | None = None,
 ) -> dict[str, Any]:
-    inspection = inspect_bootstrap_connection(
-        project,
-        goal_id=goal_id,
-        resolve_linked_worktree_alias=resolve_linked_worktree_alias,
+    inspection, registry_payload = _connection_snapshot or _inspect_bootstrap_connection(
+        project, goal_id=goal_id, resolve_linked_worktree_alias=resolve_linked_worktree_alias,
     )
     resolved_project = str(inspection["project"])
     resolved_goal_id = str(inspection["goal_id"])
@@ -827,7 +833,6 @@ def build_loopx_bootstrap_command_pack(
     )
     agent_type = agent_type_for_host_surface(host_surface)
     registry_path = Path(str(inspection["registry"]))
-    registry_payload, _registry_error = _read_registry(registry_path)
     registry_goal = next(
         (
             goal
@@ -1155,7 +1160,7 @@ def build_loopx_bootstrap_command_pack(
 
 def _build_multi_goal_start_selection_packet(
     *,
-    project: Path,
+    connection_snapshot: _BootstrapConnectionSnapshot,
     agent_id: str | None,
     thread_id: str | None,
     new_peer: bool,
@@ -1169,14 +1174,10 @@ def _build_multi_goal_start_selection_packet(
     include_command_pack_detail: bool,
     display_name: str | None = None,
 ) -> dict[str, Any] | None:
-    inspection = inspect_bootstrap_connection(
-        project,
-        resolve_linked_worktree_alias=False,
-    )
-    registry_path = Path(str(inspection.get("registry") or ""))
-    registry, registry_error = _read_registry(registry_path)
-    if registry_error or not registry:
+    inspection, registry = connection_snapshot
+    if not registry:
         return None
+    registry_path = Path(str(inspection["registry"]))
     goals = registry_goals(registry)
     if len(goals) <= 1:
         return None
@@ -1446,9 +1447,10 @@ def build_start_goal_guided_packet(
     display_name: str | None = None,
     runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
+    snapshot = _inspect_bootstrap_connection(project, goal_id=goal_id, resolve_linked_worktree_alias=False)
     if goal_id is None:
         selection_packet = _build_multi_goal_start_selection_packet(
-            project=project,
+            connection_snapshot=snapshot,
             agent_id=agent_id,
             thread_id=thread_id,
             new_peer=new_peer,
@@ -1476,7 +1478,7 @@ def build_start_goal_guided_packet(
         available_capabilities=available_capabilities,
         capability_route=capability_route,
         fine_grained=fine_grained,
-        resolve_linked_worktree_alias=False,
+        _connection_snapshot=snapshot,
         display_name=display_name,
         runtime_root_arg=runtime_root_arg,
     )
@@ -1586,11 +1588,56 @@ def build_start_goal_guided_packet(
             resolved_goal_id=str(command_pack.get("goal_id") or ""),
             effective_agent_id=str(command_pack.get("agent_id") or "") or None,
             runtime_root_arg=runtime_root_arg,
+            registry_payload=snapshot[1],
         )
         if isinstance(project_connection, dict)
         and not isinstance(identity_selection_gate, dict)
         else None
     )
+    ordered_steps = [
+        {
+            "id": "inspect_connection",
+            "kind": "read_only",
+            "command_source": "#/command_pack/canonical_cli_command",
+            "purpose": "resolve the requested project route, goal id, registry, and active state before any mutation",
+        },
+        {
+            "id": "connect_if_needed",
+            "kind": "conditional_mutation",
+            "command": commands.get("goal_start_connect_if_needed"),
+            "purpose": "create or reuse project-local LoopX state only when no matching goal exists",
+        },
+        *bind_thread_steps,
+        *fine_mode_steps,
+        *todo_authoring_steps(
+            existing_runnable_frontier=guided_frontier,
+            plan_prompt=commands.get("goal_start_plan_prompt"),
+            fine_grained=fine_grained,
+            cli_bin=cli_bin,
+            runtime_root=command_pack.get("command_runtime_root"),
+            goal_id=str(command_pack.get("goal_id") or ""),
+            agent_id=command_pack.get("agent_id"),
+        ),
+        {
+            "id": "refresh_state",
+            "kind": "state_sync",
+            "command": commands.get("goal_start_refresh_state"),
+            "purpose": "project the accepted plan and next action into active state/history",
+        },
+        {
+            "id": "activate_host_loop",
+            "kind": "identity_gate" if identity_selection_gate else "host_loop",
+            "command": commands.get("goal_start_host_loop_activation"),
+            "purpose": "install or refresh the host loop only when it is missing, unknown, stale, or agent type changed",
+        },
+        {
+            "id": "quota_guard",
+            "kind": "guard",
+            "command": commands.get("goal_start_quota_should_run"),
+            "purpose": "let LoopX choose the first bounded segment and scheduler cadence",
+        },
+        *scheduler_ack_steps,
+    ]
     guided_transaction = {
         "schema_version": GUIDED_START_SCHEMA_VERSION,
         "mode": "dry_run_preview",
@@ -1610,50 +1657,7 @@ def build_start_goal_guided_packet(
             if fine_grained
             else {}
         ),
-        "ordered_steps": [
-            {
-                "id": "inspect_connection",
-                "kind": "read_only",
-                "command_source": "#/command_pack/canonical_cli_command",
-                "purpose": "resolve the requested project route, goal id, registry, and active state before any mutation",
-            },
-            {
-                "id": "connect_if_needed",
-                "kind": "conditional_mutation",
-                "command": commands.get("goal_start_connect_if_needed"),
-                "purpose": "create or reuse project-local LoopX state only when no matching goal exists",
-            },
-            *bind_thread_steps,
-            *fine_mode_steps,
-            *todo_authoring_steps(
-                existing_runnable_frontier=guided_frontier,
-                plan_prompt=commands.get("goal_start_plan_prompt"),
-                fine_grained=fine_grained,
-                cli_bin=cli_bin,
-                runtime_root=command_pack.get("command_runtime_root"),
-                goal_id=str(command_pack.get("goal_id") or ""),
-                agent_id=command_pack.get("agent_id"),
-            ),
-            {
-                "id": "refresh_state",
-                "kind": "state_sync",
-                "command": commands.get("goal_start_refresh_state"),
-                "purpose": "project the accepted plan and next action into active state/history",
-            },
-            {
-                "id": "activate_host_loop",
-                "kind": "identity_gate" if identity_selection_gate else "host_loop",
-                "command": commands.get("goal_start_host_loop_activation"),
-                "purpose": "install or refresh the host loop only when it is missing, unknown, stale, or agent type changed",
-            },
-            {
-                "id": "quota_guard",
-                "kind": "guard",
-                "command": commands.get("goal_start_quota_should_run"),
-                "purpose": "let LoopX choose the first bounded segment and scheduler cadence",
-            },
-            *scheduler_ack_steps,
-        ],
+        "ordered_steps": ordered_steps,
         "idempotency_policy": {
             "safe_to_rerun_preview": True,
             "reuse_connected_goal": True,
@@ -1674,7 +1678,7 @@ def build_start_goal_guided_packet(
     if isinstance(identity_selection_gate, dict):
         guided_transaction["blocked_by"] = "agent_identity_selection"
         guided_transaction["identity_selection_gate"] = identity_selection_gate
-        guided_transaction["ordered_steps"].insert(
+        ordered_steps.insert(
             2,
             {
                 "id": "select_agent_identity",
@@ -1695,7 +1699,7 @@ def build_start_goal_guided_packet(
     if selected_capability_route is not None:
         entry_key = str(selected_capability_route["entry_command_key"])
         admission_key = str(selected_capability_route["admission_command_key"])
-        guided_transaction["ordered_steps"].insert(
+        ordered_steps.insert(
             3 if isinstance(identity_selection_gate, dict) else 2,
             {
                 "id": "qualify_selected_capability",

@@ -467,6 +467,31 @@ function makeDriver(fixture: RunnerFixture): LoopXContinuationDriver {
 }
 
 describe('same-session LoopX driver', () => {
+  it('does not report a cancelled maintenance probe as a missing CLI', async () => {
+    const host = fakeAgent()
+    const maintenance = new AbortController()
+    const warnings: string[] = []
+    let probes = 0
+    vi.spyOn(host.agent, 'runMaintenance').mockImplementation(task => task(maintenance.signal))
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true,
+      runner: async () => {
+        probes += 1
+        maintenance.abort()
+        return { exitCode: 1, stdout: '', stderr: '' }
+      },
+      warn: message => warnings.push(message),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => probes > 0)
+      await new Promise<void>(resolve => setTimeout(resolve, 0))
+      expect(warnings).toEqual([])
+      expect(host.nextTurn).toHaveLength(0)
+      expect(probes).toBe(1)
+    } finally { await driver.dispose() }
+  })
+
   it('retries admission after attach-time maintenance becomes free without an idle event', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
@@ -956,8 +981,11 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('queues one authoritative task and revalidates the same receipt before entry', async () => {
-    const fixture = runnerFixture()
+  it.each([
+    ['POSIX', 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.'],
+    ['PowerShell', '$LOOPX_TURN = "turn-stable"\nContinue through the authoritative LoopX workflow.'],
+  ])('queues one authoritative %s task and revalidates the same receipt before entry', async (_shell, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const driver = makeDriver(fixture)
 
@@ -967,7 +995,7 @@ describe('same-session LoopX driver', () => {
     expect(queued.content).toEqual([
       {
         type: 'text',
-        text: 'LOOPX_TURN=turn-stable\nContinue through the authoritative LoopX workflow.',
+        text: heartbeatTaskBody,
       },
     ])
     expect(queued.source).toEqual({
@@ -1188,14 +1216,14 @@ describe('same-session LoopX driver', () => {
     await driver.dispose()
   })
 
-  it('fails closed when the canonical task body contains a conflicting turn id', async () => {
-    const fixture = runnerFixture({
-      heartbeatTaskBody: [
-        'LOOPX_TURN=turn-stable',
-        'LOOPX_TURN=turn-other',
-        'Continue through the authoritative LoopX workflow.',
-      ].join('\n'),
-    })
+  it.each([
+    ['wrong POSIX id', 'LOOPX_TURN=turn-other'],
+    ['wrong PowerShell id', '$LOOPX_TURN = "turn-other"'],
+    ['conflicting POSIX ids', 'LOOPX_TURN=turn-stable\nLOOPX_TURN=turn-other'],
+    ['duplicate PowerShell ids', '$LOOPX_TURN = "turn-stable"\n$LOOPX_TURN = "turn-stable"'],
+    ['mixed shell duplicates', 'LOOPX_TURN=turn-stable\n$LOOPX_TURN = "turn-stable"'],
+  ])('fails closed when the canonical task body contains %s', async (_case, heartbeatTaskBody) => {
+    const fixture = runnerFixture({ heartbeatTaskBody })
     const host = fakeAgent()
     const warnings: string[] = []
     const driver = new LoopXContinuationDriver({

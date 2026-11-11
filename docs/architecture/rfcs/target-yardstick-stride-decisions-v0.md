@@ -304,9 +304,11 @@ feasible, and do not interpret nominal significance as a lifetime guarantee.
 | Effects | Existing admitted task, same lease and settlement. A local probe may change within its declared scope. | Existing Todo/Goal/authority operations; newly selected work starts after original settlement and its own admission. |
 | Recovery | Original Turn and work identity. | Original obligation, Turn and replan context/recovery owner. |
 
-Per-Turn **availability** does not mean per-Turn mandatory deliberation. No new
-evidence and no reached decision boundary means continue the current authorized
-slice with no extra decision payload. Existing settlement and periodic-review
+Per-Turn **availability** does not mean per-Turn mandatory deliberation: control-plane
+token, RPC and deliberation overhead counts against budget $B$. No new
+decision-relevant evidence and no reached decision boundary means continue the
+current authorized slice with zero extra decision payload, zero repeated prompt
+ceremony and zero extra RPC round trips. Existing settlement and periodic-review
 duties still apply. The new record is optional on ordinary Turns; when supplied,
 identity, evidence and scope validation are mandatory. Do not describe a rejected
 write as advisory guidance.
@@ -528,21 +530,42 @@ score differences telescope to final improvement; process reward for a future
 learner must preserve that objective rather than reward activity or repeatedly
 repairing the same defect.
 
-Local evidence has both noise and possible systematic bias. More local samples
-cannot by themselves fix workload mismatch or missed hard correctness/tail-time
-constraints. Qualify a yardstick where choices happen: same-parent candidates,
+Local evidence has both noise and possible systematic bias (see
+[measurement quality in budgeted planning](../../research/budgeted-research-planning.md#measurement)).
+More local samples cannot by themselves fix workload mismatch or missed hard
+correctness/tail-time constraints. Qualify a yardstick on the decision-local
+neighborhood where choices happen: matched parent/child and sibling candidates,
 exact evaluator/input scope, nearby alternatives and native counterexamples.
 Across-time rank agreement may merely reflect common search progress. Include a
 bounded audit of uncertain/proxy-rejected candidates when it can expose missed
 opportunities; do not let the proxy alone veto informative authorized evaluation.
-A conflict revisits the scoped method, not a global blacklist of its whole type.
+A proxy-versus-native reversal triggers scoped recalibration, audit or replacement
+for that workload/horizon, not a permanent global blacklist of the whole evaluator
+type.
 
 Evaluator cooldown, queue availability and pending feedback are planning inputs,
 not permission to change the benchmark. Reuse immutable candidate/result links
 when feedback arrives late. A pending result can support independent work while
-it runs; it is not a measured gain. Confirmation must fit the frozen terminal
-protocol, and adaptively used native feedback is development evidence, not an
-untouched holdout.
+it runs; it is not a measured gain. Schedule backward from horizon $B$ under
+native cooldown and queue latency so candidate confirmation completes inside the
+frozen terminal selection rule rather than stranding unconfirmed local gains at
+deadline, and treat adaptively used native feedback as development evidence rather
+than an untouched holdout.
+
+As quantitative decision and search methodologies accumulate (`Yardstick`,
+`Stride`, multi-point scoped fidelity against frontier bias cliffs,
+confirmation-reserve back-scheduling, paired same-checkpoint counterfactuals,
+and mechanism-island evolutionary candidate selection for long-horizon tasks),
+consolidate their shared invariants—silent admission when disabled or unchanged,
+bounded context compilation with canonical replay-prefix isolation and
+single-owner digest/truncation codecs, exact scope-tuple execution/verification
+with `null` preservation rather than zero substitution, durable writeback, and
+advisory feedback—onto one composable typed stage kernel rather than duplicating
+per-feature validation or sorting boilerplate (proposed companion consolidation:
+[#8516](https://github.com/loopx-project/loopx/pull/8516)). Analytical and
+population-selection operators remain `advisory_only`
+(`execution_authority_granted=false`) until matched-budget evidence qualifies
+promotion.
 
 ### 5.9 Policy evolution through the same owner
 
