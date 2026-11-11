@@ -6,22 +6,25 @@ import {executeHandoffModeSet} from "../../loopx/control_plane/coordination/hand
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
 import {fileRemoteAuthorityAdmission} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
 import {createRemoteAuthorityServer} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
-import {remoteAuthorityOperationId} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+import {remoteAuthorityOperationId, type RemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {postgresRemoteFixture, claimRequest} from "./remote_authority_fixture.ts";
 
 export function registerRemoteAuthorityModeConformance(connectionString: string | undefined) {
   test("remote authority requires hard leases on the committing observation", {skip: !connectionString}, async t => {
     const fixture = await postgresRemoteFixture(t, connectionString!);
-    for (const timing of ["already-soft", "after-preflight", "before-commit"]) {
-      await t.test(`mode change ${timing} cannot leave a soft remote claim`, async child => {
-        const request = claimRequest("a", `todo_${timing.replaceAll("-", "_")}`);
+    for (const operation of ["claim", "release"] as const) for (const timing of ["already-soft", "after-preflight", "before-commit"]) {
+      await t.test(`mode change ${timing} cannot commit a remote ${operation} under soft mode`, async child => {
+        const claim = claimRequest("a", `todo_${operation}_${timing.replaceAll("-", "_")}`);
+        const {request_id: _, ...scope} = claim as Extract<RemoteAuthorityRequest, {operation: "claim"}>;
+        const request: RemoteAuthorityRequest = operation === "claim" ? claim
+          : {...scope, operation, idempotency_key: "missing-lease-key", expected_version: 0};
         await fixture.seed([request.todo_id]);
         let switched = false, headReads = 0, commitAttempts = 0;
         let switchedHead: Awaited<ReturnType<typeof fixture.store.loadAuthority>>;
         async function switchMode() {
           switched = true;
           assert.equal((await executeHandoffModeSet(fixture.store, {goal_id: request.goal_id,
-            operation_id: `mode-${timing}`, requested_mode: "soft_claim",
+            operation_id: `mode-${operation}-${timing}`, requested_mode: "soft_claim",
             observed_at: new Date().toISOString(), dry_run: false})).status, "applied");
           switchedHead = await fixture.store.loadAuthority();
         }
@@ -58,9 +61,13 @@ export function registerRemoteAuthorityModeConformance(connectionString: string 
         } else {
           const result = response.value.result as JsonObject;
           assert.equal(response.value.status, "result");
-          assert.equal(result.status, "failed");
-          assert.equal(result.reason_code, "claim_handoff_mode_mismatch");
-          assert(headReads >= (timing === "before-commit" ? 3 : 2));
+          if (operation === "release" && timing === "before-commit") {
+            assert.equal(result.status, "conflict"); // Lifecycle commands do not retry a stale observation.
+          } else {
+            assert.equal(result.status, "failed");
+            assert.equal(result.reason_code, `${operation === "claim" ? "claim" : "lease"}_handoff_mode_mismatch`);
+          }
+          assert(headReads >= (operation === "claim" && timing === "before-commit" ? 3 : 2));
         }
         assert.equal(commitAttempts, timing === "before-commit" ? 1 : 0);
         const recovered = await fixture.client(endpoint, "a", request, true);

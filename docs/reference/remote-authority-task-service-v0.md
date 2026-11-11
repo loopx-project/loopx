@@ -76,11 +76,16 @@ Progress names the original claim's client `request_id`; normal activity can
 maintain that execution and advance its lease version. Before a later lifecycle
 command, use `read` to confirm the same owner/epoch and obtain the current version
 while retaining the original lease key. Stale versions fail without an automatic
-rebase. Progress cannot adopt another execution generation.
-Remote claims require `hard_lease` in the canonical observation used to prepare
-the commit, including every CAS retry. A concurrent switch to `soft_claim` rejects
-the remote claim without assigning work or recording a claim receipt; ordinary
-local soft claims retain their existing behavior.
+rebase. Versions are non-negative safe integers, including `0` on existing
+canonical leases. Releasing an absent lease with version `0` seals a successful
+no-op receipt with `missing: true`, `released: false` and `changed: false`;
+replay and recovery retain that outcome without creating a lease.
+Progress cannot adopt another execution generation.
+Remote claims and lease lifecycle commands require `hard_lease` in the canonical
+observation used to prepare the commit, including every claim CAS retry. A
+concurrent switch to `soft_claim` rejects the remote operation without changing
+work or recording a receipt. Local soft claims and cleanup retain their existing
+behavior; historical hard-lease receipts keep the same identity.
 Read responses retain current lease facts even when a canonical task has a long
 note. If the note's JSON encoding exceeds 4 KiB, the response omits `note` and
 sets `todo.note_omitted: true`; the stored note remains unchanged. The overall

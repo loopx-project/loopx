@@ -53,7 +53,7 @@ export function decodeRemoteAuthorityRequest(raw: unknown): RemoteAuthorityReque
   if (normalizeTodoId(value.todo_id) !== value.todo_id || normalizeGoalId(value.goal_id) !== value.goal_id ||
       normalizeOwner(value.actor_id) !== value.actor_id) throw new TypeError("Use canonical task, Goal and actor identities");
   if (typeof value.store_identity !== "string" || !POSTGRESQL_STORE_IDENTITY_PATTERN.test(value.store_identity)) throw new TypeError("Invalid store identity");
-  if ("expected_version" in value && (!Number.isSafeInteger(value.expected_version) || Number(value.expected_version) < 1)) throw new TypeError("Invalid lease version");
+  if ("expected_version" in value && (!Number.isSafeInteger(value.expected_version) || Number(value.expected_version) < 0)) throw new TypeError("Invalid lease version");
   if ("ttl_seconds" in value && (!Number.isSafeInteger(value.ttl_seconds) || Number(value.ttl_seconds) < 1 || Number(value.ttl_seconds) > 3600)) throw new TypeError("Invalid lease duration");
   if (value.operation === "progress" && (typeof value.note !== "string" || !value.note.trim() || Buffer.byteLength(value.note) > 4096)) throw new TypeError("Progress requires a bounded note");
   return value as unknown as RemoteAuthorityRequest;
@@ -134,6 +134,11 @@ function responseCommand(raw: unknown, request: RemoteAuthorityRequest, operatio
   }
   if (request.operation !== "progress") {
     responseRequires(result.handoff_mode === "hard_lease");
+    if (request.operation === "release" && result.missing === true) {
+      responseRequires(request.expected_version === 0 && result.changed === false &&
+        result.released === false && result.lease == null);
+      return;
+    }
     responseLease(result.lease, request, true);
     if (request.operation === "renew") responseRequires(result.renewed === true);
     if (request.operation === "release") responseRequires(result.released === true);

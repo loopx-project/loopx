@@ -80,7 +80,7 @@ function pinnedStore(store: AuthorityStore, identity: string, admission: JsonObj
 function commandResult(result: JsonObject): JsonObject {
   const output: JsonObject = {};
   for (const key of ["status", "reason_code", "changed", "todo_id", "claimed_by", "operation_id",
-    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed"]) {
+    "claim_operation_id", "provider_revision", "cursor", "handoff_mode", "released", "renewed", "missing"]) {
     if (Object.hasOwn(result, key)) output[key] = result[key];
   }
   if (result.lease && typeof result.lease === "object" && !Array.isArray(result.lease)) {
@@ -176,7 +176,7 @@ export class RemoteAuthorityService {
         claim_operation_id: remoteAuthorityOperationId(request, admission.principal_id, request.claim_request_id),
         patch: {note: request.note}, clear_fields: []});
       else result = await executeCanonicalTaskLeaseLifecycle(store, {...common, operation: request.operation,
-        owner: request.actor_id, idempotency_key: request.idempotency_key,
+        owner: request.actor_id, idempotency_key: request.idempotency_key, required_handoff_mode: "hard_lease",
         expected_version: request.expected_version, ttl_seconds: request.operation === "renew" ? request.ttl_seconds : null});
       return reply({status: "result", operation_id: operationId, result: commandResult(result)});
     } catch {

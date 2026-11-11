@@ -8,7 +8,8 @@ import {mkdtemp, writeFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {decodeRemoteAuthorityRequest} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
+import {decodeRemoteAuthorityRequest, decodeRemoteAuthorityResponse, remoteAuthorityOperationId,
+  remoteAuthorityResponse} from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
 import {decodeRemoteAuthorityPolicy, remoteAuthorityPolicyAdmission, readRemoteAuthorityPolicy} from "../../loopx/control_plane/coordination/remote_authority_policy.ts";
 import {RemoteAuthorityService} from "../../loopx/control_plane/coordination/remote_authority_service.ts";
 import {callRemoteAuthority, createRemoteAuthorityServer} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
@@ -41,6 +42,37 @@ test("policy binds credentials, tenant, Goal, actor, operation and incarnation b
   const readOnly = servicePolicy(); readOnly.principals[0].grants[0].operations = ["read"];
   assert.equal(remoteAuthorityPolicyAdmission(decodeRemoteAuthorityPolicy(readOnly), credentials.a, request).status, "rejected");
   assert.equal(connections, 0);
+});
+
+for (const operation of ["renew", "release"] as const) {
+  test(`remote ${operation} versions use the canonical non-negative safe-integer range`, () => {
+    const {request_id: _, ...scope} = claimRequest("a") as ReturnType<typeof claimRequest> & {request_id: string};
+    const request = {...scope, operation, idempotency_key: "existing-key", ...(operation === "renew" ? {ttl_seconds: 600} : {})};
+    for (const expected_version of [0, 1, Number.MAX_SAFE_INTEGER]) {
+      const valid = {...request, expected_version};
+      assert.deepEqual(decodeRemoteAuthorityRequest(valid), valid);
+    }
+    for (const expected_version of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Infinity, "0", null, true]) {
+      assert.throws(() => decodeRemoteAuthorityRequest({...request, expected_version}));
+    }
+  });
+}
+
+test("missing-lease release responses require explicit no-op evidence", () => {
+  const {request_id: _, ...scope} = claimRequest("a") as ReturnType<typeof claimRequest> & {request_id: string};
+  const request = decodeRemoteAuthorityRequest({...scope, operation: "release", idempotency_key: "existing-key", expected_version: 0});
+  const result: JsonObject = {status: "no_change", changed: false, released: false, missing: true,
+    handoff_mode: "hard_lease", provider_revision: `${request.store_identity}:3`, cursor: "3"};
+  const wrap = (payload: JsonObject) => remoteAuthorityResponse(request, "execute", {
+    status: "result", operation_id: remoteAuthorityOperationId(request, "principal-a"), result: payload});
+  assert.deepEqual(decodeRemoteAuthorityResponse(wrap(result), request, "execute"), wrap(result));
+  for (const field of ["missing", "released", "changed", "provider_revision", "cursor"]) {
+    const incomplete = {...result}; delete incomplete[field];
+    assert.throws(() => decodeRemoteAuthorityResponse(wrap(incomplete), request, "execute"));
+  }
+  for (const patch of [{released: true}, {changed: true}, {missing: false}, {lease: {}}, {status: "applied"}]) {
+    assert.throws(() => decodeRemoteAuthorityResponse(wrap({...result, ...patch}), request, "execute"));
+  }
 });
 
 test("invalid policy cannot silently broaden or retain grants", async t => {
@@ -85,6 +117,11 @@ test("TLS listener bounds input and admission, and drains admitted requests", as
     });
   }
   assert.equal(await raw(JSON.stringify({...claimRequest("a"), now: "caller-clock"})), 400);
+  const {request_id: _, ...scope} = claimRequest("a") as ReturnType<typeof claimRequest> & {request_id: string};
+  for (const operation of ["renew", "release"]) {
+    assert.equal(await raw(JSON.stringify({...scope, operation, idempotency_key: "existing-key", expected_version: -1,
+      ...(operation === "renew" ? {ttl_seconds: 600} : {})})), 400);
+  }
   assert.equal(await raw("x".repeat(17 * 1024)), 413);
   assert.equal(await raw(JSON.stringify(claimRequest("a")), {Origin: "https://unrelated.invalid"}), 401);
   assert.equal(admissions, 0);
