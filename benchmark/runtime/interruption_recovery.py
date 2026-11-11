@@ -40,23 +40,29 @@ def recovery_handoff(env: dict[str, str]) -> tuple[dict | None, str]:
 
 class ProcessObservers:
     """Preserve request-admission cleanup while retaining process observations."""
-    def __init__(self, *observers):
-        self.observers = [observer for observer in observers if observer is not None]
+    def __init__(self, native_observation, request_admission):
+        self._native_observation = native_observation
+        self._request_admission = request_admission
+        self._observers = tuple(
+            observer for observer in (native_observation, request_admission) if observer is not None
+        )
 
-    def started(self, process):
-        for observer in self.observers:
-            observer.started(process)
+    def started(self, process, *, launch_started_at_unix):
+        if self._native_observation is not None:
+            self._native_observation.started(process, launch_started_at_unix=launch_started_at_unix)
+        if self._request_admission is not None:
+            self._request_admission.started(process)
 
     def before_cleanup(self, process, error):
-        for observer in self.observers:
+        for observer in self._observers:
             observer.before_cleanup(process, error)
 
     def signal_requested(self, number):
-        for observer in self.observers:
+        for observer in self._observers:
             observer.signal_requested(number)
 
     def after_cleanup(self, process, error):
-        for observer in self.observers:
+        for observer in self._observers:
             observer.after_cleanup(process, error)
 
 

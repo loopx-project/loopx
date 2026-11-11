@@ -1,7 +1,7 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
-  progressiveContextPlan, successorReplanReadSelection, type ReusableExactBody} from "./progressive_context.ts";
+  progressiveContextPlan, successorReplanReadSelection, type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
@@ -1570,9 +1570,10 @@ function signatureCoverage(envelope: JsonObject, responsePlanValue: unknown): st
  * with its existing owner. Explicit unknown/null declarations are never v0.
  * This does not make the bounded envelope a complete future work contract.
  */
-export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject): void {
+export function assertTurnEnvelopeConsumerVersion(envelope: JsonObject, allowUnversionedHistory = false): void {
   assertSupportedQuotaPacket(envelope);
-  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION) {
+  if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION &&
+      !(allowUnversionedHistory && !Object.hasOwn(envelope, "schema_version"))) {
     throw new EffectRuntimeRequestError("unsupported TurnEnvelope schema_version; use a compatible consumer");
   }
   const signature = object(envelope.action_signature);
@@ -1796,8 +1797,8 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
 
 /** A current private plan stores its one admitted source and transport header.
  * The old plan codec is read only for recorded journals or explicit old input. */
-export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
-  work: JsonObject; decision: JsonObject | null; scopedIdentity: JsonObject | null | undefined;
+function checkedTurnPlanSource(plan: JsonObject, numberTokens?: unknown): {
+  work: JsonObject; decision: JsonObject | null;
 } {
   if (plan.schema_version === "loopx_turn_plan_v1") {
     if (!Object.hasOwn(plan, "work_contract") || Object.hasOwn(plan, "turn_envelope")
@@ -1809,8 +1810,7 @@ export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
         turn_key: object(plan.transaction).turn_key, source_decision_hash: plan.source_decision_hash,
         ...(Object.hasOwn(plan, "detail_ref") ? {detail_ref: plan.detail_ref} : {})}});
     const work = {goal_id: checked.decision.goal_id ?? null, ...checked.projection};
-    return {work, decision: checked.decision, scopedIdentity: scopedTurnSettlementIdentity(work,
-      object(plan.transaction).turn_instance_id)};
+    return {work, decision: checked.decision};
   }
   if (Object.hasOwn(plan, "schema_version") && plan.schema_version !== "loopx_turn_plan_v0") {
     throw new EffectRuntimeRequestError("unsupported Turn plan version");
@@ -1819,9 +1819,22 @@ export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
   if (Object.hasOwn(plan, "work_contract")) {
     const checked = completeHostSource({payload: plan.work_contract, envelope,
       source_number_tokens: numberTokens});
-    return {work: {...envelope, ...checked.projection}, decision: checked.decision, scopedIdentity: undefined};
+    return {work: {...envelope, ...checked.projection}, decision: checked.decision};
   }
-  return {work: envelope, decision: null, scopedIdentity: undefined};
+  // Older journals can omit the envelope header. A declared version or
+  // signature format must pass the same compatibility check as Host input.
+  assertTurnEnvelopeConsumerVersion(envelope, true);
+  return {work: envelope, decision: null};
+}
+
+export function turnPlanWorkSource(plan: JsonObject, numberTokens?: unknown): {
+  work: JsonObject; decision: JsonObject | null; scopedIdentity: JsonObject | null | undefined;
+} {
+  const source = checkedTurnPlanSource(plan, numberTokens);
+  const scopedIdentity = plan.schema_version === "loopx_turn_plan_v1"
+    ? scopedTurnSettlementIdentity(source.work, object(plan.transaction).turn_instance_id)
+    : undefined;
+  return {...source, scopedIdentity};
 }
 
 function admittedDriverLineage(work: JsonObject, decision: JsonObject | null,
@@ -1885,11 +1898,11 @@ function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   const staged = nativeReplanPresentation(request);
   if (staged) return staged;
   if (request.surface !== "complete_turn")
-    return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
+    return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScopes(context));
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
-  return progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScope(source));
+  return progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScopes(source));
 }
 
 function completeWorkIdentity(decision: JsonObject): JsonObject {
@@ -2332,34 +2345,51 @@ function readyWriteScope(context: JsonObject): ReusableExactBody | undefined {
     sourceIdentity: JSON.stringify([route, context.goal_ref ?? null, boundary.handoff_mode ?? null])};
 }
 
-/** Present the long scope list on demand only while an ordinary Turn prepares work. */
-function progressivePreparationScope(payload: JsonObject):
-  {path: string[]; marker_path: string[]; instruction: string} | undefined {
+/** Work preparation retains current controls and keeps long scope lists at their exact source addresses. */
+function progressivePreparationScopes(payload: JsonObject): PreparationScopeDetail[] {
   const interaction = jsonObject(payload.interaction_contract);
   const cli = jsonObject(interaction?.cli_channel);
   const preparation = jsonObject(cli?.execution_preparation);
   if (interaction?.schema_version !== INTERACTION_CONTRACT_SCHEMA_VERSION ||
-      payload.should_run !== true || payload.effective_action !== EffectiveAction.NORMAL_RUN ||
+      payload.should_run !== true ||
       jsonObject(interaction.agent_channel)?.delivery_allowed !== false ||
-      cli?.spend_allowed_now !== false || cli.spend_after_validation !== false) return undefined;
+      cli?.spend_allowed_now !== false || cli.spend_after_validation !== false) return [];
+  const obligation = jsonObject(payload.execution_obligation);
+  const repair = payload.effective_action === EffectiveAction.AGENT_WORKSPACE_REPAIR &&
+    interaction.mode === EffectiveAction.AGENT_WORKSPACE_REPAIR && payload.workspace_repair_allowed === true &&
+    payload.normal_delivery_allowed === false && payload.recovery_delivery_allowed === false &&
+    obligation?.kind === EffectiveAction.AGENT_WORKSPACE_REPAIR && obligation.contract === "agent_workspace_guard" &&
+    obligation.must_attempt_work === true && obligation.delivery_allowed === false;
+  if (!repair && payload.effective_action !== EffectiveAction.NORMAL_RUN) return [];
   const selecting = cli.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
     jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1";
   const claiming = cli.selection_required !== true && payload.normal_delivery_allowed === false &&
     preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
     preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true;
-  if (!selecting && !claiming) return undefined;
+  if (!repair && !selecting && !claiming) return [];
   const boundary = jsonObject(payload.goal_boundary);
-  const scopes = boundary?.write_scope;
   // The recovery pointer and its guidance also cost bytes. Leave short lists inline.
-  if (!boundary || Object.hasOwn(boundary, "write_scope_pointer") ||
-      !Array.isArray(scopes) || scopes.some(scope => typeof scope !== "string") ||
-      Buffer.byteLength(JSON.stringify(scopes)) < 1024) return undefined;
-  return {
+  const longScope = (value: unknown) => Array.isArray(value) && value.every(scope => typeof scope === "string")
+    && Buffer.byteLength(JSON.stringify(value)) >= 1024;
+  const scopes: PreparationScopeDetail[] = [];
+  if (boundary && !Object.hasOwn(boundary, "write_scope_pointer") && longScope(boundary.write_scope)) scopes.push({
     path: ["goal_boundary", "write_scope"],
     marker_path: ["goal_boundary", "write_scope_pointer"],
-    instruction: "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
-      + "Use the complete current scope from the ready decision before delivery. ",
-  };
+    instruction: repair
+      ? "If workspace repair needs the Goal's write scopes, select /goal_boundary/write_scope from the source below. "
+      : "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
+        + "Use the complete current scope from the ready decision before delivery. ",
+  });
+  const selected = jsonObject(payload.selected_todo);
+  if (repair && selected?.schema_version === "quota_selected_todo_v0" &&
+      typeof selected.todo_id === "string" && longScope(selected.required_write_scopes)) scopes.push({
+    path: ["selected_todo", "required_write_scopes"],
+    instruction: "If workspace repair needs the Todo's requested write scopes, select /selected_todo/required_write_scopes from the source below. ",
+  });
+  const finalScope = scopes.at(-1);
+  if (repair && finalScope) finalScope.instruction +=
+    "After relocating, rerun the guard for this Turn and use its complete current scopes before delivery. ";
+  return scopes;
 }
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
@@ -2411,6 +2441,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "planning_facts") return completePlanningFacts(request);
+  if (operation === "recorded_plan_lineage") {
+    const {work, decision} = checkedTurnPlanSource(
+      requireJsonObject(request.plan, "recorded Turn plan"), request.source_number_tokens);
+    const identity = decision === null ? work : completeSessionLineage(decision);
+    return {goal_id: identity.goal_id ?? null, agent_id: identity.agent_id ?? null};
+  }
   if (operation === "plan_work") {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};

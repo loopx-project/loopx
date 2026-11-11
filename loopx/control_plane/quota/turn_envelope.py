@@ -223,6 +223,13 @@ def read_turn_plan_work(plan: Mapping[str, Any]) -> dict[str, Any]:
     return _wire_mapping(plan.get("turn_envelope"))
 
 
+def read_recorded_turn_plan_lineage(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Check a recorded plan with the same source reader as journal inspection."""
+    tokens = source_number_tokens(plan.get("work_contract"))
+    return _turn_envelope_result("recorded_plan_lineage", plan=plan,
+        **({"source_number_tokens": tokens} if tokens else {}))
+
+
 def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
     """Read identity from the complete owner, with historical request decoding."""
     checked = complete_turn_host_source(turn_plan_host_source(request), operation="complete_host_lineage")

@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 import json
 import re
+from fnmatch import fnmatch
 from hashlib import sha256
 import threading
 from itertools import islice
+from os import scandir
 from contextlib import contextmanager, ExitStack, nullcontext
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -332,6 +334,22 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
                 if message.get("message_id") in pending_message_ids
                 and isinstance(message.get("turn_id"), str) and message.get("turn_id")
             )
+            # A cursor page holds at most 200 rows. Wider reads with a dense
+            # set of returns can skip opening each original Turn: the complete
+            # route scan costs at most a Turn and route lookup per visible Turn.
+            # Only choose locators here; the same route and result checks apply.
+            if len(turn_ids) > 200:
+                lookup_limit = 2 * len(turn_ids)
+                try:
+                    with scandir(routes) as entries:
+                        names = list(islice((entry.name for entry in entries if fnmatch(entry.name, "*.json")),
+                                            lookup_limit + 1))
+                except OSError:
+                    pass  # A direct locator may still be readable.
+                else:
+                    if 0 < len(names) <= lookup_limit:
+                        yield from sorted(routes / name for name in names)
+                        return
             for turn_id in turn_ids:
                 try:
                     turn = source_store.load_turn(session_id, turn_id) or {}

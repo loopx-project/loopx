@@ -202,8 +202,8 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
     )
     source_read = (
         "Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops). "
-        "Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs. "
-        "Recover execution/lost context from needed original sections/identity; never re-admit. "
+        "For selection/replan or missing details, follow returned read/recovery instructions "
+        "with original capture/identity; never re-admit. "
         "Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair."
     )
     return {

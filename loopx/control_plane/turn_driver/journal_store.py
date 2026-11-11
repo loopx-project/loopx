@@ -14,7 +14,7 @@ from ..coordination.shadow_management import (
     runtime_artifact_lock_target,
     shadow_maintenance_lock_target,
 )
-from ..effect_runtime import EffectRuntimeConflict, effect_runtime_result
+from ..effect_runtime import EffectRuntimeConflict, EffectRuntimeRejected, effect_runtime_result
 from .turn_journal_runtime import (
     write_turn_journal,
 )
@@ -129,14 +129,12 @@ def load_loopx_turn_plan_from_journal(
     )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
+    from ..quota.turn_envelope import read_recorded_turn_plan_lineage
 
-    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
-        # Recorded transitional plans must check their supplied complete source,
-        # just like current plans. Only source-absent history uses raw identity.
-        identity = turn_host_lineage(plan)
-    else:
-        identity = cast(dict[str, Any], plan.get("turn_envelope")) if isinstance(plan.get("turn_envelope"), dict) else {}
+    try:
+        identity = read_recorded_turn_plan_lineage(plan)
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
     if identity.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
     if agent_id is not None and identity.get("agent_id") != agent_id:

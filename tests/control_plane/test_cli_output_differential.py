@@ -2322,15 +2322,26 @@ def test_thin_source_read_guidance_requires_complete_ordered_recovery_contract()
     base = _row(row_id="surface/heartbeat_prompt_thin/small/markdown", format="markdown",
         chars=4_000, utf8_bytes=4_000, compact_payload_chars=None, lines=40,
         continuation_instructions=before)
-    head = {**base, "chars": 4_100, "utf8_bytes": 4_102, "lines": 44, "continuation_instructions": after}
+    head = {**base, "chars": 4_037, "utf8_bytes": 4_039, "lines": 43, "continuation_instructions": after}
     assert not _compare_row(base, head)["failures"]
     assert _compare_row({**base, "continuation_instructions": after}, head)["failures"]
     for clause in ("work_context and required_reads", "before acting", "goals/criteria/constraints/stops",
-                   "selection/replan", "missing/truncated", "needed original sections/identity",
-                   "never re-admit", "explicit full reads", "capture/handoff flags"):
+                   "selection/replan", "missing details", "returned read/recovery instructions",
+                   "original capture/identity", "never re-admit", "explicit full reads",
+                   "capture/handoff flags", "selection/same-Turn repair"):
         partial = observe(body.replace(clause, "omitted", 1))
         assert not partial["source_read_after"], clause
         assert _compare_row(base, {**head, "continuation_instructions": partial})["failures"]
+    lines = body.splitlines()
+    first = next(index for index, line in enumerate(lines) if line.startswith("Read work_context and required_reads"))
+    second = next(index for index, line in enumerate(lines) if line.startswith("For selection/replan"))
+    lines[first], lines[second] = lines[second], lines[first]
+    reordered = observe("\n".join(lines))
+    assert not reordered["source_read_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": reordered})["failures"]
+    result = _compare_row(base, head)
     for metric in ("chars", "utf8_bytes", "lines"):
-        result = _compare_row(base, head)
         assert _compare_row(base, {**head, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    json_base = {**base, "format": "json", "row_id": "surface/heartbeat_prompt_thin/small/json"}
+    json_head = {**json_base, "continuation_instructions": after}
+    assert _compare_row(json_base, json_head)["allowances"] == _compare_row(json_base, json_base)["allowances"]

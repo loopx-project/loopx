@@ -942,13 +942,13 @@ def _continuation_instruction_migration(
             # text in brief; retain authority/recovery clauses. Once present,
             # ordinary growth limits resume; no new line or shape allowance.
             chars += 512
-        if surface == "heartbeat_prompt_thin" and migrated("source_read"):
-            # Full source availability is distinct from an unconditional full
-            # reread after compaction. The complete ordered read/recovery block
-            # adds 104 JSON / 100 Markdown chars and four Markdown lines.
-            # Same-block baselines and other heartbeat modes get no allowance.
-            chars += 128
-            lines = max(lines, 4)
+        if (surface == "heartbeat_prompt_thin"
+                and base.get("format") == candidate.get("format") == "markdown"
+                and migrated("source_read")):
+            # In the matched CLI fixtures, the complete ordered block adds
+            # 37 Markdown characters and three lines. JSON fits its usual budget.
+            chars = max(chars, 40)
+            lines = max(lines, 3)
     if row_id.startswith((
         "surface/heartbeat_prompt_thin/",
         "variant/heartbeat_prompt_brief/",

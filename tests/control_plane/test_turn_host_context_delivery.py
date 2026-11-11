@@ -76,10 +76,19 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     assert produced.returncode == 0, produced.stdout + produced.stderr
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
-    if mode == "legacy_reference":
-        assert json.loads(produced.stdout) == source
     assert source["schema_version"] == "loopx_turn_envelope_v1"
-    envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
+    if mode == "legacy_reference":
+        envelope = json.loads(produced.stdout)
+        assert envelope["schema_version"] == "loopx_turn_envelope_v0"
+        signature = envelope["action_signature"]
+        assert signature["matches"] is True
+        assert signature["source_hash"] == signature["envelope_hash"] == _canonical_hash(
+            turn_envelope_action_signature_document(envelope),
+        )
+        assert signature["source_decision_hash"] == source["contract_binding"]["content_hash"]
+        assert Path(envelope["detail_ref"]["captured_decision"]["path"]).resolve() == (capture / "decision.json").resolve()
+    else:
+        envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
     context = source["interaction_contract"].get("agent_context")
     assert bool(context) is (mode != "off")
     if not context:
@@ -197,7 +206,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     code, envelope = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", turn,
-        "--codex-app", "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
+        "--codex-app", "--complete-turn", "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, envelope
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
