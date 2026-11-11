@@ -681,11 +681,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
     from tests.control_plane.codex_checkpoint_fixture import (
-        last_context_page, local_inference_provider, native_process_continuation,
+        delivered_context, last_context_page, local_inference_provider, native_process_continuation,
         selected_context_values,
     )
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
-    from tests.control_plane.test_codex_context_capture import _delivered
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _configure_selectable_alternative,
         _write_fixture, _spend_run_count, _heartbeat_receipt_count,
@@ -715,16 +714,35 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider="sqlite")
     sources = []
+    guard = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app")
     for name in (() if benchmark else ("cold", "warm")):
-        code, decision = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
-        assert code == 0, decision
         if large_capture:
-            # Unknown supporting fields are part of the saved capture's
-            # forward-compatible lossless contract. Only the requested field
-            # should enter model input; the full material must remain recoverable.
-            decision["retained_material"] = {
-                "requirement": unicode_requirement, "supporting": supporting_material}
+            from contextlib import redirect_stdout
+            from io import StringIO
+
+            from loopx.cli import main
+            from loopx.cli_commands import quota
+
+            prepare = quota._prepare_quota_result_context
+
+            def prepare_large_source(payload, *args, **kwargs):
+                # The actual producer must bind the optional material into
+                # its decision before the test saves the original capture.
+                return prepare({**payload, "retained_material": {
+                    "requirement": unicode_requirement, "supporting": supporting_material}},
+                    *args, **kwargs)
+
+            output = StringIO()
+            with monkeypatch.context() as fixture_patch, redirect_stdout(output):
+                fixture_patch.chdir(project)
+                fixture_patch.setattr(quota, "_prepare_quota_result_context", prepare_large_source)
+                code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                    *guard, "--context-delivery", "off"])
+            decision = json.loads(output.getvalue())
+        else:
+            code, decision = _run_cli(registry, runtime, *guard, cwd=project)
+        assert code == 0, decision
         source = workspace / (name + "-source.json")
         source.write_text(json.dumps(decision, ensure_ascii=False))
         if large_capture:
@@ -948,7 +966,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         assert page["next_offset"] > page["offset"] and page["next_command"]
                         queue.append(page["next_command"])
                         return response(request, number, message)
-                    assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
+                    assert delivered_context(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
                 if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
@@ -1002,7 +1020,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             errors.append(error)
             return message
 
-    with local_inference_provider(response) as (url, _, _):
+    with local_inference_provider(response) as (url, _, provider_requests):
         if benchmark:
             from benchmark.runtime.worker import run_once
             skills = workspace / "skills"
@@ -1050,6 +1068,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
     assert not errors and phase == "done", (errors, phase, wrong_runtime.exists())
+    if large_capture:
+        assert all("资料🙂" not in json.dumps(request["input"], ensure_ascii=False)
+            for request in provider_requests)
     if force_async:
         assert async_observed and read_gate.is_file()
     if routed_program:
@@ -1068,8 +1089,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     for published, descriptor in observed.values():
         projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
         if large_capture:
-            # Oversized inputs use the exact saved document without a delta target.
-            assert descriptor["mode"] == "full" and "target" not in descriptor
+            assert descriptor["mode"] == "full"
+            if "target" in descriptor:
+                assert descriptor["target"]["goal_id"] == GOAL_ID
+                assert descriptor["target"]["agent_id"] == AGENT_ID
             assert published == projected
             assert projected["retained_material"] == {
                 "requirement": unicode_requirement, "supporting": supporting_material}
