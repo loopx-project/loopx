@@ -5,9 +5,23 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from ...chat_store import ChatSessionStore, _read_json
+from ...chat_store import RESUMABLE_SESSION_STATES, ChatSessionStore, _read_json
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
+
+
+def prepared_steward_binding_waits(
+    request: dict[str, Any], bindings: list[dict[str, Any]], store: ChatSessionStore
+) -> bool:
+    """Skip provider reads while a recorded executor mismatch persists."""
+    session = store.load_session(request["session_id"])
+    binding = next((row for row in bindings if row["binding_id"] == request["binding_id"]), None)
+    if not session or not binding or not binding.get("enabled"):
+        return False
+    allocation = session.get("manager_executor_allocation")
+    return (session.get("status") in RESUMABLE_SESSION_STATES
+            and session.get("executor_endpoint_id") != binding.get("executor_endpoint_id")
+            and isinstance(allocation, dict) and allocation.get("selection_policy") in ("preferred", "pinned"))
 
 
 class PrivateDeliveryDiscovery:

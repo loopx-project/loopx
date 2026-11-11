@@ -20,7 +20,9 @@ import {createHash} from "node:crypto";
 type Path = (string | number)[];
 export type PreparationScopeDetail = {path: Path; marker_path?: Path; instruction: string};
 type ReadSelection = {pointer: string; path: Path};
-type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]};
+type ReusableReadField = {
+  path: Path; freshKeys: string[]; minimumBytes: number; sourceIdentity?: string | string[]; appendText?: true;
+};
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
@@ -112,7 +114,7 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
         known(content, ["todo", "authority_read"]) && (todo.todo_id === undefined || todo.todo_id === selectedId);
       if (!full && !compact) return [];
       return [{path: [...path, "todo", "note"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
-        sourceIdentity: [...route, authority.source_authority, selectedId]}];
+        sourceIdentity: [...route, authority.source_authority, selectedId], appendText: true}];
     }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
@@ -190,6 +192,32 @@ function observedSectionDigest(body: string, field?: ReusableReadField): string 
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** A length-bearing proof lets the current captured note verify a previous
+ * prefix without keeping another copy of that note in the native journal. */
+function observedSectionProof(body: string, value: unknown, field?: ReusableReadField): string {
+  const digest = observedSectionDigest(body, field);
+  return field?.appendText && typeof value === "string" ? `${Buffer.byteLength(value)}:${digest}` : digest;
+}
+
+function matchesObservedSection(expected: unknown, body: string, value: unknown, field?: ReusableReadField): boolean {
+  const proof = observedSectionProof(body, value, field);
+  return expected === proof || (field?.appendText === true && expected === proof.slice(proof.indexOf(":") + 1));
+}
+
+function observedTextAppend(value: unknown, proof: unknown, identity: ReturnType<typeof contextSourceIdentity>,
+    field?: ReusableReadField):
+    {prefixBytes: number; suffix: string} | undefined {
+  if (!field?.appendText || typeof value !== "string" || typeof proof !== "string") return undefined;
+  const parts = /^(\d+):([a-f0-9]{64})$/.exec(proof);
+  if (!parts) return undefined; // A legacy digest can still prove exact equality.
+  const prefixBytes = Number(parts[1]), bytes = Buffer.from(value);
+  if (!Number.isSafeInteger(prefixBytes) || prefixBytes < field.minimumBytes || prefixBytes >= bytes.length
+      || (bytes[prefixBytes]! & 0xc0) === 0x80) return undefined;
+  const prefix = bytes.subarray(0, prefixBytes).toString("utf8");
+  if (observedSectionDigest(identity(prefix, ["context", ...field.path]), field) !== parts[2]) return undefined;
+  return {prefixBytes, suffix: bytes.subarray(prefixBytes).toString("utf8")};
+}
+
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
 export function contextReadSectionDigests(request: JsonObject, paths: Path[], exactBody?: ReusableExactBody): JsonObject {
@@ -213,7 +241,8 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[], ex
       const read = capturedContextSelection({context, select: [address], recover_selection_errors: true});
       if (read.rejected_selection) continue;
       const path = (read.selections as {path: Path}[])[0].path;
-      if (observedSectionDigest(identity(at(context, path), ["context", ...path]), fields.get(address)) === expected)
+      const value = at(context, path);
+      if (matchesObservedSection(expected, identity(value, ["context", ...path]), value, fields.get(address)))
         coverage.add(address);
     }
     const complete = (path: Path): boolean => {
@@ -224,12 +253,22 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[], ex
     };
     for (const [address, field] of fields)
       if (complete(field.path)) covered.set(address, field);
+    // The native reader only presents this after authenticating the retained
+    // proof against the current epoch and checking the rendered page bytes.
+    const presented = jsonObject(request.observed_text_append);
+    const address = presented?.pointer;
+    const field = typeof address === "string" ? fields.get(address) : undefined;
+    if (typeof address === "string" && field) {
+      const append = observedTextAppend(at(context, field.path), inherited[address], identity, field);
+      if (append && append.prefixBytes === presented?.prefix_bytes) covered.set(address, field);
+    }
   }
   return Object.fromEntries([...covered].flatMap(([address, {path, minimumBytes}]) => {
-    const content = identity(at(context, path), ["context", ...path]);
+    const value = at(context, path);
+    const content = identity(value, ["context", ...path]);
     // Parent delivery must not multiply tiny bodies into a larger journal.
     return selected.has(address) || Buffer.byteLength(content) >= minimumBytes
-      ? [[address, observedSectionDigest(content, fields.get(address))]] : [];
+      ? [[address, observedSectionProof(content, value, fields.get(address))]] : [];
   }));
 }
 
@@ -268,7 +307,7 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
     const body = at(context, path);
     if (typeof seen[address] === "string" && field) {
       const content = identity(body, ["context", ...path]);
-      if (Buffer.byteLength(content) >= field.minimumBytes && observedSectionDigest(content, field) === seen[address]) {
+      if (Buffer.byteLength(content) >= field.minimumBytes && matchesObservedSection(seen[address], content, body, field)) {
         reused[address] = seen[address];
         return field.freshKeys.filter(key => body !== null && typeof body === "object" &&
           Object.hasOwn(body, key)).map(key => ({pointer: pointer([...path, key]), path: [...path, key]}));
@@ -283,16 +322,27 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
     return Object.keys(reused).length > before ? children : [row];
   };
   const current = selections.flatMap(visit);
-  if (!Object.keys(reused).length) return authoringOnly();
+  const note = current.find(row => fields.get(row.pointer)?.appendText);
+  const value = note && at(context, note.path);
+  const append = note && observedTextAppend(value, seen[note.pointer], identity, fields.get(note.pointer));
+  if (!append && !Object.keys(reused).length) return authoringOnly();
   const grouped = capturedContextSelection({context, initial_read: true}, current.map(row => row.pointer)).selections as typeof selections;
+  const textAppend = note && append && grouped.some(row => row.pointer === note.pointer)
+    ? {pointer: note.pointer, prefix_bytes: append.prefixBytes} : undefined;
+  if (textAppend) reused[textAppend.pointer] = seen[textAppend.pointer];
+  if (!Object.keys(reused).length) return authoringOnly();
   const original = capturedContextSelection({context, initial_read: true}, pointers).selections as typeof selections;
   const bytes = (rows: typeof selections) => rows.reduce((total, row) => total + Buffer.byteLength(
     JSON.stringify({pointer: row.pointer}).slice(0, -1) + ',"value":' + identity(at(context, row.path), ["context", ...row.path]) + '}'), 0);
   // Splitting a container repeats addresses. Count those and the reuse index;
   // retain a margin for the existing recovery guidance, or deliver it whole.
-  if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
+  // Reserve space for the appended selection's display marker and prefix length.
+  const appendSavings = textAppend && append
+    ? Buffer.byteLength(JSON.stringify(value)) - Buffer.byteLength(JSON.stringify(append.suffix)) - 128 : 0;
+  if (bytes(grouped) - appendSavings + Buffer.byteLength(JSON.stringify(Object.keys({...reused, ...retainedAuthoring})))
       + MIN_REUSABLE_BODY_BYTES >= bytes(original)) return authoringOnly();
   Object.assign(reused, retainedAuthoring);
+  const observation = {reused, ...(textAppend ? {text_append: textAppend} : {})};
   if (request.include_initial_read_plan === true) {
     // The IO adapter already has the ordinary plan. Keep unchanged runs even
     // when reused sections are far apart in the ordered selection.
@@ -311,9 +361,9 @@ function observedFirstRead(request: JsonObject, pointers: string[], exactBody?: 
       splices.push({start, end: original.length, selections: grouped.slice(next)});
     const edits = splices.length === 1 ? {selection_splice: splices[0]} : {selection_splices: splices};
     if (splices.length && Buffer.byteLength(JSON.stringify(edits)) < Buffer.byteLength(JSON.stringify({selections: grouped})))
-      return {...edits, reused};
+      return {...edits, ...observation};
   }
-  return {selections: grouped, reused};
+  return {selections: grouped, ...observation};
 }
 
 function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelection[]): JsonObject {
@@ -344,7 +394,9 @@ function withLinkedObservedRemainder(observed: JsonObject | undefined,
   const remaining = initial.remaining.selections as ReadSelection[];
   const scoped = remaining.flatMap(row => addresses.has(row.pointer) || selected.some(item => pathStartsWith(row.path, item.path))
     ? [row] : selected.filter(item => pathStartsWith(item.path, row.path)));
-  return {...observed, linked_remaining: compactObservedSelection(remaining, scoped)};
+  const append = jsonObject(observed.text_append);
+  const text = append && scoped.some(row => row.pointer === append.pointer) ? {text_append: append} : {};
+  return {...observed, linked_remaining: {...compactObservedSelection(remaining, scoped), ...text}};
 }
 
 function observedSelection(ordinary: ReadSelection[], observed: JsonObject): ReadSelection[] | undefined {
@@ -745,7 +797,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
 }
 
 /** A pending Manager Inbox read already delivers these scoped request rows. */
-function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolean {
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -753,18 +805,25 @@ function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolea
       || read.ordering !== "before_work" || typeof read.command !== "string" || !read.command
       || source?.ok !== true || source.read_complete !== false
       || !agenda || agenda.read_command !== read.command || agenda.count_unit !== "request"
-      || agenda.scan_complete !== true || agenda.omitted_count !== 0 || agenda.unavailable_count !== 0
+      || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
         "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
-      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return false;
-  const {incoming_count: incoming, outgoing_count: outgoing, items} = agenda;
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
-      || incoming + outgoing !== items.length) return false;
-  // Keep small agendas inline. Three pointers retain the starting counts and
-  // scan status without repeating the required read's details or guidance.
-  return Buffer.byteLength(JSON.stringify(items), "utf8") >= 2048;
+      || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
+      || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
+  const fields = ["incoming_count", "outgoing_count", "scan_complete"];
+  if (omitted === 0) return fields;
+  // A complete scan can have a bounded display. Preserve the omission count
+  // and reconciliation guidance while leaving the rows to the required read.
+  if (typeof agenda.instruction === "string" && agenda.instruction.trim()) {
+    return [...fields, "omitted_count", "instruction"];
+  }
+  return undefined;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -903,8 +962,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include(...source, "content", field);
     include(...source, "content", "read_complete");
     const agendaPath = [...source, "content", "unfinished_delegations"];
-    if (canDeferManagerAgenda(_source, requiredInboxReads)) {
-      for (const field of ["incoming_count", "outgoing_count", "scan_complete"]) include(...agendaPath, field);
+    const agendaFields = managerAgendaOpeningFields(_source, requiredInboxReads);
+    if (agendaFields) {
+      for (const field of agendaFields) include(...agendaPath, field);
     } else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.
