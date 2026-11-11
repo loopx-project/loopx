@@ -7,7 +7,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
-import {ResearchCaseStudy, caseChapterHashPrefix} from "./research-case-study";
+import {ResearchCaseStudy, caseChapterHashPrefix, type CaseCitationBookmark} from "./research-case-study";
 import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
@@ -32,6 +32,7 @@ type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: 
 type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
 type EvidenceRead = {
   scope: string;
+  bookmark?: CaseCitationBookmark;
   busy?: boolean;
   value?: Citation;
   failure?: {message: string; route: string; selection: Record<string, string>};
@@ -95,7 +96,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const [evidenceRead, setEvidenceRead] = useState<EvidenceRead | null>(null);
   const citeGeneration = useRef(0);
   const sourcePanel = useRef<HTMLElement>(null);
-  const sourceTrigger = useRef<HTMLButtonElement | null>(null);
+  const sourceTrigger = useRef<HTMLElement | null>(null);
   const invalidateCitation = useCallback(() => {
     citeGeneration.current++;
     sourceTrigger.current = null;
@@ -234,8 +235,8 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     url.searchParams.set("research_goal", goalId);
     url.searchParams.set("research_reading", "case");
     const namespace = readSourceUrl ? new URL(readSourceUrl, url).searchParams.get("source_namespace") : null;
-    return {url, goalId, packId, namespace, follow: (href: URL) => {
-      if (href.href !== window.location.href) window.history.pushState(window.history.state, "", href);
+    return {url, goalId, packId, namespace, follow: (href: URL, replace = false) => {
+      if (href.href !== window.location.href) window.history[replace ? "replaceState" : "pushState"](window.history.state, "", href);
       if (location.packId !== packId) applyLocation({open: location.open, packId});
     }};
   };
@@ -265,33 +266,44 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     } catch (e) {if (current === generation.current) setError(errorText(e));}
     finally {if (current === generation.current) setCancelPending(false);}
   };
-  const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLButtonElement) => {
+  const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLElement, bookmark?: CaseCitationBookmark) => {
     const p = readingPack;
     if (!p || evidenceScope === null) return;
     if (origin) sourceTrigger.current = origin;
     const current = ++citeGeneration.current;
-    setEvidenceRead({scope: evidenceScope, busy: true});
+    setEvidenceRead({scope: evidenceScope, bookmark, busy: true});
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
       ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
     try {
       const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`));
-      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, value});
+      if (bookmark && (value.source_id !== selection.source_id || String(value.first_line) !== selection.first_line
+          || String(value.last_line) !== selection.last_line)) {
+        throw new Error(zh ? "原文读回与引用范围不一致。" : "The original returned does not match the cited range.");
+      }
+      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, bookmark, value});
     } catch (e) {
       if (current === citeGeneration.current) setEvidenceRead({
-        scope: evidenceScope, failure: {message: errorText(e), route, selection},
+        scope: evidenceScope, bookmark, failure: {message: errorText(e), route, selection},
       });
     }
   };
-  const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
+  const readCitation = (c: AssessmentCitation, origin?: HTMLElement, bookmark?: CaseCitationBookmark) =>
+    readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin, bookmark);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
-  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route) : undefined;
+  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route, undefined, visibleEvidence?.bookmark) : undefined;
   const closeCitation = () => {
     const origin = sourceTrigger.current;
+    const bookmark = visibleEvidence?.bookmark;
+    if (bookmark && window.location.hash === bookmark.hash) {
+      const url = new URL(window.location.href);
+      url.hash = bookmark.chapterHash;
+      window.history.replaceState(window.history.state, "", url);
+    }
     invalidateCitation();
     const closedAt = citeGeneration.current;
     requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
   };
-  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, invalidateCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -401,17 +413,19 @@ export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis:
   const p = a.pack;
   const firstStudy = packs[0]?.pack_id;
   useEffect(() => {
-    if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
+    const hash = window.location.hash;
+    if (!a.loading && !a.readError && p && !p.case_study && firstStudy
+        && !(hash.startsWith(caseChapterHashPrefix) && hash.includes("~"))) a.select(firstStudy);
   }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
   return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
     <header className="case-reader-toolbar">{(packs.length > 1 || (packs.length === 1 && !p?.case_study)) ? <label>{a.zh ? "解读版本" : "Study version"}
       <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
         {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
-      </select></label> : null}<button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+      </select></label> : null}<button type="button" onClick={() => {a.closeCitation(); onHistory();}}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
-    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
-      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+    {p?.case_study ? <ResearchCaseStudy key={`${p.pack_id}:${p.analysis_key}`} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
+      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation} onLeaveCitation={a.invalidateCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
 }
