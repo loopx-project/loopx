@@ -569,6 +569,133 @@ Readback validation: Dashboard `npm run smoke:delivery-review`,
 After the integrated Dashboard build, `npm run smoke:goal-acceptance-contract-packaged`
 runs the same contract browser check against the shipped assets.
 
+<a id="owner-check-scope-reconciliation"></a>
+
+### Reconcile obsolete work before supersession / 替代旧任务前协调检查范围
+
+Use this owner path when an authorized correction replaces a Todo's behavior,
+while the original objective and unaffected acceptance remain valid. For example,
+`todo_parse` is already accepted, `todo_transform_old` is obsolete,
+`todo_transform_current` is its existing replacement, and `todo_final` still checks
+the delivery. Inspect acceptance and Todos on the same registry/runtime route.
+Keep the original owner document and correction source with the operation receipt:
+public `inspect` deliberately omits executable argv, so it cannot reconstruct the
+complete configuration.
+
+With `all_advancement`, superseding bound work can return
+`goal_acceptance_validation_required`. Removing only its binding still leaves it
+in scope and can return `goal_acceptance_unbound`. Neither means that an Agent may
+disable checks. The authorized local owner must review the **whole replacement
+document**, including every retained criterion, command/pin/oracle and binding.
+Explicitly narrow coverage to the current accepted work; future Todos will no
+longer be included automatically and need owner review if they belong in scope.
+
+For this standalone contract, save the following as `acceptance-current.json`.
+Replace the illustrative IDs and bounded artifact checks with the real reviewed
+ones, including the available Python executable. Preserve any existing validator
+pins/oracles. The checks below assert actual output, not unconditional success.
+Do not add `outcome_id` to this expanded document: the compact outcome authoring
+form resolves its work links and supports only omitted scope or explicit `goal`
+scope; it cannot express this explicit work subset.
+
+```json
+{
+  "scope": {"kind": "selected_work", "todo_ids": ["todo_parse", "todo_transform_current", "todo_final"]},
+  "objective": "Deliver validated records",
+  "non_goals": ["Publish the records"],
+  "criteria": [
+    {
+      "id": "parse",
+      "description": "The accepted parsed records remain intact.",
+      "validation_argv": ["python3", "-c", "from pathlib import Path; assert Path('parsed.txt').read_text() == 'alpha\\nbeta\\n'"],
+      "validation_timeout_seconds": 5
+    },
+    {
+      "id": "transform-current",
+      "description": "The corrected transform preserves the requested order.",
+      "validation_argv": ["python3", "-c", "from pathlib import Path; assert Path('transformed.txt').read_text() == 'ALPHA\\nBETA\\n'"],
+      "validation_timeout_seconds": 5
+    },
+    {
+      "id": "final",
+      "description": "The final delivery contains the corrected records.",
+      "validation_argv": ["python3", "-c", "from pathlib import Path; assert Path('delivery.txt').read_text() == 'ALPHA\\nBETA\\n'"],
+      "validation_timeout_seconds": 5
+    }
+  ],
+  "bindings": [
+    {"todo_id": "todo_parse", "criterion_ids": ["parse"]},
+    {"todo_id": "todo_transform_current", "criterion_ids": ["transform-current"]},
+    {"todo_id": "todo_final", "criterion_ids": ["final"]}
+  ]
+}
+```
+
+Keep explicit `--registry` / `--runtime-root` arguments on **every** command when
+using a nondefault route. Configure without `--agent-id` only under existing local
+owner authorization; omission selects a trusted local role, not authentication.
+Use the exact current `provider_revision` from `inspect`, never the acceptance
+contract's numeric `revision`. Preview and apply the identical reviewed document
+with the same operation ID and provider revision:
+
+```bash
+loopx --format json goal-acceptance inspect --goal-id example-goal
+loopx --format json goal-acceptance configure --goal-id example-goal \
+  --document acceptance-current.json --expected-provider-revision '<provider_revision>' \
+  --operation-id reconcile-transform-v2
+loopx --format json goal-acceptance configure --goal-id example-goal \
+  --document acceptance-current.json --expected-provider-revision '<provider_revision>' \
+  --operation-id reconcile-transform-v2 --execute
+```
+
+Read the returned `operation_id`, `provider_revision`, scope, criteria and `tasks`
+associations (`todo_id`, `criterion_ids`, `state`);
+the accepted parser and final check must remain, and the obsolete Todo must be
+absent from both scope and bindings. Retain the reviewed document, correction
+source and receipt together. After a lost response retry that exact operation
+with its original revision. After a confirmed revision conflict, inspect and
+review current state before creating a new operation; do not silently rebase.
+
+Only then supersede the obsolete Todo. For canonical `hard_lease` work already
+claimed by `example-agent`, acquire its ordinary lease (or inspect its existing
+lease) and use the exact returned `lease.idempotency_key` and `lease.version`:
+
+```bash
+loopx --format json task-lease acquire --goal-id example-goal \
+  --todo-id todo_transform_old --owner example-agent --idempotency-key retire-transform-v1
+loopx --format json todo supersede --goal-id example-goal \
+  --todo-id todo_transform_old --agent-id example-agent \
+  --reason 'message:owner-correction: use the corrected transform' \
+  --successor-todo-id todo_transform_current \
+  --task-lease-idempotency-key '<lease.idempotency_key>' \
+  --task-lease-expected-version '<lease.version>'
+loopx --format json todo list --goal-id example-goal
+loopx --format json goal-acceptance inspect --goal-id example-goal
+```
+
+This uses the raw valid lease pair; it does not require managed supersede claims.
+Do not reuse a released/expired lease or substitute a provider revision for its
+version. Read back the original Todo's successor link and the retained work/checks.
+Supersession records obsolete history; it does not verify the successor, rerun the
+accepted parser, or complete the Goal. Current/final work still needs its normal
+fresh checks, claims, leases and continuation handling.
+
+**保守边界：** 仅在已有明确授权且原目标与未受影响的验收仍有效时，由本地 owner 审阅
+完整替换文档。仅删 binding 不能让旧任务退出 `all_advancement`；改为上述
+`selected_work` 保留已验收 parser、当前替代任务和最终检查，同时明确以后新增任务
+不再自动纳入。每条命令沿用同一 registry/runtime，配置用最新 `provider_revision`，
+预览与执行复用同一 operation ID；丢响应原样重试，确认冲突后重新审阅并新建操作。
+保留原配置、用户更正来源、拟用文档和回执，再用实际 lease key/version 替代旧任务。
+配置与 supersede 都不证明新产物通过；后续仍须执行真实检查。
+
+This changes executable check coverage only. It does **not** retire or replace
+persisted additive `outcome_requirements`, erase their sources/work history, or
+resolve a contradictory immutable requirement. Report that conflict as unresolved
+unless a supported owner amendment path actually reconciles it; do not claim this
+recipe aligns it. 中文：本流程只协调命令检查覆盖，不撤销、覆盖或伪装满足累计的不可变
+成果要求；若已持久化要求互相冲突，在受支持的 owner 修订实际解决前，必须明确保留
+未解决状态。
+
 ## 中文
 
 打开本机 Goal，选择 **概览 → 交付与依据 → 验收观察**。
@@ -611,6 +738,9 @@ status 同时在独立的 `run_history.goals[].artifact_lifecycle` 和 Markdown 
 真实 status 收集和浏览器入口；打包验证使用 `LOOPX_GOAL_ACCEPTANCE_PACKAGED=1`。
 
 ### 默认验收中的命令检查
+
+旧任务被新任务替代时，使用上方[检查范围协调示例](#owner-check-scope-reconciliation)：
+完整保留仍有效的检查与工作绑定，由 owner 明确排除旧任务后，再按真实租约执行 supersede。
 
 已注册且**已提升到 canonical authority** 的 Goal 可为已有成果要求配置命令检查。
 命令不会自动提升 provider，canonical 读取失败也不回退到旧 Markdown。
