@@ -1466,7 +1466,11 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       const answer = (typeof scriptedAnswer === "object" ? scriptedAnswer?.message : scriptedAnswer)
         || "已沿用当前 Goal 与 Agent Session。接下来会先核对状态，再继续推进。";
       await new Promise((resolveWait) => setTimeout(resolveWait, /(中断控制|刷新恢复)/u.test(turnMessages.get(turnId) ?? "") ? 5000 : 1200));
-      await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
+      try {
+        await route.fulfill({ contentType: "text/event-stream", body: finishTurn(sessionId, turnId, answer, null, scriptedAnswer?.goal_draft, scriptedAnswer?.proposals ?? []), status: 200 });
+      } catch (error) {
+        if (!/Route is already handled/u.test(String(error?.message ?? error))) throw error;
+      }
       return;
     }
     if (url.pathname === "/api/chat/goals/contexts") {

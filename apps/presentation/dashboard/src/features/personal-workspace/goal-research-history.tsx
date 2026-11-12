@@ -116,7 +116,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const [recordsOpen, setRecordsOpen] = useState(false);
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
-  const [phase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
+  const [requestedPhase, setPhase] = useState<number | null>(() => viewFromUrl(goalId).phase);
+  const phase = read.complete ? requestedPhase : null;
+  const historyCoverage = useRef<HTMLDivElement>(null);
   const presentationId = useId().replace(/:/g, "");
   const detail = useRef<HTMLDivElement>(null);
   const graph = useRef<HTMLDivElement>(null);
@@ -127,16 +129,18 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const copy = zh ? {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
-    partial: "历史尚未完整载入", failure: "无法读取此来源的研究记录",
-    time: "记录时间（本地）", unknown: "时间未记录", record: "条记录", records: "条记录", evidence: "已记录依据",
+    partialFailure: "只载入了部分研究记录", refreshFailure: "刷新失败，当前记录已保留",
+    failure: "无法读取此来源的研究记录",
+    time: "记录时间（本地）", partialTime: "已读记录（本地时间）", unknown: "时间未记录", record: "条记录", records: "条记录", evidence: "已记录依据",
     interpretation: "独立检查与实际采用尚未核验", versions: "来源与版本引用", updates: "历史记录",
     changes: "次记录", question: "个问题", questions: "个问题", links: "显式关联", missing: "部分关联的来源节点尚未记录",
     group: "来源分组", lost: "当前记录中找不到所选节点，其他历史仍可浏览。",
   } : {
     title: "Research history", loading: "Reading the full recorded history", reading: "Reading", refresh: "Refresh history",
     all: "Whole graph", scope: "Recorded Explore history", coverage: "Other-source coverage and attempt-time coverage are unverified",
-    partial: "History is not fully loaded", failure: "Could not read this source's research history",
-    time: "Recorded time (local)", unknown: "Time not recorded", record: "record", records: "records", evidence: "Recorded evidence",
+    partialFailure: "Only part of the history loaded", refreshFailure: "Refresh failed; current records are preserved",
+    failure: "Could not read this source's research history",
+    time: "Recorded time (local)", partialTime: "Loaded records (local time)", unknown: "Time not recorded", record: "record", records: "records", evidence: "Recorded evidence",
     interpretation: "Independent checking and actual adoption are unverified", versions: "Source and version references", updates: "History",
     changes: "records", question: "question", questions: "questions", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
     group: "Source grouping", lost: "The selected node is absent from this snapshot. Other history remains readable.",
@@ -276,9 +280,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     url.searchParams.set("research_lens", next);
     if (nextPhase === null) url.searchParams.delete("research_phase");
     else url.searchParams.set("research_phase", String(nextPhase));
-    if (next !== lens || nextPhase !== phase) window.history.pushState(null, "", url);
+    if (next !== lens || nextPhase !== requestedPhase) window.history.pushState(null, "", url);
   };
-  const chooseLens = (next: Lens) => chooseView(next, phase);
+  const chooseLens = (next: Lens) => chooseView(next, requestedPhase);
   const fullTime = (at: number, precise = false) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {
     month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
     second: precise ? "2-digit" : undefined, fractionalSecondDigits: precise ? 3 : undefined,
@@ -444,7 +448,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </ContextHelp>
     </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups}
+        <GoalResearchTimeline timeline={timeline} complete={read.complete} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups}
           onGroupSelect={(day, button) => select({nodes: [], day}, true, button)} phase={phase} onPhase={next => chooseView(lens, next)}
           onSelect={(id, finding, event) => choose(id, true, finding, undefined, event)} onSelectMany={(nodes, button) => select({nodes, day: null}, true, button)} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
@@ -514,7 +518,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/>;
   }
   if (caseReading && (hasCases || awaitingRequestedCase)) {
-    return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
+    return <ResearchCaseReading analysis={analysis} active={active} onHistory={() => setCaseMode(false)}/>;
   }
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {hasCases ? <button type="button" className="case-return-reader" onClick={() => setCaseMode(true)}>{zh ? "← Case 深度解读" : "← Case studies"}</button> : null}
@@ -553,19 +557,22 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={refresh}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     {!emptySourceHistory ? <div className="research-history-meta">
-      <div className="research-history-coverage" role="status">{emptyWithAnalysis ? <>{emptyHistoryMessage} · {read.events.length} / {read.total}<ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}>
+      <div className="research-history-coverage" ref={historyCoverage} role="status" tabIndex={-1}>{emptyWithAnalysis ? <>{emptyHistoryMessage} · {read.events.length} / {read.total}<ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}>
         <p>{zh ? "已保存的分析、原生测量与 Explore 历程分别读取。这个 Goal 没有已记录的 Explore 历程；已保存的结果仍可在下方阅读。" : "Saved analysis, native measurements and Explore history are read separately. This Goal has no recorded Explore history; its saved results remain readable below."}</p>
-      </ContextHelp></> : <>{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+      </ContextHelp></> : <>{!read.complete && read.events.length ? copy.partialTime : copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${recordUnit}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
+          : `${read.events.length} / ${read.total} ${recordUnit}`}</>}</div>
       {!readingSelection ? displayControl : null}
     </div> : null}
     {readFailure ? <div className="research-history-read-error" role="alert">
       <AlertCircle size={18} aria-hidden/>
-      <div><strong>{read.events.length ? (zh ? "刷新失败，当前记录已保留" : "Refresh failed; current records are preserved") : copy.failure}</strong>
+      <div><strong>{read.events.length ? (read.complete ? copy.refreshFailure : copy.partialFailure) : copy.failure}</strong>
         <ContextHelp label={zh ? "研究记录读取详情" : "History read details"}><p>{readFailure}</p></ContextHelp>
       </div>
-      <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
+      <button type="button" disabled={busy} onClick={event => {
+        if (document.activeElement === event.currentTarget) historyCoverage.current?.focus({preventScroll: true});
+        refresh();
+      }}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
     {emptySourceHistory ? <>
       <div className="research-history-empty research-history-source-empty"><div>

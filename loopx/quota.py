@@ -1041,6 +1041,7 @@ def build_quota_should_run(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
     receipt_bound_todo_id: str | None = None,
     requested_action_todo_id: str | None = None,
+    retained_action_selection_todo_id: str | None = None,
     receipt_bound_monitor_phase: ReceiptBoundMonitorPhase | None = None,
     receipt_bound_replay_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_terminal_phase: ReceiptBoundTerminalPhase | None = None,
@@ -1060,10 +1061,17 @@ def build_quota_should_run(
         build_quota_should_run as _build_quota_should_run,
     )
 
+    # Inline reentry can retain an explicit choice before creating a receipt.
+    # This only orders the agent's eligible cards within the existing read cap.
+    preferred_yardstick_todo_id = receipt_bound_todo_id or requested_action_todo_id or retained_action_selection_todo_id
+
     def read_explore_context(read_goal_id: str, read_agent_id: str | None) -> dict[str, Any] | None:
         from .capabilities.explore.turn_context import read_replan_explore_context
 
-        return read_replan_explore_context(source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id)
+        return read_replan_explore_context(
+            source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id,
+            preferred_yardstick_todo_id=preferred_yardstick_todo_id,
+        )
 
     return _build_quota_should_run(
         status_payload,

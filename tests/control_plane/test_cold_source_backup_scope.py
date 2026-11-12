@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,6 +142,66 @@ def test_scoping_does_not_hide_unsafe_unrelated_members_or_changed_artifact(tmp_
         read_cold_source_backup(manifest, source_paths=[tmp_path / "runtime/goals/example"])
 
 
+@pytest.mark.parametrize("unavailable_identity", [None, "st_dev", "st_ino"])
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("field", ["st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"])
+def test_archive_identity_change_policy(tmp_path, monkeypatch, platform, field, unavailable_identity):
+    from loopx.control_plane.coordination import cold_source_backup
+
+    manifest = backup(tmp_path)
+    archive = tmp_path / "state.tar.gz"
+    archive_stat = archive.stat()
+    assert archive_stat.st_dev and archive_stat.st_ino
+    original_fstat = os.fstat
+    original_lstat = Path.lstat
+    observations = 0
+
+    def partial_identity(observed):
+        if unavailable_identity is None or (observed.st_dev, observed.st_ino) != (
+            archive_stat.st_dev, archive_stat.st_ino
+        ):
+            return observed
+        # Unavailable volume/file indexes are injected only at the stat boundary.
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[unavailable_identity] = 0
+        return SimpleNamespace(**fields)
+
+    def path_stat(path, *args, **kwargs):
+        return partial_identity(original_lstat(path, *args, **kwargs))
+
+    def descriptor_stat(fd):
+        nonlocal observations
+        observed = original_fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (archive_stat.st_dev, archive_stat.st_ino):
+            return observed
+        observations += 1
+        observed = partial_identity(observed)
+        if observations != 2:
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields[field] += 1
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(Path, "lstat", path_stat)
+    monkeypatch.setattr(cold_source_backup, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": descriptor_stat,
+    }))
+    if platform == "nt" and field == "st_ctime_ns" and unavailable_identity is None:
+        witness = read_cold_source_backup(manifest)
+        assert witness["archive_sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+        assert witness["archive_size_bytes"] == archive_stat.st_size
+        assert witness["members"] == [
+            {"archive_path": "runtime/goals/example/state.md",
+             "sha256": hashlib.sha256(b"retained source").hexdigest()},
+            {"archive_path": "runtime/goals/example/task-leases/settled.json",
+             "sha256": hashlib.sha256(b"retained lease").hexdigest()},
+        ]
+    else:
+        with pytest.raises(ColdSourceBackupError, match="cold_import_backup_changed_retry"):
+            read_cold_source_backup(manifest)
+    assert observations == 2
+
+
 def test_streaming_witness_has_no_old_expanded_byte_ceiling(tmp_path):
     archive = tmp_path / "large-expanded.tar.gz"
     source = tmp_path / "source.bin"
@@ -200,6 +262,8 @@ def test_streaming_witness_rejects_symlink_ancestor_and_cycle(tmp_path):
 
     link = tarfile.TarInfo("root/link")
     link.type, link.linkname = tarfile.SYMTYPE, "target"
+    assert read_cold_source_backup(unsafe_manifest("first-link", [link]),
+        source_paths=[tmp_path])["members"] == []
     descendant = tarfile.TarInfo("root/link/file")
     descendant.size = 1
     with pytest.raises(ValueError, match="member_unsafe"):

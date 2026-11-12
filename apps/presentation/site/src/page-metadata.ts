@@ -27,11 +27,11 @@ export const pageMetadata = {
     path: "",
     en: {
       title: "LoopX — Start long-running agent work with one goal",
-      description: "Tell Codex, Claude Code or another agent one natural-language goal. LoopX keeps the work, gates, evidence and recovery durable across sessions.",
+      description: "Tell Codex, Claude Code or another agent one natural-language goal. LoopX keeps the work, decisions, verification and recovery durable across sessions.",
     },
     zh: {
       title: "LoopX — 从一个目标开始长程 Agent 工作",
-      description: "给 Codex、Claude Code 等 Agent 一个自然语言目标。LoopX 跨会话保留工作、决策门、证据与恢复状态。",
+      description: "给 Codex、Claude Code 等 Agent 一个自然语言目标。LoopX 跨会话保留工作、判断、验证结果与恢复状态。",
     },
   },
   sweMarathon: {

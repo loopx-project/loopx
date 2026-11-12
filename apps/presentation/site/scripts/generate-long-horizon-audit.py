@@ -13,11 +13,14 @@ import matplotlib.pyplot as plt
 
 BLOG = Path(__file__).resolve().parents[1] / "public/blog"
 DATA = json.loads((BLOG / "data/long-horizon-audit.json").read_text())
+LESSON = json.loads((BLOG / "context-delivery/measurements.json").read_text())
 mpl.rcParams.update({"svg.fonttype": "none", "svg.hashsalt": "loopx-blog-audit",
     "font.family": "sans-serif", "font.sans-serif": ["PingFang SC", "Noto Sans CJK SC", "DejaVu Sans"],
     "axes.spines.top": False, "axes.spines.right": False, "axes.spines.left": False,
     "axes.spines.bottom": False, "axes.labelcolor": "#334155", "text.color": "#0f172a"})
-BLUE, TEAL, PURPLE, GRAY = "#2563eb", "#0f766e", "#7c3aed", "#94a3b8"
+SLATE, BLUE, TEAL, EMERALD, INDIGO, PURPLE, GRAY = (
+    "#334155", "#2563eb", "#0f766e", "#059669", "#4f46e5", "#7c3aed", "#64748b"
+)
 
 
 def save(fig, relative):
@@ -29,13 +32,192 @@ def save(fig, relative):
 
 for language in ("en", "zh"):
     zh = language == "zh"
+    # 1. Independent archived tutorial comparisons, not one measured cascade.
+    # Each numerator is paired with its own recorded baseline. In particular,
+    # a manual --select response is not a native --initial-read measurement.
+    orig_b = LESSON["native_projection"]["original_bytes"]
+    required_b = LESSON["native_projection"]["required_bytes"]
+    prog_b = LESSON["cycle_codec"]["current_full_bytes"]
+    pdelta_b = LESSON["cycle_codec"]["delta_bytes"]
+    manual_source_b = next(r for r in LESSON["reader_rows"] if r["case"] == "complete_capture")["body_bytes"]
+    batch_row = next(r for r in LESSON["reader_rows"] if r["case"] == "one_batched_select")
+    first_body_lesson = batch_row["body_bytes"]
+    first_cli_lesson = batch_row["output_bytes"]
+
+    fig = plt.figure(figsize=(14.4, 6.9))
+    gs = fig.add_gridspec(
+        2, 2, width_ratios=[1.05, 1.15], height_ratios=[1.0, 1.0],
+        left=.18, right=.97, bottom=.20, top=.78, wspace=.48, hspace=.58,
+    )
+    left = fig.add_subplot(gs[:, 0])
+    right_top = fig.add_subplot(gs[0, 1])
+    right_bot = fig.add_subplot(gs[1, 1])
+
+    cascade_vals = [100 * required_b / orig_b, 100 * pdelta_b / prog_b,
+                    100 * first_body_lesson / manual_source_b]
+    cascade_labels = (
+        [
+            "Progressive 必要视图 / 原捕获",
+            "周期内 Delta / 本轮完整交付",
+            "手工批量选读 / 教程捕获",
+        ]
+        if zh else
+        [
+            "Progressive view / original capture",
+            "In-cycle Delta / full delivery",
+            "Manual selection / tutorial capture",
+        ]
+    )
+    cascade_notes = [
+        f"{cascade_vals[0]:.1f}% ({required_b:,} / {orig_b:,} B)",
+        f"{cascade_vals[1]:.1f}% ({pdelta_b:,} / {prog_b:,} B)",
+        f"{cascade_vals[2]:.1f}% ({first_body_lesson:,} / {manual_source_b:,} B · {100*first_cli_lesson/manual_source_b:.1f}% CLI)",
+    ]
+    left.barh(range(3), cascade_vals, color=[BLUE, TEAL, PURPLE], height=.50)
+    left.set_yticks(range(3), cascade_labels, fontsize=10.2)
+    left.invert_yaxis()
+    left.set_xlim(0, 168)
+    left.set_xlabel("占各行自身对照基线的字节 (%)" if zh else "Share of each row's own baseline bytes (%)", fontsize=9.8)
+    left.set_title(
+        "A. 归档教程的三组独立对照" if zh else "A. Three independent archived tutorial comparisons",
+        loc="left", pad=14, fontsize=11.5, fontweight="bold",
+    )
+    for idx, (val, note) in enumerate(zip(cascade_vals, cascade_notes)):
+        weight = "bold" if idx == 1 else "normal"
+        color = "#0f766e" if idx == 1 else "#0f172a"
+        left.text(val + 2.2, idx, note, va="center", fontsize=9.6, fontweight=weight, color=color)
+
+    # Panel B1: Real 18h ANN paired audit — stacking Compaction-Cycle Structured Delta on top of Progressive
+    ann_prog_b = 3089841
+    ann_all46_b = 1898889
+    ann_vals = [100.0, 100 * ann_all46_b / ann_prog_b, 100.0 - 74.25]
+    ann_labels = (
+        [
+            "Progressive 选中包 (46 轮)",
+            "+ 周期内 Delta (全 46 轮)",
+            "+ 周期内 Delta (24 增量轮)",
+        ]
+        if zh else
+        [
+            "Progressive selected (46)",
+            "+ In-cycle Delta (all 46)",
+            "+ In-cycle Delta (24 delta)",
+        ]
+    )
+    ann_notes = (
+        [
+            "100.0% (3.09 MB 选中基线)",
+            f"{ann_vals[1]:.1f}% (1.90 MB · 再减 −38.54%)",
+            f"{ann_vals[2]:.2f}% (同周期再减 −74.25%)",
+        ]
+        if zh else
+        [
+            "100.0% (3.09 MB selected base)",
+            f"{ann_vals[1]:.1f}% (1.90 MB · −38.54%)",
+            f"{ann_vals[2]:.2f}% (in-cycle −74.25%)",
+        ]
+    )
+    right_top.barh(range(3), ann_vals, color=[BLUE, TEAL, EMERALD], height=.52)
+    right_top.set_yticks(range(3), ann_labels, fontsize=9.8)
+    right_top.invert_yaxis()
+    right_top.set_xlim(0, 188)
+    right_top.set_xlabel("占 Progressive 选中字节 (%)" if zh else "Share of Progressive selected bytes (%)", fontsize=9.5)
+    right_top.set_title(
+        "B1. 18h 实测核心增量：叠加压缩周期内结构化 Delta（ANN）"
+        if zh else
+        "B1. 18h core layer: stacking compaction-cycle Delta (ANN)",
+        loc="left", pad=12, fontsize=11.0, fontweight="bold",
+    )
+    for idx, (val, note) in enumerate(zip(ann_vals, ann_notes)):
+        weight = "bold" if idx >= 1 else "normal"
+        color = "#0f766e" if idx >= 1 else "#0f172a"
+        right_top.text(val + 2.4, idx, note, va="center", fontsize=9.4, fontweight=weight, color=color)
+
+    # Panel B2: 8-task 18h aggregate step-down (explicit cohorts)
     rows = DATA["context"]["tasks"]
-    fig, axes = plt.subplots(1, 2, figsize=(13.8, 6.8), gridspec_kw={"width_ratios": [1.45, 1]})
-    fig.subplots_adjust(left=.17, right=.97, bottom=.22, top=.80, wspace=.48)
+    prog_213 = 100 * sum(r["progressive_bytes"] for r in rows) / sum(r["full_bytes"] for r in rows)
+    denom_112 = DATA["context"]["delta_full_bytes_reported_approx"]
+    first_cli_112 = 100 * sum(r["first_cli_bytes"] for r in rows) / denom_112
+    first_body_112 = 100 * sum(r["first_body_bytes"] for r in rows) / denom_112
+    real_vals = [100.0, prog_213, first_body_112]
+    real_labels = (
+        [
+            "All · 完整决策包",
+            "Progressive · 213 次",
+            "Prog+Delta 首读 · 112 次",
+        ]
+        if zh else
+        [
+            "All · Full packets",
+            "Progressive · 213 wakes",
+            "Prog+Delta First read · 112",
+        ]
+    )
+    real_notes = (
+        [
+            "100.0% (22.41 MB / 续跑 ≈12.53 MB)",
+            f"{prog_213:.1f}% (7.29 MB · 净减 −67.5%)",
+            f"≈ {first_body_112:.1f}% 正文 / ≈ {first_cli_112:.1f}% CLI (−97% / −95%)",
+        ]
+        if zh else
+        [
+            "100.0% (22.41 MB / in-cycle ≈12.53 MB)",
+            f"{prog_213:.1f}% (7.29 MB · −67.5%)",
+            f"≈ {first_body_112:.1f}% body / ≈ {first_cli_112:.1f}% CLI (−97% / −95%)",
+        ]
+    )
+    right_bot.barh(range(3), real_vals, color=[SLATE, BLUE, PURPLE], height=.52)
+    right_bot.set_yticks(range(3), real_labels, fontsize=9.8)
+    right_bot.invert_yaxis()
+    right_bot.set_xlim(0, 188)
+    right_bot.set_xlabel("占对应唤醒组 Full 字节 (%)" if zh else "Share of cohort Full bytes (%)", fontsize=9.5)
+    right_bot.set_title(
+        "B2. 八题 18h 队列汇总：从 100% 到叠加首读入口"
+        if zh else
+        "B2. 8-task 18h cohorts: 100% Full to Prog+Delta entry",
+        loc="left", pad=12, fontsize=11.0, fontweight="bold",
+    )
+    for idx, (val, note) in enumerate(zip(real_vals, real_notes)):
+        right_bot.text(val + 2.4, idx, note, va="center", fontsize=9.4)
+
+    for axis in (left, right_top, right_bot):
+        axis.set_axisbelow(True)
+        axis.grid(axis="x", color="#e2e8f0", linewidth=.7)
+        axis.tick_params(axis="both", length=0)
+        axis.set_xticks([0, 25, 50, 75, 100])
+
+    fig.suptitle(
+        "分层上下文：独立教程对照与 18h 周期内差分观测"
+        if zh else
+        "Layered context: separate tutorial comparisons and 18h in-cycle Delta observations",
+        fontsize=15.0, fontweight="bold", y=.955,
+    )
+    sub = (
+        "渐进视图保留必要事实；周期内结构化 Delta 复用已验证子树。压缩或失配恢复完整基线，不保证任意输入逐级变小。"
+        if zh else
+        "Progressive views retain necessary facts; in-cycle Delta reuses verified subtrees. Compaction or mismatch restores the complete baseline."
+    )
+    fig.text(.5, .87, sub, ha="center", fontsize=10.2, color="#475569")
+    footer_cascade = (
+        "A：measurements.json 的独立归档对照，各行分母不同；674 B 为三个 --select 的手工选读，未测同源四阶段的 --initial-read。\n"
+        "B2：八题 213 次唤醒（Progressive）与 112 次同周期续跑（Prog+Delta 首读）各自相对原分母的比例；跨队列分母分开列出，不做混乘。"
+        if zh else
+        "A: independent archived comparisons in measurements.json; 674 B is a manual three-path selection, not a measured stacked --initial-read.\n"
+        "B2: 8-task shares over 213 wakes (Progressive) and 112 in-cycle continuations (Prog+Delta first-read); each cohort keeps its own denominator."
+    )
+    fig.text(.03, .03, footer_cascade, fontsize=9.4, color="#475569", linespacing=1.5)
+    save(fig, f"images/context-delivery/context-cascade-{language}.svg")
+
+    # 2. Eight-task detailed byte ratio audit (with 100% Full baseline bar & explicit single-layer vs stacked labels)
+    rows = DATA["context"]["tasks"]
+    fig, axes = plt.subplots(1, 2, figsize=(14.0, 6.8), gridspec_kw={"width_ratios": [1.38, 1.08]})
+    fig.subplots_adjust(left=.15, right=.96, bottom=.23, top=.80, wspace=.50)
     left, right = axes
-    series = [("Progressive · all wakes", [100*r["progressive_bytes"]/r["full_bytes"] for r in rows], BLUE),
-              ("Delta · in-cycle", [r["delta_share_reported"] for r in rows], TEAL),
-              ("First-read body · in-cycle", [r["first_body_share_reported"] for r in rows], PURPLE)]
+    series = [
+        ("Progressive · 全部 213 次" if zh else "Progressive · all 213 wakes", [100*r["progressive_bytes"]/r["full_bytes"] for r in rows], BLUE),
+        ("单路无损 Delta 文件 · 112 次" if zh else "Lossless Delta file · 112 wakes", [r["delta_share_reported"] for r in rows], TEAL),
+        ("Prog+Delta 首读正文 · 112 次" if zh else "Prog+Delta First body · 112 wakes", [r["first_body_share_reported"] for r in rows], PURPLE),
+    ]
     for index, (label, values, color) in enumerate(series):
         positions = [i + (index-1)*.23 for i in range(len(rows))]
         left.barh(positions, values, height=.20, label=label, color=color)
@@ -43,28 +225,66 @@ for language in ("en", "zh"):
     left.invert_yaxis()
     left.set_xlim(0, 55)
     left.set_xlabel("占同组 Full 字节 (%)" if zh else "Share of Full bytes within each cohort (%)")
-    left.set_title("A. 逐题占比 · 分开标明唤醒组" if zh else "A. Task shares · cohorts stay explicit", loc="left", pad=18)
-    totals = [100*sum(r["progressive_bytes"] for r in rows)/sum(r["full_bytes"] for r in rows)]
+    left.set_title(
+        "A. 逐题占比 · 单层文件载荷与叠加首读" if zh else "A. Per-task shares · single-layer vs stacked",
+        loc="left", pad=16, fontsize=11.5, fontweight="bold",
+    )
+
+    prog_share = 100 * sum(r["progressive_bytes"] for r in rows) / sum(r["full_bytes"] for r in rows)
     denominator = DATA["context"]["delta_full_bytes_reported_approx"]
-    totals += [100*sum(r[key] for r in rows)/denominator
-               for key in ("delta_bytes", "first_body_bytes", "first_cli_bytes")]
-    labels = ["Progressive · 213", "Delta · 112", "First body · 112", "First CLI · 112"]
-    right.barh(range(4), totals, color=[BLUE, TEAL, PURPLE, GRAY], height=.52)
-    right.set_yticks(range(4), labels, fontsize=10)
+    delta_share = 100 * sum(r["delta_bytes"] for r in rows) / denominator
+    first_cli_share = 100 * sum(r["first_cli_bytes"] for r in rows) / denominator
+    first_body_share = 100 * sum(r["first_body_bytes"] for r in rows) / denominator
+
+    totals = [100.0, delta_share, prog_share, first_cli_share, first_body_share]
+    labels = (
+        [
+            "All (Full) · 213 / 112",
+            "单路 Delta 文件 · 112",
+            "Progressive 视图 · 213",
+            "Prog+Delta 首读 CLI · 112",
+            "Prog+Delta 首读正文 · 112",
+        ]
+        if zh else
+        [
+            "All (Full) · 213 / 112",
+            "Delta file only · 112",
+            "Progressive view · 213",
+            "Prog+Delta First CLI · 112",
+            "Prog+Delta First body · 112",
+        ]
+    )
+    right.barh(range(5), totals, color=[SLATE, TEAL, BLUE, GRAY, PURPLE], height=.54)
+    right.set_yticks(range(5), labels, fontsize=10)
     right.invert_yaxis()
-    right.set_xlim(0, 50)
-    for index, value in enumerate(totals):
-        right.text(value+1, index, f"{'≈ ' if index else ''}{value:.1f}%", va="center", fontsize=12)
-    right.set_title("B. 各自分母的加权总计" if zh else "B. Weighted totals · separate denominators", loc="left", pad=18)
+    right.set_xlim(0, 128)
+    right.set_xticks([0, 25, 50, 75, 100])
+    approx_flags = [False, True, False, True, True]
+    for index, (value, approx) in enumerate(zip(totals, approx_flags)):
+        right.text(value + 2.0, index, f"{'≈ ' if approx else ''}{value:.1f}%", va="center", fontsize=10.5)
+    right.set_title(
+        "B. 从 100% 对照单层载荷与叠加首读" if zh else "B. From 100%: single-layer vs stacked entry",
+        loc="left", pad=16, fontsize=11.5, fontweight="bold",
+    )
     for axis in axes:
         axis.set_axisbelow(True)
         axis.grid(axis="x", color="#e2e8f0", linewidth=.7)
         axis.tick_params(axis="both", length=0)
-    fig.suptitle("八题上下文字节审计：先区分 213 次与 112 次唤醒" if zh else "Eight-task context byte audit: 213 wakes and 112 in-cycle wakes", fontsize=17, y=.96)
-    fig.legend(*left.get_legend_handles_labels(), loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(.53,.11), fontsize=10)
-    footer = ("Progressive：7,285,951 / 22,408,690 B，覆盖 213 次唤醒。Delta／首读：仅覆盖 112 次，Full 分母原报告约 12.53 MB。\n聚合复算；原始逐 wake 分母未公开。不可将右图解释为覆盖 213 次的累积减量。" if zh else
-        "Progressive: 7,285,951 / 22,408,690 B across 213 wakes. Delta/first-read: 112 wakes; reported Full denominator ≈ 12.53 MB.\nAggregate recalculation; exact per-wake denominators unavailable. The right panel is not a cumulative reduction across 213 wakes.")
-    fig.text(.03,.035,footer,fontsize=10,color="#475569",linespacing=1.6)
+    fig.suptitle(
+        "八题上下文字节审计：区分单层载荷（Progressive / 无损 Delta）与叠加首读"
+        if zh else
+        "Eight-task context byte audit: single-layer payloads vs stacked Prog+Delta entry",
+        fontsize=15.2, fontweight="bold", y=.955,
+    )
+    fig.legend(*left.get_legend_handles_labels(), loc="lower center", ncol=3, frameon=False, bbox_to_anchor=(.50, .115), fontsize=9.8)
+    footer = (
+        "All：22,408,690 B（213 次）/ 约 12.53 MB（112 次续跑）。归档表中「单路 Delta 文件」（4,488,335 B ≈ 35.8%）是未叠加渐进裁剪的完整无损差分文件，\n"
+        "与 Progressive（7,285,951 B = 32.5%）同属单层裁剪；两者叠加后的 Prog+Delta 首读入口降至 ≈ 3.0%（正文）/ ≈ 5.0%（含 CLI 封装）。"
+        if zh else
+        "All: 22,408,690 B (213 wakes) / ≈ 12.53 MB (112 continuations). Published 'Delta file only' (4,488,335 B ≈ 35.8%) is the unprojected lossless delta file,\n"
+        "parallel to Progressive (7,285,951 B = 32.5%); stacking both in Prog+Delta first-read drops the entry payload to ≈ 3.0% (body) / ≈ 5.0% (CLI)."
+    )
+    fig.text(.03, .03, footer, fontsize=9.6, color="#475569", linespacing=1.55)
     save(fig, f"images/context-delivery/multitask-byte-ratios-{language}.svg")
 
     stride = DATA["stride"]

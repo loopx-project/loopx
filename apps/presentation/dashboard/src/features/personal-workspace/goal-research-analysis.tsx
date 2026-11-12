@@ -396,7 +396,7 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
-export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Controller; onHistory: () => void}) {
+export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis: Controller; active: boolean; onHistory: () => void}) {
   const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
   const p = a.pack;
   const firstStudy = packs[0]?.pack_id;
@@ -410,7 +410,7 @@ export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Control
         {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
       </select></label> : null}<button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
-    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
+    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
       scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
@@ -634,7 +634,7 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
   return <div className={`research-analysis${result?.synthesis ? " has-synthesis" : ""}`} ref={a.panel} tabIndex={-1} role="region" aria-label={zh ? "轨迹深度分析" : "Trajectory analysis"} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); a.close();}}}>
     <header><div>{result?.synthesis ? <><div className="analysis-report-title"><h3>{zh ? "研究汇报" : "Research report"}</h3>{scopeHelp}</div>
       <div className="analysis-report-meta">{p?.title ? <p>{p.title}</p> : null}<span>{scope}</span></div></>
-      : <><h3>{zh ? "轨迹深度分析" : "Trajectory analysis"}</h3>{p?.title ? <p>{p.title}</p> : null}</>}</div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory} aria-label={zh ? "Goal 研究历程" : "Goal research history"} title={zh ? "Goal 研究历程" : "Goal research history"}><History size={16} aria-hidden/></button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
+      : <><h3>{zh ? "轨迹深度分析" : "Trajectory analysis"}</h3>{p?.title ? <p>{p.title}</p> : null}</>}</div><div className="analysis-header-actions">{result?.synthesis && onHistory ? <button type="button" onClick={onHistory} aria-label={zh ? "研究历程" : "Research history"} title={zh ? "研究历程" : "Research history"}><History size={16} aria-hidden/></button> : null}{result ? <button type="button" onClick={() => void a.read().catch(() => undefined)} aria-label={zh ? "刷新分析结果" : "Refresh analysis result"}><RefreshCw size={15} aria-hidden/></button> : null}<button type="button" onClick={a.close} aria-label={zh ? "关闭分析" : "Close analysis"}><X size={16} aria-hidden/></button></div></header>
     {a.error ? <div className="analysis-error" role="alert">{zh ? "分析请求未完成，已保存结果保留。" : "The analysis request did not complete; saved results are preserved."} <button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "重试读取" : "Retry reading"}</button><ContextHelp label={zh ? "失败详情" : "Failure details"}><p>{a.error}</p></ContextHelp></div> : null}
     {a.snapshot?.catalog.unreadable_pack_ids?.length && !p?.continuation_unavailable ? <p className="analysis-warning">{zh ? "部分历史分析暂不可读" : "Some historical analyses cannot be read"} · {a.snapshot.catalog.unreadable_pack_ids.length}</p> : null}
     <AnalysisReadState analysis={a}/>

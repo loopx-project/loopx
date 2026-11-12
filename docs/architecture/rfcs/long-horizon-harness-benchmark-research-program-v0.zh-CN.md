@@ -813,6 +813,28 @@ causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablati
 源码交付和模型采用只验证路径，不证明效果。双会话 Controller/Worker、数值 fidelity
 引擎和学习型策略均非前置条件。后续 schema 修改要有已观察到的 producer/consumer 缺口。
 
+<a id="action-value-episode"></a>
+
+#### 动作价值证据的片段读回
+
+首个实现切片应从前瞻选定的有意义决策点，展示一个可接续的真实片段：
+**当时状态 → 事前预测与选择 → 实际工作／消耗 → 返回证据及下一决定 → 冻结终局**。
+数据语义见[研究说明 §9](../../research/budgeted-research-planning.zh-CN.md#action-value-evidence)，
+owner 与负例见[联合 RFC §5.9、C17–C18](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)。
+复用已有 plan/finding/measurement/followthrough；原记录缺失时报告不能恢复，
+不事后补造预测，不为补齐片段增加模型或 Native 调用。采集与分析开销进入完整成本。
+若全程尚未结束，终局先保留为待关联，在预定终点结算；不为完成读回追加一轮运行。
+
+读回需要明确关键预测有没有被支持或推翻，以及实际下一段工作如何处理它；
+有据继续原计划也是采用。两小时后的局部涨分不能充当十八小时终局标签，
+未选路线没有结果也不填零。延迟增益保留相关工作链，而非全部归给最后一次 switch。
+
+这条读回证明的是关联与可分析性；合成示例可验证缺失／迟到／修订处理，不能替代真实采用。
+正式比较保留全部预选片段，包括失败、取消、无收益和证据不足，避免只展示成功故事。
+分别报告预测校准、采用与决策变化、同状态配对差异、从头终局及新任务收益；
+前一层通过不自动使后一层通过。学习／校准留出隔离任务、来源 run 或同父分叉家族，
+仍沿用下述 pilot 与完整预算合同，不另起一套实验或放宽反馈权限。
+
 #### 可负担的条件效应 pilot
 
 先选三个互补任务类型，使用固定 upstream 版本的任务名称：

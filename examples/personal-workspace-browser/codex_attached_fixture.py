@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -90,18 +91,30 @@ with (
                 elif (
                     body_fault
                     and self.path.startswith("/api/chat/codex-attached?")
-                    and "agent_id=" not in self.path
+                    and (
+                        "before" in parse_qs(urlsplit(self.path).query)
+                        if body_fault == "history"
+                        else "agent_id" not in parse_qs(urlsplit(self.path).query)
+                    )
                 ):
-                    # Headers first, then a body that never completes: the client
-                    # read limit aborts a stalled body, and a short close against
-                    # the declared length surfaces as a network error. Both keep
-                    # the status the response already carried.
+                    # Send actual headers, then end the connection short of the
+                    # declared body length (or let the browser's read time out).
                     mode, body_fault = body_fault, None
-                    self.send_response(503 if mode == "timeout" else 403)
-                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    status = {"timeout": 503, "drop": 403, "history": 200}[mode]
+                    self.send_response(status)
+                    self.send_header(
+                        "Content-Type",
+                        "application/json"
+                        if status == 200
+                        else "text/html; charset=utf-8",
+                    )
                     self.send_header("Content-Length", "200")
                     self.end_headers()
-                    self.wfile.write(b"<html><body>Service unavailable")
+                    self.wfile.write(
+                        b'{"ok":'
+                        if status == 200
+                        else b"<html><body>Service unavailable"
+                    )
                     self.wfile.flush()
                     if mode == "timeout":
                         time.sleep(7.5)
@@ -121,11 +134,13 @@ with (
                     )
                     self._send_json({"ok": True})
                     return
-                if self.path in {
-                    "/fixture/discovery-body-timeout",
-                    "/fixture/discovery-body-drop",
-                }:
-                    body_fault = "timeout" if self.path.endswith("timeout") else "drop"
+                faults = {
+                    "/fixture/discovery-body-timeout": "timeout",
+                    "/fixture/discovery-body-drop": "drop",
+                    "/fixture/history-body-drop": "history",
+                }
+                if self.path in faults:
+                    body_fault = faults[self.path]
                     self._send_json({"ok": True})
                     return
                 if self.path == "/fixture/work-records":
@@ -330,12 +345,29 @@ with (
                                         "payload": {
                                             "type": "task_complete"
                                             if finished
-                                            else "task_started"
+                                            else "task_started",
+                                            "turn_id": "live-workspace-fixture",
                                         },
                                     }
                                 )
                                 + "\n"
                             )
+                            if not finished:
+                                stream.write(
+                                    json.dumps(
+                                        {
+                                            "type": "turn_context",
+                                            "timestamp": "2026-01-01T00:00:04Z",
+                                            "payload": {
+                                                "turn_id": "live-workspace-fixture",
+                                                "model": "codex-synthetic-attached-workspace-verification-model",
+                                                "model_provider": "openai",
+                                                "effort": "max",
+                                            },
+                                        }
+                                    )
+                                    + "\n"
+                                )
                     if finished:
                         append_message(rollout, "assistant", text)
                     request.publish_live(

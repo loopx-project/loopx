@@ -116,6 +116,7 @@ def project_quota_planning(
     resolve_capacity: bool = False, current_time: str | None = None,
     summary_kind: str | None = None,
     consume_display_views: bool = False, request_only: bool = False,
+    display_view_names: list[str] | None = None,
 ) -> dict[str, Any]:
     identity = agent_identity if isinstance(agent_identity, dict) else {}
     profile = identity.get("agent_profile")
@@ -195,6 +196,7 @@ def project_quota_planning(
                    if not native_profile else {}),
                 "materialize_resume": reference is not None or request_only,
                 "consume_display_views": consume_display_views,
+                **({"display_view_names": display_view_names} if display_view_names is not None else {}),
             }} if summary_kind else {}),
             "frontier_deadline": value.get("frontier_deadline"),
             "route_items": build_todo_route_continuation_facts(value, handoff_gates=handoff_gates),

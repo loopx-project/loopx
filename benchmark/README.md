@@ -1011,10 +1011,12 @@ An explicit **SForge phase-clock participant** preserves a declared Host file's
 remaining duration alongside native opportunities. Add
 `--phase-deadline-file /private/source-phase-deadline` to capture, and
 `--phase-deadline-file /private/new-host-control/phase-deadline` to restore.
-Supply the original physical integer deadline from the admitted source Host,
-through an authorized controller read route. The destination file must be new,
-outside the artifact and native bank, and installed at the Host's existing
-phase-file route before starting its ordinary entry command.
+Supply the original physical deadline from the admitted source Host through an
+authorized controller read route. Fresh SForge phases record integer seconds.
+The continuation scheduler may record fractional seconds in its active clock.
+The destination file must be new, outside the artifact and native bank, and
+installed at the Host's existing phase-file route before starting its ordinary
+entry command.
 
 Planning input no longer projects the Host's deadline, remaining time or
 execution reserve to the model. The original task-planning packet is preserved;

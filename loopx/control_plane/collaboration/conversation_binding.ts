@@ -1,7 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {isDeepStrictEqual} from "node:util";
 import {createHash} from "node:crypto";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
@@ -246,7 +246,7 @@ export function planConversationBinding(params: JsonObject): JsonObject {
         || defaults.status !== "ready" || defaults.source !== "machine_configuration"
         || !["preferred", "pinned"].includes(String(defaults.selection_policy))
         || typeof defaults.configuration_revision !== "string"
-        || !/^sha256:[a-f0-9]{64}$/.test(defaults.configuration_revision)
+        || !ENVELOPED_SHA256_PATTERN.test(defaults.configuration_revision)
         || allocation.schema_version !== "manager_executor_allocation_v0"
         || allocation.configuration_revision !== defaults.configuration_revision
         || allocation.selection_policy !== defaults.selection_policy || allocation.available !== true

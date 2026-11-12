@@ -20,6 +20,58 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+def test_app_steward_discovery_only_projects_the_bound_session(tmp_path, monkeypatch):
+    from collections import Counter
+    from loopx import chat_store
+    from test_native_steward_private import finish, steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        event = provider.event("steward-app", "discovery-source", "Read the fixture workspace")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        assert finish(runtime, request)["status"] == "completed"
+        original_id = request["session_id"]
+        other = store.create_session(goal_id="different-goal", agent_id="codex", adapter_kind="codex_app_server",
+                                     upstream_thread_id="other-thread", upstream_mode="chat")
+        bindings = transport.bindings
+        bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        before = capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id)
+        metadata, transcripts = Counter(), []
+        read, revision = chat_store._read_json, store._event_revision
+
+        def read_session(path):
+            if path.name == "session.json":
+                metadata[path.parent.name] += 1
+            return read(path)
+
+        def read_revision(path):
+            if path.name == "messages.jsonl":
+                transcripts.append(path.parent.name)
+            return revision(path)
+
+        with monkeypatch.context() as observations:
+            observations.setattr(chat_store, "_read_json", read_session)
+            observations.setattr(store, "_event_revision", read_revision)
+            start = len(provider.calls)
+            assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": original_id}
+            assert sum("auth" in args and "--verify" in args for args in provider.calls[start:]) == 1
+        assert metadata == {original_id: 2, other["session_id"]: 1}
+        assert transcripts == [original_id]
+        assert before == (capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id))
+
+        # The alias's own context is unrelated, but its declared ID still
+        # resolves to the same canonical bound record. Core must see both.
+        alias_path = store._session_path(other["session_id"])
+        alias_path.write_text(json.dumps({**other, "session_id": original_id}))
+        with pytest.raises(ValueError, match="canonical bound Session identity is ambiguous"):
+            bindings.app_steward_target()
+    finally:
+        runtime.close()
+        fixture.close()
+
+
 @pytest.mark.parametrize("outcome", ["adopted", "closed", "interrupted"])
 def test_private_steward_holds_original_request_during_executor_adoption(tmp_path, monkeypatch, outcome):
     from test_native_steward_private import finish, steward
@@ -99,6 +151,118 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
             transport.reconcile_request(pending_path)
             assert provider.writes == writes
             assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+        assert original_path.read_bytes() == original_delivery
+    finally:
+        fixture.close()
+
+
+@pytest.mark.parametrize("change", ["executor", "scope", "revoked", "second_publication", "closed",
+                                    "source_unavailable", "source_changed"])
+def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
+    from test_native_steward_private import finish, steward
+    from loopx import chat_ingress
+    from loopx.capabilities.native_chat import conversation_bindings
+    from loopx.file_lock import exclusive_file_lock
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        def source_reads(message_id):
+            return sum("+messages-mget" in args and message_id in args for args in provider.calls)
+
+        original_event = provider.event("steward-app", "original-before-adoption", "Read the original conversation")
+        assert transport.admit("steward-app", original_event)["status"] == "durably_accepted"
+        assert source_reads(original_event["message_id"]) == 1
+        original_ref = identity_ref(binding["provider_ref"], original_event["message_id"])
+        original = transport.core.read_request(original_ref)
+        assert finish(runtime, original)["status"] == "completed"
+        original_path = transport.root / f"{original_ref}.json"
+        assert transport.reconcile_request(original_path) == 1
+        original_delivery = original_path.read_bytes()
+        sid = original["session_id"]
+
+        bindings = transport.bindings
+        bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        adopted = bindings.read()
+        stale = {**adopted, "bindings": [
+            {**row, "executor_endpoint_id": "antigravity"} if row["binding_id"] == binding["binding_id"] else row
+            for row in adopted["bindings"]]}
+        bindings.path.write_text(json.dumps(stale))
+        published = {**adopted, "revision": adopted["revision"] + 1}
+        if change == "scope":
+            published["bindings"] = [
+                {**row, "goal_scope": "selected"} if row["binding_id"] == binding["binding_id"] else row
+                for row in adopted["bindings"]]
+        if change == "revoked":
+            published = {**published, "app_steward_binding_id": None, "bindings": [
+                row for row in adopted["bindings"] if row["binding_id"] != binding["binding_id"]]}
+        observed_endpoints = []
+        pending_event = provider.event("steward-app", "original-during-adoption", "Continue in this conversation")
+        pending_id = pending_event["message_id"]
+        pending_source = dict(provider.messages[pending_id])
+
+        def publish_at_scope_fence(path, **kwargs):
+            if path == bindings.path and kwargs.get("operation") == "configure_bound_delivery_scope":
+                previous = next(row for row in bindings.read()["bindings"] if row["binding_id"] == binding["binding_id"])
+                observed_endpoints.append(previous["executor_endpoint_id"])
+                if len(observed_endpoints) == 1:
+                    bindings.path.write_text(json.dumps(published))
+                    if change == "source_unavailable":
+                        provider.messages.pop(pending_id)
+                    elif change == "source_changed":
+                        provider.messages[pending_id]["content"] = "Edited after the first provider read"
+                elif change == "second_publication":
+                    bindings.path.write_text(json.dumps({**stale, "revision": adopted["revision"] + 2}))
+                elif change == "closed":
+                    assert runtime.close_session(sid)
+            return exclusive_file_lock(path, **kwargs)
+
+        monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
+        monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
+        pending_ref = identity_ref(binding["provider_ref"], pending_id)
+        pending_path = transport.root / f"{pending_ref}.json"
+        calls_before = capture.read_bytes()
+        writes_before = list(provider.writes)
+        admission = transport.admit("steward-app", pending_event)
+        request = transport.core.read_request(pending_ref)
+        if change == "source_unavailable":
+            assert admission["status"] == "source_verification_failed"
+            assert request["status"] == "prepared" and request["session_id"] == sid and request["turn_id"] is None
+            assert json.loads(pending_path.read_text())["status"] == "captured"
+            assert source_reads(pending_id) == 2 and observed_endpoints == ["antigravity"]
+            assert not store.turn_for_client(sid, f"external-{pending_ref}")
+            assert capture.read_bytes() == calls_before and provider.writes == writes_before
+            provider.messages[pending_id] = pending_source
+            transport.reconcile_request(pending_path)
+            request = transport.core.read_request(pending_ref)
+        if change not in {"executor", "source_unavailable"}:
+            assert admission["status"] == "command_rejected"
+            assert request["status"] == "rejected" and request["turn_id"] is None
+            assert not store.turn_for_client(sid, f"external-{pending_ref}")
+            assert capture.read_bytes() == calls_before and provider.writes == writes_before
+            if change == "source_changed":
+                assert source_reads(pending_id) == 2
+            assert observed_endpoints == (["antigravity", "codex"] if change in {"second_publication", "closed"} else ["antigravity"])
+            if change == "closed":
+                assert request["session_id"] == sid and "response_code" not in request
+        else:
+            if change == "executor":
+                assert admission["status"] == "durably_accepted"
+                assert source_reads(pending_id) == 2
+            assert observed_endpoints == ["antigravity", "codex"]
+            assert request["status"] == "accepted" and request["session_id"] == sid
+            assert request["binding_id"] == binding["binding_id"] and request["source"] == original["source"]
+            assert finish(runtime, request)["status"] == "completed"
+            if json.loads(pending_path.read_text())["status"] != "delivered":
+                assert transport.reconcile_request(pending_path) == 1
+            delivered = json.loads(pending_path.read_text())
+            assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
+            assert delivered["event"]["message_id"] == pending_event["message_id"]
+            assert store.turn_for_client(sid, f"external-{pending_ref}")["turn_id"] == request["turn_id"]
+            writes_after = list(provider.writes)
+            assert transport.reconcile_request(pending_path) == 0 and provider.writes == writes_after
+            assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+        assert [row["session_id"] for row in store.list_sessions()] == [sid]
         assert original_path.read_bytes() == original_delivery
     finally:
         fixture.close()
@@ -2078,6 +2242,10 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
         # does not retire the retained original work or authorize a replay.
         transport.reconcile()
         assert json.loads((transport.root / f"{row['request_ref']}.json").read_text())["status"] == "delivered"
+        # An old Turn can retain a large diagnostic without changing its
+        # structured failure. The read-only health route must still show the
+        # pending original, even when that diagnostic cannot fit a Core RPC.
+        store.update_turn(row["session_id"], row["turn_id"], error="synthetic diagnostic " * 450_000)
 
         def durable_state():
             return {path: path.read_bytes() for path in store.root.rglob("*")
@@ -2085,8 +2253,6 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
 
         before = durable_state()
         writes = list(provider.writes)
-        assert transport.core.quota_backlog_pending(row)
-        assert transport.core.quota_backlog_observer()([row]) == [True]
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
             connection.request("GET", "/api/chat/lark/private-conversations")
@@ -2097,6 +2263,8 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
             connection.close()
         binding = next(item for item in result["connections"] if item["binding_id"] == row["binding_id"])
         assert binding["pending_count"] == 1 and binding["recovery_count"] == 0
+        assert transport.core.quota_backlog_pending(row)
+        assert transport.core.quota_backlog_observer()([row]) == [True]
         assert durable_state() == before and provider.writes == writes
         assert not ordinary[4].exists() or '"method": "turn/start"' not in ordinary[4].read_text()
         store.update_session(row["session_id"], status="closed")
@@ -2641,6 +2809,52 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         # Completed App inputs retain receipt feedback, never a processing
         # reaction on the assistant mirror or a different original request.
         assert {ref for _profile, ref, _emoji in provider.reaction_creates if ref.startswith("om_out_")} == user_mirrors
+    finally:
+        runtime.close()
+
+
+def test_app_projection_discovers_a_restored_transcript_with_the_same_size_and_mtime(ordinary):
+    import os
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    sid = original["session_id"]
+    transcript = store.sessions_root / sid / "messages.jsonl"
+    canonical = [message for message in store.messages(sid) if message.get("turn_id") in turns]
+    starts = ordinary[4].read_bytes()
+    try:
+        full = transcript.read_bytes()
+        old = b"".join(line for line in full.splitlines(keepends=True)
+                       if json.loads(line).get("turn_id") not in turns)
+        assert old.endswith(b"\n") and len(old) < len(full)
+        # Simulate the earlier view before a same-size atomic restore.
+        transcript.write_bytes(old[:-1] + b" " * (len(full) - len(old)) + b"\n")
+        previous = transcript.stat()
+        transport._web_projection_scan_at = 0
+        assert transport._web_projection_paths() == []
+        assert len(provider.writes) == before
+
+        restored = transcript.with_name("restored-messages.jsonl")
+        restored.write_bytes(full)
+        os.utime(restored, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        restored.replace(transcript)
+        observed = transcript.stat()
+        assert (observed.st_mtime_ns, observed.st_size) == (previous.st_mtime_ns, previous.st_size)
+        transport._web_projection_scan_at = 0
+        path, = transport._web_projection_paths()
+        _drain_app_projection(transport, lambda: len(provider.writes) == before + len(canonical))
+
+        deliveries = json.loads(path.read_text())["deliveries"]
+        assert {key for key in deliveries if key.startswith("web.")} == {
+            "web." + message["message_id"] for message in canonical}
+        for message, (profile, text) in zip(canonical, provider.writes[before:], strict=True):
+            receipt = deliveries["web." + message["message_id"]]
+            assert profile == "notes-app" and message["text"] in text and receipt["verified"]
+            delivered = provider.messages[receipt["attempt"]["message_ref"]]
+            assert delivered["chat_id"] == "oc_notes_app"
+        transport._web_projection_scan_at = 0
+        transport.reconcile()
+        assert len(provider.writes) == before + len(canonical)
+        assert ordinary[4].read_bytes() == starts and transcript.read_bytes() == full
     finally:
         runtime.close()
 
@@ -6142,14 +6356,19 @@ def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_pa
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert path.stat().st_size == before.st_size and path.stat().st_mtime_ns == before.st_mtime_ns
     assert transport.pending_delivery_paths() == [path]
-    # Unknown read failures must remain visible rather than reuse an old
-    # delivered view or turn the request into an empty/successful queue.
-    def unavailable(_):
+    # An unreadable record is held for a later scan. It keeps its bytes and
+    # becomes discoverable again as soon as the original reader recovers.
+    reads = []
+
+    def unavailable(candidate):
+        reads.append(candidate)
         raise OSError("read unavailable")
 
-    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
-    with pytest.raises(OSError, match="read unavailable"):
-        transport.pending_delivery_paths()
+    with monkeypatch.context() as faults:
+        faults.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
+        assert transport.pending_delivery_paths() == []
+        assert reads == [path] and path.read_bytes() == body
+    assert transport.pending_delivery_paths() == [path]
 
 
 def test_private_discovery_does_not_cache_a_file_replaced_during_read(tmp_path, monkeypatch):
