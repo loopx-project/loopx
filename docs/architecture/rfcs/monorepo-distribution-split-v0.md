@@ -3509,3 +3509,53 @@ exit-only Agent: registration and honest failed-Turn recovery do not prove
 natural-language task completion or model benefit. Complete minimal closure,
 R1/M3, workspace/meta publication, installed-host adoption and full-cost
 acceptance remain open.
+
+### 2026-11-13 — Standalone natural-language startup reaches existing owners
+
+The independently installed core now routes `start-goal`,
+`bootstrap-command-pack`, `register-agent` and `bind-agent-thread` to the
+ordinary product's existing registrars and handlers. Previously all four
+required the omitted full CLI facade. The goal preview preserves exact text,
+remains read-only and exposes the same ordered bootstrap, identity, Todo and
+host/guard transaction. Fresh registration, collision rejection, global/source
+readback and bound-session reuse execute against the default SQLite authority.
+No new engine, model service, authority rule or capability activation is added.
+The ordinary installation retains its complete-parser diagnostic fallback;
+invalid standalone arguments retain the existing explicit unavailable failure.
+
+Installed qualification passes 16 checks, including the guided identity journey
+and existing SQLite/File execution, rejected artifacts, renewed/released lease
+refusal and confirmed-result recovery/replay. Eight focused comparisons match
+the ordinary parser and preview. The original baseline independently installed
+wheel refuses natural-language startup; the repaired wheel executes it. These
+are executable behavioral deltas, not help-text-only delivery.
+
+A separate isolated generic-CLI task was performed by the current host model:
+create a reusable inventory generator and JSON/Markdown reports from source
+catalog/movement files, with exact decimal valuation and excluded records. Its
+independent validator accepts the result. Killing the driver after its typed
+result was journaled, then resuming the original key, completes the Todo and
+records one settlement without invoking the model again; a further replay has
+no state or quota effects. An earlier pre-work attempt expired while awaiting
+model input; its unknown-outcome recovery rejection remains recorded. There
+were two host transport dispatches in total and one confirmed model result;
+this is not a claim of one dispatch across the entire experiment.
+
+A three-pair local loading census (macOS arm64, Python 3.13.5, Node 26.0.0,
+new Python processes with ordinary filesystem/bytecode caches, plus two warm
+calls per process) observes 8 core modules for top-level help and 186 for guided
+help/preview. The direct ordinary full-facade comparison loads 1,151/1,164
+modules. Preview includes two subprocess events and nine Python socket audit
+events, so process/IPC costs must remain in the closure inventory. Different
+source/install cache and launch conditions, three samples, Python-only audit
+coverage and unavailable model-token counters prevent a performance or complete
+V10 claim. This does not approve D2 or a minimal preset.
+
+The source-regression attempt that exhausted local disk remains failed; its
+recovered run is recorded separately. Complete minimal install/load/context
+closure, initial/revised/compacted/lost-ACK context qualification, supported host
+adoption, full V1–V5/V10, R1/M3, Standard/workspace/meta splitting and complete
+costs remain open. Rollback the routing slice while retaining task authority and
+reconciling original attempts. Existing exact-head review, premerge and bilingual
+requirements, original failures, budgets and separate research/release authority
+remain in force.

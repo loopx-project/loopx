@@ -2056,3 +2056,38 @@ def test_selected_connect_preview_keeps_full_cli_result_without_workspace(tmp_pa
     assert selected.returncode == ordinary.returncode == 0, (selected.stderr, ordinary.stderr)
     assert json.loads(selected.stdout) == json.loads(ordinary.stdout)
     assert not registry.exists()
+
+
+@pytest.mark.parametrize('arguments', [
+    ['start-goal', '--help'],
+    ['bootstrap-command-pack', '--help'],
+    ['register-agent', '--help'],
+    ['bind-agent-thread', '--help'],
+    ['start-goal', '--guided', '--goal-text', '完整 goal', '--host-surface', 'unsupported'],
+    ['register-agent', '--goal-id', 'missing'],
+    ['bind-agent-thread', '--goal-id', 'missing', '--agent-id', 'test'],
+])
+def test_guided_core_routes_match_complete_parser(arguments):
+    # Invalid argv retains the ordinary installation's canonical full-parser
+    # diagnostic fallback; valid selected help must never load that facade.
+    selected = run_cli_main('loopx.entrypoint', arguments,
+                           forbidden_modules=('loopx.cli',) if '--help' in arguments else ())
+    full = run_cli_main('loopx.cli', arguments)
+    assert (selected.returncode, selected.stdout, selected.stderr) == (full.returncode, full.stdout, full.stderr)
+
+
+def test_guided_core_preview_matches_complete_owner_without_writes(tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    argv = ['--runtime-root', str(tmp_path / 'runtime'), '--format', 'json',
+            'start-goal', '--guided', '--project', str(project),
+            '--host-surface', 'shell', '--goal-text', 'Report "inventory" and 总计.']
+    environment = {'CODEX_THREAD_ID': '', 'TRAECLI_THREAD_ID': '', 'LOOPX_USAGE_PING': '0'}
+    selected = run_cli_main('loopx.entrypoint', argv, forbidden_modules=('loopx.cli',), environment=environment)
+    full = run_cli_main('loopx.cli', argv, environment=environment)
+    assert selected.returncode == full.returncode == 0
+    assert selected.stdout == full.stdout and selected.stderr == full.stderr
+    packet = json.loads(selected.stdout)
+    assert packet['goal_text'] == 'Report "inventory" and 总计.'
+    assert packet['guided_transaction']['writes_now'] is False
+    assert not list(project.iterdir()) and not (tmp_path / 'runtime').exists()

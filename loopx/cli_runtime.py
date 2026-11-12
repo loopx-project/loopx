@@ -75,7 +75,8 @@ PROJECT_LIFECYCLE_COMMANDS = {
 _REGISTRY_INSPECTION_COMMANDS = frozenset({"registry", "registry-boundary"})
 _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | _REGISTRY_INSPECTION_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
-	"bootstrap", "connect", "configure-goal",
+	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
+	"register-agent", "bind-agent-thread",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
@@ -393,7 +394,19 @@ def _handle_registry_inspection_command(
 
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
-	if command in {"bootstrap", "connect"}:
+	if command == "start-goal":
+		from .cli_commands.start_goal import register_start_goal_command
+
+		register_start_goal_command(subparsers)
+	elif command == "bootstrap-command-pack":
+		from .cli_commands.starter_bootstrap_registration import register_starter_bootstrap_commands
+
+		register_starter_bootstrap_commands(subparsers)
+	elif command in {"register-agent", "bind-agent-thread"}:
+		from .cli_commands.registry_admin import register_registry_admin_commands
+
+		register_registry_admin_commands(subparsers)
+	elif command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import register_bootstrap_connect_command
 
 		register_bootstrap_connect_command(subparsers)
@@ -526,13 +539,25 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "start-goal":
+		from .cli_commands.start_goal import handle_start_goal_command
+
+		return handle_start_goal_command(
+			args, print_payload, runtime_root_arg=args.runtime_root,
+		)
+	if args.command == "bootstrap-command-pack":
+		from .cli_commands.starter_bootstrap import handle_loopx_bootstrap_command_pack_command
+
+		return handle_loopx_bootstrap_command_pack_command(
+			args, print_payload, runtime_root_arg=args.runtime_root,
+		)
 	if args.command in {"bootstrap", "connect"}:
 		from .cli_commands.bootstrap_connect import handle_bootstrap_connect_command
 
 		return handle_bootstrap_connect_command(
 			args, registry_path=registry_path, print_payload=print_payload,
 		)
-	if args.command == "configure-goal":
+	if args.command in {"configure-goal", "register-agent", "bind-agent-thread"}:
 		from .cli_commands.registry_admin import handle_registry_admin_command
 
 		return handle_registry_admin_command(
