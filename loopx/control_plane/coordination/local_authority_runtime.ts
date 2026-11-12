@@ -2,7 +2,7 @@ import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
 import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
-import {registryAuthoritySourceCheck} from "./authority_source.ts";
+import {registryAuthoritySourceCheck, requireReviewedRegistrySha256} from "./authority_source.ts";
 import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
 import type {ClaimWorkspaceObserver} from "./claim_execution.ts";
@@ -114,6 +114,8 @@ export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
 export const LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v2";
+export const LOCAL_COORDINATION_TODO_CREATE_SOURCE_BOUND_REQUEST_SCHEMA =
+  "loopx_local_coordination_todo_create_request_v3";
 export const LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_terminal_lifecycle_request_v3";
 export const LOCAL_COORDINATION_TODO_ARCHIVE_REQUEST_SCHEMA =
@@ -1146,17 +1148,21 @@ export async function createLocalCoordinationTodo(
   };
   try {
     const input = requireJsonObject(value, "local coordination Todo create request");
-    if (input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA) {
+    const sourceBound = input.schema_version === LOCAL_COORDINATION_TODO_CREATE_SOURCE_BOUND_REQUEST_SCHEMA;
+    const reviewed = sourceBound || input.schema_version === LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA;
+    if (!reviewed && input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo create request schema mismatch");
     }
-    const reviewed = input.schema_version === LOCAL_COORDINATION_TODO_CREATE_REVIEWED_REQUEST_SCHEMA;
     if (!reviewed && Object.hasOwn(input, "expected_provider_revision")) {
       throw new TypeError("expected_provider_revision requires Todo create request v2");
     }
+    if (!sourceBound && Object.hasOwn(input, "expected_registry_sha256")) {
+      throw new TypeError("expected_registry_sha256 requires Todo create request v3");
+    }
+    const expectedRegistry = sourceBound ? requireReviewedRegistrySha256(input.expected_registry_sha256) : undefined;
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA, expectedRegistry);
     const expectedRevision = reviewed
       ? requireAuthorityStoreId(input.expected_provider_revision, "expected provider revision") : undefined;
     if (typeof input.dry_run !== "boolean") {
@@ -1183,6 +1189,7 @@ export async function createLocalCoordinationTodo(
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         dry_run: input.dry_run === true,
         ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
+        ...(expectedRegistry === undefined ? {} : {expected_registry_sha256: expectedRegistry}),
         now: claimObservedAt(input.observed_at),
       }, authoritySourcesCurrent);
       return {

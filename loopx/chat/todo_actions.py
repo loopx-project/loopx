@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from .status_api import goal_read_runtime_root
-from ..chat import apply_todo_review_preview, build_todo_review_preview
+from ..chat import _stable_digest, apply_todo_review_preview, build_todo_review_preview
+from ..control_plane.coordination.authority_source_capture import authority_registry_source
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
@@ -37,6 +38,12 @@ def review_todo_create(
         runtime_root_arg=runtime_root_arg, text=text, preview_id=preview_id)
 
 
+def create_checkpoint_steps(proposal: dict[str, Any]) -> dict[str, Any]:
+    checkpoint = proposal.get("checkpoint")
+    steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
+    return steps if isinstance(steps, dict) else {}
+
+
 def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
     """Carry the canonical outcome and dependent effect, never a local guess."""
     resume = result.get("unblock_resume")
@@ -53,6 +60,50 @@ class ChatTodoActionMixin:
         from .status_api import goal_read_runtime_root
 
         return goal_read_runtime_root(self)
+
+    def _confirmed_create_source(self, goal_id: str) -> tuple[Path, str, str, str]:
+        registry_path, override = todo_create_source(self, goal_id)
+        with authority_registry_source(registry_path) as witness:
+            root = str(effective_runtime_root(registry_path, override).resolve())
+        source_binding = _stable_digest({"registry": witness["path"], "runtime": root}, length=64)
+        return registry_path, root, source_binding, witness["sha256"]
+
+    def _save_create_plan(
+        self, proposal: dict[str, Any], fingerprint: str, plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        proposal_id = proposal["proposal_id"]
+        if fingerprint != proposal["expected_state_fingerprint"]:
+            return self.store.apply(proposal_id, current_state_fingerprint=fingerprint, receipt={},
+                stale_unless_checkpoint="todo_create_prepared")
+        return self.store.save_checkpoint(proposal_id, step="todo_create_prepared",
+            receipt={**plan, "operation_id": f"chat-create:{proposal_id}"}, once=True)
+
+    @staticmethod
+    def _prepared_create_arguments(proposal: dict[str, Any], source_binding: str) -> dict[str, str]:
+        plan = create_checkpoint_steps(proposal).get("todo_create_prepared")
+        if not isinstance(plan, dict) or plan.get("operation_id") != f"chat-create:{proposal['proposal_id']}":
+            raise ValueError("Todo creation plan is missing or malformed")
+        if plan.get("source_binding") != source_binding:
+            raise ValueError("The Goal source changed since confirmation. Restore its original source before retrying.")
+        arguments = {key: plan.get(key) for key in (
+            "operation_id", "expected_provider_revision", "expected_registry_sha256",
+        )}
+        if any(not isinstance(value, str) or not value for value in arguments.values()):
+            raise ValueError("Todo creation plan is missing its canonical write basis")
+        return arguments
+
+    def _create_confirmation_conflict(
+        self, proposal: dict[str, Any], error: LocalCoordinationAuthorityUnavailable,
+    ) -> dict[str, Any]:
+        if error.code not in {"provider_revision_mismatch", "authority_source_changed"}:
+            raise error
+        # The canonical transaction checks the original receipt before either
+        # condition. These errors therefore reject a write that never landed.
+        stale = self.store.apply(proposal["proposal_id"], current_state_fingerprint=_stable_digest({
+            "expected": proposal["expected_state_fingerprint"], "conflict": error.code,
+            "provider_revision": error.payload.get("current_provider_revision"),
+        }), receipt={})
+        return {"proposal": stale, "turn": self._turn_from_receipt(stale.get("receipt"))}
 
     def _run_todo_update(
         self, parameters: dict[str, Any], *, dry_run: bool,

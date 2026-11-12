@@ -90,6 +90,17 @@ same operation ID is a conflict. No provider promotion or receipt rewrite occurs
 
 ## Write Contract
 
+Confirming a typed Chat Todo or Monitor prepares the provider revision and
+source registry digest before writing. The proposal's operation ID and the
+Monitor's first due time are reused on retry. After checking the current Goal
+source and caller authority, retry returns the original receipt for a committed
+create. An uncommitted create still requires the reviewed source and provider
+revision. Older control planes reject the source-bound v3 request before writing.
+
+确认 Chat 的 Todo 或 Monitor 提案时，先记录源注册表摘要和权威存储修订号，再执行写入。
+重试沿用原操作 ID 和 Monitor 的首次到期时间。已提交的操作返回原回执，未提交的操作仍校验
+确认时的来源和修订号。来源绑定请求采用 v3 协议，旧版控制面会在写入前拒绝。
+
 For a caller-owned runtime that already registered its Goal/Agent, generate the
 model planning checkpoint before writing executable task Todos:
 

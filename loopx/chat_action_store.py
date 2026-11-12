@@ -1398,6 +1398,7 @@ class ChatActionStore:
         *,
         step: str,
         receipt: Mapping[str, Any],
+        once: bool = False,
     ) -> dict[str, Any]:
         safe_step = _opaque_id(step, field="step")
         safe_receipt = _safe_json_value(dict(receipt), path="checkpoint.receipt")
@@ -1413,6 +1414,8 @@ class ChatActionStore:
             proposal = payload["proposals"].get(token)
             if not isinstance(proposal, dict):
                 raise KeyError("typed Chat action proposal was not found")
+            if once and proposal.get("status") == "applied":
+                return proposal
             if proposal.get("status") not in {"applying", "gated", "failed"}:
                 raise ActionConflictError(
                     f"proposal in {proposal.get('status')} state cannot save a checkpoint"
@@ -1423,6 +1426,8 @@ class ChatActionStore:
             )
             steps = checkpoint.get("steps")
             steps = dict(steps) if isinstance(steps, dict) else {}
+            if once and safe_step in steps:
+                return proposal
             steps[safe_step] = safe_receipt
             checkpoint["steps"] = steps
             checkpoint["last_completed_step"] = safe_step
@@ -1511,6 +1516,7 @@ class ChatActionStore:
         *,
         current_state_fingerprint: str,
         receipt: Mapping[str, Any],
+        stale_unless_checkpoint: str | None = None,
     ) -> dict[str, Any]:
         token = _opaque_id(proposal_id, field="proposal_id")
         current_fingerprint = _bounded_text(
@@ -1537,6 +1543,11 @@ class ChatActionStore:
             expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
             now = _utc_now()
             if current_fingerprint != expected_fingerprint:
+                # A concurrent confirmer may already have bound the original
+                # write. Its durable plan must resolve commit vs stale.
+                checkpoint = proposal.get("checkpoint") or {}
+                if stale_unless_checkpoint and stale_unless_checkpoint in (checkpoint.get("steps") or {}):
+                    return proposal
                 proposal["status"] = "stale"
                 proposal["stale"] = {
                     "expected_state_fingerprint": expected_fingerprint,

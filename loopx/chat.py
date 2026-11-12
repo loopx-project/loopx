@@ -1055,15 +1055,23 @@ def _todo_preview_fingerprint(payload: dict[str, Any]) -> str:
     )
 
 
+def todo_create_was_duplicate(payload: dict[str, Any]) -> bool:
+    """Classify the original create, even when this call only read its receipt."""
+    if payload.get("decision_read_from_provider") is True:
+        return payload.get("status") == "no_change"
+    return bool(payload.get("already_exists"))
+
+
 def _todo_write_receipt(
     *,
     preview_id: str,
-    preview_payload: dict[str, Any],
+    preview_revision: str | None,
     applied_payload: dict[str, Any],
 ) -> dict[str, Any]:
     compact = _compact_todo_payload(applied_payload, applied=True)
     todo = compact["todo"]
-    outcome = "todo_already_exists" if compact["already_exists"] else "todo_added"
+    already_exists = todo_create_was_duplicate(applied_payload)
+    outcome = "todo_already_exists" if already_exists else "todo_added"
     receipt = {
         "schema_version": CHAT_TODO_RECEIPT_SCHEMA_VERSION,
         "preview_id": preview_id,
@@ -1071,8 +1079,8 @@ def _todo_write_receipt(
         "todo_id": todo["todo_id"],
         "status": "applied",
         "outcome": outcome,
-        "already_exists": compact["already_exists"],
-        "preview_revision": _todo_revision(preview_payload),
+        "already_exists": already_exists,
+        "preview_revision": preview_revision,
     }
     receipt["receipt_id"] = _stable_digest(receipt)
     return receipt
@@ -1111,6 +1119,7 @@ def _add_review_todo(
     priority: str | None = None,
     dry_run: bool,
     expected_provider_revision: str | None = None,
+    expected_registry_sha256: str | None = None,
     operation_id: str | None = None,
 ) -> dict[str, Any]:
     return add_goal_todo(
@@ -1129,7 +1138,36 @@ def _add_review_todo(
             if expected_provider_revision is not None
             else {}
         ),
+        **({"expected_registry_sha256": expected_registry_sha256}
+           if expected_registry_sha256 is not None else {}),
     )
+
+
+def plan_reviewed_todo_create(
+    *, registry_path: Path, goal_id: str, runtime_root_arg: str, text: str,
+    priority: str | None,
+) -> tuple[str, str]:
+    """Bind a typed proposal's existing preview to its provider revision."""
+    preview = _add_review_todo(registry_path=registry_path, goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg, text=text, priority=priority, dry_run=True)
+    revision = _todo_revision(preview)
+    if preview.get("decision_read_from_provider") is not True or not revision:
+        raise ValueError("Todo confirmation requires a canonical preview")
+    return _todo_preview_fingerprint(preview), revision
+
+
+def apply_prepared_todo_review(
+    *, registry_path: Path, goal_id: str, runtime_root_arg: str, text: str,
+    priority: str | None, preview_id: str, operation_id: str,
+    expected_provider_revision: str, expected_registry_sha256: str,
+) -> dict[str, Any]:
+    """Send the original reviewed request so the provider can recover it."""
+    applied = _add_review_todo(registry_path=registry_path, goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg, text=text, priority=priority, dry_run=False,
+        operation_id=operation_id, expected_provider_revision=expected_provider_revision,
+        expected_registry_sha256=expected_registry_sha256)
+    return _todo_write_receipt(preview_id=preview_id, preview_revision=expected_provider_revision,
+        applied_payload=applied)
 
 
 def _bound_todo_review_preview(
@@ -1256,7 +1294,7 @@ def apply_todo_review_preview(
     compact = _compact_todo_payload(applied, applied=True)
     compact["receipt"] = _todo_write_receipt(
         preview_id=preview_id,
-        preview_payload=current_preview,
+        preview_revision=_todo_revision(current_preview),
         applied_payload=applied,
     )
     return compact

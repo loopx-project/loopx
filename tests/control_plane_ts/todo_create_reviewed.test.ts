@@ -100,3 +100,26 @@ test("reviewed create wire requires a revision before accessing a provider", asy
     assert.match(String(result.reason), /expected provider revision/);
   }
 });
+
+test("source-bound create requires v3 and a valid registry digest before accessing a provider", async () => {
+  let opened = false;
+  const dependency = {createStore: () => {
+    opened = true;
+    throw new Error("must not access a provider");
+  }};
+  const v2 = await createLocalCoordinationTodo({
+    schema_version: "loopx_local_coordination_todo_create_request_v2",
+    expected_provider_revision: "reviewed", expected_registry_sha256: "a".repeat(64),
+  }, dependency);
+  assert.equal(v2.status, "failed");
+  assert.match(String(v2.reason), /expected_registry_sha256 requires Todo create request v3/);
+  for (const expected_registry_sha256 of [undefined, null, "short", 1]) {
+    const v3 = await createLocalCoordinationTodo({
+      schema_version: "loopx_local_coordination_todo_create_request_v3",
+      expected_provider_revision: "reviewed", expected_registry_sha256,
+    }, dependency);
+    assert.equal(v3.status, "failed");
+    assert.match(String(v3.reason), /expected_registry_sha256 must be a SHA-256 digest/);
+  }
+  assert.equal(opened, false);
+});
