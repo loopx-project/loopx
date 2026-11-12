@@ -15,8 +15,8 @@ from loopx.capabilities.change_quality.result import (
 from loopx.capabilities.change_quality.scope import build_change_quality_scope
 
 
-def _repository(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
+def _repository(tmp_path: Path, dirname: str = "repo") -> Path:
+    repo = tmp_path / dirname
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
     subprocess.run(
@@ -34,6 +34,32 @@ def _repository(tmp_path: Path) -> Path:
 
 def _scope(repo: Path) -> dict:
     return build_change_quality_scope(repo_path=repo, base_ref="HEAD")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a carriage return in a path is POSIX-only")
+@pytest.mark.parametrize("name", ["line\rbreak.txt", "line\r\nbreak.txt"])
+def test_untracked_names_with_carriage_returns_stay_exact(
+    tmp_path: Path, name: str
+) -> None:
+    """Text-mode Git reads normalize CR and CRLF; the scope must not."""
+
+    repo = _repository(tmp_path)
+    (repo / name).write_text("content\n", encoding="utf-8")
+
+    scope = _scope(repo)
+    assert scope["changed_files"] == [name]
+    assert scope["sources"]["untracked"] == [name]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a newline in a directory is POSIX-only")
+def test_repository_root_with_control_characters_is_preserved(tmp_path: Path) -> None:
+    """A checkout directory ending in LF must not be trimmed to another path."""
+
+    repo = _repository(tmp_path, "repo\nline")
+    (repo / "base.txt").write_text("changed\n", encoding="utf-8")
+
+    scope = _scope(repo)
+    assert scope["changed_files"] == ["base.txt"]
 
 
 @pytest.mark.parametrize("name", ["中文文件.txt", "café.txt", "ファイル.txt"])
