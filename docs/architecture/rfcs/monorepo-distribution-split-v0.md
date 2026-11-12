@@ -3468,3 +3468,143 @@ qualifies the consumed replan read cost; full CLI process, durable writeback,
 model and end-to-end outcome costs are not inferred from these timings. The
 complete minimal load/context closure, R1/M3, independent Standard packages,
 workspace/meta publication and installed-host adoption remain open.
+
+
+### 2026-11-12 — Dashboard source acceptance executes its backend journeys
+
+Source coverage now executes the existing first-Goal and runtime-readiness
+journeys through the real disposable Chat service. Both source and packaged
+lanes already prepare the verified Chat bundle. Declared backend journeys
+require successful backend assertions before a PASS receipt; an early return
+cannot qualify them. Scenarios with other legitimate coverage boundaries keep
+their existing behavior. The shared browser proxy adds EPIPE to its existing
+three-attempt GET/HEAD socket recovery, recognizes typed errno or the first
+Playwright socket-error line, and never retries an HTTP write or arbitrary prose.
+Research-record search checks bind help dismissal to its current keyboard trigger
+and require the selected query to survive dismissal.
+
+On immutable source `eedfc5e24`, local macOS/Node26 qualification passes all
+86 scenarios across three non-overlapping 29/29/28 partitions with a common
+catalog and source tree, verified backend-readback markers and nonempty merged
+coverage. The passing partitions take 1,943.74 seconds; earlier failed runs,
+setup and repair remain separate records. This is validation cost, with no
+complete model/service/human cost comparison.
+
+The matched 200-item M2 pair retains all 15 samples and long-task windows.
+Ordinary medians are 225.77/172.99/310.77/128.45/146.52 ms, maximum 366.08 ms;
+coverage medians are 328.21/371.20/332.49/174.73/173.02 ms, maximum 421.22 ms.
+Both have zero samples above the 1-second target. Full-suite coverage M2 also
+passes: medians 325.35/270.28/326.59/164.22/166.47 ms, maximum 463.88 ms.
+The real 1,200 ms repeated Board delay is correctly rejected by ordinary
+qualification (slow median 1491.77 ms, maximum 1519.98 ms; all 15
+samples/windows retained). Existing strict-boundary and missing-sample tests
+pass without a budget change.
+
+Earlier failed source partitions (EPIPE, query loss and temporary-directory
+failure) remain recorded separately, as do historical frozen 1.162-second
+failures and cancelled runs. This repairs
+source-acceptance execution and its bounded transport recovery, with no render
+threshold, kernel runtime or authority change. The first-Goal fixture uses an
+exit-only Agent: registration and honest failed-Turn recovery do not prove
+natural-language task completion or model benefit. Complete minimal closure,
+R1/M3, workspace/meta publication, installed-host adoption and full-cost
+acceptance remain open.
+
+### 2026-11-13 — Standalone natural-language startup reaches existing owners
+
+The independently installed core now routes `start-goal`,
+`bootstrap-command-pack`, `register-agent` and `bind-agent-thread` to the
+ordinary product's existing registrars and handlers. Previously all four
+required the omitted full CLI facade. The goal preview preserves exact text,
+remains read-only and exposes the same ordered bootstrap, identity, Todo and
+host/guard transaction. Fresh registration, collision rejection, global/source
+readback and bound-session reuse execute against the default SQLite authority.
+No new engine, model service, authority rule or capability activation is added.
+The ordinary installation retains its complete-parser diagnostic fallback;
+invalid standalone arguments retain the existing explicit unavailable failure.
+
+Installed qualification passes 16 checks, including the guided identity journey
+and existing SQLite/File execution, rejected artifacts, renewed/released lease
+refusal and confirmed-result recovery/replay. Eight focused comparisons match
+the ordinary parser and preview. The original baseline independently installed
+wheel refuses natural-language startup; the repaired wheel executes it. These
+are executable behavioral deltas, not help-text-only delivery.
+
+A separate isolated generic-CLI task was performed by the current host model:
+create a reusable inventory generator and JSON/Markdown reports from source
+catalog/movement files, with exact decimal valuation and excluded records. Its
+independent validator accepts the result. Killing the driver after its typed
+result was journaled, then resuming the original key, completes the Todo and
+records one settlement without invoking the model again; a further replay has
+no state or quota effects. An earlier pre-work attempt expired while awaiting
+model input; its unknown-outcome recovery rejection remains recorded. There
+were two host transport dispatches in total and one confirmed model result;
+this is not a claim of one dispatch across the entire experiment.
+
+A three-pair local loading census (macOS arm64, Python 3.13.5, Node 26.0.0,
+new Python processes with ordinary filesystem/bytecode caches, plus two warm
+calls per process) observes 8 core modules for top-level help and 186 for guided
+help/preview. The direct ordinary full-facade comparison loads 1,151/1,164
+modules. Preview includes two subprocess events and nine Python socket audit
+events, so process/IPC costs must remain in the closure inventory. Different
+source/install cache and launch conditions, three samples, Python-only audit
+coverage and unavailable model-token counters prevent a performance or complete
+V10 claim. This does not approve D2 or a minimal preset.
+
+The source-regression attempt that exhausted local disk remains failed; its
+recovered run is recorded separately. Complete minimal install/load/context
+closure, initial/revised/compacted/lost-ACK context qualification, supported host
+adoption, full V1–V5/V10, R1/M3, Standard/workspace/meta splitting and complete
+costs remain open. Rollback the routing slice while retaining task authority and
+reconciling original attempts. Existing exact-head review, premerge and bilingual
+requirements, original failures, budgets and separate research/release authority
+remain in force.
+
+### 2026-11-13 — Startup metadata isolation and installed context recovery
+
+Default goal-start help and preview previously imported issue-fix execution,
+candidate preflight and repository analysis merely to render command hints.
+The existing command templates now have a capability-owned metadata module;
+bootstrap and catalog consumers use it, while the workflow module preserves
+its existing Python import API and an explicit issue-fix route retains its complete preflight
+contract. Independently installed base/head startup output is byte-identical;
+default help/preview load 186→171 LoopX modules and the explicit route 186→179.
+Module counts alone establish a narrower loading boundary, not a speed claim.
+
+Thirty alternating installed base/head pairs per workload on macOS arm64,
+Python 3.13.5 and ordinary OS/bytecode caches observe first-entry median/p95
+of 314.73/362.55→181.25/303.01 ms for help and
+542.36/670.44→311.08/572.66 ms for preview. Two subsequent calls per process
+have warm medians 0.66→0.54 ms and 11.83→8.94 ms. Median peak RSS is
+43.22→32.46 MB and 46.05→36.18 MB. All complete outputs match;
+preview remains 52,727 bytes. Retain the head preview maximum 1,092.15 ms.
+First entry includes imports; this is neither OS-cold nor full V10 qualification.
+Source regression passes 348 checks with one native Windows/PowerShell skip;
+the final installed wheel passes 20 checks. Earlier failed attempts remain.
+
+Installed CLI qualification exercises the existing context-project/read/hook
+owners with complete source or explicit recovery: off keeps original values,
+partial delivery and lost ACK cannot establish a baseline, unchanged/revised
+views preserve complete constraints, standalone PostCompact invalidates the
+baseline, and a changed captured file is refused. Warm transport may choose
+full when complete delta framing would cost more. The test runs against the
+original installed core as well; it qualifies the existing installed protocol
+and supplies a regression boundary rather than introducing another context
+owner. Native events are fixtures, not evidence of model retention or adoption.
+
+Instrumented SQLite/File Turn witnesses retain Python, actual Node-loader and
+RPC observations. The selected Turn entry still loads 525 Python modules,
+including 111 capability modules; its Node runtime retains eager shared typed
+support. Complete work contracts and transport costs remain in the inventory.
+This diagnostic does not qualify endpoint/network completeness, OS-cold cost,
+model tokens or the full minimal composition. Keep earlier failed checks and
+the separate startup/context boundary; full V1–V5/V10, R1/M3, independent
+Standard/workspace packages, installed-host adoption and complete original-goal
+regression remain open under their existing owners and acceptance.
+
+The installation gate exposed a project-skill supporting-example link that left
+the installed bundle. The link now resolves to the byte-verified public source
+at an immutable revision; the procedure, consent and check-scope clauses remain
+unchanged. It is an on-demand supporting reference, not a runtime fetch or new
+authority. Preserve the earlier failed installation gate and disk-limited base
+replays separately from the repaired-head validation.

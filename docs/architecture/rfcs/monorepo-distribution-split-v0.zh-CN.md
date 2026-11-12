@@ -2706,3 +2706,110 @@ dry-run 拒绝路径的中位数为 142.4→135.1 ms、934.4→911.8 ms。零条
 这些计时推断完整 CLI 进程、持久写回、模型及端到端成果成本。完整最小加载／
 上下文闭包、R1/M3、独立 Standard 包、workspace／meta 发布及安装宿主采用仍未
 完成。
+
+
+### 2026-11-12 — Dashboard 源码验收执行真实后端旅程
+
+源码 coverage 现在通过真实的一次性 Chat 服务执行既有首次 Goal 和运行就绪旅程。
+源码与打包分线均已准备经校验的 Chat bundle。声明需要后端的旅程必须完成真实后端
+断言后才能记录 PASS，提前返回不能满足该条件；其他有合理 coverage 边界的场景
+保留原有行为。共用浏览器代理在既有至多三次 GET/HEAD socket 恢复中纳入 EPIPE，
+仅识别类型化 errno 或 Playwright 首行 socket 错误，不重试 HTTP 写请求或任意诊断文字。
+研究记录搜索检查将提示关闭绑定当前键盘按钮，并要求关闭后保留原查询。
+
+固定源码 `eedfc5e24` 在本地 macOS/Node26 下完成全部 86 场景资格：三个互不重叠的
+29/29/28 分片共享同一完整场景目录和源码 tree，后端读回标记及非空合并 coverage 均已核对。
+本次通过的分片用时 1,943.74 秒；此前失败运行、准备和修复仍分开记录。这是验证成本，
+不构成完整模型、服务和人工成本比较。
+
+同版本 200 项 M2 对照保留全部 15 个样本和长任务窗口。普通模式五组中位数为
+225.77/172.99/310.77/128.45/146.52 ms，最大 366.08 ms；coverage 模式为
+328.21/371.20/332.49/174.73/173.02 ms，最大 421.22 ms，两者超过 1 秒目标的
+样本数均为 0。完整分片中的 coverage M2 也通过：中位数
+325.35/270.28/326.59/164.22/166.47 ms，最大 463.88 ms。真实注入 1,200 ms 的重复看板
+停顿被普通资格正确拒绝：慢组中位数 1491.77 ms、最大 1519.98 ms，全部 15 个
+样本和窗口仍保留。既有严格边界及缺失样本负例通过，预算未变。
+
+此前源码分片的 EPIPE、查询丢失和临时目录失败分别保留记录；历史冻结的 1.162 秒失败
+及已取消运行也保持原判定。
+本项修复源码验收执行与有界传输恢复，不改变渲染阈值、内核运行时或 authority。
+首次 Goal 夹具使用退出式 Agent：登记及如实显示失败 Turn 的恢复不证明自然语言任务
+完成或模型收益。完整最小闭包、R1/M3、workspace/meta 发布、安装宿主采用及完整成本
+验收仍保持开放。
+
+### 2026-11-13 — 独立发行版的自然语言启动到达既有 owner
+
+独立安装的 core 现在将 `start-goal`、`bootstrap-command-pack`、
+`register-agent` 和 `bind-agent-thread` 路由到普通产品既有的 registrar 与
+handler。此前四条命令都依赖被排除的完整 CLI facade。目标预览保留完整原文，
+保持只读，并返回同一套有序的 bootstrap、身份、Todo 与 host/guard 事务。
+新身份注册、冲突拒绝、global/source 回读和绑定会话复用在默认 SQLite authority
+上真实执行。没有新增 engine、模型服务、权限规则或 capability 激活。
+普通安装仍保留完整 parser 的诊断 fallback；独立 core 的非法参数仍返回既有明确
+unavailable 错误。
+
+安装验证通过 16 项检查，覆盖 guided 身份旅程及既有 SQLite/File 执行、产物拒绝、
+续租/释放后的完成拒绝和已确认结果恢复/重放。八项聚焦对照与普通 parser 和预览
+一致。原始独立安装基线 wheel 拒绝自然语言启动，修复 wheel 能执行这条路径。
+这是真实可执行的行为差异，不是仅修改帮助文案。
+
+另一个隔离 generic-CLI 任务由当前 host 模型实际完成：依据 catalog/movement
+源文件生成可复用库存脚本及 JSON/Markdown 报告，保留精确小数计价和排除记录。
+独立 validator 接受结果。typed result 已入 journal 后杀掉 driver，再用原始 key
+恢复，可完成 Todo 并只结算一次，且不再次调用模型；再次重放无状态或额度副作用。
+更早一次任务前尝试在等待模型输入期间过期，其 unknown-outcome 恢复拒绝仍保留。
+整个实验共两次 host transport dispatch、一个已确认模型结果，不能宣称全实验
+只 dispatch 一次。
+
+三对本地 loading census 使用 macOS arm64、Python 3.13.5、Node 26.0.0，
+新 Python 进程保留普通文件系统/bytecode 缓存，每进程再运行两次 warm 调用。
+core 顶层帮助加载 8 个模块，guided 帮助/预览加载 186 个；直接普通 full-facade
+对照为 1,151/1,164 个。预览出现两次 subprocess 和九次 Python socket audit
+事件，process/IPC 成本必须保留在闭包清单。源码/安装的缓存与启动条件不同、仅三
+个样本、仅 Python audit 范围及缺失模型 token 计数，使其不能支持性能或完整
+V10 结论，也不批准 D2 或 minimal preset。
+
+源码回归因本地磁盘耗尽而中止的尝试仍为失败，恢复后的运行单独记录。
+完整最小 install/load/context 闭包、initial/revised/compacted/lost-ACK 上下文
+资格、受支持 host 采用、完整 V1–V5/V10、R1/M3、Standard/workspace/meta 拆包
+和完整成本仍未完成。回滚路由切片时保留 task authority 并协调原始尝试。
+既有 exact-head 评审、premerge、双语要求、原始失败、预算及独立研究/发布授权
+继续有效。
+
+### 2026-11-13 — 启动元数据隔离与安装上下文恢复
+
+默认目标启动的帮助和预览此前只是为了渲染命令提示，就导入 issue-fix 执行、
+candidate preflight 和仓库分析。既有命令模板现在放在 capability 自有的元数据
+模块；bootstrap 与 catalog 消费它，workflow 模块保留原 Python 导入接口，显式
+issue-fix 路由仍带完整 preflight 契约。独立安装 base/head 的启动输出逐字节一致；
+默认帮助/预览的 LoopX 模块加载为 186→171，显式路由为 186→179。
+模块数量本身只证明加载边界缩小，不是速度收益结论。
+
+macOS arm64、Python 3.13.5、普通 OS/bytecode 缓存下，每项 workload 运行
+30 对交替的独立安装 base/head，首次入口的中位数/p95 为帮助
+314.73/362.55→181.25/303.01 ms，预览 542.36/670.44→311.08/572.66 ms。
+每进程随后两次调用的 warm 中位数为 0.66→0.54 ms 和 11.83→8.94 ms；
+峰值 RSS 中位数为 43.22→32.46 MB 和 46.05→36.18 MB。全部完整输出一致，
+预览仍为 52,727 字节。保留 head 预览最大值 1,092.15 ms。首次入口包含导入，
+本记录不属于 OS-cold 或完整 V10 资格。源码回归通过 348 项，1 项因缺少原生
+Windows/PowerShell 环境跳过；最终安装 wheel 通过 20 项。早期失败尝试仍保留。
+
+安装 CLI 验证通过既有 context-project/read/hook owner 交付完整源或明确恢复：
+关闭功能时保留原始值；部分交付和丢 ACK 不能建立基线；未变化/修订视图保留完整
+约束；独立 PostCompact 使基线失效；捕获文件被修改时拒绝读取。完整 delta framing
+更贵时，warm 传输可选择 full。同一测试也在原独立 core 安装上运行，资格化既有
+安装协议并补充回归边界，不新增上下文 owner。原生事件为夹具，不证明模型保留
+上下文或宿主采用。
+
+带追踪的 SQLite/File Turn witness 保留 Python、真实 Node loader 和 RPC 观察。
+选定 Turn 入口仍加载 525 个 Python 模块，其中 111 个 capability 模块；Node
+runtime 仍保留 eager 的共享 typed 支持。完整 work contract 与传输成本继续保留
+在清单中。本诊断不资格化 endpoint/网络完整性、OS-cold 成本、模型 token 或完整
+最小组合。保留早期检查失败及独立的启动/上下文边界；完整 V1–V5/V10、R1/M3、
+独立 Standard/workspace 包、安装宿主采用及覆盖原始目标的完整回归仍由既有
+owner 和验收约束保持开放。
+
+安装门暴露了 project skill 的支持示例链接离开安装包的问题。链接现在指向经字节
+核验的公开源文件，并固定不可变 revision；原流程、同意边界和检查范围条款保持
+原义。它是按需支持资料，不是 runtime fetch 或新 authority。早期安装门失败和
+受磁盘限制的 base 重放，与修复 head 的验证分别保留。

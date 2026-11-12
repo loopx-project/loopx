@@ -118,7 +118,7 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     assert not Path(json.loads(probe.stdout)["package"]).is_relative_to(REPOSITORY)
     help_text = _run(core_python, ["--help"], tmp_path, environment={"PATH": str(tmp_path)}).stdout
     assert "loopx connect --help" in help_text and "loopx turn run-once --help" in help_text
-    assert "preset list" not in help_text and "start-goal" not in help_text
+    assert "preset list" not in help_text and "loopx start-goal --guided" in help_text
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     commands = [entry["command"] for group in reference["groups"] for entry in group["commands"]]
     assert "loopx configure-goal --help" in commands
@@ -129,6 +129,77 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     assert "invalid choice" in invalid.stderr
     refusal = _run(core_python, ["dashboard"], tmp_path, expected=2)
     assert "unavailable in the standalone core" in refusal.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime = tmp_path / "project", tmp_path / "runtime"
+    project.mkdir()
+    prefix = ["--runtime-root", str(runtime), "--format", "json"]
+    objective = 'Produce an inventory report; preserve "quoted" source names and 总计.'
+    start = [*prefix, "start-goal", "--guided", "--project", str(project),
+             "--goal-id", GOAL, "--host-surface", "shell", "--goal-text", objective]
+
+    def command(*arguments, expected=0):
+        return json.loads(_run(core_python, list(arguments), project, expected=expected).stdout)
+
+    preview = command(*start)
+    assert preview["goal_text"] == objective
+    assert preview["guided_transaction"]["writes_now"] is False
+    assert preview["guided_transaction"]["spends_quota_now"] is False
+    assert preview["recommended_next_step"]["identity_selection_gate"]["default_action"] == "register_fresh_agent"
+    assert not list(project.iterdir()) and not runtime.exists()
+    # These are the real bootstrap and identity owners advertised by the
+    # preview, running from the standalone wheel with the full facade absent.
+    created = command(*prefix, "bootstrap", "--project", str(project), "--goal-id", GOAL,
+                      "--objective", objective, "--write-scope", "docs/**")
+    assert created["storage_selection"]["provider"] == "sqlite"
+    assert created["global_sync"]["ok"] is True
+    registered = command(*prefix, "register-agent", "--goal-id", GOAL,
+                         "--agent-id", AGENT, "--require-new", "--execute")
+    assert registered["registration_readback"]["verified"] is True
+    assert registered["global_sync"]["ok"] is True
+    collision = command(*prefix, "register-agent", "--goal-id", GOAL,
+                        "--agent-id", AGENT, "--require-new", "--execute", expected=1)
+    assert collision["ok"] is False and collision["written"] is False
+    binding = command(*prefix, "bind-agent-thread", "--goal-id", GOAL,
+                      "--agent-id", AGENT, "--thread-id", "core-session", "--host-surface", "shell", "--execute")
+    assert binding["global_sync"]["ok"] is True
+    assert binding["registration_readback"]["verified"] is True
+    resumed = command(*start, "--thread-id", "core-session")
+    assert resumed["agent_id"] == AGENT
+    assert resumed["project_connection"]["goal_found"] is True
+    assert "identity_selection_gate" not in resumed["guided_transaction"]
+    pack = command(*prefix, "bootstrap-command-pack", "--project", str(project),
+                   "--goal-id", GOAL, "--agent-id", AGENT, "--host-surface", "shell", "--goal-text", objective)
+    assert pack["goal_start_contract"]["goal_text"] == objective
+    assert pack["goal_start_contract"]["explicit_invocation_confirms_project_local_state_writes"] is True
+
+
+@pytest.mark.parametrize("route", ["help", "preview", "catalog"])
+def test_installed_core_start_metadata_defers_issue_fix_execution(core_python, tmp_path, route):
+    arguments = ["start-goal", "--help"] if route == "help" else [
+        "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+        "start-goal", "--guided", "--project", str(tmp_path / "project"),
+        "--goal-id", GOAL, "--host-surface", "shell", "--goal-text", "Verify the complete report."]
+    script = '''import json,sys
+if sys.argv[2]=='catalog':
+ from loopx.capabilities.issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
+ assert ISSUE_FIX_CATALOG_ENTRY['default_enabled'] is False
+else:
+ from loopx.entrypoint import main
+ try:code=main(json.loads(sys.argv[1]))
+ except SystemExit as error:code=error.code
+ assert code==0
+for name in ('workflow_plan','candidate_preflight','acceptance_loop','metadata_preview','repository_context'):
+ assert 'loopx.capabilities.issue_fix.'+name not in sys.modules,name
+'''
+    result = subprocess.run([core_python, "-I", "-c", script, json.dumps(arguments), route],
+        cwd=tmp_path, env=_environment(core_python), capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, (result.stdout, result.stderr)
     assert not list(tmp_path.iterdir())
 
 

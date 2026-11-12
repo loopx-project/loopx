@@ -2813,6 +2813,52 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         runtime.close()
 
 
+def test_app_projection_discovers_a_restored_transcript_with_the_same_size_and_mtime(ordinary):
+    import os
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    sid = original["session_id"]
+    transcript = store.sessions_root / sid / "messages.jsonl"
+    canonical = [message for message in store.messages(sid) if message.get("turn_id") in turns]
+    starts = ordinary[4].read_bytes()
+    try:
+        full = transcript.read_bytes()
+        old = b"".join(line for line in full.splitlines(keepends=True)
+                       if json.loads(line).get("turn_id") not in turns)
+        assert old.endswith(b"\n") and len(old) < len(full)
+        # Simulate the earlier view before a same-size atomic restore.
+        transcript.write_bytes(old[:-1] + b" " * (len(full) - len(old)) + b"\n")
+        previous = transcript.stat()
+        transport._web_projection_scan_at = 0
+        assert transport._web_projection_paths() == []
+        assert len(provider.writes) == before
+
+        restored = transcript.with_name("restored-messages.jsonl")
+        restored.write_bytes(full)
+        os.utime(restored, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        restored.replace(transcript)
+        observed = transcript.stat()
+        assert (observed.st_mtime_ns, observed.st_size) == (previous.st_mtime_ns, previous.st_size)
+        transport._web_projection_scan_at = 0
+        path, = transport._web_projection_paths()
+        _drain_app_projection(transport, lambda: len(provider.writes) == before + len(canonical))
+
+        deliveries = json.loads(path.read_text())["deliveries"]
+        assert {key for key in deliveries if key.startswith("web.")} == {
+            "web." + message["message_id"] for message in canonical}
+        for message, (profile, text) in zip(canonical, provider.writes[before:], strict=True):
+            receipt = deliveries["web." + message["message_id"]]
+            assert profile == "notes-app" and message["text"] in text and receipt["verified"]
+            delivered = provider.messages[receipt["attempt"]["message_ref"]]
+            assert delivered["chat_id"] == "oc_notes_app"
+        transport._web_projection_scan_at = 0
+        transport.reconcile()
+        assert len(provider.writes) == before + len(canonical)
+        assert ordinary[4].read_bytes() == starts and transcript.read_bytes() == full
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("recovery", ["readback", "revoked"])
 def test_app_failed_turn_mirrors_only_its_terminal_notice_to_the_original_chat(ordinary, monkeypatch, recovery):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
@@ -6310,14 +6356,19 @@ def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_pa
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert path.stat().st_size == before.st_size and path.stat().st_mtime_ns == before.st_mtime_ns
     assert transport.pending_delivery_paths() == [path]
-    # Unknown read failures must remain visible rather than reuse an old
-    # delivered view or turn the request into an empty/successful queue.
-    def unavailable(_):
+    # An unreadable record is held for a later scan. It keeps its bytes and
+    # becomes discoverable again as soon as the original reader recovers.
+    reads = []
+
+    def unavailable(candidate):
+        reads.append(candidate)
         raise OSError("read unavailable")
 
-    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
-    with pytest.raises(OSError, match="read unavailable"):
-        transport.pending_delivery_paths()
+    with monkeypatch.context() as faults:
+        faults.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
+        assert transport.pending_delivery_paths() == []
+        assert reads == [path] and path.read_bytes() == body
+    assert transport.pending_delivery_paths() == [path]
 
 
 def test_private_discovery_does_not_cache_a_file_replaced_during_read(tmp_path, monkeypatch):

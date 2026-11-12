@@ -172,6 +172,12 @@ scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);
 export { scenarioCatalog };
 
+export function requireBackendReadback(scenario, result) {
+  if (scenario.requiresBackendReadback && result.backendReadbackVerified !== true) {
+    throw new Error(`Required backend readback did not execute: ${scenario.id}`);
+  }
+}
+
 async function main() {
   const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
   const scenarios = requestedScenario
@@ -207,10 +213,12 @@ async function main() {
           ? browser
           : { newPage: (options = {}) => browser.newPage({ locale: "zh-CN", ...options }) };
         const result = await scenario.run({ browser: scenarioBrowser, collectCoverage, url });
+        requireBackendReadback(scenario, result);
         coverageEntries.push(...result.coverageEntries);
         results[scenario.id] = {
           status: "PASS",
           note: result.note,
+          ...(scenario.requiresBackendReadback ? {backend_readback_verified: true} : {}),
           duration_ms: Date.now() - startedAt,
         };
       } catch (error) {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .workflow_plan import build_issue_fix_pr_lifecycle_command
+from .command_templates import build_issue_fix_pr_lifecycle_command
 
 
 ISSUE_FIX_CATALOG_ENTRY: dict[str, Any] = {
