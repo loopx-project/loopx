@@ -11,8 +11,9 @@ is not campaign completion. Existing legitimate stops/waits still apply.
 
 ## Direct corrections to success criteria
 
-Distinguish a changed purpose from a changed acceptance criterion. When the user
-clarifies how success is judged, refine the matching outcome before work that
+Distinguish changes to the Goal's ongoing purpose or responsibilities from
+changes to its acceptance criteria. When the user clarifies how success is
+judged, refine the matching outcome before work that
 depends on that interpretation. Use the standalone refinement below when the
 change cannot wait for a delivery milestone. Read its complete result, reconcile
 affected Todos and decisions, and obtain current guard context as required;
@@ -21,8 +22,8 @@ peer message, report or Vision summary. None of those changes canonical acceptan
 Ordinary progress, wording polish and implementation choices that leave the
 criteria unchanged need no requirement write.
 
-Keep the original objective if the purpose is unchanged. Preserve unaffected
-requirements and actual authorization, budget and stop conditions. If the user
+Keep the current objective when the correction changes only acceptance.
+Preserve unaffected requirements and actual authorization, budget and stop conditions. If the user
 rejects an Agent-added assumption, remove it from the plan without treating it
 as a retained user commitment. If the correction conflicts with an actually
 persisted requirement or configured check, the additive refinement cannot retire
@@ -42,11 +43,14 @@ requirement explicit rather than claiming the check update retired it.
 
 ## Current operating objective
 
-When recorded explicit user direction makes the Goal objective obsolete, prepare
-an objective proposal with `goal-acceptance prepare-objective`, the proposed
-objective, reason and original user source reference. Reuse a matching pending
-proposal. Autonomous replanning may discover a mismatch against existing user
-direction; it does not itself require a new human decision. Surface the proposal
+When explicit user direction changes the ongoing purpose or adds a lasting
+responsibility within the current project, prepare an objective proposal for
+the bound Goal with `goal-acceptance prepare-objective`, the proposed objective,
+reason and original user source reference. For an addition, carry forward the
+current commitments and include the new responsibility in the proposed text.
+Retain earlier requirements, permissions, budgets and stops. Reuse a matching
+pending proposal. Autonomous replanning may discover a mismatch against
+existing user direction. Surface the proposal
 once with its reason, effect and CLI route, then continue independently
 authorized work under the current objective. A pending proposal is reviewable
 output, not a gate, an adoption requirement or a reason to poll/ask repeatedly.
@@ -62,7 +66,7 @@ The complete path is available through CLI, without App access or source reads.
 `goal-acceptance --help` describes both JSON documents. For example:
 
 ```json
-{"objective":"Maintain reliable exports","reason":"Recorded user direction now includes ongoing recovery","source_ref":"message:owner-direction"}
+{"objective":"Maintain reliable exports and regularly verify restore drills","reason":"The owner added regular restore drills","source_ref":"message:owner-direction"}
 ```
 
 ```bash
@@ -88,7 +92,20 @@ another peer. Retry the same proposal ID after a lost response. The existing
 native operation/checkpoint recovers once and returns the current canonical
 basis; do not prepare a replacement or replay an old objective over a newer one.
 
-Only after owner apply, each Agent adopts the current objective through
+After owner apply, read the existing Todos in the same Goal. Update a matching
+item through `todo update`. For missing work, use the ordinary add route, for
+example:
+
+```bash
+loopx --format json todo add --goal-id GOAL --role agent --claimed-by AGENT \
+  --text "Run and verify the next restore drill" --operation-id add-restore-work
+```
+
+Read back the canonical objective and the Todo under the original Goal ID.
+If the owner also changed how success is judged, refine the matching outcome
+through its own operation.
+
+Each affected Agent then adopts the current objective through
 `goal-acceptance adopt-objective` with its exact revision, digest and inspected
 `objective_work_digest` from its own `inspect` result:
 

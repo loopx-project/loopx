@@ -1,15 +1,15 @@
 ---
 name: loopx-project
-description: "Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. In an already bound Goal, also use for a material direct-user deliverable or correction that must refine cumulative outcome requirements. Other ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry."
+description: "Use for LoopX project lifecycle work: connect or configure a project/Goal, repair project-local state or stale dashboard status, sync registry entries, or diagnose CLI/PATH/status/history routing. In a bound Goal, also use for material direct-user changes to the objective or cumulative outcome requirements. Ordinary task execution and routine refresh-state settlement already directed by a current interaction_contract do not require this skill. For registering durable project materials, prefer loopx-doc-registry."
 ---
 
 # LoopX Project Workflow
 
 Use this skill when the requested operation changes or diagnoses the project
 lifecycle, Goal configuration, registry routing, or status projection, or a direct
-user request materially refines the bound Goal’s supporting outcomes. A LoopX
-mention, registry path, or routine `refresh-state` command in an admitted task
-does not by itself select the project lifecycle workflow.
+user request materially changes the bound Goal’s objective or supporting
+outcomes. A LoopX mention, registry path, or routine `refresh-state` in an
+admitted task does not by itself select the project lifecycle workflow.
 
 For ordinary task execution, follow the current `interaction_contract`, its
 required reads and ordered settlement commands. Do not repeat onboarding,
@@ -117,11 +117,14 @@ or peer instructions. Attribution never expands authority. Record in-scope
 refinement under existing authorization, link concrete work, read back, and
 revisit unmet requirements before switching focus or claiming completion.
 
-If recorded direct user direction makes the Goal objective obsolete, use
+When recorded direct user direction changes the ongoing purpose or adds a
+lasting responsibility within the current project, use
 `goal-acceptance prepare-objective` with the proposed objective, reason and
-opaque source reference. Autonomous replanning may discover this mismatch from
-existing user context; it need not request new intent merely because the Agent
-initiated the review. Surface the existing proposal once as reviewable output,
+opaque source reference. For an addition, retain existing commitments in the
+revised objective and add or update its Todo in the same Goal. Autonomous
+replanning may discover this mismatch from existing user context. It need not
+request new intent merely because the Agent initiated the review. Surface the
+existing proposal once as reviewable output,
 not a mandatory question or precondition for continuing authorized work.
 Preparing or reusing a pending proposal changes neither the current objective
 nor execution authority. Continue under the current valid Goal; pause only an
