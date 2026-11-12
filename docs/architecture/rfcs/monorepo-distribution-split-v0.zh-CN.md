@@ -2813,3 +2813,26 @@ owner 和验收约束保持开放。
 核验的公开源文件，并固定不可变 revision；原流程、同意边界和检查范围条款保持
 原义。它是按需支持资料，不是 runtime fetch 或新 authority。早期安装门失败和
 受磁盘限制的 base 重放，与修复 head 的验证分别保留。
+
+### 2026-11-13 — 安装上下文回归进入 package lane
+
+独立 core lane 现在一起执行 `tests/test_core_distribution.py` 和
+`tests/control_plane/test_installed_core_context.py`，pull request 与 main push
+的路径过滤器也都观察上下文测试。此前该测试虽通过本地资格验证，lane 却未执行。
+独立 workflow 检查在未改动的 base 上因这三处遗漏拒绝，在修复后的命令和过滤器上
+通过。干净 Python 3.11.15 wheel 的 1,885 个 tracked runtime 文件与源码字节一致；
+安装产物继续与源码测试环境隔离。
+
+补充观察在 macOS arm64/Python 3.13.5/Node 26 上，使用同一独立 core 2.3.0、
+隔离 SQLite/File 完整 Turn 夹具、合成 Host，并关闭使用遥测。两个选定 Turn
+进程仍加载 525 个 LoopX Python 模块，其中 111 个 capability 模块，发出
+220/221 次 Effect RPC。观察到的 1,024 次 Python 连接/地址解析事件均指向
+loopback；两个 Node listener 及其 DNS lookup 也使用 loopback。包含 Host
+supervisor 在内的四个 Node 进程加载 247 个不同文件。观察器自身的本地连接与
+named-import 子进程对照通过；早期不完整观察器与本次核验后的观察分别保留。
+
+这些观察识别了此夹具中的本地 RPC 流量，不证明 OS 全域网络完整性、普通遥测
+行为、模型上下文采用、配对性能或完整成本。本交付补齐安装协议的 CI 覆盖缺口，
+不选择 D2/D5 或最小 preset。真实 Host 的 initial/revised/compacted/lost-ACK
+采用、完整 V1–V5/V10、R1/M3、Standard/workspace 发布及原始目标回归继续开放。
+保留早期失败、冻结预算和未变的治理 owner。
