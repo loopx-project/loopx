@@ -3016,7 +3016,8 @@ export function PersonalWorkspacePage({
               <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={openAttention}
                 onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
-                runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
+                runtimeReadiness={readOnly || originalSourceUnresolved ? undefined : runtimeReadiness}
+                recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})} />
             ) : (
               <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
