@@ -233,7 +233,7 @@ class LarkPrivateConversations:
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
-        self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
+        self._web_projection_snapshots: dict[str, tuple[int, ...]] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
@@ -1522,9 +1522,8 @@ class LarkPrivateConversations:
             store = self.core.controller.store
             for sid, source_path in sources.items():
                 try:
-                    stat = (store.sessions_root / sid / "messages.jsonl").stat()
-                    snapshot = (stat.st_mtime_ns, stat.st_size)
-                    if self._web_projection_snapshots.get(sid) == snapshot:
+                    snapshot = file_change_fingerprint(store.sessions_root / sid / "messages.jsonl")
+                    if snapshot is not None and self._web_projection_snapshots.get(sid) == snapshot:
                         continue
                     source = _read_json(source_path)
                     if (source.get("binding_id") not in enabled or source.get("session_id") != sid
@@ -1546,7 +1545,8 @@ class LarkPrivateConversations:
                                    for message in selected):
                                 row["status"] = "pending"
                                 _atomic_write_json(path, row)
-                    self._web_projection_snapshots[sid] = snapshot
+                    if snapshot is not None:
+                        self._web_projection_snapshots[sid] = snapshot
                 except (OSError, ValueError, KeyError):
                     # An unreadable source is unknown. Keep any prior outbox;
                     # it retains fresh source and canonical-message checks.
