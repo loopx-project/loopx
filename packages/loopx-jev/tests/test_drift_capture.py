@@ -60,10 +60,20 @@ def windows(monkeypatch):
     monkeypatch.setattr(drift_capture, "os", platform)
     if os.name != "nt":
         # Native Windows exercises CreateFileW; other hosts simulate its IO boundary.
+        opened_paths = {}
+
+        def descriptor(path, directory=False):
+            fd = os.open(path, os.O_RDONLY)
+            opened_paths[fd] = path.resolve()
+            return fd
+
         monkeypatch.setattr(
             drift_capture,
             "_windows_descriptor",
-            lambda path, directory=False: os.open(path, os.O_RDONLY),
+            descriptor,
+        )
+        monkeypatch.setattr(
+            drift_capture, "_windows_final_path", lambda fd: opened_paths[fd]
         )
     return platform
 
@@ -75,10 +85,86 @@ def test_windows_regular_file_without_nofollow(repo, windows):
     assert captured["files"]["missing.txt"] is None
 
 
+def test_windows_stable_capture_allows_ctime_skew(repo, windows):
+    (repo / "file.txt").write_bytes(b"ordinary file\n")
+    lstat, fstat = windows.lstat, windows.fstat
+    # A stable file's lstat/fstat ctime can differ; identity must not depend on it.
+    windows.lstat = lambda path: stat_fields(lstat(path), st_ctime_ns=1)
+    windows.fstat = lambda fd: stat_fields(fstat(fd), st_ctime_ns=2)
+    assert (
+        drift_capture.stable_capture(repo, ["file.txt"])["files"]["file.txt"]["text"]
+        == "ordinary file\n"
+    )
+
+
 @pytest.mark.parametrize("name", [".GIT/config", ".gIt/config"])
 def test_windows_rejects_case_insensitive_git_metadata(repo, windows, name):
     with pytest.raises(ValueError, match="invalid_scope_path"):
         drift_capture.capture(repo, [name])
+
+
+@pytest.fixture
+def unread_windows_file(monkeypatch):
+    opened = drift_capture._windows_open
+
+    def unread(path):
+        stream = opened(path)
+        monkeypatch.setattr(
+            stream, "read", lambda *args: pytest.fail("read excluded or unverified bytes")
+        )
+        return stream
+
+    monkeypatch.setattr(drift_capture, "_windows_open", unread)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows path representations")
+@pytest.mark.parametrize(
+    "representation", ["long", "case", "extended", "device", "short", "short_case"]
+)
+def test_windows_rejects_native_git_path_representations(
+    repo, windows, unread_windows_file, representation
+):
+    if representation.startswith("short"):
+        result = subprocess.run(
+            ["fsutil", "file", "setshortname", str(repo / ".git"), "GIT~1"],
+            capture_output=True,
+        )
+        if result.returncode:
+            pytest.skip(
+                "8.3 alias creation unavailable: "
+                + (result.stdout + result.stderr).decode(errors="replace").strip()
+            )
+    name = {
+        "long": ".git/config",
+        "case": ".GiT/config",
+        "extended": f"//?/{repo.as_posix()}/.git/config",
+        "device": f"//./{repo.as_posix()}/.git/config",
+        "short": "GIT~1/config",
+        "short_case": "git~1/CONFIG",
+    }[representation]
+    assert os.path.samefile(repo / name, repo / ".git/config")
+    with pytest.raises(ValueError, match="invalid_scope_path"):
+        drift_capture.capture(repo, [name])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows final-path API")
+@pytest.mark.parametrize("result", [0, 32768])
+def test_windows_fails_closed_without_final_path(
+    repo, windows, unread_windows_file, monkeypatch, result
+):
+    import ctypes
+
+    (repo / "file.txt").write_bytes(b"ordinary file")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    def unavailable(*args):
+        ctypes.set_last_error(5)
+        return result
+
+    monkeypatch.setattr(kernel, "GetFinalPathNameByHandleW", unavailable)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel)
+    with pytest.raises((ValueError, OSError)):
+        drift_capture.capture(repo, ["file.txt"])
 
 
 @pytest.mark.parametrize("directory", [False, True])

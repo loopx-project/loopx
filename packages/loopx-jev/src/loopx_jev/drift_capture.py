@@ -132,9 +132,32 @@ def _windows_open(target: Path) -> BinaryIO:
         raise
 
 
+def _windows_final_path(descriptor: int) -> Path:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    final_path = kernel.GetFinalPathNameByHandleW
+    final_path.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    final_path.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    # FILE_NAME_NORMALIZED | VOLUME_NAME_DOS keeps root and file names comparable.
+    length = final_path(msvcrt.get_osfhandle(descriptor), buffer, len(buffer), 0)
+    if not 0 < length < len(buffer):
+        raise ValueError("capture_path_unavailable")
+    return Path(buffer.value)
+
+
 def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
     with ExitStack() as parents:
         current = repo
+        canonical_repo = repo
         for part in ("", *target.relative_to(repo).parts[:-1]):
             current = current / part
             try:
@@ -145,6 +168,8 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
             parents.callback(os.close, descriptor)
             if _windows_identity(os.fstat(descriptor), directory=True)[:2] != expected:
                 raise ValueError("workspace_changed_during_capture")
+            if not part:
+                canonical_repo = _windows_final_path(descriptor)
         try:
             observed = os.lstat(target)
         except FileNotFoundError:
@@ -153,6 +178,12 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
         with _windows_open(target) as stream:
             if _windows_identity(os.fstat(stream.fileno())) != expected_file:
                 raise ValueError("workspace_changed_during_capture")
+            canonical = _windows_final_path(stream.fileno())
+            if not canonical.is_relative_to(canonical_repo):
+                raise ValueError("scope_escapes_workspace")
+            validate_paths(
+                canonical_repo, [canonical.relative_to(canonical_repo).as_posix()]
+            )
             raw = stream.read(MAX_BYTES + 1)
             opened = os.fstat(stream.fileno())
             if (
