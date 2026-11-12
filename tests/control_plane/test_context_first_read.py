@@ -1071,6 +1071,42 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     assert json.loads(detail["content"])["selections"][0]["value"] == agenda
 
 
+def test_initial_read_surfaces_bounded_peer_return_attention_before_long_sources(tmp_path, decision):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    attention = {"count": 1, "omitted_count": 0, "items": [{
+        "request_id": "a" * 64, "request_revision": 1, "step": "consume_peer_result",
+        "unconsumed_return_count": 1,
+        "returns": [{"result_key": "conclusion", "request_revision": 1,
+            "status": "delivered", "consumed": False}],
+    }]}
+    items = [{"request_id": f"{index:064x}", "direction": "incoming" if index < 10 else "outgoing",
+        "step": "review_request_work", "purpose": "Keep the original evidence. " * 16}
+        for index in range(20)]
+    agenda = {"count_unit": "request", "incoming_count": 10, "outgoing_count": 11,
+        "items": items, "omitted_count": 1, "return_attention": attention,
+        "scan_complete": True, "unavailable_count": 0, "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=True, must_attempt=True)
+    channel["required_reads"].append(read)
+    sources = channel["work_context"]["sources"]
+    sources.append({**read, "content": {"ok": True, "read_complete": False,
+        "unfinished_delegations": agenda}})
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content/unfinished_delegations"
+    attention_path = prefix + "/return_attention"
+    assert values[attention_path] == attention
+    assert prefix not in values and prefix + "/items" not in values
+    goal_text = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    assert list(values).index(attention_path) < list(values).index(goal_text)
+
+
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     plan = {"schema_version": "future", "new_stop": "Stop before every new effect."}
     decision["interaction_contract"]["cli_channel"]["settlement_plan"] = plan

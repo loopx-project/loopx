@@ -867,8 +867,7 @@ export function scopedReplanYardstickReversal(decision: JsonObject) {
   return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
 }
 
-/** A pending Manager Inbox read already delivers these scoped request rows. */
-function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+function requiredManagerAgenda(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -879,12 +878,20 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
       || agenda.scan_complete !== true || agenda.unavailable_count !== 0
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
-        "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
+        "return_attention", "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
       || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  return agenda;
+}
+
+/** A pending Manager Inbox read already delivers these scoped request rows. */
+function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  if (!agenda) return undefined;
   const {incoming_count: incoming, outgoing_count: outgoing, omitted_count: omitted, items} = agenda;
   if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
       || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
       || typeof omitted !== "number" || !Number.isSafeInteger(omitted) || omitted < 0
+      || !Array.isArray(items)
       || !Number.isSafeInteger(incoming + outgoing) || incoming + outgoing !== items.length + omitted
       || Buffer.byteLength(JSON.stringify(items), "utf8") < 2048) return undefined;
   const fields = ["incoming_count", "outgoing_count", "scan_complete"];
@@ -895,6 +902,26 @@ function managerAgendaOpeningFields(value: unknown, requiredReads: unknown[]): s
     return [...fields, "omitted_count", "instruction"];
   }
   return undefined;
+}
+
+/** Keep only returned-result identities in the first page; full Inbox text stays on its owner read. */
+function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonObject | undefined {
+  const agenda = requiredManagerAgenda(value, requiredReads);
+  const attention = jsonObject(agenda?.return_attention);
+  if (!attention || !known(attention, ["count", "items", "omitted_count"])
+      || typeof attention.count !== "number" || !Number.isSafeInteger(attention.count) || attention.count <= 0
+      || typeof attention.omitted_count !== "number" || !Number.isSafeInteger(attention.omitted_count)
+      || attention.omitted_count < 0 || !Array.isArray(attention.items) || attention.items.length > 4
+      || attention.count !== attention.items.length + attention.omitted_count) return undefined;
+  for (const value of attention.items) {
+    const item = jsonObject(value);
+    if (!item || item.step !== "consume_peer_result" || typeof item.request_id !== "string"
+        || typeof item.unconsumed_return_count !== "number" || item.unconsumed_return_count <= 0
+        || !Array.isArray(item.returns) || !item.returns.some(value => jsonObject(value)?.consumed !== true)) {
+      return undefined;
+    }
+  }
+  return attention;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -982,6 +1009,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  // A long Manager Inbox agenda stays behind its required read. Surface only
+  // the bounded returned-result identities before work so paging or context
+  // recovery cannot hide that the requester has a result to consume.
+  for (const {source, index} of sourceRows) {
+    if (managerReturnAttention(source, requiredInboxReads)) {
+      include(...work, "sources", index, "content", "unfinished_delegations", "return_attention");
+    }
+  }
   const selectedTodo = object(context.selected_todo);
   const identityAgent = object(context.agent_identity)?.agent_id;
   const agentId = context.agent_id ?? identityAgent;

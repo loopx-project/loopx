@@ -128,6 +128,10 @@ def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goa
         assert code == 0, packet
         agenda = packet["unfinished_delegations"]
         assert agenda["outgoing_count"] == 1, agenda
+        attention = agenda["return_attention"]
+        assert attention["count"] == 1 and attention["omitted_count"] == 0
+        assert attention["items"][0]["request_id"] == rid
+        assert attention["items"][0]["step"] == "consume_peer_result"
         row = agenda["items"][0]
         assert row["request_id"] == rid and row["request_revision"] == 2
         assert row["purpose"] == "Check the corrected contract"
@@ -137,7 +141,9 @@ def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goa
     assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == before
     consume_return(root, goal, "agent-b", rid, registry=registry)
     for actor in ("agent-a", "agent-b"):
-        assert read_delegation_turn_context(root, registry, goal, actor)["unfinished_delegations"]["items"] == []
+        agenda = read_delegation_turn_context(root, registry, goal, actor)["unfinished_delegations"]
+        assert agenda["items"] == []
+        assert agenda["return_attention"] == {"count": 0, "items": [], "omitted_count": 0}
 
 
 def test_request_control_refuses_wrong_actor_namespace_and_untrusted_effect_facts(source_goal, tmp_path):
