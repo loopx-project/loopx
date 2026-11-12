@@ -7,10 +7,113 @@ from loopx.control_plane.effect_runtime import effect_runtime_request_scope
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted
 from loopx.control_plane.todos.goal_todo_projection import project_todo_read, todo_summaries_from_fields
 from loopx.control_plane.todos.quota_selection import project_quota_planning
-from loopx.control_plane.todos.quota_summary import select_quota_todo_contexts, select_quota_todo_summaries, select_quota_todo_summary
+from loopx.control_plane.todos.quota_summary import select_quota_todo_contexts, select_quota_todo_summaries, select_quota_todo_summary, select_quota_todo_summaries_with_terminal, select_planning_inventory_source_items
 from loopx.control_plane.todos.summary_item import canonical_todo_source_reference
 from loopx.control_plane.todos.list_readback import list_goal_todos
 from tests.control_plane import test_quota_settlement_cli as fixture
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_replan_transaction_retains_complete_terminal_rows_and_source_fences(tmp_path, monkeypatch, provider):
+    from loopx.control_plane import effect_runtime as runtime_owner
+
+    project, runtime, _ = fixture._write_fixture(tmp_path, claimed=False)
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    with state.open("a") as file:
+        for index in range(160):
+            file.write(f"\n- [x] [P1] Completed synthetic work {index}\n"
+                f"  <!-- loopx:todo todo_id=todo_terminal_{index:03d} status=done "
+                f"task_class=advancement_task claimed_by={fixture.AGENT_ID} "
+                f"successor_todo_ids=todo_terminal_{index + 1:03d} -->\n")
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    identity = {"agent_id": fixture.AGENT_ID}
+    replies = []
+    dispatch = runtime_owner.effect_runtime_request
+    def observed(method, params, **kwargs):
+        result = dispatch(method, params, **kwargs)
+        if method == "todo.read" and params.get("kind") == "quota_projection":
+            replies.append((params, result))
+        return result
+    monkeypatch.setattr(runtime_owner, "effect_runtime_request", observed)
+    with effect_runtime_request_scope():
+        before = read_canonical_todos_if_promoted(runtime_root=runtime,
+            goal_id=fixture.GOAL_ID, include_summary=True)
+        fields = before["_todo_fields"]
+        user, agent = fields["user_todos"], fields["agent_todos"]
+        expected = (*select_quota_todo_summaries(user, agent, agent_identity=identity),
+            select_planning_inventory_source_items(agent, None, include_terminal=True))
+        replies.clear()
+        actual = select_quota_todo_summaries_with_terminal(user, agent, agent_identity=identity)
+        assert actual == expected
+        assert len(actual[2]) == 161
+        assert actual[2][-1]["successor_todo_ids"] == ["todo_terminal_160"]
+        assert len(replies) == 1
+        request, response = replies[0]
+        assert all("source_reference" in row["summary_request"] for row in request["requests"])
+        wires = response["result"]["quota_wires"]
+        assert "display_views" not in wires[0]
+        assert set(wires[1]["display_views"]) == {"terminal"}
+        assert all("vision_wait_basis" not in wire for wire in wires)
+        invalid = deepcopy(request)
+        invalid["requests"][1]["summary_request"]["source_reference"]["field_sha256"] = "0" * 64
+        with pytest.raises(ValueError, match="original complete read"):
+            project_todo_read(invalid)
+        stale = deepcopy(agent)
+        stale.expected = {**stale.expected, "cursor": "foreign"}
+        with pytest.raises(ValueError, match="canonical source changed"):
+            select_quota_todo_summaries_with_terminal(user, stale, agent_identity=identity)
+        directory = runtime / "authority" / f"{provider}-v0"
+        retained = directory.with_name(directory.name + "-retained")
+        directory.rename(retained)
+        try:
+            with pytest.raises(LocalCoordinationAuthorityUnavailable) as original:
+                read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+            with pytest.raises(LocalCoordinationAuthorityUnavailable) as narrowed:
+                select_quota_todo_summaries_with_terminal(user, agent, agent_identity=identity)
+            assert narrowed.value.code == original.value.code
+            assert narrowed.value.payload == original.value.payload
+        finally:
+            retained.rename(directory)
+    # References leaving their request scope use the complete supplied codec.
+    assert select_quota_todo_summaries_with_terminal(user, agent, agent_identity=identity) == expected
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    assert after["provider_revision"] == before["provider_revision"]
+    assert after["todos"] == before["todos"]
+
+
+@pytest.mark.parametrize("names", [[], ["terminal", "terminal"], ["foreign"], [1], "terminal"])
+def test_summary_display_view_selection_rejects_invalid_names(names):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    from loopx.control_plane.todos.handoff_note import todo_read_source
+
+    source = {"items": [{"todo_id": "todo_a", "status": "done", "done": True}]}
+    with pytest.raises(EffectRuntimeRejected, match="distinct supported views"):
+        effect_runtime_result("todo.context.page", {"summary_display_views": {
+            "source": todo_read_source(source), "view_names": names}})
+
+
+def test_summary_display_default_parity_and_explicit_terminal_selection():
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.todos.handoff_note import todo_read_source
+    from loopx.control_plane.todos.summary_item import todo_source_display_views
+
+    source = {"items": [{"todo_id": "todo_a", "text": "Completed work", "status": "done", "done": True,
+        "task_class": "advancement_task", "successor_todo_ids": ["todo_b"]},
+        {"todo_id": "todo_b", "text": "Successor work", "status": "open", "done": False, "task_class": "advancement_task"}]}
+    request = {"source": todo_read_source(source)}
+    default = effect_runtime_result("todo.context.page", {"summary_display_views": request})
+    assert set(default) == {"summary", "planning", "terminal"}
+    assert default == todo_source_display_views(source)
+    selected = effect_runtime_result("todo.context.page", {"summary_display_views": {
+        **request, "view_names": ["terminal"]}})
+    assert selected == {"terminal": default["terminal"]}
+    assert {row["todo_id"] for row in selected["terminal"]} == {"todo_a", "todo_b"}
+    invalid = project_quota_planning(source, all_open_items=[], source_open_count=1,
+        agent_identity={"agent_id": "agent-a"}, filter_user_gate_blocks_agent=False,
+        available_capabilities=None, summary_kind="user", request_only=True,
+        display_view_names=["terminal"])
+    with pytest.raises(ValueError, match="require consumed display views"):
+        project_todo_read({"kind": "quota_projection", "requests": [invalid]})
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

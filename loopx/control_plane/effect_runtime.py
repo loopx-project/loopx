@@ -1611,12 +1611,14 @@ def effect_runtime_result(
     def validate_result(result: Any) -> Any:
         # A caller must explicitly request a bundle. A request scope or a small
         # source does not establish that it will consume additional views.
-        if set(params) == {"summary_display_views"} and (not isinstance(result, dict) or any(
-            not isinstance(result.get(view), list)
-            or any(not isinstance(row, dict) for row in result[view])
-            for view in ("summary", "planning", "terminal")
-        )):
-            raise RuntimeError("invalid TypeScript Todo source views")
+        if set(params) == {"summary_display_views"}:
+            requested = params["summary_display_views"].get("view_names", ("summary", "planning", "terminal"))
+            if not isinstance(result, dict) or any(
+                not isinstance(result.get(view), list)
+                or any(not isinstance(row, dict) for row in result[view])
+                for view in requested
+            ):
+                raise RuntimeError("invalid TypeScript Todo source views")
         return result
 
     key = None

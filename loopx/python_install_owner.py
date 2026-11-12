@@ -8,10 +8,25 @@ string literal rather than a command; POSIX keeps shell quoting.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
+from importlib.metadata import Distribution, PackageNotFoundError
 import json
 import os
 from pathlib import Path
 import shlex
+
+
+def installed_loopx_distribution(lookup: Callable[[str], Distribution]) -> Distribution:
+    """Select the existing distribution, or the standalone core when absent.
+
+    Callers still verify that its RECORD owns their actual imported file.
+    Missing metadata, redirected records and content checks keep their original
+    failure behavior; the core name is not an ownership assertion.
+    """
+    try:
+        return lookup("loopx")
+    except PackageNotFoundError:
+        return lookup("loopx-core")
 
 
 @dataclass(frozen=True)
@@ -77,18 +92,17 @@ def python_distribution_upgrade_command(
     owner: PythonInstallOwner,
     python_executable: str,
     doctor_command: str,
+    distribution_name: str = "loopx",
 ) -> str | None:
     if owner.manager == "pipx":
-        package_command = f"pipx upgrade {shlex.quote(owner.environment or 'loopx')}"
+        package_command = f"pipx upgrade {shlex.quote(owner.environment or distribution_name)}"
     elif owner.manager == "pip":
         package_command = (
-            f"{interpreter_invocation(python_executable)} -m pip install --upgrade loopx"
+            f"{interpreter_invocation(python_executable)} -m pip install --upgrade {shlex.quote(distribution_name)}"
         )
     else:
         return None
-    return (
-        f"{package_command}\n"
-        "loopx workflow-skills --install\n"
-        "loopx slash-commands --install\n"
-        f"{doctor_command}"
-    )
+    steps = [package_command]
+    if distribution_name == "loopx":
+        steps.extend(["loopx workflow-skills --install", "loopx slash-commands --install"])
+    return "\n".join([*steps, doctor_command])
