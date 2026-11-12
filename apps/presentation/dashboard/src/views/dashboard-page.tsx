@@ -1819,13 +1819,16 @@ function PersonalGoalHome({
     });
   }, [conversationHistory.history, contextId, selectedAgent.label, runtimeAgents]);
 
+  // Switching steward views keeps the same conversation. A Goal's overview
+  // still cannot initiate recovery for a conversation that was not opened.
+  const mayRecoverConversation = !selectedGoal || selectedView === "chat";
   useEffect(() => {
     if (readOnly || appEntryBlocked) return;
     if (!selectedAgent.available) return;
     if (!conversationHistory.connectionKey || !conversationHistory.history) return;
     // Browsing a Goal (including palette navigation) must not create/resume
     // a session. Explicit Chat entry or sending through the composer owns that.
-    if (selectedGoal && selectedView !== "chat") return;
+    if (!mayRecoverConversation) return;
     const readHistory = conversationHistory.history;
     const targetContextId = contextId;
     const sessionKey = `${targetContextId}:${selectedAgent.agentId}`;
@@ -2098,7 +2101,7 @@ function PersonalGoalHome({
       retireRecoveryObservation?.();
       window.clearTimeout(handoffRetryTimer);
     };
-  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, selectedView, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
+  }, [conversationHistory.connectionKey, contextId, model.goals[0]?.goalId, readOnly, appEntryBlocked, mayRecoverConversation, selectedGoal?.goalId, selectedAgent.agentId, selectedAgent.available, selectedAgent.label, selectedAgents, turnRecoveryRequest]);
 
   // The projection deliberately outlives the mounted view. Its caller may be
   // running for a Goal the owner has already left, and the recovery stream's
