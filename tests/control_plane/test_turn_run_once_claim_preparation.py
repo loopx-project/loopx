@@ -76,7 +76,7 @@ def test_the_advertised_claim_runs_once_before_delivery(tmp_path: Path) -> None:
 
     prepared = builtin_execution_preparation_claim(
         _decision(), registry_path=registry, runtime_root=runtime_root,
-        cwd=project, runner=run,
+        cwd=project, agent_id=AGENT, runner=run,
     )
 
     assert prepared == TODO
@@ -88,6 +88,43 @@ def test_the_advertised_claim_runs_once_before_delivery(tmp_path: Path) -> None:
         "--format", "json", "todo", "claim", "--goal-id", GOAL,
         "--todo-id", TODO, "--agent-id", AGENT, "--claimed-by", AGENT,
     ]
+
+
+def test_powershell_launcher_is_invoked_through_pwsh(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from loopx.command_invocation import shutil as invocation_shutil
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+
+    launcher = tmp_path / "loopx.ps1"
+    monkeypatch.setattr(
+        codex_execution_preparation,
+        "current_loopx_cli_argv",
+        lambda: [str(launcher), "--cli-bin", str(launcher)],
+    )
+    monkeypatch.setattr(
+        invocation_shutil,
+        "which",
+        lambda command: "pwsh" if command == "pwsh" else None,
+    )
+    calls = []
+
+    def run(command, *, cwd, timeout):
+        calls.append(list(command))
+        return _Completed({"ok": True})
+
+    assert builtin_execution_preparation_claim(
+        _decision(), agent_id=AGENT,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime", cwd=tmp_path, runner=run,
+    ) == TODO
+    assert calls == [[
+        "pwsh", "-NoLogo", "-NoProfile", "-File", str(launcher),
+        "--cli-bin", str(launcher), "--registry", str(tmp_path / "registry.json"),
+        "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+        "todo", "claim", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", AGENT, "--claimed-by", AGENT,
+    ]]
 
 
 @pytest.mark.parametrize(
@@ -103,7 +140,7 @@ def test_preparation_this_adapter_cannot_own_stays_a_typed_wait(
     assert builtin_execution_preparation_claim(
         _decision(state=state, host_execution_allowed=host_execution_allowed),
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
-        cwd=tmp_path, runner=run,
+        cwd=tmp_path, agent_id=AGENT, runner=run,
     ) is None
 
 
@@ -126,7 +163,7 @@ def test_only_the_exact_advertised_claim_is_executed(
     assert builtin_execution_preparation_claim(
         _decision(cli_args=cli_args, should_run=should_run, todo_id=todo_id),
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
-        cwd=tmp_path, runner=run,
+        cwd=tmp_path, agent_id=AGENT, runner=run,
     ) is None
 
 
@@ -146,7 +183,7 @@ def test_inconsistent_decision_identity_is_not_claimed(
             decision_agent_id=decision_agent_id,
         ),
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
-        cwd=tmp_path, runner=run,
+        cwd=tmp_path, agent_id=AGENT, runner=run,
     ) is None
 
 
@@ -156,8 +193,8 @@ def test_a_timed_out_claim_surfaces_as_preparation_failure(tmp_path: Path) -> No
 
     with pytest.raises(ExecutionPreparationClaimFailed) as refused:
         builtin_execution_preparation_claim(
-            _decision(), registry_path=tmp_path / "registry.json",
-            runtime_root=tmp_path / "runtime", cwd=tmp_path, runner=run,
+                _decision(), registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime", cwd=tmp_path, agent_id=AGENT, runner=run,
         )
 
     assert refused.value.code == "turn_execution_preparation_claim_failed"
@@ -174,10 +211,84 @@ def test_a_refused_claim_surfaces_the_atomic_authority_reason(tmp_path: Path) ->
 
     with pytest.raises(ExecutionPreparationClaimFailed) as refused:
         builtin_execution_preparation_claim(
-            _decision(), registry_path=tmp_path / "registry.json",
-            runtime_root=tmp_path / "runtime", cwd=tmp_path, runner=run,
+                _decision(), registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime", cwd=tmp_path, agent_id=AGENT, runner=run,
         )
 
     assert refused.value.code == "turn_execution_preparation_claim_failed"
     assert "Todo claimed_by does not grant this actor update authority" in str(refused.value)
     assert TODO in str(refused.value)
+
+
+def _identity_decision(**changes: object) -> dict[str, object]:
+    decision = _decision()
+    preparation = decision["execution_preparation"]
+    selected = decision["selected_todo"]
+    assert isinstance(preparation, dict) and isinstance(selected, dict)
+    decision["goal_id"] = changes.get("goal_id", GOAL)
+    decision["agent_id"] = changes.get("decision_agent_id", AGENT)
+    preparation["agent_id"] = changes.get("preparation_agent_id", AGENT)
+    preparation["todo_id"] = changes.get("todo_id", TODO)
+    selected["todo_id"] = changes.get("selected_todo_id", TODO)
+    if "selected_agent_id" in changes:
+        selected["agent_id"] = changes["selected_agent_id"]
+    if "identity_agent_id" in changes:
+        decision["agent_identity"] = {"agent_id": changes["identity_agent_id"]}
+    return decision
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"goal_id": f" {GOAL}"},
+        {"preparation_agent_id": f" {AGENT}"},
+        {"todo_id": f" {TODO}"},
+        {"selected_todo_id": f"{TODO} "},
+        {"decision_agent_id": f" {AGENT}"},
+        {"selected_agent_id": f"{AGENT} "},
+        {"identity_agent_id": "agent-b"},
+        {"decision_agent_id": "agent-b"},
+        {"goal_id": 7},
+        {"todo_id": None},
+    ],
+)
+def test_an_identity_that_would_change_the_claim_is_not_normalized(
+    tmp_path: Path, changes: dict[str, object],
+) -> None:
+    def run(command, *, cwd, timeout):  # pragma: no cover - must not run
+        raise AssertionError(f"unexpected claim: {command}")
+
+    assert builtin_execution_preparation_claim(
+        _identity_decision(**changes), agent_id=AGENT,
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        cwd=tmp_path, runner=run,
+    ) is None
+
+
+def test_a_call_for_another_agent_does_not_claim(tmp_path: Path) -> None:
+    def run(command, *, cwd, timeout):  # pragma: no cover - must not run
+        raise AssertionError(f"unexpected claim: {command}")
+
+    assert builtin_execution_preparation_claim(
+        _decision(), agent_id="agent-b",
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+        cwd=tmp_path, runner=run,
+    ) is None
+
+
+def test_matching_identity_contracts_still_run_the_exact_claim(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, *, cwd, timeout):
+        calls.append(list(command))
+        return _Completed({"ok": True})
+
+    assert builtin_execution_preparation_claim(
+        _identity_decision(selected_agent_id=AGENT, identity_agent_id=AGENT),
+        agent_id=AGENT, registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime", cwd=tmp_path, runner=run,
+    ) == TODO
+    assert calls[0][-10:] == [
+        "todo", "claim", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", AGENT, "--claimed-by", AGENT,
+    ]

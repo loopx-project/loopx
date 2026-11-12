@@ -90,6 +90,7 @@ def handle_turn_command(
             runtime_root_override=runtime_root_arg,
         )
         execution_preparer = native_execution_preparer
+        preparation_error = "native task preparation did not make the same Todo ready"
         if (
             execution_preparer is None
             and args.turn_command == "run-once"
@@ -101,10 +102,12 @@ def handle_turn_command(
             )
 
             project_cwd = Path(args.project).expanduser().resolve()
+            preparation_error = "execution preparation did not make the same Todo ready"
 
             def execution_preparer(decision: Mapping[str, Any]) -> str | None:
                 return builtin_execution_preparation_claim(
                     decision,
+                    agent_id=args.agent_id,
                     registry_path=registry_path.expanduser().resolve(),
                     runtime_root=runtime_root.resolve(),
                     cwd=project_cwd,
@@ -305,7 +308,7 @@ def handle_turn_command(
                     if (preparation.get("state") != "ready" or preparation.get("todo_id") != prepared_todo
                             or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
                             or decision.get("normal_delivery_allowed") is not True):
-                        raise ValueError("execution preparation did not make the same Todo ready")
+                        raise ValueError(preparation_error)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}

@@ -1126,10 +1126,17 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     }
 
 
-def test_run_once_claims_zero_lease_before_codex_host(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_claims_zero_lease_before_codex_host(
+    tmp_path, monkeypatch, provider,
+):
     from tests.test_loopx_turn_codex_cli import _fake_codex
 
-    project, runtime, registry = _write_live_fixture(tmp_path, handoff_mode="hard_lease")
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+    )
     binary, log = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
     home = tmp_path / "codex-home"

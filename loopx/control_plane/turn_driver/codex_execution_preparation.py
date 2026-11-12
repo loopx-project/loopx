@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...command_invocation import current_loopx_cli_argv
+from ...command_invocation import command_argv, current_loopx_cli_argv
 from ..content_digest import BARE_SHA256_PATTERN
 
 
@@ -116,13 +116,17 @@ def _run_json(
     timeout: float,
     runner: CommandRunner,
 ) -> dict[str, Any]:
-    command = [
-        *current_loopx_cli_argv(),
-        "--registry", str(registry_path),
-        *(["--runtime-root", str(runtime_root)] if runtime_root is not None else []),
-        "--format", "json",
-        *arguments,
-    ]
+    route = current_loopx_cli_argv()
+    command = command_argv(
+        Path(route[0]),
+        [
+            *route[1:],
+            "--registry", str(registry_path),
+            *(["--runtime-root", str(runtime_root)] if runtime_root is not None else []),
+            "--format", "json",
+            *arguments,
+        ],
+    )
     completed = runner(command, cwd=cwd, timeout=timeout)
     try:
         payload = json.loads(completed.stdout or "{}")
@@ -158,9 +162,17 @@ class ExecutionPreparationClaimFailed(ValueError):
     code = "turn_execution_preparation_claim_failed"
 
 
+def _exact_identity(value: object) -> str | None:
+    """Keep a decision identity exact; display normalization cannot stand in for it."""
+    if isinstance(value, str) and value and value == value.strip():
+        return value
+    return None
+
+
 def builtin_execution_preparation_claim(
     decision: Mapping[str, Any],
     *,
+    agent_id: str,
     registry_path: Path,
     runtime_root: Path,
     cwd: Path,
@@ -185,27 +197,41 @@ def builtin_execution_preparation_claim(
     claim = preparation.get("claim")
     if not isinstance(claim, Mapping) or claim.get("host_execution_allowed") is not True:
         return None
-    goal_id = str(decision.get("goal_id") or "").strip()
-    decision_agent_id = str(
-        decision.get("agent_id") or selected.get("agent_id") or ""
-    ).strip()
-    agent_id = str(preparation.get("agent_id") or "").strip()
-    todo_id = str(preparation.get("todo_id") or "").strip()
+    identity = decision.get("agent_identity")
+    declared_agent = decision.get("agent_id")
+    selected_agent = selected.get("agent_id")
+    identity_agent = identity.get("agent_id") if isinstance(identity, Mapping) else None
+    goal_id = _exact_identity(decision.get("goal_id"))
+    caller_agent_id = _exact_identity(agent_id)
+    preparation_agent_id = _exact_identity(preparation.get("agent_id"))
+    todo_id = _exact_identity(preparation.get("todo_id"))
+    selected_todo_id = _exact_identity(selected.get("todo_id"))
+    selected_agent_id = _exact_identity(selected_agent)
+    identity_agent_id = _exact_identity(identity_agent)
+    # An absent declaration may fall back to the composed identity contract.
+    # A present declaration that needed trimming is not the same identity.
+    decision_agent_id = (
+        _exact_identity(declared_agent) if declared_agent is not None else identity_agent_id
+    )
     expected_claim = [
         "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
-        "--agent-id", agent_id, "--claimed-by", agent_id,
+        "--agent-id", caller_agent_id, "--claimed-by", caller_agent_id,
     ]
     if (
         preparation.get("schema_version") != "execution_preparation_v0"
         or preparation.get("delivery_allowed") is not False
         or decision.get("normal_delivery_allowed") is not False
         or decision.get("should_run") is not True
-        or not decision_agent_id
-        or decision_agent_id != agent_id
         or not goal_id
-        or not agent_id
+        or not caller_agent_id
+        or not decision_agent_id
+        or not preparation_agent_id
         or not todo_id
-        or str(selected.get("todo_id") or "").strip() != todo_id
+        or selected_todo_id != todo_id
+        or decision_agent_id != caller_agent_id
+        or preparation_agent_id != caller_agent_id
+        or (selected_agent is not None and selected_agent_id != caller_agent_id)
+        or (identity_agent is not None and identity_agent_id != caller_agent_id)
         or claim.get("cli_args") != expected_claim
         or not registry_path.is_absolute()
         or not runtime_root.is_absolute()
