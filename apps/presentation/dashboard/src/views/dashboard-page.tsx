@@ -9,6 +9,7 @@ import { useBoundConversation } from "../data/use-bound-conversation";
 import {AppStewardEntry, useAppStewardTarget} from "../features/personal-workspace/app-steward-entry";
 import { goalSubtree } from "../features/personal-workspace/goal-hierarchy";
 import {readGoalWorkBrowse, writeGoalWorkBrowse, type GoalWorkBrowseState} from "../features/personal-workspace/goal-work-browse";
+import { caseChapterHashPrefix } from "../features/personal-workspace/research-case-study";
 import {compactWorkspaceText as compactShareText, workspaceAgentTodoFromItem} from "../features/personal-workspace/personal-workspace-model";
 import type { GoalAcceptanceObservation } from "../data/goal-acceptance-observation";
 import { attentionDetails, attentionDetailsFromSnapshot, sourceAttention } from "../features/personal-workspace/attention-details";
@@ -19,7 +20,7 @@ import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
-import { dashboardRoute } from "../router";
+import { clearedResearchSearch, dashboardRoute } from "../router";
 import {
   QueueItem,
   RunGoal,
@@ -3507,6 +3508,10 @@ function StatusRequestView({
 }
 
 
+function keepCaseChapterHash(hash = "") {
+  return hash.startsWith(caseChapterHashPrefix.slice(1)) ? hash : "";
+}
+
 export function DashboardPage() {
   const search = dashboardRoute.useSearch();
   const navigate = dashboardRoute.useNavigate();
@@ -3628,16 +3633,15 @@ export function DashboardPage() {
     // Loading the current source on reload must not add a duplicate history
     // entry: Back should return to the user's previous workspace view.
     if (search.statusUrl !== url) {
+      const keepsSource = (currentUrl: string) => !currentUrl || currentUrl === url
+        || Boolean(prepared && bound && statusSourceForUrl(prepared, currentUrl, window.location.href)?.statusUrl === bound.statusUrl);
       await navigate({
         replace: bindingInitialIdentity,
+        hash: keepsSource(search.statusUrl) ? keepCaseChapterHash : undefined,
         search: (current) => {
           // Normalizing an alias of the same physical reader preserves its
           // bookmarks; a different source still clears source-local selection.
-          const sameStatusSource = "statusUrl" in current && (!current.statusUrl || current.statusUrl === url
-            || Boolean(prepared && bound && statusSourceForUrl(prepared, current.statusUrl, window.location.href)?.statusUrl === bound.statusUrl));
-          const runtimeSourceChanged = Boolean(nextPayload.local_dashboard_api?.read_only_sources?.length
-            && "statusUrl" in current && current.statusUrl && current.statusUrl !== url
-            && (!prepared || !bound || statusSourceForUrl(prepared, current.statusUrl, window.location.href)?.statusUrl !== bound.statusUrl));
+          const sameStatusSource = "statusUrl" in current && keepsSource(current.statusUrl);
           return {
             ...current,
             statusUrl: url,
@@ -3647,9 +3651,7 @@ export function DashboardPage() {
             workSession: sameStatusSource ? current.workSession : undefined,
             // Node/pack ids are source-local even when the Goal ids coincide.
             // Back restores the original source's URL and its own selection.
-            ...(runtimeSourceChanged ? {research_lens: undefined, research_phase: undefined, research_goal: undefined, research_node: undefined, research_finding: undefined, research_event: undefined, research_state: undefined,
-              research_group: undefined, research_analysis: undefined,
-              research_analysis_goal: undefined, research_pack: undefined} : {}),
+            ...(sameStatusSource ? {} : clearedResearchSearch),
           };
         },
       });
@@ -3903,6 +3905,7 @@ export function DashboardPage() {
         replace: true,
         search: (current) => ({
           ...current,
+          ...clearedResearchSearch,
           goalId: "",
         }),
       });
@@ -3919,22 +3922,28 @@ export function DashboardPage() {
 
   function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
     void navigate({
-      search: (current) => ({
-        ...current,
-        goalId,
-        workspace: undefined,
-        conversationBinding: undefined,
-        conversationSession: undefined,
-        messageSession: undefined, message: undefined,
-        workAgent: undefined, workSession: undefined,
-        todo: undefined,
-        view: view === "chat" ? "conversation" : view,
-      }),
+      hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
+      search: (current) => {
+        const currentSearch = current as Partial<typeof search>;
+        const keepResearch = Boolean(currentSearch.research_goal) || currentSearch.goalId === goalId;
+        return ({
+          ...current,
+          ...(keepResearch ? {} : clearedResearchSearch),
+          goalId,
+          workspace: undefined,
+          conversationBinding: undefined,
+          conversationSession: undefined,
+          messageSession: undefined, message: undefined,
+          workAgent: undefined, workSession: undefined,
+          todo: undefined,
+          view: view === "chat" ? "conversation" : view,
+        });
+      },
     });
   }
 
   function selectWorkspace(projectRef: string | null) {
-    void navigate({ search: (current) => ({ ...current, goalId: "", todo: undefined, workAgent: undefined, workSession: undefined, workspace: projectRef ?? undefined,
+    void navigate({ search: (current) => ({ ...current, ...clearedResearchSearch, goalId: "", todo: undefined, workAgent: undefined, workSession: undefined, workspace: projectRef ?? undefined,
       conversationBinding: undefined, conversationSession: undefined, messageSession: undefined, message: undefined, view: "conversation" }) });
   }
 
@@ -3955,44 +3964,52 @@ export function DashboardPage() {
     <PersonalGoalHome
       appEntry={appEntry}
       conversationMessageFocus={search.messageSession && search.message ? {sessionId: search.messageSession, messageId: search.message} : undefined}
-      onClearMessageFocus={() => void navigate({replace: true, search: current => ({...current, messageSession: undefined, message: undefined})})}
+      onClearMessageFocus={() => void navigate({replace: true, hash: keepCaseChapterHash,
+        search: current => ({...current, messageSession: undefined, message: undefined})})}
       workBrowseSearch={search}
       onWorkBrowseChange={(patch, workSource, replace = false) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
-        void navigate({replace, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+        void navigate({replace, hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, ...writeGoalWorkBrowse({...readGoalWorkBrowse(current, goalId, workSource), ...patch}, goalId, workSource)} : current});
       }}
       boundConversation={search.conversationBinding !== undefined || search.conversationSession !== undefined
         ? { bindingId: search.conversationBinding ?? "", sessionId: search.conversationSession ?? "" } : null}
-      onOpenOriginalConversation={target => void navigate({search: current => ({...current, goalId: "", workspace: undefined,
+      onOpenOriginalConversation={target => void navigate({search: current => ({...current, ...clearedResearchSearch, goalId: "", workspace: undefined,
         workAgent: undefined, workSession: undefined, todo: undefined, messageSession: undefined, message: undefined, conversationBinding: target.bindingId, conversationSession: target.sessionId, view: "conversation"})})}
       rootGoalId={search.rootGoalId}
-      onChangeGoalRoot={rootGoalId => void navigate({search: current => ({...current,
-        workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined, rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined})})}
+      onChangeGoalRoot={rootGoalId => void navigate({
+        hash: !rootGoalId || rootGoalId === search.goalId ? keepCaseChapterHash : undefined,
+        search: current => ({...current,
+          workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined,
+          rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined}),
+      })}
       goalArchiveLoadState={goalArchiveLoadState}
       sourceError={loadError}
       selectedTodoId={search.todo ?? null}
       selectedWorkSessionId={search.workSession}
       onSelectWorkSession={(sessionId, replace = false) => {
         const goalId = search.goalId, agentId = search.workAgent, statusUrl = search.statusUrl;
-        void navigate({replace, search: current => "goalId" in current && current.goalId === goalId && current.workAgent === agentId && current.statusUrl === statusUrl
+        void navigate({replace, hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.workAgent === agentId && current.statusUrl === statusUrl
           ? {...current, workSession: sessionId, messageSession: current.workSession === sessionId ? current.messageSession : undefined,
             message: current.workSession === sessionId ? current.message : undefined} : current});
       }}
       selectedWorkAgentId={search.workAgent ?? null}
       onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
-        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+        void navigate({hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
-        void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
+        void navigate({hash: keepCaseChapterHash, search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
           ? {...current, todo: todoId ?? undefined} : current});
       }}
       selectedView={search.view === "conversation" ? "chat" : search.goalId ? search.view ?? "overview" : "overview"}
       onSelectView={(view) => {
-        void navigate({ search: current => ({ ...current, workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined, view: view === "chat" ? "conversation" : view }) });
+        void navigate({
+          hash: keepCaseChapterHash,
+          search: current => ({ ...current, workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined, view: view === "chat" ? "conversation" : view }),
+        });
       }}
       onGoalActivationStateChange={(goalId, activationState) => {
         statusRequestFenceRef.current.projectionRevision += 1;

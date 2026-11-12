@@ -333,13 +333,14 @@ for (const promptContract of [
   "no-clone installer",
   "loopx doctor",
   "loopx connect/bootstrap",
-  "project connection status, current user gate, top agent todo",
-  "next safe action, and available commands",
-  "/loopx <complex task>",
+  "one natural-language goal",
   "/loopx <goal text>",
   "concise ordered plan",
-  "P0/P1/P2 todos",
+  "save that plan as ordered LoopX Todos",
+  "read back the current work, any decision that needs me, and the next safe action",
+  "Keep LoopX internal terms behind advanced or debugging explanations",
   "把当前项目接入 LoopX",
+  "把计划按顺序保存为 LoopX 待办",
   "下一步安全动作是什么",
 ]) {
   if (!homepageSource.includes(promptContract)) {

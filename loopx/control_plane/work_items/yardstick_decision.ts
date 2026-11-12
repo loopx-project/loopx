@@ -181,7 +181,7 @@ export function normalizeWorkYardstickSourceSnapshot(
 
 /** Share current-work eligibility between the read plan and its final projection. */
 export function workYardstickTodos(params: JsonObject): JsonObject[] {
-  return evaluateMethodologyActivation({enabled: params.yardstick_enabled}).active && Array.isArray(params.work_todos)
+  const todos = evaluateMethodologyActivation({enabled: params.yardstick_enabled}).active && Array.isArray(params.work_todos)
     ? (params.work_todos as JsonObject[]).filter(
         todo =>
           todo.role === "agent" &&
@@ -191,6 +191,9 @@ export function workYardstickTodos(params: JsonObject): JsonObject[] {
           (params.todo_id == null || todo.todo_id === params.todo_id),
       )
     : [];
+  const preferred = todos.findIndex(todo => todo.todo_id === params.preferred_yardstick_todo_id);
+  if (preferred > 0) todos.unshift(...todos.splice(preferred, 1));
+  return todos;
 }
 
 function belongsToWork(row: JsonObject, binding: JsonObject): boolean {

@@ -211,11 +211,9 @@ def _user_gate_scope_projection_repair_active(payload: Mapping[str, object]) -> 
 
 
 def _capability_resolution_user_actions(payload: dict[str, Any]) -> list[str]:
-    capability_gate = (
-        cast(dict[str, Any], payload.get("capability_gate"))
-        if isinstance(payload.get("capability_gate"), dict)
-        else {}
-    )
+    capability_gate = payload.get("capability_gate")
+    if not isinstance(capability_gate, dict):
+        capability_gate = {}
     if not capability_gate.get("owner_missing"):
         return []
     owner_action = protocol_action_text(capability_gate.get("owner_action"))
@@ -288,11 +286,9 @@ def projected_user_channel_actions(
         return capability_actions[:limit]
     if not user_channel_action_required(payload):
         return []
-    capability_gate = (
-        cast(dict[str, Any], payload.get("capability_gate"))
-        if isinstance(payload.get("capability_gate"), dict)
-        else {}
-    )
+    capability_gate = payload.get("capability_gate")
+    if not isinstance(capability_gate, dict):
+        capability_gate = {}
     if capability_gate.get("owner_missing"):
         owner_action = protocol_action_text(capability_gate.get("owner_action"))
         if owner_action:
@@ -437,12 +433,12 @@ def _turn_scoped_cli_settlement_context(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if selection.action_portfolio_requires_explicit_selection(payload):
         return None, None
-    agent_identity = cast(dict[str, Any], payload.get("agent_identity")) if isinstance(payload.get("agent_identity"), dict) else {}
-    selected_todo = (
-        cast(dict[str, Any], payload.get("selected_todo"))
-        if isinstance(payload.get("selected_todo"), dict)
-        else {}
-    )
+    agent_identity = payload.get("agent_identity")
+    if not isinstance(agent_identity, dict):
+        agent_identity = {}
+    selected_todo = payload.get("selected_todo")
+    if not isinstance(selected_todo, dict):
+        selected_todo = {}
     goal_id = str(payload.get("goal_id") or "").strip()
     agent_id = str(agent_identity.get("agent_id") or "").strip()
     selected_todo_id = normalize_todo_id(selected_todo.get("todo_id"))
@@ -574,7 +570,9 @@ def _selection_recovery_command(
     turn_instance_id: str | None, runtime_root: str | None,
     registry_path: str | None = None,
 ) -> str:
-    identity = cast(dict[str, Any], payload.get("agent_identity")) if isinstance(payload.get("agent_identity"), dict) else {}
+    identity = payload.get("agent_identity")
+    if not isinstance(identity, dict):
+        identity = {}
     try:
         scheduler_args = render_scheduler_execution_args(
             scheduler_execution_context=scheduler_execution_context,
@@ -676,11 +674,9 @@ def _automation_prompt_upgrade_cli_actions(
     payload: Mapping[str, object], *, command_prefix: str, goal_id: str,
 ) -> list[str]:
     """Render the existing prompt-upgrade commands without selecting work."""
-    automation_prompt_upgrade = (
-        cast(dict[str, Any], payload.get("automation_prompt_upgrade"))
-        if isinstance(payload.get("automation_prompt_upgrade"), dict)
-        else {}
-    )
+    automation_prompt_upgrade = payload.get("automation_prompt_upgrade")
+    if not isinstance(automation_prompt_upgrade, dict):
+        automation_prompt_upgrade = {}
     actions = [
         str(item.get("command") or "").strip()
         for item in automation_prompt_upgrade.get("agent_example_commands") or []
@@ -713,7 +709,9 @@ def _admitted_interaction_next_cli_actions(
 ) -> list[str]:
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
-    agent_identity = cast(dict[str, Any], payload.get("agent_identity")) if isinstance(payload.get("agent_identity"), dict) else {}
+    agent_identity = (
+        identity if isinstance(identity := payload.get("agent_identity"), dict) else {}
+    )
     scoped_cli_args = _scoped_cli_args(
         agent_identity,
         available_capabilities=available_capabilities,
@@ -785,8 +783,7 @@ def _admitted_interaction_next_cli_actions(
     )
     if mode == "governed_capability_intent":
         projection = (
-            cast(Mapping[str, Any], payload.get("pending_capability_intent"))
-            if isinstance(payload.get("pending_capability_intent"), Mapping)
+            intent if isinstance(intent := payload.get("pending_capability_intent"), Mapping)
             else {}
         )
         command = protocol_action_text(projection.get("command"), limit=1200)
@@ -859,8 +856,7 @@ def _admitted_interaction_next_cli_actions(
         return [typed_quota_guard]
     if mode == AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value:
         agent_scope_frontier = (
-            cast(dict[str, Any], payload.get("agent_scope_frontier"))
-            if isinstance(payload.get("agent_scope_frontier"), dict)
+            frontier if isinstance(frontier := payload.get("agent_scope_frontier"), dict)
             else {}
         )
         if cycle_actions := _dependency_cycle_cli_actions(
@@ -868,11 +864,9 @@ def _admitted_interaction_next_cli_actions(
             lifecycle_actor_args=lifecycle_actor_args, typed_quota_guard=typed_quota_guard,
         ):
             return cycle_actions
-        monitor_candidates = (
-            cast(list[Any], agent_scope_frontier.get("monitor_blocked_resume_candidates"))
-            if isinstance(agent_scope_frontier.get("monitor_blocked_resume_candidates"), list)
-            else []
-        )
+        monitor_candidates = agent_scope_frontier.get("monitor_blocked_resume_candidates")
+        if not isinstance(monitor_candidates, list):
+            monitor_candidates = []
         if monitor_candidates:
             first_candidate = (
                 monitor_candidates[0]
@@ -889,22 +883,18 @@ def _admitted_interaction_next_cli_actions(
                 f"{command_prefix} refresh-state --goal-id {goal_id} --classification standing_monitor_gate_repair_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
                 quota_spend_action,
             ]
-        route_candidates = (
-            cast(list[Any], agent_scope_frontier.get("route_continuation_replan_candidates"))
-            if isinstance(agent_scope_frontier.get("route_continuation_replan_candidates"), list)
-            else []
-        )
+        route_candidates = agent_scope_frontier.get("route_continuation_replan_candidates")
+        if not isinstance(route_candidates, list):
+            route_candidates = []
         if route_candidates:
             return [
                 f"{command_prefix} todo add --goal-id {goal_id} --role agent --text '<public-safe route continuation advancement todo>'",
                 f"{command_prefix} refresh-state --goal-id {goal_id} --classification route_continuation_replan_recorded --delivery-batch-scale single_surface --delivery-outcome outcome_progress{settlement_args}{scoped_cli_args}",
                 quota_spend_action,
             ]
-        candidates = (
-            cast(list[Any], agent_scope_frontier.get("deferred_resume_candidates"))
-            if isinstance(agent_scope_frontier.get("deferred_resume_candidates"), list)
-            else []
-        )
+        candidates = agent_scope_frontier.get("deferred_resume_candidates")
+        if not isinstance(candidates, list):
+            candidates = []
         first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
         todo_id = str(first_candidate.get("todo_id") or "<todo_id>")
         reopen = (
@@ -1120,11 +1110,9 @@ def _interaction_spend_policy(
 
 
 def _blocked_priority_fallback_user_reason(payload: dict[str, Any]) -> str | None:
-    fallback = (
-        cast(dict[str, Any], payload.get("blocked_priority_fallback"))
-        if isinstance(payload.get("blocked_priority_fallback"), dict)
-        else {}
-    )
+    fallback = payload.get("blocked_priority_fallback")
+    if not isinstance(fallback, dict):
+        fallback = {}
     if not fallback:
         return None
     if (
@@ -1218,11 +1206,9 @@ def _build_interaction_agent_channel(
         "quiet_noop_allowed": quiet_noop_allowed,
     }
     channel.update(build_primary_action_projection(payload, mode=mode, primary_action=primary_action))
-    work_lane = (
-        cast(Mapping[str, Any], payload.get("work_lane_contract"))
-        if isinstance(payload.get("work_lane_contract"), Mapping)
-        else {}
-    )
+    work_lane = payload.get("work_lane_contract")
+    if not isinstance(work_lane, Mapping):
+        work_lane = {}
     if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping):
         channel["auxiliary_monitor_poll"] = dict(
             work_lane["auxiliary_monitor_poll"]
@@ -1388,16 +1374,12 @@ def _build_interaction_cli_channel(
             "spend_after_validation": False,
             "spend_policy": "bind this Goal's work Turn through the projected guard before work or settlement",
         }
-    work_lane = (
-        cast(Mapping[str, Any], payload.get("work_lane_contract"))
-        if isinstance(payload.get("work_lane_contract"), Mapping)
-        else {}
-    )
-    auxiliary_monitor = (
-        cast(Mapping[str, Any], work_lane.get("auxiliary_monitor_poll"))
-        if isinstance(work_lane.get("auxiliary_monitor_poll"), Mapping)
-        else None
-    )
+    work_lane = payload.get("work_lane_contract")
+    if not isinstance(work_lane, Mapping):
+        work_lane = {}
+    auxiliary_monitor = work_lane.get("auxiliary_monitor_poll")
+    if not isinstance(auxiliary_monitor, Mapping):
+        auxiliary_monitor = None
     if auxiliary_monitor is not None:
         selected_monitor_id = normalize_todo_id(
             auxiliary_monitor.get("selected_todo_id")
@@ -1412,11 +1394,9 @@ def _build_interaction_cli_channel(
             command_prefix = selection.render_cli_command_prefix(
                 runtime_root=runtime_root, registry_path=registry_path,
             )
-            agent_identity = (
-                cast(dict[str, Any], payload.get("agent_identity"))
-                if isinstance(payload.get("agent_identity"), dict)
-                else {}
-            )
+            agent_identity = payload.get("agent_identity")
+            if not isinstance(agent_identity, dict):
+                agent_identity = {}
             safe_turn_instance_id = str(turn_instance_id or "").strip()
             auxiliary_projection: dict[str, Any] = {
                 **dict(auxiliary_monitor),
@@ -1521,11 +1501,9 @@ def _build_interaction_cli_channel(
             capability_reentry,
             selection_required=selection.action_portfolio_requires_explicit_selection(payload),
         )
-    selected_todo = (
-        cast(Mapping[str, Any], payload.get("selected_todo"))
-        if isinstance(payload.get("selected_todo"), Mapping)
-        else {}
-    )
+    selected_todo = payload.get("selected_todo")
+    if not isinstance(selected_todo, Mapping):
+        selected_todo = {}
     if spend_after_selection and selected_todo.get("todo_id"):
         channel["delivery_workspace_causality"] = {
             "schema_version": "delivery_workspace_causality_v0",
@@ -1552,11 +1530,9 @@ def _attach_interaction_post_writeback_actions(
     preparation = payload.get("execution_preparation")
     if isinstance(preparation, Mapping) and preparation.get("state") != "ready":
         return
-    goal_boundary = (
-        cast(Mapping[str, Any], payload.get("goal_boundary"))
-        if isinstance(payload.get("goal_boundary"), Mapping)
-        else {}
-    )
+    goal_boundary = payload.get("goal_boundary")
+    if not isinstance(goal_boundary, Mapping):
+        goal_boundary = {}
     actions = goal_boundary.get("post_writeback_actions")
     if isinstance(actions, list) and actions:
         contract["cli_channel"]["post_writeback_actions"] = actions
@@ -1566,19 +1542,15 @@ def _attach_interaction_vision_continuation_audit(
     contract: dict[str, Any],
     payload: dict[str, Any],
 ) -> None:
-    vision_continuation_audit = (
-        cast(dict[str, Any], payload.get("vision_continuation_audit"))
-        if isinstance(payload.get("vision_continuation_audit"), dict)
-        else {}
-    )
+    vision_continuation_audit = payload.get("vision_continuation_audit")
+    if not isinstance(vision_continuation_audit, dict):
+        vision_continuation_audit = {}
     if not vision_continuation_audit.get("required"):
         return
     contract["agent_channel"]["vision_continuation_audit"] = vision_continuation_audit
-    vision_gap_judge = (
-        cast(dict[str, Any], vision_continuation_audit.get("vision_gap_judge"))
-        if isinstance(vision_continuation_audit.get("vision_gap_judge"), dict)
-        else {}
-    )
+    vision_gap_judge = vision_continuation_audit.get("vision_gap_judge")
+    if not isinstance(vision_gap_judge, dict):
+        vision_gap_judge = {}
     contract["cli_channel"]["vision_continuation_audit"] = {
         "required": True,
         "required_before_closeout": vision_continuation_audit.get(
@@ -1609,11 +1581,9 @@ def _attach_interaction_vision_wait_state(
     contract: dict[str, Any],
     payload: dict[str, Any],
 ) -> None:
-    vision_wait_state = (
-        cast(dict[str, Any], payload.get("vision_wait_state"))
-        if isinstance(payload.get("vision_wait_state"), dict)
-        else {}
-    )
+    vision_wait_state = payload.get("vision_wait_state")
+    if not isinstance(vision_wait_state, dict):
+        vision_wait_state = {}
     if vision_wait_state.get("state") != "waiting":
         return
     contract["agent_channel"]["vision_wait_state"] = vision_wait_state
@@ -1670,16 +1640,12 @@ def _build_interaction_contract_projection(
     runtime_root: str | None = None,
     registry_path: str | None = None,
 ) -> tuple[InteractionContractPacket, SchedulerArbitration]:
-    execution_obligation = (
-        cast(dict[str, Any], payload.get("execution_obligation"))
-        if isinstance(payload.get("execution_obligation"), dict)
-        else {}
-    )
-    heartbeat_recommendation = (
-        cast(dict[str, Any], payload.get("heartbeat_recommendation"))
-        if isinstance(payload.get("heartbeat_recommendation"), dict)
-        else {}
-    )
+    execution_obligation = payload.get("execution_obligation")
+    if not isinstance(execution_obligation, dict):
+        execution_obligation = {}
+    heartbeat_recommendation = payload.get("heartbeat_recommendation")
+    if not isinstance(heartbeat_recommendation, dict):
+        heartbeat_recommendation = {}
     monitor_only = payload.get("agent_work_mode") == "monitor_only"
     user_required = False if monitor_only else user_channel_action_required(payload)
     decision = _project_interaction_execution(

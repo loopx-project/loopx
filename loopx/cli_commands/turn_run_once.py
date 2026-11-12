@@ -366,7 +366,10 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
-                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {
+                    "task_lease_idempotency_key": execution_context.get("task_lease_proof", {}).get("idempotency_key"),
+                    "task_lease_expected_version": execution_context.get("task_lease_proof", {}).get("expected_version"),
+                }),
             )
             if completion.get("ok") is not True:
                 return completion

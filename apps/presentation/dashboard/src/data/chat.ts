@@ -1304,8 +1304,10 @@ function sameHistoryRevision(current: ChatSessionSummary, read: ChatSessionSumma
 }
 
 function historyTransportUnavailable(error: unknown) {
-  return error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
-    && (error.payload.http_status === undefined || Number(error.payload.http_status) >= 500);
+  if (!(error instanceof ChatApiError) || error.payload.error_code !== "chat_api_unavailable") return false;
+  const status = error.payload.http_status;
+  // A response body can be interrupted after successful history headers.
+  return status === undefined || status === 200 || Number(status) >= 500;
 }
 
 export type ChatHistory = {

@@ -33,6 +33,7 @@ def _terminal_todo_source_state(
     done = summary.get("done_count")
     deferred = summary.get("deferred_count")
     watch_only = summary.get("watch_only_monitor_count", 0)
+    monitor_open_items = summary.get("monitor_open_items")
     if not (
         type(total) is int
         and total >= 0
@@ -42,8 +43,8 @@ def _terminal_todo_source_state(
         and done + watch_only == total
         and _strict_zero(summary.get("convergence_open_count", summary.get("open_count")))
         and _strict_zero(deferred)
-        and isinstance(summary.get("monitor_open_items"), list)
-        and len(cast(list[Any], summary.get("monitor_open_items"))) == watch_only
+        and isinstance(monitor_open_items, list)
+        and len(monitor_open_items) == watch_only
     ):
         return "invalid", False
     intent = summary.get("closure_intent")
@@ -67,13 +68,13 @@ def _projection_has_empty_terminal_frontier(projection: dict[str, Any] | None) -
     frontier = projection.get("remaining_advancement_frontier")
     monitors = projection.get("monitor_only_lanes")
     successors = projection.get("deferred_successors")
-    if not all(isinstance(value, dict) for value in (normalized, frontier, monitors, successors)):
+    if not (
+        isinstance(normalized, dict)
+        and isinstance(frontier, dict)
+        and isinstance(monitors, dict)
+        and isinstance(successors, dict)
+    ):
         return False
-
-    normalized = cast(dict[str, Any], normalized)
-    frontier = cast(dict[str, Any], frontier)
-    monitors = cast(dict[str, Any], monitors)
-    successors = cast(dict[str, Any], successors)
 
     required_keys = (
         (normalized, {"user_open_count", "agent_open_count", "agent_advancement_open_count", "agent_monitor_open_count", "agent_monitor_due_count"}),
@@ -114,7 +115,7 @@ def _terminal_todo_source_contract(
 ) -> tuple[dict[str, Any], bool]:
     user_status, user_intent = _terminal_todo_source_state(user_todo_summary, role="user")
     agent_status, agent_intent = _terminal_todo_source_state(agent_todo_summary, role="agent")
-    source_completeness: dict[str, Any] = {
+    source_completeness: dict[str, object] = {
         "schema_version": GOAL_TERMINAL_SOURCE_COMPLETENESS_SCHEMA_VERSION,
         "user_todos": user_status,
         "agent_todos": agent_status,
@@ -180,9 +181,8 @@ def _terminal_no_followup_resolves_vision_checkpoint(
 
 
 def goal_frontier_is_terminal_no_followup(*, projection: dict[str, Any] | None) -> bool:
-    if not _projection_has_empty_terminal_frontier(projection):
+    if projection is None or not _projection_has_empty_terminal_frontier(projection):
         return False
-    projection = cast(dict[str, Any], projection)
     terminal_state = projection.get("terminal_state")
     completeness = projection.get("source_completeness")
     return bool(

@@ -679,6 +679,49 @@ def test_rotated_vision_obligation_contains_all_three_acceptance_gaps() -> None:
     assert obligation["triggers"][2]["completed_todo_threshold"] == 5
 
 
+def test_admitted_vision_checkpoint_survives_a_new_periodic_review() -> None:
+    admission_runs = [_open_vision_after_prior_ack()]
+    arguments = {"state_text": STATE_TEXT, "agent_id": AGENT_ID, "goal_id": GOAL_ID}
+    admitted, _ = qualify_replan_writeback(newest_first_runs=admission_runs, **arguments)
+    assert admitted is not None
+    assert [trigger["kind"] for trigger in admitted["triggers"]] == [
+        "vision_acceptance_gap",
+        "vision_outcome_checkpoint_required",
+    ]
+
+    later_runs = [
+        {**run, "generated_at": f"2026-08-13T12:{index:02d}:00+08:00"}
+        for index, run in enumerate(_durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD))
+    ][::-1]
+    current, _ = qualify_replan_writeback(
+        newest_first_runs=[*later_runs, *admission_runs], **arguments,
+    )
+    assert current is not None
+    assert [trigger["kind"] for trigger in current["triggers"]] == ["periodic_review_due"]
+    assert current["obligation_id"] != admitted["obligation_id"]
+
+    bound = {
+        **arguments,
+        "newest_first_runs": [*later_runs, *admission_runs],
+        "guard_scoped": True,
+        "guard_semantic_replan_obligation_id": admitted["obligation_id"],
+        "receipt_bound_guard_recorded_at": "2026-08-13T11:28:00+08:00",
+        "receipt_bound_guard_turn_instance_id": "vision-before-periodic",
+    }
+    with pytest.raises(ReplanWritebackRejected, match="typed semantic delta"):
+        enforce_open_replan_writeback(**bound)
+    delta = enforce_open_replan_writeback(
+        **bound,
+        agent_vision={
+            "vision_patch": {"acceptance_summary": "An independent check supports continuing."},
+            "path_delta": {"outcome": "continue", "evidence_refs": ["evidence:checkpoint-review"]},
+        },
+    )
+    assert delta is not None
+    assert delta["obligation_id"] == admitted["obligation_id"]
+    assert delta["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
+
+
 def test_refresh_state_run_rejects_maintenance_after_vision_obligation_rotation(
     tmp_path: Path,
 ) -> None:

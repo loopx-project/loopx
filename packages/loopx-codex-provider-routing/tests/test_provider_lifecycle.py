@@ -187,12 +187,48 @@ def test_provider_doctor_checks_real_dependencies_and_does_not_start_unconfigure
     before = list(owner.root.iterdir())
     result = provider.doctor(owner)
     assert result["installation_ready"] and result["relay"]["state"] == "not_started"
+    assert result["adapter_readiness"] == {"state": "not_required", "ready": True}
     assert result["consumer_readiness"]["steward"]["state"] == "not_configured"
     assert result["same_relay_instance"] is None
     assert result["message_delivery_verified"] is False and list(owner.root.iterdir()) == before
     monkeypatch.setenv("PATH", "")
     with pytest.raises(Exception, match="node_unavailable"):
         provider.doctor(owner)
+
+
+def test_provider_doctor_rejects_stale_native_adapter_with_healthy_relay(owner, tmp_path, monkeypatch):
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    host = importlib.import_module("loopx_codex_provider_routing.native_host")
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    provider = importlib.import_module("loopx_codex_provider_routing.provider")
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text("")
+    fake_codex.chmod(0o700)
+    route = {"home": tmp_path / "codex-home", "frontend": tmp_path / "frontend"}
+    monkeypatch.setattr(host.native_app, "route", lambda *_: route)
+    original_which = host.shutil.which
+    monkeypatch.setattr(host.shutil, "which", lambda name: str(fake_codex) if name == "codex" else original_which(name))
+    current = host.discover()
+    stale = {**current, "pins": {**current["pins"], "native_account_store.py": "0" * 64}}
+    state = owner._load()
+    native.atomic(owner.path, {**state, "adapter": stale})
+    before = owner.path.read_bytes()
+    runtime = {"instance_id": "relay", "pid": 1, "build": "current"}
+    monkeypatch.setattr(life, "consumer_statuses", lambda _: {
+        name: {"state": "ready", "ready": True, "runtime": runtime} for name in ("worker", "steward")
+    })
+    monkeypatch.setattr(host.NativeHost, "status", lambda *_: pytest.fail("Probe must use adapter checks only"))
+
+    result = provider.doctor(owner)
+    assert result["same_relay_instance"] is True
+    assert result["installation_ready"] is False and result["ok"] is False
+    assert result["adapter_readiness"] == {"state": "adapter_changed", "ready": False}
+    assert owner.path.read_bytes() == before
+
+    native.atomic(owner.path, {**state, "adapter": current})
+    result = provider.doctor(owner)
+    assert result["adapter_readiness"] == {"state": "ready", "ready": True}
+    assert result["installation_ready"] and result["ok"]
 
 
 def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, monkeypatch):
@@ -243,6 +279,52 @@ def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, 
         assert code == 1
         assert {v["state"] for v in draining["consumer_readiness"].values()} == {"draining"}
         assert draining["same_relay_instance"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+@pytest.mark.parametrize("saved_policy", [
+    {},
+    {"policy": None},
+    {"policy": []},
+    {"policy": {"enabled": "true"}},
+], ids=["missing", "null", "list", "invalid-enabled"])
+@pytest.mark.parametrize("operation", ["doctor", "status"])
+def test_provider_readiness_reports_invalid_saved_policy(owner, tmp_path, monkeypatch, saved_policy, operation):
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    provider = importlib.import_module("loopx_codex_provider_routing.provider")
+    probe = native.NativeAccounts(tmp_path / "probe")
+    probe.root.mkdir(mode=0o700, parents=True)
+    native.atomic(probe.path, {"schema_version": native.SCHEMA, "adapter": {}, **saved_policy})
+    before = probe.path.read_bytes()
+    credentials = {"token": "worker-" + "w" * 32, "steward_token": "steward-" + "s" * 32}
+    server = relay.RelayServer(owner, {"port": 0, **credentials})
+    native.atomic(probe.root / "api-relay.json", {
+        "schema_version": relay.SCHEMA, "port": server.server_port, **credentials,
+    })
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    monkeypatch.setenv("PYTHONPATH", str(SRC))
+    command = [sys.executable, "-m", "loopx_codex_provider_routing.provider",
+               "--runtime-root", str(tmp_path / "probe")]
+    payload = None
+    if operation == "doctor":
+        command.append("--doctor")
+    else:
+        payload = json.dumps({"schema_version": provider.SCHEMA, "operation": "status"})
+    try:
+        result = subprocess.run(command, input=payload, capture_output=True, text=True, timeout=8)
+        assert result.returncode == 1 and not result.stderr, result.stderr
+        status = json.loads(result.stdout)
+        assert status["ok"] is False and status["installation_ready"] is False
+        assert status["adapter_readiness"] == {"state": "state_untrusted", "ready": False}
+        assert status["same_relay_instance"] is True
+        assert all(observation["ready"] for observation in status["consumer_readiness"].values())
+        assert probe.path.read_bytes() == before
+        assert all(token not in result.stdout for token in credentials.values())
     finally:
         server.shutdown()
         server.server_close()

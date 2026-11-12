@@ -286,6 +286,56 @@ interface RunnerFixture {
   heartbeatCalls: number
 }
 
+// Relevant scheduler fields emitted by hint.ts for a generic_cli human gate.
+function schedulerWaitHint() {
+  return {
+    schema_version: 'scheduler_hint_v0',
+    source: 'quota.should-run',
+    action: 'backoff_waiting_for_user',
+    cadence_class: 'human_gate',
+    unchanged_poll: {
+      limits: { local_scheduler: 3, codex_cli_tui: 3, claude_code_loop: 3 },
+      after_limits: {
+        local_scheduler: 'stop_tick_loop',
+        codex_cli_tui: 'update_goal_blocked_keep_loopx_active',
+        claude_code_loop: 'stop_loop',
+      },
+      final_quota_replan_check_enabled: true,
+      final_quota_replan_check_action: 'rerun_quota_should_run_once',
+    },
+    reset_policy: {
+      reset_token: 'scheduler-token',
+      host_state_key: 'scheduler_hint.reset_policy.reset_token',
+    },
+    cold_path_detail: {
+      schema_version: 'scheduler_hint_detail_v0',
+      source: 'quota.should-run',
+      local_scheduler: {
+        recommended_interval_minutes: 30,
+        max_interval_minutes: 120,
+        unchanged_poll_backoff_multiplier: 2,
+        example_progression_minutes: [30, 60, 120],
+        unchanged_poll_limit: 3,
+        after_limit: 'stop_tick_loop',
+        no_spend_for_cadence_change: true,
+      },
+    },
+  }
+}
+
+function schedulerClock() {
+  const timers: Array<{ callback: () => void; delay: number }> = []
+  return {
+    timers,
+    setTimeout(callback: () => void, delay: number) {
+      const timer = { callback, delay }
+      timers.push(timer)
+      return timer
+    },
+    clearTimeout() {},
+  }
+}
+
 function runnerFixture(options: {
   readonly quotaExitFailures?: number
   readonly heartbeatExitFailures?: number
@@ -293,6 +343,7 @@ function runnerFixture(options: {
   readonly waitMinutes?: number
   readonly schedulerMode?: 'poll' | 'stop' | 'missing'
   readonly unchangedPollLimit?: number
+  readonly schedulerHint?: () => Record<string, unknown>
   readonly quotaAgentId?: string
   readonly quotaTurnInstanceId?: string
   readonly heartbeatTurnInstanceId?: string
@@ -362,7 +413,7 @@ function runnerFixture(options: {
           : options.shouldRun ?? true
         const turnInstanceId = options.quotaTurnInstanceId
           ?? args[args.indexOf('--turn-instance-id') + 1]
-        const schedulerHint = shouldRun
+        const schedulerHint = options.schedulerHint?.() ?? (shouldRun
           ? { action: 'run_now' }
           : options.schedulerMode === 'stop'
             ? {
@@ -372,17 +423,19 @@ function runnerFixture(options: {
             : options.schedulerMode === 'missing'
               ? { action: 'wait' }
               : {
-                  action: 'wait',
+                  schema_version: 'scheduler_hint_v0',
+                  action: 'backoff_until_state_change',
                   reset_policy: { reset_token: 'scheduler-token' },
                   unchanged_poll: {
+                    limits: { local_scheduler: options.unchangedPollLimit ?? null },
+                  },
+                  cold_path_detail: {
+                    schema_version: 'scheduler_hint_detail_v0',
                     local_scheduler: {
                       recommended_interval_minutes: options.waitMinutes ?? 5,
-                      ...(options.unchangedPollLimit === undefined
-                        ? {}
-                        : { unchanged_poll_limit: options.unchangedPollLimit }),
                     },
                   },
-                }
+                })
         return {
           exitCode: shouldRun && !options.typedQuotaFailure ? 0 : 1,
           stdout: JSON.stringify({
@@ -1539,6 +1592,105 @@ describe('same-session LoopX driver', () => {
     expect(fixture.heartbeatCalls).toBe(0)
     expect(host.nextTurn).toHaveLength(0)
     await driver.dispose()
+  })
+
+  it('schedules detailed waits, stops at the limit and resets on a new token', async () => {
+    const hint = schedulerWaitHint()
+    let runnable = false
+    const fixture = runnerFixture({
+      shouldRun: () => runnable,
+      schedulerHint: () => hint,
+    })
+    const clock = schedulerClock()
+    const host = fakeAgent()
+    const driver = new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      clock,
+    })
+    try {
+      observeActivated(driver, host)
+      for (const [index, minutes] of [30, 60, 120].entries()) {
+        await waitFor(() => clock.timers.length === index + 1)
+        expect(clock.timers[index]?.delay).toBe(minutes * 60_000)
+        expect(fixture.quotaCalls[index]).toContain('--include-detail')
+        expect(fixture.quotaCalls[index]).toContain('scheduler')
+        clock.timers[index]?.callback()
+      }
+      await waitFor(() => fixture.quotaCalls.length === 4)
+      expect(clock.timers).toHaveLength(3)
+      expect(fixture.heartbeatCalls).toBe(0)
+      expect(host.nextTurn).toHaveLength(0)
+
+      hint.reset_policy.reset_token = 'changed-token'
+      await driver.evaluateActivatedSession({ agent: host.agent, session: host.agent.session })
+      expect(clock.timers).toHaveLength(4)
+      expect(clock.timers[3]?.delay).toBe(30 * 60_000)
+
+      runnable = true
+      clock.timers[3]?.callback()
+      await waitFor(() => host.nextTurn.length === 1)
+      expect(fixture.heartbeatCalls).toBe(1)
+      expect(clock.timers).toHaveLength(4)
+    } finally {
+      await driver.dispose()
+    }
+  })
+
+  it.each([45, 7_200])('bounds a detailed wait by recheck_after_seconds=%s', async seconds => {
+    const hint = schedulerWaitHint()
+    const fixture = runnerFixture({
+      shouldRun: false,
+      schedulerHint: () => ({
+        ...hint,
+        cold_path_detail: {
+          ...hint.cold_path_detail,
+          local_scheduler: {
+            ...hint.cold_path_detail.local_scheduler,
+            recheck_after_seconds: seconds,
+          },
+        },
+      }),
+    })
+    const clock = schedulerClock()
+    const host = fakeAgent()
+    const driver = new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true, clock })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => clock.timers.length === 1)
+      expect(clock.timers[0]?.delay).toBe(Math.min(30 * 60_000, seconds * 1_000))
+      expect(fixture.heartbeatCalls).toBe(0)
+    } finally {
+      await driver.dispose()
+    }
+  })
+
+  it.each([0, 1, null])('uses the compact unchanged-poll limit %s instead of the detail copy', async limit => {
+    const hint = schedulerWaitHint()
+    const fixture = runnerFixture({
+      shouldRun: false,
+      schedulerHint: () => ({
+        ...hint,
+        unchanged_poll: { ...hint.unchanged_poll, limits: { local_scheduler: limit } },
+      }),
+    })
+    const clock = schedulerClock()
+    const host = fakeAgent()
+    const driver = new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true, clock })
+    try {
+      observeActivated(driver, host)
+      const intervals = limit === null ? [30, 60, 120, 120] : [30].slice(0, limit)
+      for (const [index, minutes] of intervals.entries()) {
+        await waitFor(() => clock.timers.length === index + 1)
+        expect(clock.timers[index]?.delay).toBe(minutes * 60_000)
+        clock.timers[index]?.callback()
+      }
+      await waitFor(() => fixture.quotaCalls.length === intervals.length + 1)
+      expect(clock.timers).toHaveLength(intervals.length + (limit === null ? 1 : 0))
+    } finally {
+      await driver.dispose()
+    }
   })
 
   it('honors the typed unchanged-poll limit without an indefinite timer loop', async () => {

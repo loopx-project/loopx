@@ -275,3 +275,15 @@ def test_windows_interpreter_line_runs_a_real_executable(
 
     assert completed.returncode == 0, completed.stderr
     assert "loopx-interpreter-witness-ok" in completed.stdout
+
+
+@pytest.mark.parametrize("manager", ["pip", "pipx"])
+def test_standalone_core_upgrade_keeps_its_composition(manager):
+    command = python_distribution_upgrade_command(
+        owner=PythonInstallOwner(manager), python_executable=sys.executable,
+        doctor_command="loopx doctor", distribution_name="loopx-core",
+    )
+    assert command is not None and "loopx-core" in command.splitlines()[0]
+    assert "workflow-skills" not in command
+    assert "slash-commands" not in command
+    assert command.splitlines()[-1] == "loopx doctor"
