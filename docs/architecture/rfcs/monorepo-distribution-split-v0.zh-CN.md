@@ -2775,3 +2775,41 @@ V10 结论，也不批准 D2 或 minimal preset。
 和完整成本仍未完成。回滚路由切片时保留 task authority 并协调原始尝试。
 既有 exact-head 评审、premerge、双语要求、原始失败、预算及独立研究/发布授权
 继续有效。
+
+### 2026-11-13 — 启动元数据隔离与安装上下文恢复
+
+默认目标启动的帮助和预览此前只是为了渲染命令提示，就导入 issue-fix 执行、
+candidate preflight 和仓库分析。既有命令模板现在放在 capability 自有的元数据
+模块；bootstrap 与 catalog 消费它，workflow 模块保留原 Python 导入接口，显式
+issue-fix 路由仍带完整 preflight 契约。独立安装 base/head 的启动输出逐字节一致；
+默认帮助/预览的 LoopX 模块加载为 186→171，显式路由为 186→179。
+模块数量本身只证明加载边界缩小，不是速度收益结论。
+
+macOS arm64、Python 3.13.5、普通 OS/bytecode 缓存下，每项 workload 运行
+30 对交替的独立安装 base/head，首次入口的中位数/p95 为帮助
+314.73/362.55→181.25/303.01 ms，预览 542.36/670.44→311.08/572.66 ms。
+每进程随后两次调用的 warm 中位数为 0.66→0.54 ms 和 11.83→8.94 ms；
+峰值 RSS 中位数为 43.22→32.46 MB 和 46.05→36.18 MB。全部完整输出一致，
+预览仍为 52,727 字节。保留 head 预览最大值 1,092.15 ms。首次入口包含导入，
+本记录不属于 OS-cold 或完整 V10 资格。源码回归通过 348 项，1 项因缺少原生
+Windows/PowerShell 环境跳过；最终安装 wheel 通过 20 项。早期失败尝试仍保留。
+
+安装 CLI 验证通过既有 context-project/read/hook owner 交付完整源或明确恢复：
+关闭功能时保留原始值；部分交付和丢 ACK 不能建立基线；未变化/修订视图保留完整
+约束；独立 PostCompact 使基线失效；捕获文件被修改时拒绝读取。完整 delta framing
+更贵时，warm 传输可选择 full。同一测试也在原独立 core 安装上运行，资格化既有
+安装协议并补充回归边界，不新增上下文 owner。原生事件为夹具，不证明模型保留
+上下文或宿主采用。
+
+带追踪的 SQLite/File Turn witness 保留 Python、真实 Node loader 和 RPC 观察。
+选定 Turn 入口仍加载 525 个 Python 模块，其中 111 个 capability 模块；Node
+runtime 仍保留 eager 的共享 typed 支持。完整 work contract 与传输成本继续保留
+在清单中。本诊断不资格化 endpoint/网络完整性、OS-cold 成本、模型 token 或完整
+最小组合。保留早期检查失败及独立的启动/上下文边界；完整 V1–V5/V10、R1/M3、
+独立 Standard/workspace 包、安装宿主采用及覆盖原始目标的完整回归仍由既有
+owner 和验收约束保持开放。
+
+安装门暴露了 project skill 的支持示例链接离开安装包的问题。链接现在指向经字节
+核验的公开源文件，并固定不可变 revision；原流程、同意边界和检查范围条款保持
+原义。它是按需支持资料，不是 runtime fetch 或新 authority。早期安装门失败和
+受磁盘限制的 base 重放，与修复 head 的验证分别保留。
