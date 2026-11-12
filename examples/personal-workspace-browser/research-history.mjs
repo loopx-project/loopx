@@ -795,7 +795,7 @@ export const researchHistoryScenario = {
       assert.equal(await analysis.getByRole('tab', {name: /下一步实验/}).getAttribute('aria-selected'), 'true');
       await synthesisPage.setViewportSize({width: 1280, height: 900});
       const packBeforeHistory = new URL(synthesisPage.url()).searchParams.get('research_pack');
-      await analysis.getByRole('button', {name: 'Goal 研究历程', exact: true}).click();
+      await analysis.getByRole('button', {name: '研究历程', exact: true}).click();
       assert.equal(await analysis.count(), 0);
       assert.equal(new URL(synthesisPage.url()).searchParams.get('research_pack'), packBeforeHistory);
       await synthesisPage.waitForFunction(() => document.activeElement?.classList.contains('research-history-heading'));
@@ -807,12 +807,13 @@ export const researchHistoryScenario = {
       await synthesisPage.reload({waitUntil: 'domcontentloaded'});
       await synthesisPage.setViewportSize({width: 390, height: 844});
       await synthesisPage.getByRole('button', {name: 'Read deeper', exact: true}).click();
-      const english = synthesisPage.locator('.research-analysis');
+      const english = synthesisPage.getByRole('region', {name: 'Trajectory analysis', exact: true});
+      await english.waitFor();
       assert.match(await english.locator('.analysis-report-meta').innerText(), /3 research episodes.*Purposive sample/);
       await english.getByRole('button', {name: 'Analysis scope', exact: true}).focus();
       await synthesisPage.getByRole('tooltip').getByText('Agent analysis · uncalibrated', {exact: true}).waitFor();
       await synthesisPage.keyboard.press('Escape');
-      assert(await english.getByRole('button', {name: 'Goal research history', exact: true}).isVisible());
+      assert(await english.getByRole('button', {name: 'Research history', exact: true}).isVisible());
       const englishAccount = english.locator('.research-report-account').first();
       assert(await englishAccount.getByRole('heading', {name: 'Observation and evidence', exact: true}).isVisible());
       assert(await englishAccount.getByRole('heading', {name: 'Interpretation', exact: true}).isVisible());

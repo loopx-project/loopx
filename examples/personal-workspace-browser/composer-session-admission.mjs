@@ -199,9 +199,28 @@ export const composerSessionAdmissionScenario = {
       if (await composerInput.inputValue() !== nextManagerDraft) throw new Error("Returning lost the unsent request's text");
       await openGoalChat();
       if (new Set(adjustments.slice(0, 3).map(row => row.client_ingress_id)).size !== 1) throw new Error("Uncertain retries minted new ingress identities");
-      await composerInput.fill(instruction);
+      for (let attempt = 0; attempt < 20 && await composerInput.inputValue() !== instruction; attempt += 1) {
+        await composerInput.fill(instruction);
+        await page.waitForTimeout(50);
+      }
+      if (await composerInput.inputValue() !== instruction) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery retry could not stage its draft: statuses=${JSON.stringify(statuses)} draft=${JSON.stringify(await composerInput.inputValue())}`);
+      }
+      if (await sendButton.isDisabled()) throw new Error("Confirmed non-delivery retry was blocked before it reached steering");
       await composerInput.press("Meta+Enter");
-      await page.getByRole("status").filter({ hasText: "本次未送达" }).waitFor();
+      for (let attempt = 0; attempt < 100 && adjustments.length < 4; attempt += 1) await page.waitForTimeout(50);
+      if (adjustments.length < 4) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery retry did not reach steering: adjustments=${JSON.stringify(adjustments)} statuses=${JSON.stringify(statuses)} draft=${JSON.stringify(await composerInput.inputValue())}`);
+      }
+      try {
+        await page.getByRole("status").filter({ hasText: "本次未送达" }).waitFor();
+      } catch (error) {
+        const statuses = await page.getByRole("status").allTextContents().catch(() => []);
+        const feedbacks = await page.locator(".personal-action-feedback").allTextContents().catch(() => []);
+        throw new Error(`Confirmed non-delivery feedback did not render: adjustments=${JSON.stringify(adjustments)} statuses=${JSON.stringify(statuses)} feedbacks=${JSON.stringify(feedbacks)} draft=${JSON.stringify(await composerInput.inputValue())}`, { cause: error });
+      }
       await composerInput.press("Meta+Enter");
       await page.getByRole("status").filter({ hasText: "执行器已接收本轮追加指令" }).waitFor();
       if (adjustments[3].client_ingress_id === adjustments[4].client_ingress_id) throw new Error("Confirmed non-delivery could not retry after recovery");
