@@ -4,10 +4,11 @@
 
 <a href="https://trendshift.io/repositories/102379"><img src="https://trendshift.io/api/badge/repositories/102379" alt="LoopX — GitHub Trending #1，由 Trendshift 记录" width="220" height="48"></a>
 
-**让 Agent 把长程目标做成可验证的成果。**
+**从一个目标开始，让长程 Agent 工作可验证。**
 
-面向长程 Agent 团队的本地优先[语义控制面](https://loopx-project.github.io/loopx/blog/zh/from-one-shot-agents-to-long-horizon-control/#control-plane)与[研究工作台](#research-workbench)，跨会话、跨运行时延续工作。<br>
-<sub>持久保留目标、决策、分工与证据，连接你已经在用的 Codex、Claude Code、DeepSeek Harness 等运行时。</sub>
+告诉你已经在用的 Agent 想完成什么。LoopX 在幕后持久保留目标、
+工作、审批与证据，让下一轮会话可以继续，而不要求你先学会 LoopX 内部机制。<br>
+<sub>连接 Codex、Claude Code、DeepSeek Harness 等运行时。高级文档仍会展开本地优先语义内核、ownership 模型与研究工作台。</sub>
 
 [![Release](https://img.shields.io/github/v/release/loopx-project/loopx?color=brightgreen)](https://github.com/loopx-project/loopx/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![TypeScript core](https://img.shields.io/badge/core-TypeScript-3178C6?logo=typescript&logoColor=white)](docs/architecture/rfcs/typescript-control-plane-migration-v0.zh-CN.md) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
@@ -21,9 +22,9 @@
 
 <a id="快速开始"></a>
 
-## 两步开始
+## 从一个目标开始
 
-**1. 安装 LoopX 和 Agent 技能。** 需要 Python 3.11+、Node.js 22.22.3+（推荐 24 LTS）。
+**1. 安装一次 LoopX。** 需要 Python 3.11+、Node.js 22.22.3+（推荐 24 LTS）。
 
 ```bash
 python3 -m pip install --upgrade loopx && loopx workflow-skills --install
@@ -31,13 +32,14 @@ python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 
 [其他安装方式与升级说明](docs/guides/installing-loopx.md)
 
-**2. 给 Agent 一个具体任务。** 重启 Agent 宿主，打开项目，再在 Codex 对话中输入：
+**2. 告诉 Agent 你想要的结果。** 重启 Agent 宿主，打开项目，再发送一个自然语言目标：
 
 ```text
 $loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 ```
 
-Claude Code 使用 `/loopx <复杂任务>`；其他运行时见[宿主接入](#从你已经在用的-agent-启动)。
+LoopX 会按需把它变成可见的任务、决策门和证据。Claude Code 使用
+`/loopx <复杂任务>`；其他运行时见[宿主接入](#从你已经在用的-agent-启动)。
 想跟着教程试一次？[选择一个入门任务](#试用-loopx)。
 
 ## 📰 最新动态
@@ -59,6 +61,9 @@ Claude Code 使用 `/loopx <复杂任务>`；其他运行时见[宿主接入](#�
 [全部发布记录](https://github.com/loopx-project/loopx/releases)
 
 ## 为什么需要 LoopX
+
+第一次有用动作之前，你不需要先学会 LoopX 内部机制。默认路径是目标优先：
+描述结果，让 Agent 准备计划；只有决策或调试需要时，再查看背后的机制。
 
 一个 Agent 可以在单次会话里完成任务。长程工作更难：目标会变化，用户决策会出现，
 证据会过期，多个 Agent 会交接。定时器能让任务继续运行，却不能保证仍在做有用的工作。

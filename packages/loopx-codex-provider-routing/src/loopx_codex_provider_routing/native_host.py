@@ -129,21 +129,26 @@ def discover(*, user_home: Path | None = None) -> dict:
             "profile": {key: str(value) for key, value in profile.items()}}
 
 
+def checked_adapter(adapter: dict, home: Path) -> tuple[Path, dict]:
+    if adapter.get("owner") != OWNER:
+        raise HostError("adapter_changed")
+    source = Path(__file__).parent
+    for name in OWNER_FILES:
+        if hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest() != adapter["pins"][name]:
+            raise HostError("adapter_changed")
+    codex = trusted_file(Path(adapter["codex"]))
+    spec = native_app.route(home, "gpt")
+    if {key: str(value) for key, value in spec.items()} != adapter.get("profile"):
+        raise HostError("adapter_changed")
+    return codex, spec
+
+
 class NativeHost:
     def __init__(self, adapter: dict, *, user_home: Path | None = None, reconcile_services: bool = True):
-        if adapter.get("owner") != OWNER:
-            raise HostError("adapter_changed")
-        source = Path(__file__).parent
-        for name in OWNER_FILES:
-            if hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest() != adapter["pins"][name]:
-                raise HostError("adapter_changed")
-        self.codex = trusted_file(Path(adapter["codex"]))
+        self.home = user_home or Path.home()
+        self.codex, self.spec = checked_adapter(adapter, self.home)
         self.apps = native_app
         self.accounts = native_account_store
-        self.home = user_home or Path.home()
-        self.spec = self.apps.route(self.home, "gpt")
-        if {key: str(value) for key, value in self.spec.items()} != adapter.get("profile"):
-            raise HostError("adapter_changed")
         self.expected = None
         self.not_after = None
 

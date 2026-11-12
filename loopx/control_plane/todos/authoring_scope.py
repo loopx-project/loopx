@@ -69,16 +69,22 @@ def require_user_todo_task_class(
     }, registered_agents=[], goal_id="")
 
 
+# Status asks the canonical reader for these same facts. Keep the wire
+# projection and the standalone diagnostics adapter on one field inventory.
+TODO_CONTRACT_DIAGNOSTIC_FIELDS = (
+    "todo_id", "role", "status", "task_class", "blocks_agent", "global_gate",
+    "bound_agent", "goal_bound", "claimed_by", "excluded_agents",
+    "removed_continuation_policy", "archive_state",
+)
+
+
 def todo_contract_diagnostics(
     *, todos: list[dict[str, Any]], registered_agents: list[str],
     terminal_statuses: set[str] | frozenset[str],
 ) -> dict[str, Any]:
     """Read-only canonical Todo diagnostics; the shared TS owner keeps the rule."""
     # Transport only bounded semantic facts, never narrative text.
-    fields = ("todo_id", "role", "status", "task_class", "blocks_agent",
-              "global_gate", "bound_agent", "goal_bound", "claimed_by",
-              "excluded_agents", "removed_continuation_policy", "archive_state")
-    rows = [{field: todo.get(field) for field in fields} for todo in todos]
+    rows = [{field: todo.get(field) for field in TODO_CONTRACT_DIAGNOSTIC_FIELDS} for todo in todos]
     diagnostics: list[dict[str, Any]] = []
     checked = 0
     for offset in range(0, len(rows), 512):

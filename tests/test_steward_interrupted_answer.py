@@ -244,6 +244,61 @@ def test_original_native_code_action_result_survives_later_timeout_without_repla
     assert [method for method, _ in language_server["calls"]].count("SendUserCascadeMessage") == 1
 
 
+@pytest.mark.parametrize("embedded", ["complete", "short", "foreign", "wrong_input", "missing_payload"])
+def test_native_running_poll_reuses_only_complete_steps_for_the_current_input(
+    tmp_path, language_server, monkeypatch, embedded,
+):
+    from test_antigravity_steward_adapter import adapter_for, _native_clock, _native_frames
+
+    adapter = adapter_for(tmp_path)
+    older_input = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+        "userInput": {"items": [{"text": "An earlier request"}]}}
+    frames = _native_frames()
+    for frame in frames:
+        for index, step in enumerate(frame["steps"], start=1):
+            step["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = index
+        frame["steps"].insert(0, deepcopy(older_input))
+    _native_clock(monkeypatch, language_server, frames)
+    rpc = native._rpc_post
+    detail_reads = []
+
+    def read(url, csrf, method, payload, timeout):
+        result = rpc(url, csrf, method, payload, timeout=timeout)
+        if method == "GetCascadeTrajectorySteps":
+            detail_reads.append(language_server["frame"]["status"])
+        if method != "GetCascadeTrajectory":
+            return result
+        if not language_server["sent_count"]:
+            return {**result, "numTotalSteps": 1}
+        steps = deepcopy(language_server["frame"]["steps"])
+        steps[1]["userInput"] = {"items": [{"text": language_server["inputs"][0]["text"]}]}
+        trajectory = {**result["trajectory"], "steps": steps}
+        if result["status"] == "CASCADE_RUN_STATUS_IDLE":
+            steps[-1]["plannerResponse"]["response"] = "Stale embedded final"
+        elif embedded == "short":
+            steps.pop(0)
+        elif embedded == "foreign":
+            trajectory["cascadeId"] = "unrelated-cascade"
+        elif embedded == "wrong_input":
+            steps[1]["userInput"]["items"][0]["text"] = "Another invocation"
+        elif embedded == "missing_payload":
+            steps[-1].pop("plannerResponse")
+        return {**result, "trajectory": trajectory}
+
+    monkeypatch.setattr(native, "_rpc_post", read)
+    events = []
+    result = adapter.start_turn("Return the original result", event_sink=lambda kind, data: events.append((kind, data)))
+    assert result["message"] == "native final"
+    assert any(kind == "answer.delta" and "progress" in data["text"] for kind, data in events)
+    assert "Stale embedded final" not in json.dumps(events)
+    assert detail_reads.count("CASCADE_RUN_STATUS_IDLE") == 1
+    assert detail_reads.count("CASCADE_RUN_STATUS_RUNNING") == (0 if embedded == "complete" else 4)
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert "CancelCascadeInvocation" not in methods
+
+
 @pytest.mark.parametrize("hard_limit, native_error", [(None, True), (150.0, True), (None, False)])
 def test_native_timeout_reports_its_clock_without_extending_native_retry(
     tmp_path, language_server, monkeypatch, hard_limit, native_error,
@@ -280,6 +335,49 @@ def test_native_timeout_reports_its_clock_without_extending_native_retry(
     assert "NATIVE_PRIVATE_SENTINEL" not in serialized and "/private/host" not in serialized
     errors = [data for kind, data in events if data.get("method") == "native/error"]
     assert len(errors) == diagnostic["native_error_count"]
+
+
+def test_original_steward_observes_native_work_at_idle_deadline_and_replies_once(
+    steward, language_server, monkeypatch,
+):
+    from test_antigravity_steward_adapter import _native_clock
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    _, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward")
+    runtime.hard_timeout_sec = None
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    previous = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_DONE"}
+    resumed = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_RUNNING"}
+    finished = {**resumed, "status": "CORTEX_STEP_STATUS_DONE"}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "plannerResponse": {"response": "Original answer", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1, "steps": [user, previous], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 302, "steps": [user, previous], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 302.01, "steps": [user, previous, resumed], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 304, "steps": [user, previous, finished, final], "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+
+    source = provider.event("steward-app", "idle-deadline-source", "Finish this request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    done = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+
+    assert done["status"] == "completed" and done["response"]["message"] == "Original answer"
+    assert transport.reconcile() == 1
+    delivery = json.loads((transport.root / f"{ref}.json").read_text())["deliveries"]["terminal"]
+    assert delivery["verified"] and delivery["text"] == done["response"]["message"]
+    returned = provider.messages[delivery["attempt"]["message_ref"]]
+    assert returned["chat_id"] == source["chat_id"]
+    assert "Original answer" in json.dumps(returned["body"])
+    assert transport.reconcile() == 0
+    assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+    assert not language_server["cancelled"].is_set()
 
 
 @pytest.mark.parametrize("kind, expected", [
@@ -450,6 +548,112 @@ def test_idle_native_error_keeps_only_unsettled_work_cancellable(
     assert methods.count("CancelCascadeInvocation") == int(cancellation_needed)
     assert ("cancellation remains unconfirmed" in str(error)) is cancellation_needed
     assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
+
+
+def _native_frames_after_cleared_error(*, answer_at=20, show_error=False):
+    from test_antigravity_steward_adapter import _native_frames
+
+    original, answer = _native_frames()[-1]["steps"]
+    error = {
+        "type": "CORTEX_STEP_TYPE_ERROR_MESSAGE",
+        "status": "CORTEX_STEP_STATUS_CLEARED",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+        "errorMessage": {
+            "shouldShowUser": show_error,
+            "error": {"shortError": "Synthetic upstream EOF"},
+        },
+    }
+    answer["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+    idle = "CASCADE_RUN_STATUS_IDLE"
+    return [
+        {"at": 10, "status": idle, "steps": [original, error]},
+        {"at": answer_at if answer_at is not None else 311, "status": idle,
+         "steps": [original, error, answer] if answer_at is not None else [original, error]},
+    ]
+
+
+def test_steward_returns_original_reply_after_cleared_native_error(steward, language_server, monkeypatch):
+    from test_antigravity_steward_adapter import _native_clock
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    _, runtime, provider, transport, binding, _, _ = steward
+    binding = transport.bindings.configure(
+        transport_ref="steward-app", project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity", context_kind="steward",
+    )
+    _native_clock(monkeypatch, language_server, _native_frames_after_cleared_error())
+    source = provider.event("steward-app", "cleared-native-error", "Complete this original request")
+    transport.admit("steward-app", source)
+    ref = identity_ref(binding["provider_ref"], source["message_id"])
+    row = transport.core.read_request(ref)
+    completed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=8)
+    assert completed["status"] == "completed"
+    assert completed["response"]["message"] == "native final"
+    assert transport.reconcile() == 1
+    saved = json.loads((transport.root / f"{ref}.json").read_text())
+    terminal = saved["deliveries"]["terminal"]
+    assert terminal["verified"]
+    reply = provider.messages[terminal["attempt"]["message_ref"]]
+    assert reply["chat_id"] == source["chat_id"]
+    assert "native final" in json.dumps(reply["body"])
+    assert transport.reconcile() == 0
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert "CancelCascadeInvocation" not in methods
+
+
+@pytest.mark.parametrize("answer_at, hard_limit, timeout_kind", [
+    (None, None, "idle"),
+    (20, 15, "hard"),
+])
+def test_cleared_native_error_does_not_extend_deadline(
+    tmp_path, language_server, monkeypatch, answer_at, hard_limit, timeout_kind,
+):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.capabilities.native_chat import antigravity_adapter
+    from loopx.chat_agent import CodexChatAgentError
+
+    frames = _native_frames_after_cleared_error(answer_at=answer_at)
+    idle_boundary = frames[-1]["at"]
+    _native_clock(monkeypatch, language_server, frames)
+    rpc_post = antigravity_adapter._rpc_post
+    final_reads = 0
+
+    def bounded_read(url, token, method, args, **kwargs):
+        nonlocal final_reads
+        if (timeout_kind == "idle" and method == "GetCascadeTrajectory"
+                and language_server["active"] and language_server["now"] >= idle_boundary):
+            final_reads += 1
+            if final_reads > 1:
+                pytest.fail("An unchanged cleared error started another final idle observation")
+        return rpc_post(url, token, method, args, **kwargs)
+
+    monkeypatch.setattr(antigravity_adapter, "_rpc_post", bounded_read)
+    adapter = adapter_for(tmp_path, hard_timeout_sec=hard_limit)
+    events = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("Complete this original request", lambda kind, data: events.append((kind, data)))
+    assert raised.value.error_code == "response_timeout"
+    assert raised.value.native_error_info["timeout"]["kind"] == timeout_kind
+    assert not any(kind in {"turn.native_result", "answer.final"} for kind, _ in events)
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == 1
+
+
+def test_user_visible_cleared_native_error_keeps_failure(tmp_path, language_server, monkeypatch):
+    from test_antigravity_steward_adapter import _native_clock, adapter_for
+    from loopx.chat_agent import CodexChatAgentError
+
+    _native_clock(monkeypatch, language_server, _native_frames_after_cleared_error(show_error=True))
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("Complete this original request")
+    assert raised.value.error_code == "antigravity_step_error"
+    assert raised.value.native_error_info == {"shortError": "Synthetic upstream EOF"}
+    methods = [method for method, _ in language_server["calls"]]
+    assert methods.count("SendUserCascadeMessage") == 1
+    assert methods.count("CancelCascadeInvocation") == 1
 
 
 def test_settled_native_error_releases_core_for_independent_input(tmp_path, language_server):

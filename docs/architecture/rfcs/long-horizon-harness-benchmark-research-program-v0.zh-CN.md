@@ -430,6 +430,14 @@ counter；严格完整会话行为仍是默认。在 main `5550e91bab` 检查点
 provider 计费完整或匹配研究收益。通过既有 Research 阅读入口呈现这些边界，不另建
 成本账本，也不把字节变化换算成已测节省。
 
+**面向 Agent 的 harness 与规划改动决策准则。** 评估任何候选 harness、上下文策略或
+规划机制时，统一以**完整预算记账**下的净终局原生验收成果
+$\Delta J(B \mid s_0) = \mathbb{E}[Y_B^\pi - Y_B^{\pi_0} \mid s_0]$ 为准：模型／上下文处理、
+控制面与协议税（RPC 往返、必填表单仪式、治理提示词）、checkpoint 构建、yardstick 造尺／修尺，
+以及评测／确认计算和冷却等待均计入成本；将负结果、无差异结果和信息不足实验原样保留在分母中；
+优先构建可恢复的静默同状态 checkpoint 反事实接续（$\tau_B(s; a, a_0, \pi)$），而非根据混淆起点状态的
+观察动作日志做无归因微调。
+
 ### 6.3 长程控制质量
 
 - 物质等价 work-slice 的重复次数；
@@ -805,6 +813,28 @@ causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablati
 源码交付和模型采用只验证路径，不证明效果。双会话 Controller/Worker、数值 fidelity
 引擎和学习型策略均非前置条件。后续 schema 修改要有已观察到的 producer/consumer 缺口。
 
+<a id="action-value-episode"></a>
+
+#### 动作价值证据的片段读回
+
+首个实现切片应从前瞻选定的有意义决策点，展示一个可接续的真实片段：
+**当时状态 → 事前预测与选择 → 实际工作／消耗 → 返回证据及下一决定 → 冻结终局**。
+数据语义见[研究说明 §9](../../research/budgeted-research-planning.zh-CN.md#action-value-evidence)，
+owner 与负例见[联合 RFC §5.9、C17–C18](target-yardstick-stride-decisions-v0.zh-CN.md#policy-evolution)。
+复用已有 plan/finding/measurement/followthrough；原记录缺失时报告不能恢复，
+不事后补造预测，不为补齐片段增加模型或 Native 调用。采集与分析开销进入完整成本。
+若全程尚未结束，终局先保留为待关联，在预定终点结算；不为完成读回追加一轮运行。
+
+读回需要明确关键预测有没有被支持或推翻，以及实际下一段工作如何处理它；
+有据继续原计划也是采用。两小时后的局部涨分不能充当十八小时终局标签，
+未选路线没有结果也不填零。延迟增益保留相关工作链，而非全部归给最后一次 switch。
+
+这条读回证明的是关联与可分析性；合成示例可验证缺失／迟到／修订处理，不能替代真实采用。
+正式比较保留全部预选片段，包括失败、取消、无收益和证据不足，避免只展示成功故事。
+分别报告预测校准、采用与决策变化、同状态配对差异、从头终局及新任务收益；
+前一层通过不自动使后一层通过。学习／校准留出隔离任务、来源 run 或同父分叉家族，
+仍沿用下述 pilot 与完整预算合同，不另起一套实验或放宽反馈权限。
+
 #### 可负担的条件效应 pilot
 
 先选三个互补任务类型，使用固定 upstream 版本的任务名称：
@@ -825,13 +855,19 @@ causal credit。给出强 utility 前必须做 holdout replay 或 bounded ablati
 checkpoint 规则和分配都在结果产生前选定，不挑有利峰值。小 pilot 用于筛查机制，
 不足以单独支持一般性收益结论；启动前冻结资源上限。
 
-沿用[同状态接续边界](hierarchical-agent-stride-control-v0.zh-CN.md#matched-research-continuation)：
-复制 workspace 不等于共享 research state。候选/frontier、已验收 incumbent、证据、
-memory、待返回结果、可用预算及 native 提交历史/cooldown 必须可等价恢复，同时使用
-新的 run 身份并继承不可变来源关联。优先选无待处理结果的 checkpoint 以减少歧义。
-[适配器](../../../benchmark/edgebench/README.md)目前不保证 native judge 重启/cooldown
-连续性；准入配对前验证所需恢复接缝。若不可用，则改成从头匹配比较并报告真实预算，
-不能把新注册会话称为 checkpoint fork；这不要求先构建通用 replay 平台。
+沿用[同状态接续边界](hierarchical-agent-stride-control-v0.zh-CN.md#matched-research-continuation)
+估计同状态反事实差异
+$\tau_B(s; a, a_0, \pi) = \mathbb{E}[Y_B^{a,\pi} - Y_B^{a_0,\pi} \mid S_0 = s]$，
+而非用混淆了起点状态的观察频率给动作排序：复制 workspace 不等于共享 research state。
+候选/frontier、已验收 incumbent、证据、memory、待返回结果、可用预算及 native 提交历史/cooldown
+必须可等价恢复，同时使用新的 run 身份并继承不可变来源关联。优先选无待处理结果的静默 checkpoint
+以减少歧义。[适配器](../../../benchmark/edgebench/README.md)目前不保证 native judge 重启/cooldown
+连续性（已合入 `main` 的 [#8499](https://github.com/loopx-project/loopx/pull/8499) 及
+C1 集成分支上的 [#8480](https://github.com/loopx-project/loopx/pull/8480) 仅验证带受信
+`--validation-command-json` 的单 worker `--worker turn-resume` 执行与原唤醒恢复，不构成
+checkpoint 分叉恢复证明）；准入配对前验证所需恢复接缝。
+若不可用，则改成从头匹配比较并报告真实预算，不能把新注册会话称为 checkpoint fork；
+这不要求先构建通用 replay 平台。
 
 保留 native cooldown 和终局选择。如果三小时容不下有用的多步路线及协议允许的确认，
 将 pilot 标为信息不足，为下一次预注册实验调整时长，不放宽 cooldown 或事后增加
@@ -1075,6 +1111,13 @@ context，并移除共享 benchmark 规划策略前缀。保留简短的目标�
 Blind 与 best-only 提示按已解析的 runner 间隔保留自动采样说明，不扩大各模式声明的反馈范围。
 这是新 run 的行为变化，须独立于反馈模式固定版本。提示交付和读回只验证工程边界；能否更早
 获得有用反馈、能否改善结果，仍是尚未验证的 E3 研究问题。
+
+已合入 `main` 的 [#8499](https://github.com/loopx-project/loopx/pull/8499) 补齐了
+EdgeBench 显式单 worker `--worker turn-resume` 入口（配合受信 `--validation-command-json`，
+沿既有 journal、校验与结算通过原唤醒恢复丢失回复，同时保持默认 runner 与 schema 不变；
+[#8480](https://github.com/loopx-project/loopx/pull/8480) 记录对应的 C1 集成分支验证）。
+这只验证 E1/E2 执行与恢复接缝；不证明 §8.7 所需的静默 checkpoint 分叉恢复等价、E3/C2 匹配预算净收益
+（$\Delta J(B \mid s_0) > 0$），也不代表 C1 默认 schema 切换。
 
 ### 11.3 必需的 delivery slice
 

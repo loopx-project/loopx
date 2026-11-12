@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
-import {initialContextReadPointers, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
+import {contextReadSectionDigests, initialContextReadPointers,
+  progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
 const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owner_agent_id: "a", todo_ids: ["t"],
@@ -95,6 +96,48 @@ test("unknown and failed source semantics remain whole rather than becoming gues
     interaction_contract: {agent_channel: {work_context: {sources: [custom]}}}}});
   assert.deepEqual(plan.instructions, []);
   assert.deepEqual(plan.deferred, []);
+});
+
+test("selected Todo append proofs require an exact current-source prefix", () => {
+  const note = "Keep the complete acceptance evidence. ".repeat(40);
+  const context = (value: string, source = "provider") => ({
+    goal_id: "goal", registry: "registry", runtime_root: "runtime",
+    selected_todo: {todo_id: "todo"},
+    interaction_contract: {agent_channel: {work_context: {
+      selected_todo_text_verified: true,
+      sources: [{source: "selected_todo", content: {ok: true, matched: true, ambiguous: false,
+        source, todo: {todo_id: "todo", note: value},
+        authority_read: {decision_read_from_provider: true, legacy_fallback_used: false,
+          source_authority: "provider"}}}]}}},
+  });
+  const path = ["interaction_contract", "agent_channel", "work_context", "sources", 0,
+    "content", "todo", "note"];
+  const address = "/interaction_contract/agent_channel/work_context/sources/0/content/todo/note";
+  const section = (value: string, consumed?: string, append?: {pointer: string; prefix_bytes: number},
+      source = "provider") => contextReadSectionDigests({context: context(value, source),
+    ...(consumed === undefined ? {} : {consumed_pointers: {[address]: consumed}}),
+    ...(append === undefined ? {} : {observed_text_append: append})},
+    consumed === undefined ? [path] : [])[address];
+
+  const original = section(note)!;
+  assert.match(original, /^\d+:[a-f0-9]{64}$/);
+  assert.equal(original.split(":")[0], String(Buffer.byteLength(note)));
+  const suffix = "Appended requirement.";
+  const appended = note + suffix;
+  const current = section(appended, original,
+    {pointer: address, prefix_bytes: Buffer.byteLength(note)});
+  assert.match(current!, /^\d+:[a-f0-9]{64}$/);
+  assert.deepEqual(section(appended, original,
+    {pointer: address, prefix_bytes: Buffer.byteLength(note) - 1}), undefined);
+  assert.equal(section(`Replacement. ${note}`, original,
+    {pointer: address, prefix_bytes: Buffer.byteLength(note)}), undefined);
+  assert.equal(section(appended, original,
+    {pointer: address, prefix_bytes: Buffer.byteLength(note)}, "other-provider"), undefined);
+
+  const legacy = original.slice(original.indexOf(":") + 1);
+  assert.match(section(note, legacy)!, /^\d+:[a-f0-9]{64}$/);
+  assert.equal(section(appended, legacy,
+    {pointer: address, prefix_bytes: Buffer.byteLength(note)}), undefined);
 });
 
 test("exact repeated Todo rows preserve membership without collapsing distinct evidence or revisions", () => {

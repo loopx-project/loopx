@@ -871,8 +871,9 @@ def _review_conclusion(
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion}
             for review, conclusion in zip(reviews, conclusions)]})
-    return cast(dict[str, Any], conclusions[selection["index"]] | ({"independent_review": selection["independent_review"]}
-        if "independent_review" in selection else {}))
+    index = cast(int, selection["index"])
+    return conclusions[index] | ({"independent_review": selection["independent_review"]}
+        if "independent_review" in selection else {})
 
 
 def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]:

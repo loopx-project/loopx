@@ -24,6 +24,8 @@ def observed_first_read_reference(directory: str, target: dict[str, Any], recove
     opening = ({"path": reference["path"], "content": content,
                 "reused": plan["reused"], "remaining": plan["linked_remaining"]}
                if "linked_remaining" in plan and "remaining" in initial else None)
+    if opening is not None and "text_append" in plan:
+        opening["text_append"] = plan["text_append"]
     return reference, opening
 
 
@@ -31,8 +33,14 @@ def observed_remaining_read_reference(directory: str, target: dict[str, Any], re
                                       context: dict[str, Any], opening: dict[str, Any],
                                       ordinary_remaining: dict[str, Any]) -> Path | None:
     """Bind the smaller remainder to the original observation and fallback."""
+    remaining, reused = opening["remaining"], opening["reused"]
+    if "text_append" in opening and "text_append" not in remaining:
+        reused = {pointer: proof for pointer, proof in reused.items()
+                  if pointer != opening["text_append"]["pointer"]}
+    if not reused:
+        return None
     pinned = _pin_observed_selection(directory, target, recovery, context,
-        {**opening["remaining"], "reused": opening["reused"]}, ordinary_remaining)
+        {**remaining, "reused": reused}, ordinary_remaining)
     return Path(pinned[0]["path"]) if pinned is not None else None
 
 
@@ -42,6 +50,11 @@ def _pin_observed_selection(directory: str, target: dict[str, Any], recovery: di
     try:
         path, digest = Path(recovery["path"]), recovery["sha256"]
         observation = {"directory": directory, "target": target, "fields": plan["reused"]}
+        if "text_append" in plan:
+            append = plan["text_append"]
+            if append["pointer"] not in plan["reused"] or ordinary_plan is None:
+                return None
+            observation["text_append"] = append
         selections = plan.get("selections")
         if ordinary_plan is not None:
             ordinary = ordinary_plan["selections"]

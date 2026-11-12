@@ -56,7 +56,7 @@ def register_benchmark_trajectory_commands(subparsers, add_format) -> None:
     )
     register.add_argument(
         "--include-incomplete-usage", action="store_true",
-        help="Observe persisted counters through an unfinished final Turn; requires usage capture. Does not establish complete cost or solver termination.",
+        help="Observe persisted counters from interrupted or unfinished Turns. Requires a usage capture. Unpersisted usage remains unknown.",
     )
     register.add_argument(
         "--native-outcomes-json",

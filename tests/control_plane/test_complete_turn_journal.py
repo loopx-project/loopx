@@ -1,6 +1,7 @@
 """Complete-source integrity must survive every journal read/write boundary."""
 from copy import deepcopy
 import json
+import sys
 
 import pytest
 
@@ -132,7 +133,9 @@ def test_complete_journal_readers_and_writer_refuse_source_drift(complete_journa
 
 
 def test_complete_journal_keeps_numeric_source_and_historical_decoder(complete_journal):
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 
     project, runtime, registry, journal = complete_journal
     plan = journal["plan"]
@@ -146,6 +149,8 @@ def test_complete_journal_keeps_numeric_source_and_historical_decoder(complete_j
     identity = plan["transaction"]["settlement_plan"]["identity"]
     path = turn_journal_path(runtime, goal_id=GOAL_ID, turn_key=key)
     path.parent.mkdir(parents=True, exist_ok=True)
+    journal["plan"] = plan = prepare_turn_decision_capture(plan, journal_path=path,
+        decision=contract, existing_journal=False)
     written = write_turn_journal(str(path), journal, expected_effect_id=identity["effect_id"])
     assert written["appended"] is True
     assert json.loads(path.read_text())["plan"]["work_contract"]["future_measurements"] == [1.0, -0.0, 2**60 + 1]
@@ -174,14 +179,26 @@ def test_complete_journal_keeps_numeric_source_and_historical_decoder(complete_j
         with pytest.raises(ValueError, match="complete Turn plan requires one source"):
             load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
                 agent_id=AGENT_ID, turn_key=key)
-        historical["plan"] = _journal_plan(contract, legacy=True, goal_ref=plan.get("goal_ref"))
-    historical["plan"].pop("work_contract")
-    path.write_text(json.dumps(historical))
-    original_bytes = path.read_bytes()
+        path.write_bytes(before)
+
+    # A separate, genuine raw-source capture exercises the old decoder. Keep
+    # the original complete observation bound to its own Turn.
+    historical_plan = build_loopx_turn_plan(build_turn_envelope(source),
+        host="generic-cli", execution_mode="isolated-headless", turn_instance_id="historical-journal-source",
+        goal_ref=plan.get("goal_ref"))
+    historical_key = historical_plan["transaction"]["turn_key"]
+    historical_path = turn_journal_path(runtime, goal_id=GOAL_ID, turn_key=historical_key)
+    historical["turn_key"] = historical_key
+    historical["plan"] = prepare_turn_decision_capture(historical_plan, journal_path=historical_path,
+        decision=source, existing_journal=False)
+    assert "work_contract" not in historical["plan"]
+    historical_path.write_text(json.dumps(historical))
+    original_bytes = historical_path.read_bytes()
     assert load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
-        agent_id=AGENT_ID, turn_key=key) == historical["plan"]
-    assert _inspect(project, runtime, registry, key)["journal_consistent"] is True
-    assert path.read_bytes() == original_bytes
+        agent_id=AGENT_ID, turn_key=historical_key) == historical["plan"]
+    assert _inspect(project, runtime, registry, historical_key)["journal_consistent"] is True
+    assert historical_path.read_bytes() == original_bytes
+    assert path.read_bytes() == before
 
 
 def test_cli_resume_refuses_changed_complete_source_without_rewriting_history(complete_journal):
@@ -201,6 +218,52 @@ def test_cli_resume_refuses_changed_complete_source_without_rewriting_history(co
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
         assert code == 1 and result["ok"] is False, result
         assert path.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("complete_journal", [("file", True), ("sqlite", True)], indirect=True)
+def test_legacy_journal_refuses_unknown_recorded_versions(complete_journal):
+    from loopx.control_plane.turn_driver.transaction import TRANSACTION_PHASES
+
+    project, runtime, registry, journal = complete_journal
+    journal["plan"].pop("work_contract")
+    journal.update(status="committed", completed_phases=list(TRANSACTION_PHASES))
+    key = journal["turn_key"]
+    path = turn_journal_path(runtime, goal_id=GOAL_ID, turn_key=key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(journal))
+    resume = ("turn", "run-once", "--resume-turn-key", key,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--host", "generic-cli",
+        "--execution-mode", "isolated-headless", "--project", str(project),
+        "--host-command-json", json.dumps([sys.executable, "-c", "raise SystemExit(99)"]))
+
+    code, result = _run_cli(registry, runtime, *resume, cwd=project)
+    assert code == 0 and result["status"] == "preview", result
+    assert _inspect(project, runtime, registry, key)["journal_consistent"] is True
+
+    for fields in (
+        ("schema_version",),
+        ("turn_envelope", "schema_version"),
+        ("turn_envelope", "action_signature", "schema_version"),
+        ("turn_envelope", "action_signature", "coverage"),
+    ):
+        invalid = deepcopy(journal)
+        carrier = invalid["plan"]
+        for field in fields[:-1]:
+            carrier = carrier[field]
+        carrier[fields[-1]] = "future_unsupported"
+        path.write_text(json.dumps(invalid))
+        saved = path.read_bytes()
+
+        observed = _inspect(project, runtime, registry, key)
+        assert observed["journal_consistent"] is False, fields
+        assert "work_contract_invalid" in observed["violations"]
+        assert observed["recovery_decision"]["action"] == "blocked"
+        assert observed["effects"] == []
+        for flags in ((), ("--execute",)):
+            code, rejected = _run_cli(registry, runtime, *resume, *flags, cwd=project)
+            assert code == 1 and rejected["ok"] is False, (fields, rejected)
+            assert "unsupported Turn" in rejected["error"], rejected
+        assert path.read_bytes() == saved
 
 
 def test_managed_retry_reads_complete_source_with_original_numbers(complete_journal):
