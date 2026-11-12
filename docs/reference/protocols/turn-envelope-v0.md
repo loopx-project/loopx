@@ -943,6 +943,16 @@ identity, step conditions, authority and one-spend semantics are unchanged.
 补结算命令保持一致。填充占位项后直接执行，检查退出码和 JSON `ok`；不再需要
 手工在子命令后追加格式参数。直接 CLI 的默认格式、历史回执与结算权限均不变。
 
+On Windows, when a pinned launcher needs quoting, `settlement_owed.command`
+uses PowerShell's call operator. Run it in PowerShell from the original
+workspace. The same response carries `settlement_owed.command_argv` for direct
+process invocation without parsing shell text. Both forms retain the launcher
+pin and original settlement identity.
+
+中文：Windows 上指定的启动器需要加引号时，补结算命令会使用 PowerShell 的
+`&` 调用运算符。请在原工作目录执行。程序可用同一响应里的 `command_argv`
+直接启动进程。两种形式均保留启动器和原结算身份。
+
 When an admitted Turn's verified durable writeback is followed by a Todo
 dependency wait, its replay now projects only the original `quota_spend` step.
 The later wait cannot replace the committed outcome with a blocked writeback.

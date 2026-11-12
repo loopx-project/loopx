@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import copy
+import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -12,7 +14,7 @@ import pytest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+    AGENT_ID, GOAL_ID, REPO_ROOT, TODO_ID, TURN_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
 
@@ -418,6 +420,51 @@ def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recover
     assert rc == 0, recovered
     assert recovered["settlement_progress"]["state"] == "settled"
     assert recovered["settlement_identity"] == original["settlement_identity"]
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Exercises the native Windows PowerShell launcher")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("composed", [False, True])
+def test_pinned_powershell_launcher_settles_original_turn_once(tmp_path, monkeypatch, provider, composed):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    assert powershell is not None
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    launcher = tmp_path / "candidate's launcher" / "loopx.ps1"
+    launcher.parent.mkdir()
+    python = sys.executable.replace("'", "''")
+    launcher.write_text(f"& '{python}' -m loopx.entrypoint @args\nexit $LASTEXITCODE\n", encoding="utf-8")
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    assert rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    prefix = ["-File", str(launcher), "--cli-bin", str(launcher), "--format", "json",
+              "--registry", str(registry), "--runtime-root", str(runtime)]
+    refresh = ["refresh-state", *binding, "--classification", "verified", "--delivery-batch-scale", "implementation",
+               "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
+               "--no-global-sync", "--suppress-external-sinks"]
+
+    def run(args):
+        process = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args], cwd=project,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}, capture_output=True, timeout=60)
+        assert process.returncode == 0, (process.stdout, process.stderr)
+        result = json.loads(process.stdout)
+        assert result["ok"] and result["settlement_identity"] == identity
+        return result
+
+    if composed:
+        action = [*prefix, *refresh, "--settle-turn"]
+    else:
+        owed = run([*prefix, *refresh])["settlement_owed"]
+        assert _spend_run_count(runtime) == 0
+        action = ["-Command", owed["command"]]
+    first, replay = run(action), run(action)
+    if not composed:
+        assert owed["command_argv"][:3] == [str(launcher), "--cli-bin", str(launcher)]
+    assert first["settlement_progress"]["state"] == "settled"
+    assert replay["idempotent_replay"]
     assert _spend_run_count(runtime) == 1
 
 

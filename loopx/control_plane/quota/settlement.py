@@ -7,6 +7,7 @@ import shlex
 from typing import Any
 
 from ...command_invocation import loopx_cli_argv
+from ...project_prompt import host_command, shell_arg_for_host
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -179,6 +180,10 @@ class QuotaSettlementReadback:
     successor_replan_pending: bool = False
 
 
+def render_owed_host_command(argv: list[str]) -> str:
+    return " ".join([host_command(argv[0]), *(shell_arg_for_host(arg) for arg in argv[1:])])
+
+
 def attach_settlement_progress(
     payload: dict[str, Any],
     readback: QuotaSettlementReadback,
@@ -196,7 +201,8 @@ def attach_settlement_progress(
     identity = readback.identity.value
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
-    prefix = shlex.join(loopx_cli_argv())
+    route = loopx_cli_argv()
+    prefix = shlex.join(route)
     if registry_path is not None:
         prefix += f" --registry {shlex.quote(str(registry_path))}"
     if runtime_root is not None:
@@ -213,7 +219,8 @@ def attach_settlement_progress(
         quota_spend_source=progress["quota_spend_source"],
         goal_ref=goal_ref,
     )
-    payload["settlement_owed"] = {
+    command = settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND)
+    owed = {
         **identity.as_dict(), "schema_version": "turn_settlement_owed_v0",
         "kind": "quota_spend", "recovery_does_not_spend": True,
         "reason": (
@@ -221,8 +228,14 @@ def attach_settlement_progress(
             if progress["state"] == "spend_receipt_required" else
             "writeback is verified; execute quota spend once for the same settlement identity"
         ),
-        "command": settlement_step_command(plan.as_dict(), SettlementStepKind.QUOTA_SPEND),
+        "command": command,
     }
+    # A quoted PowerShell executable needs the call operator. Keep the argv
+    # separately in this case so the composed CLI can execute it without a shell.
+    if host_command(route[0]).startswith("& "):
+        argv = shlex.split(command)
+        owed.update(command=render_owed_host_command(argv), command_argv=argv)
+    payload["settlement_owed"] = owed
 
 
 def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
