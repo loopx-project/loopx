@@ -1699,7 +1699,11 @@ def build_goal_frontier_projection_context_from_status(
                 agent_todo_items=agent_todo_source_items,
                 stride_strategy=stride_strategy,
             )
-            frontier_transition_candidate = {"obligation": source, "ack": source_ack}
+            frontier_transition_candidate = {
+                "obligation": source,
+                "ack": source_ack,
+                "reconstructed_vision_review": True,
+            }
 
     lifecycle_candidate = None
     if receipt_bound_replan_obligation_id and receipt_bound_guard_recorded_at:

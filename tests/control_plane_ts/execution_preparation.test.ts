@@ -107,3 +107,20 @@ test("legacy facts stay readable and an old matching lease grants no new executi
   assert.equal(retired.delivery_allowed, false);
   assert.equal(Object.hasOwn(retired, "claim"), false);
 });
+
+
+test("only a matching active lease contributes its exact completion fence", () => {
+  const proof = {idempotency_key: "original-attempt", expected_version: 7};
+  const active = {status: "active", active: true, owner: "agent-a", lease_proof: proof};
+  assert.deepEqual(projectExecutionPreparation(facts({leases: [active]})).lease_proof, proof);
+  for (const lease of [{...active, owner: "agent-b"},
+    {...active, active: false}, {...active, status: "released", active: false}]) {
+    assert.equal(Object.hasOwn(projectExecutionPreparation(facts({leases: [lease]})), "lease_proof"), false);
+  }
+  for (const lease_proof of [{...proof, expected_version: true},
+    {...proof, expected_version: 0}, {...proof, expected_version: Number.MAX_SAFE_INTEGER + 1},
+    {...proof, idempotency_key: " original-attempt"}, {expected_version: 7}]) {
+    assert.throws(() => projectExecutionPreparation(facts({leases: [{...active, lease_proof}]})),
+      EffectRuntimeRequestError);
+  }
+});

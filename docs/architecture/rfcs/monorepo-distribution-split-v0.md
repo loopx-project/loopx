@@ -3405,3 +3405,66 @@ compatibility to older readers and does not upgrade an installed runtime.
 Real File/SQLite RPC and CLI regressions, plus an isolated PostgreSQL read,
 qualify the failure boundary without rewriting authority. The original
 installed-host qualification and full-cost/adoption gaps remain open.
+
+
+### 2026-11-12 — Standalone core artifact and installation diagnosis
+
+The opt-in `packages/loopx-core` source builder reuses tracked runtime sources
+and produces an independently installed wheel without Chat, web assets, the
+canary fleet or the full CLI facade. It retains existing built-in capability
+and host compatibility imports. This is the core-artifact prerequisite for
+R1/M3; it does not qualify the complete minimal closure or publish a release.
+
+The installed journey uses the existing generic CLI host, independent artifact
+validation and canonical hard leases. The original admitted key/version travels
+through the shared TypeScript preparation and checked Turn context to the
+existing completion owner. Process loss resumes the confirmed result; replay
+does not invoke the host or debit quota again. A renewed/released lease or an
+invalid artifact refuses completion without state or quota effects.
+
+Deep installation diagnosis now selects the actual distribution's RECORD and
+required entrypoints. A healthy core passes; an unrecorded launcher or missing
+runtime file remains a failure. Ordinary distributions still require their full
+CLI. Core supports the advertised history action through its existing handler
+and parses global version options without the omitted facade. The installed
+qualification covers default SQLite and explicitly configured File hard leases;
+help/import remain usable without Node, while governed work retains the existing
+Node prerequisite. Ordinary-distribution CLI and installation parity have their
+own matched checks. The package-smoke lane executes the installed qualification.
+
+Preserve D1-D7 and all original milestones, historical failures and acceptance
+boundaries. Workspace/meta-package publication, complete install/load/context
+closure, independent Standard packages, other host/platform adoption, matched
+model effectiveness and complete costs remain open. This synthetic task and
+recovery evidence establishes neither model benefit nor an installed-host upgrade.
+
+### 2026-11-12 — Replan consumes only required Todo views
+
+The replan writeback caller now requests its two role summaries and complete
+Agent terminal rows through the existing quota read transaction. The existing
+TypeScript display owner accepts an explicit subset; omitted selection retains
+all three ordinary quota views. User source-summary rows, unused Agent views
+and prepared Vision wait facts are not generated for this caller. Source
+references, complete supplied-source fallback and provider error diagnostics
+retain their existing owners. No storage, lease, scheduler or quota-debit rule
+changes.
+
+Against immutable base `0abd0dc27`, candidate code `46f844e9d` uses the same
+disposable mixed-state fixtures and six alternating pairs per workload on real
+File/default-SQLite. SQLite replan qualification medians at 320/3,500 extra
+Agent Todos are 93.2→83.3 ms and 612.3→572.0 ms; canonical-read plus
+qualification medians are 139.4→130.0 ms and 900.9→857.0 ms. Strict refresh
+dry-run rejection medians are 142.4→135.1 ms and 934.4→911.8 ms. At zero extra
+Todos that refresh median is 28.9→29.3 ms; retain this observation without a
+noise or causality claim. Up to 128 User rows are included. Normalized
+obligations and rejection details match; counting fewer RPCs alone is not the
+acceptance oracle. Seventy focused production-provider and transport checks
+pass, including complete terminal tails, stale/missing sources and ordinary
+display defaults.
+
+Preserve #8624's original negative SQLite qualification (83.0→91.2 ms and
+605.9→704.1 ms) at its original head and criteria. This new scoped result
+qualifies the consumed replan read cost; full CLI process, durable writeback,
+model and end-to-end outcome costs are not inferred from these timings. The
+complete minimal load/context closure, R1/M3, independent Standard packages,
+workspace/meta publication and installed-host adoption remain open.

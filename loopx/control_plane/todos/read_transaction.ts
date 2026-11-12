@@ -239,7 +239,8 @@ export async function readExecutionPreparationSource(input: JsonObject, dependen
   const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
   if (!todo) return unavailable;
   const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
-    .map(({todo_id, schema_version, status, owner, expires_at}) => ({todo_id, schema_version, status, owner, expires_at}));
+    .map(({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}) =>
+      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version}));
   return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
     goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
     source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,

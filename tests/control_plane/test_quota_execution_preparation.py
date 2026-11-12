@@ -181,6 +181,9 @@ def test_should_run_requires_one_atomic_claim_before_delivery(
 def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provider):
     packet = _run(tmp_path, monkeypatch, provider, [_lease()])
     assert packet["execution_preparation"]["state"] == "ready"
+    assert packet["execution_preparation"]["lease_proof"] == {
+        "idempotency_key": _lease()["idempotency_key"], "expected_version": _lease()["version"],
+    }
     assert packet["normal_delivery_allowed"] is True
     assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
 

@@ -1,7 +1,8 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
-  progressiveContextPlan, type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
+  progressiveContextPlan, scopedReplanYardstickReversal,
+  type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
@@ -967,6 +968,8 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
     retain(follow, originalFollow, [["recorded_progress_count", "observation_count"]]);
   } else retain(follow, originalFollow, followFields);
   const explore = jsonObject(context.explore_basis) ?? {};
+  const yardstickCount = Array.isArray(explore.work_yardsticks) ? explore.work_yardsticks.length : 0;
+  const reversal = reads ? scopedReplanYardstickReversal(payload) : undefined;
   const decisionValueReview = jsonObject(jsonObject(packet.stride_control)?.decision_value_review);
   const review = retain({...common,
     core_goal: core,
@@ -983,8 +986,8 @@ function projectReplanView(request: JsonObject, payload: JsonObject, sourceHash:
       availability: explore.availability, revision: explore.revision,
       ...(Array.isArray(explore.measurement_feedback) && explore.measurement_feedback.length
         ? {measurement_count: explore.measurement_feedback.length} : {}),
-      ...(Array.isArray(explore.work_yardsticks) && explore.work_yardsticks.length
-        ? {yardstick_count: explore.work_yardsticks.length} : {}),
+      ...(yardstickCount ? {yardstick_count: yardstickCount} : {}),
+      ...(reversal ? {work_yardstick_reversal: retain(compactFields(reversal.cue, reversal.fields), reversal.cue)} : {}),
       read_action: reads?.explore ?? null,
     }, explore, ["availability", "revision"])}} : {}),
     evidence: (Array.isArray(context.evidence) ? context.evidence : []).map(value => {
@@ -2568,6 +2571,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       sha256: completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? ""),
       effective_action: decision.effective_action ?? null,
       writeback: object(projection.writeback),
+      task_lease_proof: object(object(decision.execution_preparation).lease_proof),
       replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
       replan_action_packet: projection.replan_action_packet ?? null};
   }

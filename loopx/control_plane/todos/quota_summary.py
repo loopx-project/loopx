@@ -508,6 +508,44 @@ def select_quota_todo_summaries(
             select_quota_todo_summary(agent_source, None, agent_identity=agent_identity))
 
 
+def select_quota_todo_summaries_with_terminal(
+    user_source: Any, agent_source: Any, *, agent_identity: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    """Read two summaries and complete Agent terminal rows in one transaction.
+
+    Reuse the typed quota and display owners while requesting only consumed
+    views. Ordinary quota retains its own full displays and prepared wait facts.
+    """
+    from .quota_selection import _decode_quota_summary_wire
+    from .goal_todo_projection import project_todo_read
+
+    sources = [(role, value) for role, value in (("user", user_source), ("agent", agent_source))
+               if isinstance(value, dict)]
+    requests = [project_quota_planning(value, all_open_items=[],
+        source_open_count=value.get("open_count"), agent_identity=agent_identity,
+        filter_user_gate_blocks_agent=role == "user", available_capabilities=None,
+        summary_kind="user", consume_display_views=role == "agent", request_only=True,
+        display_view_names=["terminal"] if role == "agent" else None)
+        for role, value in sources]
+    summaries: dict[str, dict[str, Any]] = {}
+    terminal: list[dict[str, Any]] = []
+    if requests:
+        result = project_todo_read({"kind": "quota_projection", "requests": requests})
+        wires = result.get("quota_wires")
+        if not isinstance(wires, list) or len(wires) != len(requests):
+            raise RuntimeError("invalid complete quota projection response")
+        for (role, source), wire in zip(sources, wires, strict=True):
+            summaries[role] = _decode_quota_summary_wire(wire, source)
+            if role == "agent":
+                views = wire.get("display_views")
+                if not isinstance(views, dict) or set(views) != {"terminal"}:
+                    raise RuntimeError("invalid consumed Agent terminal view")
+                terminal = views["terminal"]
+                if not isinstance(terminal, list) or any(not isinstance(row, dict) for row in terminal):
+                    raise RuntimeError("invalid Agent terminal source rows")
+    return summaries.get("user"), summaries.get("agent"), terminal
+
+
 def select_quota_todo_contexts(
     user_canonical: Any, user_asset: Any, agent_canonical: Any, agent_asset: Any,
     *, agent_identity: dict[str, Any] | None, available_capabilities: Any,
