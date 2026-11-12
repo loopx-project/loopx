@@ -94,13 +94,21 @@ with (
                     and (
                         "before" in parse_qs(urlsplit(self.path).query)
                         if body_fault == "history"
+                        else "entry_id" in parse_qs(urlsplit(self.path).query)
+                        if body_fault in {"content", "content-denied"}
                         else "agent_id" not in parse_qs(urlsplit(self.path).query)
                     )
                 ):
                     # Send actual headers, then end the connection short of the
                     # declared body length (or let the browser's read time out).
                     mode, body_fault = body_fault, None
-                    status = {"timeout": 503, "drop": 403, "history": 200}[mode]
+                    status = {
+                        "timeout": 503,
+                        "drop": 403,
+                        "history": 200,
+                        "content": 200,
+                        "content-denied": 403,
+                    }[mode]
                     self.send_response(status)
                     self.send_header(
                         "Content-Type",
@@ -138,6 +146,8 @@ with (
                     "/fixture/discovery-body-timeout": "timeout",
                     "/fixture/discovery-body-drop": "drop",
                     "/fixture/history-body-drop": "history",
+                    "/fixture/content-body-drop": "content",
+                    "/fixture/content-body-denied": "content-denied",
                 }
                 if self.path in faults:
                     body_fault = faults[self.path]

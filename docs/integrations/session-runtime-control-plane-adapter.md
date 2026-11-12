@@ -299,6 +299,9 @@ record access and explicit interruption/error or unavailable-record notices;
 record counts do not imply tool success or task completion.
 Source and content fingerprints reject stale detail reads;
 history replacement resets the visible window instead of mixing conversations.
+An interrupted detail read retries once at the same record and offset. A rejected
+or stale read stays stopped; previously loaded text stays readable after a
+transient failure, and the reader can request the same page again.
 An interrupted or timed-out history read keeps the records already displayed
 and explains that updates resume automatically when the connection recovers.
 Replies remain disabled until a fresh observation permits them. Changing the

@@ -10,11 +10,12 @@ export type ConversationRecord = {
   tool_exit_codes?: number[];
 };
 export type ContentPage = {text: string; next_offset: number; has_more: boolean};
+type LoadContent = (record: ConversationRecord, offset: number, signal: AbortSignal) => Promise<ContentPage>;
 
 /** Keep source order, but give dialogue priority over consecutive tool events. */
 export function AttachedConversationTimeline({records, ...props}: {
   records: ConversationRecord[]; agent: string; zh: boolean;
-  load: (record: ConversationRecord, offset: number) => Promise<ContentPage>;
+  load: LoadContent;
   live?: boolean; active?: boolean;
 }) {
   const groupKeys = useRef(new Map<string, string>());
@@ -80,7 +81,7 @@ function ToolContent({text, complete, zh}: {text: string; complete: boolean; zh:
 
 export function AttachedConversationRecord({record, agent, zh, load, live = false, active = false}: {
   record: ConversationRecord; agent: string; zh: boolean;
-  load: (record: ConversationRecord, offset: number) => Promise<ContentPage>;
+  load: LoadContent;
   live?: boolean;
   active?: boolean;
 }) {
@@ -90,6 +91,8 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(Array.from(record.text).length);
+  const contentRead = useRef<AbortController | null>(null);
+  useLayoutEffect(() => () => contentRead.current?.abort(), []);
   const labels: Record<string, string> = zh ? {
     task_started: "开始执行", task_complete: "本轮结束", turn_aborted: "执行中断", error: "执行报错",
     function_call: "工具调用", custom_tool_call: "工具调用",
@@ -104,13 +107,20 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     `${labels[record.kind] ?? (zh ? "记录暂不可读" : "Record unavailable")}${record.label && record.label !== record.kind ? ` · ${record.label}` : ""}`;
   const nonzeroCodes = [...new Set(record.tool_exit_codes?.filter(code => code !== 0))];
   async function continueReading() {
-    if (loading) return;
+    if (contentRead.current) return;
+    const controller = new AbortController();
+    contentRead.current = controller;
     setLoading(true); setError("");
     try {
-      const page = await load(record, offset);
+      const page = await load(record, offset, controller.signal);
+      if (controller.signal.aborted) return;
       setText(previous => previous + page.text); setOffset(page.next_offset); setMore(page.has_more);
-    } catch (failure) {setError(String(failure));}
-    finally {setLoading(false);}
+    } catch (failure) {
+      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      contentRead.current = null;
+      if (!controller.signal.aborted) setLoading(false);
+    }
   }
   const content = <>
     {record.redacted ? <p>{zh ? "此段包含疑似凭据，内容已隐藏。" : "This content contains credential-shaped data and has been withheld."}</p> : record.role === "tool" ? <ToolContent text={text} complete={!more} zh={zh}/> : <MarkdownText text={text}/>}
