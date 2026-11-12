@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 
 import { runFile } from '../src/cli.ts'
 import type { FileRunner } from '../src/cli.ts'
@@ -116,6 +116,7 @@ async function setAllowedSlots(testFixture: Fixture, allowedSlots: number): Prom
 
 async function fixture(): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-closeout-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
   const project = join(root, 'project')
   const runtime = join(root, 'runtime')
   const registry = join(project, '.loopx', 'registry.json')
@@ -350,6 +351,8 @@ describe('DSH admission-to-closeout integration', () => {
       warn: message => { warnings.push(message) },
     })
 
+    // Finished hooks unwind in reverse order, so the driver stops before fixture removal.
+    onTestFinished(() => driver.dispose())
     driver.observeAgent(testFixture.agent)
     const queued = await waitForQueued(testFixture, warnings)
     const source = record(queued.source)
@@ -512,8 +515,6 @@ describe('DSH admission-to-closeout integration', () => {
     expect(runs.filter(run => run.settlement_identity !== undefined).every(run => (
       record(run.settlement_identity).effect_id === effectId
     ))).toBe(true)
-
-    await driver.dispose()
   }, 90_000)
 
   it('rejects queued work when quota closes during the next pre-step hook', async () => {
