@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/package-smoke.yml"
+      - "packages/loopx-core/**"
+      - "loopx/**"
+      - "tests/test_core_distribution.py"
       - "packages/loopx-repo-health/**"
       - "packages/loopx-obelisk/**"
       - "packages/loopx-codex-provider-routing/**"
@@ -14,6 +17,9 @@ on:
       - main
     paths:
       - ".github/workflows/package-smoke.yml"
+      - "packages/loopx-core/**"
+      - "loopx/**"
+      - "tests/test_core_distribution.py"
       - "packages/loopx-repo-health/**"
       - "packages/loopx-obelisk/**"
       - "packages/loopx-codex-provider-routing/**"
@@ -28,6 +34,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  core:
+    name: loopx-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "26.0.0"
+      - uses: astral-sh/setup-uv@v7
+      - name: Prepare source validation environment
+        run: uv sync --extra test
+      - name: Build and separately install the standalone core
+        run: |
+          uv run --extra test python packages/loopx-core/prepare.py --output "$RUNNER_TEMP/core-source"
+          uv build "$RUNNER_TEMP/core-source" --out-dir "$RUNNER_TEMP/core-dist"
+          uv venv "$RUNNER_TEMP/core-env" --python .venv/bin/python
+          uv pip install --python "$RUNNER_TEMP/core-env/bin/python" "$RUNNER_TEMP"/core-dist/loopx_core-*.whl
+          echo "LOOPX_CORE_TEST_PYTHON=$RUNNER_TEMP/core-env/bin/python" >> "$GITHUB_ENV"
+      - name: Qualify installed execution, recovery, replay and refusal
+        env:
+          LOOPX_USAGE_PING: "0"
+        run: uv run --extra test python -m pytest -q tests/test_core_distribution.py
+
   codex-provider-routing:
     name: loopx-codex-provider-routing
     runs-on: ubuntu-latest

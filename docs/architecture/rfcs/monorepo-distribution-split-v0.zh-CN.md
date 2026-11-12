@@ -2658,3 +2658,27 @@ legacy fallback；已支持的历史字段清单仍可读取。这是既有源�
 
 真实 File/SQLite RPC 与 CLI 回归，以及隔离 PostgreSQL 读取，验证该失败边界
 且不重写 authority。原 installed-host 资格、完整成本和 adoption 缺口继续开放。
+
+
+### 2026-11-12 — 独立 core 产物与安装诊断
+
+可选的 `packages/loopx-core` 源码构建器复用 tracked 运行时源码，生成可独立安装的
+wheel，省略 Chat、web 资源、canary 集群及完整 CLI facade。它仍保留现有内建能力
+和宿主兼容导入。这是 R1/M3 的 core 产物前提，不代表完整最小闭包已合格，也不
+发布发行版本。
+
+安装后任务沿用 generic CLI 宿主、独立产物验收及 canonical 硬租约。最初准入的
+key/version 经共享 TypeScript preparation 和已校验的 Turn context 传入既有
+完成 owner。进程丢失后恢复已确认结果；重放不再次调用宿主或扣额。租约更新／
+释放或产物无效时拒绝完成，不产生状态写入和扣额。
+
+深度安装诊断按实际发行物的 RECORD 和必要入口检查。健康 core 通过，未登记的
+启动器或缺失运行文件仍失败；普通发行物仍要求完整 CLI。core 通过现有 handler
+执行目录列出的 history action，并在缺少完整 facade 时解析全局版本选项。安装
+资格覆盖默认 SQLite 和显式配置的 File 硬租约；无 Node 时可导入和查看帮助，
+受治理任务保留既有 Node 前提。普通发行物的 CLI 和安装兼容有独立配对检查。
+package-smoke 工作流执行这套安装后验证。
+
+保留 D1-D7、原有里程碑、历史失败与验收边界。workspace/meta 发行、完整安装／
+加载／context 闭包、独立 Standard 包、其他宿主／平台采用、配对模型效果和完整
+成本仍开放。合成任务与恢复证据不证明模型收益，也不代表已升级当前宿主。

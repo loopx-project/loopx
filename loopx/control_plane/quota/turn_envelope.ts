@@ -2571,6 +2571,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       sha256: completeTaskTextSha256(decision, selectedWorkTodoId(work) ?? ""),
       effective_action: decision.effective_action ?? null,
       writeback: object(projection.writeback),
+      task_lease_proof: object(object(decision.execution_preparation).lease_proof),
       replan_guard_scoped: Object.hasOwn(projection, "replan_action_packet"),
       replan_action_packet: projection.replan_action_packet ?? null};
   }
