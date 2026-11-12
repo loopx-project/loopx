@@ -1127,6 +1127,47 @@ def test_disabled_new_attachment_rejects_before_primary_commit(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path, provider, monkeypatch, capsys):
+    from loopx.cli import main
+
+    project, runtime, path = setup(tmp_path, provider=provider)
+    source = tmp_path / "finding.json"
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100002)
+
+    class AttachmentClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_time.astimezone(tz)
+
+    def record(turn, value):
+        source.write_text(json.dumps(value))
+        run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
+        with monkeypatch.context() as patch:
+            patch.chdir(project)
+            patch.setattr("loopx.control_plane.runtime.time.datetime", AttachmentClock)
+            code = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json",
+                "refresh-state", *binding(turn), "--classification", "validated_change",
+                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks"])
+        packet = json.loads(capsys.readouterr().out)
+        assert code == 0 and packet["explore_result_delivery"]["ok"], packet
+        return packet
+
+    first = record("before-clock-change", attachment())
+    run(project, runtime, path, "quota", "spend-slot", *binding("before-clock-change"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    changed = attachment()
+    changed["work_yardstick_decision"]["prior_finding_id"] = first["explore_result_delivery"]["finding_id"]
+    changed["work_yardstick_decision"]["target"]["summary"] = "Follow the validated successor"
+    wall_time = wall_time.replace(microsecond=100001)
+    second = record("after-clock-change", changed)
+    assert second["explore_result_recorded_at"] < first["explore_result_recorded_at"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == second["explore_result_delivery"]["finding_id"]
+    assert cue["target"]["summary"] == "Follow the validated successor"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_committed_pending_capture_recovers_after_disable_without_new_authority(
     tmp_path, provider, monkeypatch, capsys,
 ):

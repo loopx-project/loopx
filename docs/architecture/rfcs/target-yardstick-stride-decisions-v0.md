@@ -208,8 +208,9 @@ capture. The primary writeback preserves microsecond precision in the
 attachment timestamp so distinct commits in the same second remain ordered.
 This does not relax predecessor checks for equal-time or newer work,
 and attachment callers cannot supply the replay timestamp. Current context
-selects by original committed time, so late ingestion cannot replace a newer
-choice. Ordinary work preserves its original settlement type and never creates
+uses the original commit time across independent histories and follows validated
+successors within a history, including when the clock moves backwards.
+Ordinary work preserves its original settlement type and never creates
 an obligation to satisfy Stride v2. Replans retain their existing v2 contract.
 An absent attachment preserves the current decision; an explicit `proxy: null`
 chooses direct evaluation while historical profiles remain readable.
