@@ -2808,3 +2808,8 @@ runtime 仍保留 eager 的共享 typed 支持。完整 work contract 与传输�
 最小组合。保留早期检查失败及独立的启动/上下文边界；完整 V1–V5/V10、R1/M3、
 独立 Standard/workspace 包、安装宿主采用及覆盖原始目标的完整回归仍由既有
 owner 和验收约束保持开放。
+
+安装门暴露了 project skill 的支持示例链接离开安装包的问题。链接现在指向经字节
+核验的公开源文件，并固定不可变 revision；原流程、同意边界和检查范围条款保持
+原义。它是按需支持资料，不是 runtime fetch 或新 authority。早期安装门失败和
+受磁盘限制的 base 重放，与修复 head 的验证分别保留。

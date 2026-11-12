@@ -3601,3 +3601,10 @@ model tokens or the full minimal composition. Keep earlier failed checks and
 the separate startup/context boundary; full V1–V5/V10, R1/M3, independent
 Standard/workspace packages, installed-host adoption and complete original-goal
 regression remain open under their existing owners and acceptance.
+
+The installation gate exposed a project-skill supporting-example link that left
+the installed bundle. The link now resolves to the byte-verified public source
+at an immutable revision; the procedure, consent and check-scope clauses remain
+unchanged. It is an on-demand supporting reference, not a runtime fetch or new
+authority. Preserve the earlier failed installation gate and disk-limited base
+replays separately from the repaired-head validation.
