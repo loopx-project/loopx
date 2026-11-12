@@ -506,7 +506,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
     ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = hasNativeSource && emptyHistory;
-  const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const hasSavedResult = Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const emptyWithAnalysis = emptyHistory && hasSavedResult;
+  const historyBeforeAnalysisSummary = hasNativeSource && Boolean(value?.nodes.length) && !hasSavedResult;
+  const progressSummary = !progressiveOverview && !readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
   // Keep an explicitly opened study in place during a read failure. A complete
@@ -587,7 +590,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
     {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>
-      {!readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}
+      {!historyBeforeAnalysisSummary ? progressSummary : null}
       <ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/><ResearchCitationPanel analysis={analysis}/></> : null}
     {busy && !read.events.length ? <div className="research-history-loading" role="status" aria-label={copy.loading}>
       <span className="research-history-loading-label">{copy.loading}…</span>
@@ -687,6 +690,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         {readingSelection ? <ResearchProgressSummary analysis={analysis}/> : null}{historyView}
       </details>
     </div> : null}
+    {historyBeforeAnalysisSummary ? progressSummary : null}
     {(selection.nodes.some(id => !value?.nodes.some(node => node.id === id)) || (selection.day !== null && !selectedGroup)) && read.complete && !busy && !error && !history.error ? <p role="status">{copy.lost}</p> : null}
     {value?.events.length && !value.nodes.length ? <ContextHelp label={zh ? "节点结构未记录" : "Node structure not recorded"} icon={CircleHelp}><p className="research-history-note">{zh ? "尚未记录节点结构；可展开下面的已读记录。" : "Node structure has not been recorded; loaded records remain available below."}</p></ContextHelp> : null}
     {value && (value.missingLinks.length || value.unknownTimeCount || value.unknownKindCount) ? <ContextHelp icon={CircleHelp} label={zh ? "研究记录覆盖缺口" : "Research record coverage gaps"}>
