@@ -2682,3 +2682,27 @@ package-smoke 工作流执行这套安装后验证。
 保留 D1-D7、原有里程碑、历史失败与验收边界。workspace/meta 发行、完整安装／
 加载／context 闭包、独立 Standard 包、其他宿主／平台采用、配对模型效果和完整
 成本仍开放。合成任务与恢复证据不证明模型收益，也不代表已升级当前宿主。
+
+### 2026-11-12 — Replan 只消费所需 Todo 视图
+
+Replan 写回调用方现在通过既有 quota 读取事务取得两个角色摘要及完整 Agent
+terminal 行。既有 TypeScript 显示 owner 接受显式视图子集；省略选择时仍保留普通
+quota 的全部三种视图。该调用方不再生成 User source-summary 行、未消费的 Agent
+视图及预建 Vision 等待事实。来源引用、完整内联来源回退及 provider 错误诊断仍由
+既有 owner 处理；存储、lease、scheduler 及 quota 扣额规则保持原语义。
+
+以不可变基线 `0abd0dc27` 对照候选代码 `46f844e9d`，复用同一隔离混合状态夹具，
+在真实 File／默认 SQLite 上每种负载执行六组交替配对。额外 320／3,500 条 Agent
+Todo 时，SQLite replan 资格检查中位数为 93.2→83.3 ms、612.3→572.0 ms；包含
+canonical 读取与资格检查的中位数为 139.4→130.0 ms、900.9→857.0 ms。严格 refresh
+dry-run 拒绝路径的中位数为 142.4→135.1 ms、934.4→911.8 ms。零条额外 Todo 时，
+该 refresh 中位数为 28.9→29.3 ms；保留这项观测，不推断噪声或因果。夹具包含
+最多 128 条 User 行。归一化后的义务及拒绝详情一致；减少 RPC 次数本身不能作为
+验收依据。70 项聚焦生产 provider 与传输检查通过，覆盖完整 terminal 尾部、
+过期／缺失来源及普通显示默认值。
+
+保留 #8624 原 head 及原标准下的 SQLite 负面资格结果（83.0→91.2 ms、
+605.9→704.1 ms）。这份新范围结果只证明所消费 replan 读取的成本资格；不能从
+这些计时推断完整 CLI 进程、持久写回、模型及端到端成果成本。完整最小加载／
+上下文闭包、R1/M3、独立 Standard 包、workspace／meta 发布及安装宿主采用仍未
+完成。
