@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shlex
 from typing import Any
@@ -230,9 +231,9 @@ def attach_settlement_progress(
         ),
         "command": command,
     }
-    # A quoted PowerShell executable needs the call operator. Keep the argv
-    # separately in this case so the composed CLI can execute it without a shell.
-    if host_command(route[0]).startswith("& "):
+    # PowerShell quoting applies to every argument, even with an unquoted launcher.
+    # Keep the argv for the composed CLI so it does not have to parse shell text.
+    if os.name == "nt":
         argv = shlex.split(command)
         owed.update(command=render_owed_host_command(argv), command_argv=argv)
     payload["settlement_owed"] = owed

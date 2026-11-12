@@ -490,13 +490,23 @@ def test_legacy_posix_quoted_powershell_launcher_fails_before_settlement(
 @pytest.mark.skipif(os.name != "nt", reason="Exercises the native Windows PowerShell launcher")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("composed", [False, True])
-def test_pinned_powershell_launcher_settles_original_turn_once(tmp_path, monkeypatch, provider, composed):
+@pytest.mark.parametrize("relative_launcher", [False, True], ids=["quoted-launcher", "relative-launcher"])
+def test_pinned_powershell_launcher_settles_original_turn_once(
+    tmp_path, monkeypatch, provider, composed, relative_launcher,
+):
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     assert powershell is not None
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
+    if relative_launcher:
+        # The executable needs no quoting, but a later argument still does.
+        registry = registry.rename(registry.with_name("operator's registry.json"))
+        launcher_arg = "./bin/loopx.ps1"
+        launcher = project / launcher_arg
+    else:
+        launcher = tmp_path / "candidate's launcher" / "loopx.ps1"
+        launcher_arg = str(launcher)
     _initialize_fixture_authority(project, runtime, provider=provider)
-    launcher = tmp_path / "candidate's launcher" / "loopx.ps1"
     launcher.parent.mkdir()
     python = sys.executable.replace("'", "''")
     launcher.write_text(f"& '{python}' -m loopx.entrypoint @args\nexit $LASTEXITCODE\n", encoding="utf-8")
@@ -504,7 +514,7 @@ def test_pinned_powershell_launcher_settles_original_turn_once(tmp_path, monkeyp
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
     assert rc == 0, guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
-    prefix = ["-File", str(launcher), "--cli-bin", str(launcher), "--format", "json",
+    prefix = ["-File", launcher_arg, "--cli-bin", launcher_arg, "--format", "json",
               "--registry", str(registry), "--runtime-root", str(runtime)]
     refresh = ["refresh-state", *binding, "--classification", "verified", "--delivery-batch-scale", "implementation",
                "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
@@ -524,10 +534,14 @@ def test_pinned_powershell_launcher_settles_original_turn_once(tmp_path, monkeyp
         owed = run([*prefix, *refresh])["settlement_owed"]
         assert _spend_run_count(runtime) == 0
         action = ["-Command", owed["command"]]
-    first, replay = run(action), run(action)
-    if not composed:
-        assert owed["command_argv"][:3] == [str(launcher), "--cli-bin", str(launcher)]
+    first = run(action)
     assert first["settlement_progress"]["state"] == "settled"
+    assert _spend_run_count(runtime) == 1
+    if not composed:
+        argv = owed["command_argv"]
+        assert argv[:3] == [launcher_arg, "--cli-bin", launcher_arg]
+        assert argv[argv.index("--registry") + 1] == str(registry)
+    replay = run(action)
     assert replay["idempotent_replay"]
     assert _spend_run_count(runtime) == 1
 
