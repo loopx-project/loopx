@@ -231,6 +231,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
       assert.equal(stale.coverage.refresh_failed, true);
+      assert.equal(await history.locator(".research-phase").count(), 3, "A failed refresh retains the last complete time range");
       assert.match(await report(), /Failed; previously read records retained/);
       await comparisonSummary.click();
       await comparison.getByRole("combobox", {name: "Compare with"}).waitFor();
@@ -253,7 +254,23 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       // Fresh interrupted load searches only the explicitly partial snapshot.
       await page.route("**/api/chat/explore-results?*", route => new URL(route.request().url()).searchParams.has("cursor")
         ? route.fulfill({status: 503, json: {error: "Synthetic page interruption"}}) : route.continue());
-      await page.reload();
+      const periodBookmark = new URL(page.url());
+      periodBookmark.searchParams.set("research_goal", "synthetic-record-search");
+      periodBookmark.searchParams.set("research_phase", "2");
+      await page.goto(periodBookmark.href);
+      const readError = history.locator(".research-history-read-error");
+      const coverage = history.locator(".research-history-coverage");
+      await readError.waitFor();
+      await history.locator(".research-axis").waitFor();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.screenshot({path: resolve(outputDir, `research-history-partial-${width}.png`), animations: "disabled"});
+      }
+      assert.match(await coverage.innerText(), /Loaded records \(local time\).*40 \/ 79/);
+      assert.match(await readError.locator(":scope > div > strong").innerText(), /Only part of the history loaded/);
+      assert.equal(await history.locator(".research-phase, .research-phase-divider").count(), 0,
+        "Incomplete pages cannot define the full history's periods");
+      assert.equal(new URL(page.url()).searchParams.get("research_phase"), "2", "An incomplete read keeps the requested period");
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
       await readEmptyScope(page, results, "No matches in the loaded records; the remaining history is not verified.");
@@ -270,8 +287,13 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert(partial.records.length > 0 && partial.records.length < 79);
       await search.fill("amber-v1");
       await page.unroute("**/api/chat/explore-results?*");
-      await history.getByRole("button", {name: "Refresh history", exact: true}).click();
+      await readError.getByRole("button", {name: "Retry", exact: true}).press("Enter");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
+      assert(await coverage.evaluate(element => element === document.activeElement), "Keyboard retry leaves focus on the updated coverage");
+      assert.match(await coverage.innerText(), /Recorded time \(local\).*79 \/ 79/);
+      const phases = history.locator(".research-phase");
+      assert.equal(await phases.count(), 3);
+      assert.equal(await phases.nth(2).getAttribute("aria-pressed"), "true", "Recovery applies the original period bookmark");
       await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await results.getByRole("status", {name: "4 matches in 4 loaded records · 3 entries", exact: true}).waitFor();
