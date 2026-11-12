@@ -621,6 +621,11 @@ mixed/backend PRs pass through this producer. On pull requests the checkout SHA 
 may differ from the branch head. Generated-file Git cleanliness is no longer a
 qualification gate. Browser, integrity and workflow gates remain required.
 
+The `dashboard-browser` source lane waits for its Vite child to confirm that
+it bound the requested port. An HTTP response from a listener already on that
+port cannot qualify the checkout or supply its source coverage. For a local
+port conflict, select a free port with `LOOPX_PERSONAL_WORKSPACE_PORT` and rerun.
+
 Release Artifacts checks out the exact release tag and runs:
 
 ```sh

@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as directory:
 if (payload) payload.run_history.goals[0].acceptance_observation = acceptance;
 const server = packaged
   ? spawn(python, ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", resolve(root, "loopx/web")], { stdio: "ignore" })
-  : startViteDashboardServer({ dashboardDir, port });
+  : await startViteDashboardServer({ dashboardDir, port });
 async function checkLiveWriteAuthority(browser, origin) {
   const page = await browser.newPage({viewport: {width: 1024, height: 768}});
   const writes = [], errors = [];
