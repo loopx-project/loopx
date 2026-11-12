@@ -488,6 +488,8 @@ def render_concise_help(program: str = "loopx", *, standalone_core: bool = False
             "LoopX keeps long-running agent work moving with durable state and evidence.",
             "", "Usage:", f"  {program} [global options] <command> [command options]",
             "", "Start:",
+            '  loopx start-goal --guided --project . --goal-text "<goal>"',
+            "                                Start from a goal with your existing model host.",
             "  loopx connect --help           Connect a project and its objective.",
             "  loopx configure-goal --help    Configure its Agent and execution budget.",
             "  loopx todo --help              Create, claim and complete work.",

@@ -21,8 +21,20 @@ tasks requires a qualified Node runtime (22.22.3+ and the existing SQLite
 reliability checks), an explicitly selected host and its own prerequisites.
 Use the existing `turn run-once --host generic-cli` entry, a separate validation
 command, `turn inspect-journal` and `--resume-turn-key` for execution and recovery.
-Bootstrap with `connect`, configure one Agent with `configure-goal`, and create
-and claim work through the existing `todo` commands. An ordinary managed claim
+Start with one natural-language goal in your existing model host:
+
+```sh
+loopx start-goal --guided --project . --goal-text "Create and check an inventory report."
+```
+
+Follow its returned host choice and ordered transaction. The preview preserves
+the exact goal text and writes no state. Its project bootstrap, fresh identity
+registration, session binding and subsequent Todo/guard commands execute in
+this standalone distribution through their existing owners. The host supplies
+the model, tools and scheduler; the wheel does not provide them or activate an
+optional capability from goal wording. `connect` and `configure-goal` remain
+available for explicit setup. Create and claim work through the existing `todo`
+commands. An ordinary managed claim
 prepares the default SQLite lease without asking the task model to manage lease
 flags. Completion carries the original captured lease generation; recovery
 refuses a renewed, released or replaced generation rather than adopting it.
