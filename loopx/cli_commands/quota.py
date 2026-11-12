@@ -431,6 +431,12 @@ def _emit_quota_result(
         return result_code
     assert activation is not None
     context_delivery_enabled = activation["enabled"]
+    deferred_context = getattr(args, "defer_context_presentation", False)
+    output_limit = getattr(args, "max_page_output_bytes", None)
+    # A Host may defer successful presentation, while its explicit refusal budget still applies.
+    present_capture_failure = context_delivery_enabled and args.format == "json" and (
+        not deferred_context or output_limit is not None
+    )
     raw_envelope, legacy_view = False, None
     delivery_request = None
     decision_identity = ("", "")
@@ -457,11 +463,10 @@ def _emit_quota_result(
                             "diagnostic_code": exc.diagnostic_code}})
                     failure = report(args, payload, exc, capture_directory=capture_directory,
                         capture_sha256=digest)
-                    if (context_delivery_enabled and args.format == "json"
-                            and not getattr(args, "defer_context_presentation", False)):
+                    if present_capture_failure:
                         failure = _export("captured_quota_failure_view")(failure,
                             capture_directory=capture_directory, capture_sha256=digest,
-                            max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
+                            max_page_output_bytes=output_limit)
                 print_payload(failure, args.format, _quota_renderer(args))
                 return 1
             # Validate before capture or handoff; the complete source is unchanged.
@@ -473,10 +478,9 @@ def _emit_quota_result(
 
             print_payload(prepared_capture_reference(payload, captured_digest), args.format, _quota_renderer(args))
             return 0
-        if (payload.get("ok") is False and context_delivery_enabled and capture_directory
-                and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
+        if payload.get("ok") is False and capture_directory and present_capture_failure:
             print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
-                max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
+                max_page_output_bytes=output_limit),
                 args.format, _quota_renderer(args))
             return 1
         if payload.get("ok") is True:
@@ -505,7 +509,6 @@ def _emit_quota_result(
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
-    deferred_context = getattr(args, "defer_context_presentation", False)
     renderer = _quota_renderer(args)
     if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):

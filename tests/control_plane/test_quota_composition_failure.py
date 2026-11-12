@@ -21,11 +21,13 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault,limit", [
-    ("action", None), ("interaction", None), ("runtime", None), ("interaction", 1700),
+@pytest.mark.parametrize("fault,bounded_route", [
+    ("action", None), ("interaction", None), ("runtime", None),
+    ("interaction", "complete"), ("read_order", "ordinary"), ("read_order", "prepared"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
-        tmp_path, monkeypatch, provider, fault, limit):
+        tmp_path, monkeypatch, provider, fault, bounded_route):
+    limit = 1700 if bounded_route else None
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path, claimed=False)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -72,6 +74,9 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
             payload["effective_action"] = "future_execution"
         elif fault == "interaction":
             payload["interaction_contract"]["schema_version"] = "future_interaction"
+        elif fault == "read_order":
+            payload["interaction_contract"]["agent_channel"].setdefault("required_reads", []).append(
+                {"command": "cat required-material.md", "ordering": "after_spend"})
         original.update(deepcopy(payload))
         if fault == "runtime":
             raise EffectRuntimeStartupError("synthetic composition unavailable",
@@ -86,10 +91,12 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         code, failed = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
             "--context-delivery", "on", "--codex-context-dir", str(native),
             "--decision-output-dir", str(capture),
-            *(("--complete-turn", "--max-page-output-bytes", str(limit)) if limit else ()))
+            *(("--max-page-output-bytes", str(limit)) if limit else ()),
+            *(("--complete-turn",) if bounded_route == "complete" else ()),
+            *(("--defer-context-presentation", "--prepared-capture-reference") if bounded_route == "prepared" else ()))
     assert code == 1 and failed["ok"] is False
     if limit is not None:
-        assert output_bytes <= limit
+        assert output_bytes <= limit, f"{bounded_route} refusal emitted {output_bytes} bytes"
     assert failed["error_code"] == "quota_decision_transport_failed"
     assert failed["diagnostic_code"] == ("runtime_unavailable" if fault == "runtime" else "invalid_request")
     assert "composition_error" not in failed and "source_diagnostic" not in failed
@@ -141,7 +148,8 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     content = bytearray()
     eof = False
     read_args = ["context-read", *reference, "--select", "/composition_error",
-        "--select", "/source_diagnostic", "--page-bytes", "16000", "--max-page-output-bytes", "64000"]
+        "--select", "/heartbeat_receipt", "--select", "/source_diagnostic",
+        "--page-bytes", "16000", "--max-page-output-bytes", "64000"]
     while not eof:
         rc, page = cli(*read_args)
         assert rc == 0, page
@@ -154,6 +162,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
             read_args = continuation[continuation.index("quota") + 1:]
     assert json.loads(content)["selections"] == [
         {"pointer": "/composition_error", "value": diagnostic["composition_error"]},
+        {"pointer": "/heartbeat_receipt", "value": original["heartbeat_receipt"]},
         {"pointer": "/source_diagnostic", "value": original},
     ]
     saved.write_bytes(raw + b"\n")
