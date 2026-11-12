@@ -38,7 +38,7 @@ Do not clone LoopX. Follow the README Quick Start to use the no-clone installer 
 
 After setup, first report whether the project is connected, then ask me for one natural-language goal unless I already included it.
 
-When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, then show me the current work, any decision that needs me, and the next safe action.
+When you receive \`/loopx <goal text>\`, first provide a concise ordered plan, save that plan as ordered LoopX Todos, then read back the current work, any decision that needs me, and the next safe action.
 
 Keep LoopX internal terms behind advanced or debugging explanations unless a decision requires them.`,
   zh: `把当前项目接入 LoopX: https://github.com/loopx-project/loopx
@@ -48,7 +48,7 @@ Keep LoopX internal terms behind advanced or debugging explanations unless a dec
 
 接入后先汇报项目是否已连接；如果我还没有给目标，就先问我要一个自然语言目标。
 
-收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，再让我看到当前要做什么、哪里需要我判断、下一步安全动作是什么。
+收到 \`/loopx <goal text>\` 后，先给出简洁有序计划，把计划按顺序保存为 LoopX 待办，再读回当前要做什么、哪里需要我判断、下一步安全动作是什么。
 
 LoopX 内部机制术语默认放在高级或调试说明里，只有决策需要时再展开。`,
 };
