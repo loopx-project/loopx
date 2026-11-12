@@ -2829,7 +2829,8 @@ export function PersonalWorkspacePage({
           else setSelection(entry.destination.selection);
         }} />}
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })}
+        onSelectRun={(item) => setSelection({ kind: "run", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}

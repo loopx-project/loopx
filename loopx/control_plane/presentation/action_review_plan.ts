@@ -96,6 +96,8 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
   creationProgress?: GoalCreationProgress;
   creationOutcome?: GoalCreationOutcome;
+  /** Accepted dispatch bound to its Task Session. It does not establish a result. */
+  taskExecution?: { goalId: string; todoId: string; sessionId: string };
 };
 
 export type GoalCreationProgress = {
@@ -505,6 +507,23 @@ function compileDecisionReviewFrame(proposal: Record<string, unknown>): Decision
     ? DEPENDENT_EFFECTS[state as keyof typeof DEPENDENT_EFFECTS] : "unknown" };
 }
 
+function taskExecutionReadback(
+  proposal: Record<string, unknown>, receipt: Record<string, unknown>, sourceFingerprint: string,
+): ActionReviewPlan["taskExecution"] {
+  const parameters = objectValue(proposal.normalized_parameters);
+  if (proposal.action_kind !== "todo.create" || parameters?.start_execution !== true
+      || receipt.outcome !== "task_execution_started") return undefined;
+  const resources = objectValue(receipt.resource_ids);
+  const canonical = objectValue(receipt.canonical_receipt);
+  const goalId = textValue(parameters.goal_id);
+  const todoId = textValue(resources?.todo_id);
+  const sessionId = textValue(resources?.session_id);
+  if (!goalId || !todoId || !sessionId || !textValue(resources?.turn_id)
+      || resources?.goal_id !== goalId || canonical?.goal_id !== goalId || canonical?.todo_id !== todoId
+      || canonical?.status !== "applied" || !sourceFingerprint || canonical?.preview_id !== sourceFingerprint) return undefined;
+  return {goalId, todoId, sessionId};
+}
+
 /**
  * Compile provider-neutral presentation semantics from a typed action proposal.
  * This reducer owns no action authority and performs no external effects.
@@ -559,10 +578,14 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       return held("repair", "readback_unverified");
     }
     const receipt = objectValue(proposal.receipt);
-    return receipt?.projection_verified === true
-      && (proposal.action_kind !== "operation.execute" || (operationFrame?.kind === "result" && operationFrame.resultDeliveryVerified))
-      ? held("completed", "readback_verified")
-      : held("repair", "readback_unverified");
+    if (receipt?.projection_verified !== true
+        || (proposal.action_kind === "operation.execute"
+          && (operationFrame?.kind !== "result" || !operationFrame.resultDeliveryVerified))) {
+      return held("repair", "readback_unverified");
+    }
+    const taskExecution = taskExecutionReadback(proposal, receipt, identity.sourceFingerprint);
+    const completed = held("completed", "readback_verified");
+    return taskExecution ? {...completed, taskExecution} : completed;
   }
   const basis = objectValue(proposal.canonical_update_basis);
   const parameters = objectValue(proposal.normalized_parameters);
