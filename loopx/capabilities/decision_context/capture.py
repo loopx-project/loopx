@@ -24,6 +24,7 @@ from .assembler import (
     assemble_decision_evidence,
 )
 from .freshness import (
+    _SUCCESS_STATUSES,
     build_source_freshness_report,
     source_freshness_row,
     write_capture_host_health,
@@ -33,7 +34,6 @@ from .profile import DecisionContextProfile, resolve_decision_context_activation
 from .runtime import _build_source_providers
 from .sources import DecisionSourceProvider, DecisionSourceSpec
 
-_READ_SUCCESS_STATUSES = frozenset({"completed", "no_change"})
 _READ_FAILURE_STATUSES = frozenset({"provider_failed", "failed", "unavailable"})
 
 
@@ -150,7 +150,7 @@ def _status(
         else:
             last_read_at = (
                 source["checked_at"]
-                if source["status"] in _READ_SUCCESS_STATUSES
+                if source["status"] in _SUCCESS_STATUSES
                 else None
             )
         failure_streak = (
@@ -478,7 +478,7 @@ def _execute_capture_tick(
                 else:
                     status = scan.status
                     if (
-                        status in {"completed", "no_change"}
+                        status in _SUCCESS_STATUSES
                         and scan.cursor_after
                         and scan.cursor_after != cursor
                     ):
@@ -497,7 +497,7 @@ def _execute_capture_tick(
             # advance last_success_at, so repeated failures cannot look fresh.
             last_success_at = row["last_success_at"] if row else None
             failure_streak = int(row["failure_streak"] or 0) if row else 0
-            if status in _READ_SUCCESS_STATUSES:
+            if status in _SUCCESS_STATUSES:
                 last_success_at, failure_streak = observed_at, 0
             elif status in _READ_FAILURE_STATUSES:
                 failure_streak += 1
