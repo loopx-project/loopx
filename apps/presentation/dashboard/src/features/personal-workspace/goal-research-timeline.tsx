@@ -11,7 +11,7 @@ import {ContextHelp} from "./context-help";
  * Position means first record time only; it never encodes progress or cause. */
 type Copy = Record<string, string>;
 type Props = {
-  timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
+  timeline: ExploreTimeline; complete: boolean; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
   selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string, button: HTMLButtonElement) => void;
   onSelect: (id: string, finding?: string, event?: string) => void; onSelectMany: (ids: string[], button: HTMLButtonElement) => void; onPhase: (index: number | null) => void;
   timeLabel: (value: number, precise?: boolean) => string; dayLabel: (value: number) => string;
@@ -37,7 +37,7 @@ function elapsedLabel(offset: number, zh: boolean) {
   return parts.join(" ") || (zh ? "0 秒" : "0s");
 }
 
-export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId, selectedDay, dayGroups, onGroupSelect, phase, onSelect, onSelectMany, onPhase, timeLabel, dayLabel}: Props) {
+export function GoalResearchTimeline({timeline, complete, zh, selectedIds, selectedEventId, selectedDay, dayGroups, onGroupSelect, phase, onSelect, onSelectMany, onPhase, timeLabel, dayLabel}: Props) {
   const plot = useRef<HTMLDivElement>(null);
   const [plotWidth, setPlotWidth] = useState(0);
   useLayoutEffect(() => {
@@ -54,7 +54,8 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     early: "前段", middle: "中段", late: "后段", item: "个有记录的研究项", items: "个有记录的研究项", question: "个问题", questions: "个问题",
     decisions: "显式决策", none: "未记录显式决策", changed: "变化", stopped: "停止", retained: "保留",
     unstructured: "决策未结构化", unstructuredHint: "结论未按 writeback 结构记录，无法拆出依据与决策。",
-    density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", axis: "自首条记录起",
+    density: "记录密度", densityHint: "柱高为事件数；浅红为无记录空档", axis: "自首条记录起", gap: "无记录",
+    partialAxis: "自最早的已读记录起", partialDensityHint: "柱高为已读事件数", partialGap: "无已读记录",
     routes: "研究路线", routeHint: "仅由显式关联或父子分组相连", singles: "未关联研究项",
     trail: "决策轨迹", more: "显示更早记录", moreQuestions: "显示更多问题", record: "条决策记录", records: "条决策记录", unknownTime: "时间未知", all: "全部时段",
     span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
@@ -65,7 +66,8 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     early: "Early", middle: "Middle", late: "Late", item: "research item with records", items: "research items with records", question: "question", questions: "questions",
     decisions: "Explicit decisions", none: "No explicit decision recorded", changed: "Changed", stopped: "Stopped", retained: "Retained",
     unstructured: "Unstructured decisions", unstructuredHint: "Findings were not recorded in writeback sections; evidence and decisions cannot be separated.",
-    density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", axis: "Since first record",
+    density: "Recording density", densityHint: "Bar height is events; pale red is a recording gap", axis: "Since first record", gap: "No records",
+    partialAxis: "Since earliest loaded record", partialDensityHint: "Bar height counts loaded events", partialGap: "No loaded records",
     routes: "Research routes", routeHint: "Connected only by recorded relationships or parent grouping", singles: "Unlinked research items",
     trail: "Decision history", more: "Show earlier records", moreQuestions: "Show more questions", record: "decision record", records: "decision records", unknownTime: "Unknown time", all: "Whole history",
     span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
@@ -75,6 +77,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   };
   const {start, end} = timeline;
   if (start === null || end === null) return <ContextHelp label={zh ? "记录时间未知" : "Record time unknown"} icon={CircleHelp}><p className="research-history-note">{copy.noTime}</p></ContextHelp>;
+  const axisLabel = complete ? copy.axis : copy.partialAxis;
   const elapsed = end - start;
   const span = Math.max(1, elapsed);
   const pct = (at: number) => `${((at - start) / span) * 100}%`;
@@ -131,24 +134,25 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   };
   return <div className="research-timeline">
     <div className="research-timeline-summary">
-      <div className={`research-phases${timeline.phases.length === 1 ? " is-single" : ""}`} role="group" aria-label={phaseNote}>{timeline.phases.map(phaseCard)}</div>
+      {complete ? <div className={`research-phases${timeline.phases.length === 1 ? " is-single" : ""}`} role="group" aria-label={phaseNote}>{timeline.phases.map(phaseCard)}</div> : null}
       <div className="research-timeline-key">
         <div className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</div>
         <ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
-      <p>{phaseNote}</p><p className="research-density-help"><i className="research-bar-key" aria-hidden/>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
-      <p>{zh ? "横轴从首条记录算起。悬停刻度可查看对应的本地时间。" : "The axis starts at the first record. Hover over a tick for its local time."}</p>
+      {complete ? <p>{phaseNote}</p> : null}
+      <p className="research-density-help"><i className="research-bar-key" aria-hidden/>{complete ? copy.densityHint : copy.partialDensityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+      <p>{zh ? "悬停刻度可查看对应的本地时间。" : "Hover over a tick for its local time."}</p>
       <p>{findingCopy.meaning}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
-      <p>{zh ? "选中时段后，高亮其中有记录的研究项。各项位置仍按首次记录时间。" : "Selecting a period highlights items with records in it. Each item stays at its first recorded time."}</p>
+      {complete ? <p>{zh ? "选中时段后，高亮其中有记录的研究项。各项位置仍按首次记录时间。" : "Selecting a period highlights items with records in it. Each item stays at its first recorded time."}</p> : null}
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹按研究问题归组，组内保留各轮显式决策，最近记录在前；同名问题不会自动合并。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history groups explicit decisions by question, newest record first; matching titles do not merge questions."}</p>
-      <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl>
+      {complete ? <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl> : null}
         </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}
       </div>
     </div>
     <div className="research-timeline-grid">
-      <div className="research-row-label"><strong>{copy.density}</strong><small>{copy.axis}</small><small>
-        {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {zh ? "无记录" : "No records"}</span> : null}
+      <div className="research-row-label"><strong>{copy.density}</strong><small>{axisLabel}</small><small>
+        {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {complete ? copy.gap : copy.partialGap}</span> : null}
         {decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}
       </small></div>
       <div className="research-row-plot">
@@ -157,8 +161,8 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
         {timeline.decisions.length ? <div className="research-decision-ticks">{timeline.decisions.filter(item => item.at !== null).map(item => <span key={item.event.event_id}
           title={`${label(item.sections!.decision!.outcome)} · ${item.at === null ? "—" : timeLabel(item.at)}`}
           className={`is-${item.sections!.decision!.outcome}${inPhase(item.at) ? "" : " is-dimmed"}`} style={{left: pct(item.at!)}}/>)}</div> : null}
-        {timeline.phases.slice(1).map(item => <span key={item.index} className="research-phase-divider" style={{left: pct(item.start)}}/>)}
-        <div className="research-axis" role="group" aria-label={copy.axis}>{ticks.map(offset => <time
+        {complete ? timeline.phases.slice(1).map(item => <span key={item.index} className="research-phase-divider" style={{left: pct(item.start)}}/>) : null}
+        <div className="research-axis" role="group" aria-label={axisLabel}>{ticks.map(offset => <time
           key={offset} dateTime={`PT${offset / 1_000}S`} title={timeLabel(start + offset, true)}
           className={offset === 0 ? "is-start" : offset === elapsed ? "is-end" : undefined}
           style={{left: pct(start + offset)}}>{elapsedLabel(offset, zh)}</time>)}</div>
