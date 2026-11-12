@@ -638,7 +638,7 @@ def test_recovery_refuses_mismatched_or_unavailable_original_activation(controll
         assert calls == ["/api/v1/checkpoint/restore"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
+@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.50\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
 def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, raw):
     source, destination, first, second, files, grades = controllers
     token = register(source, first)
@@ -649,6 +649,24 @@ def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, ra
                           destination=tmp_path / "unit", phase_deadline_file=phase)
     bank = source.state.judge.config.log_dir / "checkpoints"
     assert not (bank / ("f" * 32)).exists() and not (bank / ".loopx-phase-attempts").exists()
+    assert destination.state.judge.tokens == {} and grades == []
+
+
+def test_expired_fractional_epoch_seals_without_work_allowance(controllers, tmp_path):
+    source, destination, first, _, files, grades = controllers
+    token = register(source, first)
+    phase = tmp_path / "source-phase"
+    phase.write_bytes(b"1.5\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="f" * 32,
+                              destination=unit, phase_deadline_file=phase)
+    manifest = json.loads((unit / "checkpoint.json").read_bytes())
+    budget = manifest["point_metadata"]["host_phase_budget"]
+    assert budget["source_deadline_epoch"] == 1.5 and budget["remaining_seconds"] == 0
+    assert (unit / "components" / "host_phase_deadline").read_bytes() == phase.read_bytes()
+    with pytest.raises(ValueError, match="no work allowance"):
+        transport.restore(files[1], root=unit, expected_sha256=point["sha256"], run_id="expired",
+                          phase_deadline_file=tmp_path / "destination-phase")
     assert destination.state.judge.tokens == {} and grades == []
 
 
