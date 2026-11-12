@@ -102,7 +102,7 @@ def _default_runner(
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command), cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=timeout,
+        encoding="utf-8", errors="strict", timeout=timeout,
         check=False,
     )
 
@@ -247,7 +247,7 @@ def builtin_execution_preparation_claim(
             timeout=timeout,
             runner=runner or _default_runner,
         )
-    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+    except (OSError, subprocess.SubprocessError, RuntimeError, UnicodeDecodeError) as exc:
         raise ExecutionPreparationClaimFailed(
             f"managed claim for Todo {todo_id} was refused before delivery: {exc}"
         ) from exc
