@@ -302,6 +302,23 @@ def test_cli_index_defaults_to_root_without_registry_or_runtime(tmp_path):
     assert not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("listing", [
+    ["--list", "context-read"],
+    ["--list", "/rows/0", "context-read", "--list=/a~1b"],
+])
+def test_cli_list_before_context_read_preserves_action(tmp_path, listing):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    capture = ["--capture-file", str(path), "--capture-sha256", hashlib.sha256(raw).hexdigest()]
+    expected_args = ["--select", "/rows/0", "--select", "/a~1b"] if len(listing) > 2 else []
+    code, expected = _run_cli(registry, runtime, "quota", "context-read", "--list",
+        *expected_args, *capture, cwd=tmp_path)
+    assert code == 0 and expected["eof"], expected
+    code, actual = _run_cli(registry, runtime, "quota", *listing, *capture, cwd=tmp_path)
+    assert code == 0 and actual == expected, actual
+    assert not registry.exists() and not runtime.exists()
+
+
 @pytest.mark.parametrize("targets", [["/rows/0"], ["/a~1b"], [""], ["/rows/0", "/a~1b"]])
 def test_cli_list_target_shorthand_matches_explicit_selection(tmp_path, targets):
     path, raw, original = fixture_capture(tmp_path)
