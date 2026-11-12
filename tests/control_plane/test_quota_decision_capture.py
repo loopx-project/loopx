@@ -199,9 +199,9 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert ordinary['blocked_priority_fallback'] == fallback
-    assert ordinary == full
-    assert ordinary['schema_version'] == 'loopx_turn_envelope_v1'
-    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
+    assert 'schema_version' not in ordinary and 'contract_binding' not in full
+    assert 'blocked_priority_fallback' not in ordinary['heartbeat_recommendation']
+    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback_ref'] == '$.blocked_priority_fallback'
     assert ordinary['heartbeat_receipt'] == full['heartbeat_receipt']
     assert ordinary['interaction_contract']['cli_channel']['settlement_plan'] == full[
         'interaction_contract']['cli_channel']['settlement_plan']
@@ -249,7 +249,7 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'boundary-decision'
-    code, envelope = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture))
+    code, envelope = _run_cli(registry, runtime, *args, '--complete-turn', '--decision-output-dir', str(capture))
     assert code == 0, envelope
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
@@ -500,6 +500,7 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
     import sys
     import tempfile
     from pathlib import Path
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
     project, runtime, registry = _write_fixture(tmp_path)
     state = _configure_read_only_todo(project)
@@ -557,7 +558,9 @@ def test_real_cli_handoff_preserves_original_receipt(tmp_path, release, native_c
                         if native_context:
                             assert list(context.iterdir()) == []
                     assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
-                    assert json.loads(original)['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+                    original_source = json.loads(original)
+                    assert original_source['heartbeat_receipt']['turn_instance_id'] == TURN_ID
+                    assert_complete_turn_decision(original_source)
                 finally:
                     if process.poll() is None:
                         process.kill()
@@ -634,8 +637,8 @@ def test_handoff_rejects_shared_or_symlink_endpoint_and_preserves_selection(tmp_
                 prepare_decision_capture(request(None, decision_handoff_socket=str(endpoint)))
             payload = {'interaction_contract': {'cli_channel': {'selection_command': {
                 'command_args_template': 'quota should-run --todo-id TODO'}}}}
-            bind_capture_selection_transport(payload, request(None, decision_output_root=tmp_path,
-                                                              decision_handoff_socket=str(endpoint)))
+            bind_capture_selection_transport(payload, request(None, decision_handoff_socket=str(endpoint)),
+                                             capture_directory=tmp_path / 'first-decision')
             words = shlex.split(payload['interaction_contract']['cli_channel']['selection_command']['command_args_template'])
             assert words[-4:] == ['--decision-output-root', str(tmp_path), '--decision-handoff-socket', str(endpoint)]
             assert '--turn-envelope' not in words  # Independent from display mode.
@@ -829,8 +832,7 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
         '--available-capability', 'shell', '--available-capability', 'filesystem_read',
         '--context-delivery', 'on', '--codex-context-dir', str(context),
         '--decision-output-root', str(captures)]
-    if turn_envelope:
-        args.append('--turn-envelope')
+    args.append('--turn-envelope' if turn_envelope else '--complete-turn')
     code = main(args)
     failure = json.loads(capsys.readouterr().out)
     assert code == 1 and failure['ok'] is False

@@ -54,11 +54,16 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     action and owns admission. Each selection invocation allocates a new capture.
     """
     root = getattr(args, "decision_output_root", None)
-    # A prepared reference binds one immutable directory. Same-Turn
-    # selection uses its parent to create a fresh sibling capture.
-    if capture_directory is not None and getattr(args, "prepared_capture_reference", False):
+    handoff = getattr(args, "decision_handoff_socket", None)
+    # A prepared or handed-off capture is immutable. A fixed directory uses
+    # its parent for the next selection, matching the Host's capture-root check.
+    if root is None and capture_directory is not None and (
+        getattr(args, "prepared_capture_reference", False) or handoff
+    ):
         capture_root = capture_directory.parent
-    if root is None and capture_root is None:
+    complete_turn = getattr(args, "complete_turn", False)
+    turn_envelope = getattr(args, "turn_envelope", False)
+    if root is None and capture_root is None and not (complete_turn or turn_envelope):
         return
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
@@ -72,11 +77,11 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
     options: dict[str, str] = {}
     # A saved guard already carries its capture root. Preserve it unless this
     # caller explicitly selects another; otherwise use the validated cache.
-    if root is not None or "--decision-output-root" not in words:
-        selected_root = root if root is not None else capture_root
+    selected_root = root if root is not None else capture_root
+    if selected_root is not None and (root is not None or "--decision-output-root" not in words):
         options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
-    if getattr(args, "decision_handoff_socket", None):
-        options["--decision-handoff-socket"] = args.decision_handoff_socket
+    if handoff:
+        options["--decision-handoff-socket"] = handoff
     # Selection is part of the same Turn, including a caller's explicit opt-out.
     if getattr(args, "context_delivery", None) is not None:
         options["--context-delivery"] = args.context_delivery
@@ -97,9 +102,9 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
             del words[index:index + 2]
     for option, value in options.items():
         words.extend((option, value))
-    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
+    if turn_envelope and "--turn-envelope" not in words:
         words.append("--turn-envelope")
-    if getattr(args, "complete_turn", False) and "--complete-turn" not in words:
+    if complete_turn and "--complete-turn" not in words:
         words.append("--complete-turn")
     selection["command_args_template"] = shlex.join(words)
 

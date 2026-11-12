@@ -167,11 +167,12 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --complete-turn --decision-output-dir ./complete-001
 ```
 
-The flag is mutually exclusive with legacy `--turn-envelope`. In the C1
-candidate, omitting it keeps the existing complete-source default and ordinary
-settlement profile; the explicit raw-off compatibility view remains v0.
-Context delivery is independent: `--context-delivery off` returns the complete v1 document without
-progressive presentation; it does not undo the explicit version choice.
+The flag is mutually exclusive with legacy `--turn-envelope`. Ordinary quota
+without either flag or a managed handoff keeps its existing source, display and
+settlement. The explicit raw-off compatibility view remains v0.
+Context delivery is independent: `--context-delivery off` returns the explicit
+complete v1 document inline. A returned selection command and native lease
+preparation retain the selected source format through same-Turn reentry.
 An older CLI rejects the new flag before guard execution. Omit it to roll back;
 existing complete captures remain readable through their original digest-bound
 `quota context-read`/`context-project` recovery.
@@ -189,6 +190,8 @@ explicit digest-bound references. For a rejected ready capture, the native
 hook can still read back its recorded claim and lease references. A
 diagnostic read cannot acknowledge delivery of ready work context. Optional
 presentation failures after verification can still refer to the verified capture.
+An explicit complete-source native preparation does not fall back to the
+ordinary reader if the ready capture loses its version and binding.
 
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
@@ -212,9 +215,11 @@ context; the caller's private current deadline and runtime guidance are not new
 model context. Actual live adoption and efficiency still require separate proof.
 
 中文：`--complete-turn` 为显式完整 v1 Host 入口，与旧 `--turn-envelope` 互斥。
-C1 候选未选择该选项时仍沿现有完整来源默认和普通结算方式；显式关闭渐进交付并
-选择旧 envelope 时仍保留有界 v0。
-渐进/差分交付独立控制；关闭上下文交付时仍返回已显式选择的完整 v1 文档。
+未指定这两个选项、也未使用托管 handoff 的普通 quota 保留既有来源、展示和结算。
+显式关闭渐进及差分交付并选择旧 envelope 时仍保留有界 v0。
+渐进/差分交付独立控制；关闭上下文交付时仍内联返回显式选择的完整 v1 文档。
+返回的选题命令和原生 lease 准备在同一 Turn 再次进入时保留已选的来源格式。
+显式选用完整来源的原生准备如果发现 ready capture 丢失版本和绑定，不会改用普通 reader。
 读取按原摘要绑定的分页，不为补读重新准入。原验收、Stop、权限、必要读取与用户
 任务时间要求保留；不会把调用方私有当前倒计时或常驻 runtime 指导新增到模型输入。
 可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，

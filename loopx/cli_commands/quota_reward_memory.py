@@ -110,6 +110,7 @@ def attach_reward_memory_recall_after_should_run(
     registry_path: Path,
     goal_id: str,
     agent_id: str,
+    complete_source: bool = False,
 ) -> list[dict[str, Any]]:
     heartbeat_receipt = payload.get("heartbeat_receipt")
     if (
@@ -132,5 +133,5 @@ def attach_reward_memory_recall_after_should_run(
         turn_instance_id=heartbeat_turn_id,
         # The quota emitter seals these validated contributions with the
         # governing decision before presenting or saving the complete source.
-        embed_in_complete_source=isinstance(payload.get("interaction_contract"), Mapping),
+        embed_in_complete_source=complete_source and isinstance(payload.get("interaction_contract"), Mapping),
     )

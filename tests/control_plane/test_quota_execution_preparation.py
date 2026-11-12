@@ -335,8 +335,9 @@ def test_model_claim_keeps_receipt_without_unrelated_projection_details(
     ("sqlite", "codex_app_heartbeat", "root", None),
     ("sqlite", "codex_app_heartbeat", "root", "other-session"),
 ])
+@pytest.mark.parametrize("complete", [False, True])
 def test_native_hook_returns_readable_ready_source_and_original_claim(
-    tmp_path, monkeypatch, provider, scenario, location, ambient,
+    tmp_path, monkeypatch, provider, scenario, location, ambient, complete,
 ):
     from loopx.control_plane.turn_driver import codex_context
 
@@ -358,9 +359,11 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
         "--turn-instance-id", "preparation-turn", "--todo-id", TODO,
         "--defer-context-presentation", "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+        *(("--complete-turn",) if complete else ()),
         todos=[original], context_delivery="on",
         goal_suffix="\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100)
     assert before["execution_preparation"]["state"] == "claim_required"
+    assert before.get("schema_version") == ("loopx_turn_envelope_v1" if complete else None)
     goal_text = (tmp_path / "state.md").read_text()
     digest = _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
@@ -391,6 +394,10 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert claim_reference == f"todo-claim:codex-capture:{digest}"
     ready = receipt["context"]
     assert ready["ok"], ready.get("reason")
+    [published] = native.glob("prepared-*/ready/decision.json")
+    published_source = json.loads(published.read_bytes())
+    assert published_source.get("schema_version") == before.get("schema_version")
+    assert ("contract_binding" in published_source) is complete
     if location == "root":
         assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
@@ -408,9 +415,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
     assert plan["schema_version"] == (
-        "quota_settlement_plan_v2" if scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
+        "quota_settlement_plan_v2" if complete or scenario == "codex_app_heartbeat" else "quota_settlement_plan_v1"
     )
-    if scenario == "codex_app_heartbeat":
+    if complete or scenario == "codex_app_heartbeat":
         writeback, spend = [step for step in plan["ordered_steps"]
                             if step["kind"] in {"durable_writeback", "quota_spend"}]
         assert "--settle-turn --settlement-receipt" in writeback["command_template"]
@@ -496,7 +503,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("replace_stage", ["guard", "record", "version"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record", "version", "downgrade"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
@@ -515,7 +522,9 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     original = tmp_path / "preparation"
     _run(tmp_path, monkeypatch, provider, [], "--codex-app",
         "--turn-instance-id", "prepared-turn", "--todo-id", TODO, "--codex-context-dir", str(native),
-        "--decision-output-dir", str(original), context_delivery="on")
+        "--decision-output-dir", str(original),
+        *(("--complete-turn",) if replace_stage in {"version", "downgrade"} else ()),
+        context_delivery="on")
     from loopx.control_plane.turn_driver import codex_execution_preparation
     record = codex_context.record_native_execution_preparation
     run = codex_execution_preparation._default_runner
@@ -528,18 +537,21 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
-        if prepared and replace_stage == "version":
-            command = [*command, "--complete-turn"]
+        if prepared:
+            assert ("--complete-turn" in command) is (replace_stage in {"version", "downgrade"})
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
                 replace_capture()
-            elif replace_stage == "version":
+            elif replace_stage in {"version", "downgrade"}:
                 source, = native.glob("prepared-*/ready/decision.json")
                 payload = json.loads(source.read_bytes())
                 assert payload["schema_version"] == "loopx_turn_envelope_v1"
-                payload["schema_version"] = "loopx_turn_envelope_v999"
+                if replace_stage == "downgrade":
+                    del payload["schema_version"], payload["contract_binding"]
+                else:
+                    payload["schema_version"] = "loopx_turn_envelope_v999"
                 source.write_text(json.dumps(payload))
                 verified["writer"]["capture_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
                 result.stdout = json.dumps(verified["writer"])
@@ -570,7 +582,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     context = receipt["context"]
     assert context["ok"] is False
     recovery = shlex.split(context["recovery_command"])
-    if replace_stage == "version":
+    if replace_stage in {"version", "downgrade"}:
         assert "Unsupported" in context["reason"]
         assert context["recovery_command"] == context["recovery"]["command"]
         assert [recovery[index + 1] for index, word in enumerate(recovery) if word == "--select"] == ["/heartbeat_receipt"]
@@ -597,11 +609,20 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
             cwd=tmp_path, text=True, capture_output=True)
         assert implicit.returncode == 1 and json.loads(implicit.stdout)["ok"] is False
         retry = shlex.split(readback["context"]["recovery_command"])
-        assert "context-project" in retry and "--turn-instance-id" in retry
-        refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
-        error = json.loads(refusal.stdout)
-        assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
-        assert "content" not in error and log.read_bytes() == after_claim
+        if replace_stage == "downgrade":
+            assert "context-read" in retry
+            assert [retry[index + 1] for index, word in enumerate(retry) if word == "--select"] == ["/heartbeat_receipt"]
+            read = subprocess.run(retry, cwd=tmp_path, check=True, text=True, capture_output=True)
+            assert json.loads(json.loads(read.stdout)["content"])["selections"] == [
+                {"pointer": "/heartbeat_receipt", "value": context["heartbeat_receipt"]},
+            ]
+        else:
+            assert "context-project" in retry and "--turn-instance-id" in retry
+            refusal = subprocess.run(retry, cwd=tmp_path, text=True, capture_output=True)
+            error = json.loads(refusal.stdout)
+            assert refusal.returncode == 1 and error["heartbeat_receipt"] == context["heartbeat_receipt"]
+            assert "content" not in error
+        assert log.read_bytes() == after_claim
         return
     assert "digest mismatch" in context["reason"]
     digest = hashlib.sha256(verified["bytes"]).hexdigest()

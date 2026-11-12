@@ -56,15 +56,16 @@ def quota_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("entry", ["quota", "thin-heartbeat"])
-@pytest.mark.parametrize(("progressive", "delta", "retire"), [
-    ("off", "off", False),
-    ("on", "off", False),
-    ("off", "auto", False),
-    ("on", "auto", True),
-], ids=["raw", "progressive", "delta", "both-with-retirement"])
+@pytest.mark.parametrize(("complete", "progressive", "delta", "retire"), [
+    (False, "off", "off", False),
+    (True, "off", "off", False),
+    (True, "on", "off", False),
+    (True, "off", "auto", False),
+    (True, "on", "auto", True),
+], ids=["ordinary", "complete-raw", "complete-progressive", "complete-delta", "complete-with-retirement"])
 def test_real_app_guard_delivers_scoped_memory_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, entry: str,
-    progressive: str, delta: str, retire: bool,
+    complete: bool, progressive: str, delta: str, retire: bool,
 ) -> None:
     registry, route = quota_fixture(tmp_path, monkeypatch, provider, retire=retire)
     enable_live_memory(registry, recall=True, ingest=True)
@@ -75,25 +76,30 @@ def test_real_app_guard_delivers_scoped_memory_once(
         "loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
         lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=memory))
     turn = "app-memory-delivery"
+    source_flags = ["--complete-turn"] if complete else []
     if entry == "thin-heartbeat":
         bootstrap = run_cli(route + ["heartbeat-prompt", "--thin", "--codex-app",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-            "--available-capability", "filesystem_read"])
+            "--available-capability", "filesystem_read", *source_flags])
         command = next(line for line in bootstrap["task_body"].splitlines()
             if line.startswith("loopx ") and "quota should-run" in line)
         args = shlex.split(command.replace('${LOOPX_TURN:?}', turn))[1:]
     else:
         args = route + ["quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--codex-app", "--turn-instance-id", turn,
-            "--available-capability", "filesystem_read"]
+            "--available-capability", "filesystem_read", *source_flags]
     args += ["--context-delivery", progressive, "--delta-delivery", delta]
     first = run_cli(args)
     assert first["should_run"] is True
-    assert_complete_turn_decision(first)
+    if complete:
+        assert_complete_turn_decision(first)
+    else:
+        assert "schema_version" not in first and "contract_binding" not in first
     plan = first["interaction_contract"]["cli_channel"]["settlement_plan"]
-    # Memory binding and settlement ownership are independent of presentation.
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
-    assert plan["ordered_steps"][2]["owner"] == "agent"
+    # The admitted explicit Host owns composed settlement across presentations.
+    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert plan["schema_version"] == ("quota_settlement_plan_v2" if complete else "quota_settlement_plan_v1")
+    assert spend["owner"] == ("runtime" if complete else "agent")
     assert first["reward_memory_recall"]["status"] == "applied"
     assert memory.calls == 1
     # Participation stays small. The complete private input has one carrier.
@@ -101,7 +107,7 @@ def test_real_app_guard_delivers_scoped_memory_once(
     contributions = {item["hook_id"]: item for item in first["turn_context_contributions"]}
     assert set(contributions) == ({"reward-memory.turn-context", "anti-entropy.turn-context"}
                                  if retire else {"reward-memory.turn-context"})
-    assert all("basis_digest" not in item for item in contributions.values())
+    assert all(("basis_digest" not in item) is complete for item in contributions.values())
     contribution = contributions["reward-memory.turn-context"]
     guidance = contribution["context_fields"]["reward_memory_recall"]["context"]["guidance"]
     assert len(guidance) == 1 and guidance[0]["content_summary"]
@@ -111,10 +117,11 @@ def test_real_app_guard_delivers_scoped_memory_once(
         assert first["anti_entropy_guidance"]["target_symbols"] == ["old_api"]
         assert projected["anti_entropy_context"] == (
             contributions["anti-entropy.turn-context"]["context_fields"]["anti_entropy_context"])
-    changed = deepcopy(first)
-    changed_plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-    changed_plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
-    assert project_turn_context(changed) == {}
+    if complete:
+        changed = deepcopy(first)
+        changed_plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
+        changed_plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+        assert project_turn_context(changed) == {}
     assert contribution["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
     assert "private, non-authoritative" in contribution["instructions"][0]
     repeated = run_cli(args)
@@ -340,7 +347,7 @@ def test_real_guard_complete_memory_rejects_changed_source_without_provider_repl
     capture_root = tmp_path / "native-memory-captures"
     capture_root.mkdir(mode=0o700)
     if entry == "thin-heartbeat":
-        bootstrap = run_cli(route + ["heartbeat-prompt", "--thin", "--codex-app",
+        bootstrap = run_cli(route + ["heartbeat-prompt", "--thin", "--codex-app", "--complete-turn",
             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--available-capability", "filesystem_read",
             "--decision-output-root", str(capture_root)])
@@ -350,7 +357,7 @@ def test_real_guard_complete_memory_rejects_changed_source_without_provider_repl
     else:
         args = route + ["quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--codex-app", "--turn-instance-id", turn,
-            "--available-capability", "filesystem_read", "--decision-output-root", str(capture_root)]
+            "--complete-turn", "--available-capability", "filesystem_read", "--decision-output-root", str(capture_root)]
     source = run_cli(args + ["--context-delivery", "off", "--delta-delivery", "off"])
     assert_complete_turn_decision(source)
     assert project_turn_context(source)["reward_memory_recall"]["context"]["guidance"]

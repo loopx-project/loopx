@@ -74,8 +74,9 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
         assert rc == 0, original
     receipt_count = _heartbeat_receipt_count(runtime, turn)
     assert receipt_count == (1 if original else 0)
-    for flag in ([], ["--turn-envelope"]):
-        capture = tmp_path / ("flag" if flag else "ordinary")
+    for source in ("ordinary", "complete", "compatibility"):
+        flag = {"ordinary": [], "complete": ["--complete-turn"], "compatibility": ["--turn-envelope"]}[source]
+        capture = tmp_path / source
         context = tmp_path / "context"
         rc, denied = _run_cli(
             registry,
@@ -117,7 +118,7 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
                     break
                 offset = page["next_offset"]
             denied = json.loads(contents)
-        elif flag:
+        elif source == "compatibility":
             # The raw compatibility view is signed against the same complete
             # refusal and must preserve the stop without granting settlement.
             assert denied["schema_version"] == "loopx_turn_envelope_v0"
@@ -133,8 +134,13 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             assert denied["detail_ref"]["captured_decision"]["path"] == str(capture / "decision.json")
             denied = captured
         assert denied["error_code"] == "quota_action_selection_rejected"
-        assert denied["schema_version"] == "loopx_turn_envelope_v1"
-        assert denied == captured
+        if source == "ordinary":
+            assert "schema_version" not in captured and "contract_binding" not in captured
+            assert "schema_version" not in denied and "contract_binding" not in denied
+            assert denied["heartbeat_receipt"] == captured["heartbeat_receipt"]
+        else:
+            assert denied["schema_version"] == "loopx_turn_envelope_v1"
+            assert denied == captured
         assert "context_delivery" not in denied
         assert (
             not context.exists()
@@ -153,15 +159,16 @@ def test_rejected_cli_decision_is_complete_and_keeps_original_effects(
             "selection_rejection" in denied
             or "action_selection_qualification" in denied
         )
-        binding = denied["contract_binding"]["scheduler_execution_args"]
-        from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+        if source != "ordinary":
+            binding = denied["contract_binding"]["scheduler_execution_args"]
+            from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
 
-        assert (
-            _turn_envelope_result(
-                "compose_complete", payload=denied, scheduler_execution_args=binding
+            assert (
+                _turn_envelope_result(
+                    "compose_complete", payload=denied, scheduler_execution_args=binding
+                )
+                == denied
             )
-            == denied
-        )
         envelope = build_turn_envelope(denied)
         plan = build_loopx_turn_plan(
             envelope,
@@ -252,6 +259,7 @@ def test_unhealthy_paused_decision_keeps_stop_policy_in_complete_capture(
     args = Namespace(
         quota_command="should-run",
         turn_envelope=flag,
+        complete_turn=not flag,
         format="json",
         context_delivery="auto",
         goal_id=PAUSED_GOAL,
@@ -349,7 +357,7 @@ def test_success_without_contract_is_rejected_before_capture_or_handoff(
         quota._emit_quota_result(
             {"ok": True, "should_run": True, "effective_action": "run",
                 "schema_version": schema},
-            Namespace(quota_command="should-run", turn_envelope=flag,
+            Namespace(quota_command="should-run", turn_envelope=flag, complete_turn=not flag,
                 format="json", goal_id=GOAL_ID, agent_id=AGENT_ID),
             context=None,
             registry_path=tmp_path / "registry.json",

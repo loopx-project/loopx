@@ -4127,14 +4127,12 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
     assert cli_channel["quota_spend_source"] == expected_source
-    # This ordinary guided entry retains the source's manual settlement.
-    # A new wire format cannot opt it into the native composed publisher.
+    # The default guided entry keeps the ordinary capture and manual spend.
     assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
     spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
     assert spend["owner"] == "agent"
     assert f"--source {expected_source}" in spend["command_template"]
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-    assert_complete_turn_decision(selected)
+    assert "schema_version" not in selected and "contract_binding" not in selected
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4195,8 +4193,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
     spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
     assert spend["owner"] == "agent" and "--source visible-goal" in spend["command_template"]
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-    assert_complete_turn_decision(selected)
+    assert "schema_version" not in selected and "contract_binding" not in selected
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4310,8 +4307,7 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
     spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
     assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
-    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
-    assert_complete_turn_decision(guard)
+    assert "schema_version" not in guard and "contract_binding" not in guard
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
@@ -4872,13 +4868,19 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(
+    tmp_path: Path, profile: str, complete: bool,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
     rc, preview = _run_cli(
         registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        *(["--complete-turn", "--context-delivery", "off", "--delta-delivery", "off"] if complete else []),
     )
     assert rc == 0, preview
     contract = preview["interaction_contract"]
@@ -4892,8 +4894,17 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, pr
     command = (selection["route_prefix"] + " " + selection["command_args_template"]).replace(
         "{todo_id}", ALTERNATIVE_TODO_ID,
     ).replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
+    if complete:
+        assert_complete_turn_decision(preview)
+        argv = shlex.split(command)
+        assert argv.count("--complete-turn") == 1
+        assert "--decision-output-root" not in argv
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
+    if complete:
+        assert_complete_turn_decision(bound)
+    else:
+        assert "schema_version" not in bound and "contract_binding" not in bound
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID
@@ -7072,8 +7083,6 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     tmp_path: Path, provider: str,
 ) -> None:
-    from hashlib import sha256
-
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
 
@@ -7115,9 +7124,8 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert plan["route"]["would_invoke_host"] is False
     assert not any(plan["effects"].values())
 
-    capture = tmp_path / "guided-replan-capture"
     bound_rc, bound = _run_generated_cli(
-        actions[0] + " --decision-output-dir " + shlex.quote(str(capture)),
+        actions[0],
         registry_path=registry_path,
     )
 
@@ -7130,35 +7138,31 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert bound["schema_version"] == "loopx_turn_envelope_v1"
-    assert cli_channel["settlement_plan"]["identity"] == identity
-    assert "settlement_read_ref" not in cli_channel
-    # The complete source replaces the staged writeback-only view. Read its
-    # original immutable capture, preserving the same no-reentry/side-effect
-    # oracle as the historical reader test.
-    decision_file = capture / "decision.json"
+    assert cli_channel["settlement_identity"] == identity
+    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
+    assert "settlement_plan" not in cli_channel
+    # Native admission defers the plan; consume its exact captured reader
+    # without another guard or a second guided-start Turn.
+    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         runtime / "goals" / GOAL_ID / "runs/index.jsonl",
-        decision_file,
+        Path(reader_argv[reader_argv.index("--decision-file") + 1]),
     )
     original_files = {path: path.read_bytes() for path in source_paths}
-    reader_rc, page = _run_cli(registry_path, runtime, "quota", "context-read",
-        "--capture-file", str(decision_file), "--capture-sha256", sha256(original_files[decision_file]).hexdigest(),
-        "--page-bytes", "64000", "--max-page-output-bytes", "64000")
-    assert reader_rc == 0, page
-    content = [page["content"]]
-    while not page["eof"]:
-        reader = subprocess.run(shlex.split(page["next_command"]), cwd=REPO_ROOT,
-            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}, capture_output=True, text=True, timeout=60)
-        assert reader.returncode == 0, (reader.stdout, reader.stderr)
-        page = json.loads(reader.stdout)
-        content.append(page["content"])
-    complete = json.loads("".join(content))
-    assert complete == bound
-    assert complete["replan_action_packet"]["obligation_id"] == obligation_id
-    plan = complete["interaction_contract"]["cli_channel"]["settlement_plan"]
+    reader = subprocess.run(
+        reader_argv,
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert reader.returncode == 0, (reader.stdout, reader.stderr)
+    writeback = json.loads(reader.stdout)
+    assert writeback["obligation_id"] == obligation_id
+    plan = writeback["writeback"]["settlement_plan"]
     assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend",

@@ -135,7 +135,7 @@ def test_bound_successor_review_reads_current_evidence_and_uses_creation_receipt
         monkeypatch.setenv("CODEX_THREAD_ID", session)
         epoch = hook("SessionStart", source="startup")
     flags = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
-             "--turn-instance-id", TURN, "--context-delivery", "on",
+             "--turn-instance-id", TURN, "--context-delivery", "on", "--complete-turn",
              "--codex-context-dir", str(native), "--decision-output-root", str(captures))
     navigation = call(*flags)
     assert navigation["schema_version"] == "context_capture_navigation_v1"

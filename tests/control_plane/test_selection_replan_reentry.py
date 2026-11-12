@@ -501,7 +501,10 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
+def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider, complete):
+    from hashlib import sha256
+
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     project, runtime, registry = _write_fixture(tmp_path)
@@ -519,10 +522,14 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--todo-id", "todo_chain_000000000001", "--context-delivery", "on",
         "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+        *(["--complete-turn"] if complete else []),
         "--max-page-output-bytes", "4096")
     assert rc == 0 and presented["ok"], presented
     assert len(json.dumps(presented, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
-    original = json.loads((capture / "decision.json").read_text())
+    original_path = capture / "decision.json"
+    original_bytes = original_path.read_bytes()
+    original = json.loads(original_bytes)
+    assert original.get("schema_version") == ("loopx_turn_envelope_v1" if complete else None)
     assert original["ok"] and original["effective_action"] == "autonomous_replan_required"
     assert original["heartbeat_receipt"]["status"] == "committed"
     assert original["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
@@ -555,7 +562,15 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert selected_reference["path"] == original_reference["path"]
     assert selected_reference["sha256"] == original_reference["sha256"]
     saved_capture = Path(selected_reference["path"])
-    assert json.loads(saved_capture.read_bytes()) == original
+    saved_view = json.loads(saved_capture.read_bytes())
+    assert saved_view["heartbeat_receipt"] == original["heartbeat_receipt"]
+    assert saved_view.get("schema_version") == original.get("schema_version")
+    # Either presentation may stage a separate view. The journal must still
+    # retain the source digest and the read must preserve the committed receipt.
+    assert json.loads((native / "session.json").read_bytes())["source_recovery"]["sha256"] == (
+        sha256(original_bytes).hexdigest()
+    )
+    assert original_path.read_bytes() == original_bytes
     assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
     # Identical JSON semantics with different original bytes still fail closed;
     # a reader failure cannot allocate another admission or spend.

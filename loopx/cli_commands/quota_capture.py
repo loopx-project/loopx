@@ -345,7 +345,9 @@ def _saved_context_transport_failure(
         "instruction": instruction}
 
 
-def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
+def project_saved_context_capture(
+    args: argparse.Namespace, *, hook_session: str | None = None, require_complete_source: bool = False,
+) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
     Publication is delayed until this native tool runs, so the lifecycle owner
@@ -400,7 +402,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     version = payload.get("schema_version")
     complete = version == COMPLETE_TURN_DECISION_VERSION
     try:
-        if not complete and not is_legacy_saved_quota_decision(payload):
+        if not complete and (require_complete_source or not is_legacy_saved_quota_decision(payload)):
             if activation["enabled"]:
                 from ..control_plane.turn_driver.codex_context import retire_rejected_saved_context
 
@@ -998,7 +1000,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 "capture_sha256": digest,
                                 "goal_id": request["goal_id"], "agent_id": request["agent_id"],
                                 "turn_instance_id": request["turn_instance_id"],
-                            }), hook_session=event["session_id"])
+                            }), hook_session=event["session_id"],
+                                require_complete_source=request.get("complete_turn") is True)
                             context = receipt["context"]
                             if context.get("ok") is False:
                                 recovery = context.get("recovery")

@@ -23,7 +23,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("fault,bounded_route", [
     ("action", None), ("interaction", None), ("runtime", None),
-    ("interaction", "complete"), ("read_order", "ordinary"), ("read_order", "prepared"),
+    ("interaction", "complete"), ("read_order", "explicit"), ("read_order", "prepared"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
         tmp_path, monkeypatch, provider, fault, bounded_route):
@@ -91,8 +91,8 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         code, failed = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
             "--context-delivery", "on", "--codex-context-dir", str(native),
             "--decision-output-dir", str(capture),
+            "--complete-turn",
             *(("--max-page-output-bytes", str(limit)) if limit else ()),
-            *(("--complete-turn",) if bounded_route == "complete" else ()),
             *(("--defer-context-presentation", "--prepared-capture-reference") if bounded_route == "prepared" else ()))
     assert code == 1 and failed["ok"] is False
     if limit is not None:
@@ -193,7 +193,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
             unavailable.setattr(decision_capture, "write_decision_capture", fail_write)
             code, refused = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
                 "--context-delivery", "on", "--codex-context-dir", str(native),
-                "--decision-output-dir", str(missing_capture))
+                "--complete-turn", "--decision-output-dir", str(missing_capture))
         assert code == 1 and refused["should_run"] is False
         assert refused["heartbeat_receipt"]["event_id"] == failed["heartbeat_receipt"]["event_id"]
         assert refused["error_code"] == "quota_decision_transport_failed"

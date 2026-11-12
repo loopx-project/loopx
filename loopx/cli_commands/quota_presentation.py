@@ -135,9 +135,8 @@ def compose_quota_cli_source(
     capability_context: list[dict[str, object]],
 ) -> tuple[dict[str, object], bool, dict[str, object] | None]:
     """Prepare one decided source and an optional bounded compatibility display."""
-    # Current JSON and Markdown readers consume the same complete source.
-    # Only explicit off retains the bounded compatibility display; a format
-    # choice cannot silently put an ordinary caller back on the v0 reader.
+    # Explicit complete-source JSON and Markdown readers share one source.
+    # The legacy flag with delivery off selects the bounded compatibility view.
     raw_envelope = (getattr(args, "turn_envelope", False)
         and not activation["enabled"]
         and activation.get("requested") == "off"
@@ -240,11 +239,14 @@ def _project_quota_cli_payload(
     payload: dict[str, object],
     args: argparse.Namespace,
     detail_sections: frozenset[str],
+    *,
+    ordinary_source: bool = False,
+    capture_directory: Path | None = None,
 ) -> dict[str, object]:
     """Project decided contracts; failed collection retains its diagnostic.
 
-    Collection failures must not reenter their unavailable runtime. Decided
-    should-run inputs already carry their complete source (issue #3687).
+    Collection failures must not reenter their unavailable runtime (issue #3687).
+    Explicit complete-source inputs have already been composed.
     """
     from ..control_plane.effect_program import reject_retired_quota_format
     from ..control_plane.quota.cli_projection import (
@@ -262,10 +264,24 @@ def _project_quota_cli_payload(
                 payload, include_decision_detail="decisions" in detail_sections,
             )
         # A collection failure has no decided contract and must not reenter
-        # its unavailable runtime. Decided refusals still need signed views.
+        # its unavailable runtime. An explicit complete-source refusal still
+        # keeps its signed view.
         # Keep the decided diagnostic, including its original recovery/receipt.
         return payload
     if args.quota_command == "should-run":
+        if ordinary_source:
+            from ..control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+            from ..control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
+            if capture_directory is not None and "vision" not in detail_sections:
+                payload = project_captured_replan_cli_view(payload)
+            return compact_quota_should_run_cli_payload(
+                payload,
+                include_todo_summary_detail="agent-todos" in detail_sections,
+                include_user_todo_summary_detail="user-todos" in detail_sections,
+                include_goal_boundary_detail="goal-boundary" in detail_sections,
+                include_vision_detail="vision" in detail_sections,
+            )
         if (payload.get("schema_version") == "loopx_turn_envelope_v1"
                 and isinstance(payload.get("interaction_contract"), Mapping)):
             return payload
@@ -273,8 +289,6 @@ def _project_quota_cli_payload(
             "should-run emission requires a composed complete decision; "
             "historical captures require their explicit recovery reader"
         )
-    # Decided should-run inputs have one complete source; any v0 reader gets a
-    # compatibility view from that source after capture.
     if args.quota_command in {"status", "plan"}:
         return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
     if args.quota_command == "monitor-poll":

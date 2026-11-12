@@ -317,6 +317,7 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
+    complete_source: bool,
 ) -> tuple[dict[str, object], dict[str, Any], list[dict[str, Any]]]:
     """Stage optional context after the capture and settlement route is decided."""
     try:
@@ -355,6 +356,7 @@ def _prepare_quota_result_context(
         capability_context = attach_reward_memory_recall_after_should_run(
             payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+            complete_source=complete_source,
         )
     return payload, activation, capability_context
 
@@ -411,11 +413,17 @@ def _emit_quota_result(
     if budgeted_spend:
         attach_quota_settlement_guidance(payload, registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None)
+    # The ordinary quota caller retains its existing source and view until
+    # the complete contract is qualified for default adoption.
+    complete_source = any(getattr(args, name, None) for name in (
+        "complete_turn", "turn_envelope", "decision_handoff_socket",
+    ))
     activation = None
     if not budgeted_spend:
         payload, activation, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
+            complete_source=complete_source,
         )
     if context is not None:
         observe_quota_result(
@@ -442,7 +450,7 @@ def _emit_quota_result(
     decision_identity = ("", "")
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
-        if args.quota_command == "should-run":
+        if args.quota_command == "should-run" and complete_source:
             from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
             try:
@@ -471,6 +479,11 @@ def _emit_quota_result(
                 return 1
             # Validate before capture or handoff; the complete source is unchanged.
             payload = _project_quota_cli_payload(payload, args, detail_sections)
+        elif args.quota_command == "should-run":
+            if "schema_version" in payload or "contract_binding" in payload:
+                raise QuotaDecisionTransportError("Ordinary quota received an unexpected decision source.")
+            if payload.get("ok") is True and not isinstance(payload.get("interaction_contract"), Mapping):
+                raise QuotaDecisionTransportError("Ordinary quota decision is missing its interaction contract.")
         captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
@@ -503,8 +516,17 @@ def _emit_quota_result(
         decision_identity = (str(payload.get("goal_id") or ""),
             str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     captured_payload = payload
-    if args.quota_command != "should-run":
-        payload = _project_quota_cli_payload(payload, args, detail_sections)
+    # The native planner and its fallback must use the same original bytes.
+    # Compaction here would stage a second view before native first-read paths
+    # are derived, while its exact recovery reference still names decision.json.
+    native_read = (
+        args.quota_command == "should-run" and native_context and not deferred_context
+        and args.format == "json" and payload.get("ok") is True
+    )
+    if args.quota_command != "should-run" or (not complete_source and not native_read):
+        payload = _project_quota_cli_payload(payload, args, detail_sections,
+            ordinary_source=not complete_source,
+            capture_directory=capture_directory)
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
@@ -516,8 +538,9 @@ def _emit_quota_result(
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface=quota_context_surface(captured_payload, args))
-    if (not deferred_context and succeeded and args.quota_command == "should-run"
-            and activation["progressive_enabled"] and not native_context and delivery_request is None):
+    if (not deferred_context and (args.format == "json" or complete_source) and succeeded
+            and args.quota_command == "should-run" and activation["progressive_enabled"]
+            and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,
             runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
             directory=capture_directory, reader_argv=reader_argv,

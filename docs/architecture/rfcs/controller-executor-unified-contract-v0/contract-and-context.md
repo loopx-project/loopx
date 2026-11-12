@@ -837,8 +837,9 @@ the complete-source path; they do not increase the historical reader's budget.
 #### Turn consumer preparation and instruction parity
 
 The separately landed Turn slice left the ordinary quota producer on its recorded
-contract. This parent C1 proposal also migrates the quota/heartbeat producer;
-recorded requests retain their original version-specific reader. Current Turn planning consumes
+contract. This parent C1 proposal adds explicit complete-source quota and thin
+heartbeat entrypoints; ordinary quota stays on the recorded contract.
+Recorded requests retain their original version-specific reader. Current Turn planning consumes
 its complete source directly and publishes its own immutable capture; pairing a
 newly composed source with an older executor envelope is rejected.
 
@@ -974,7 +975,7 @@ unchanged. See the [owned budget decision](../../../reference/contracts/interfac
 This control subset is not complete-source parity, model adoption or a net
 efficiency result, and does not close the parent C1 acceptance.
 
-The candidate now routes ordinary Markdown, with or without `--turn-envelope`,
+An earlier default-cutover candidate routed ordinary Markdown, with or without `--turn-envelope`,
 through the same stateless progressive owner as JSON when delivery is omitted
 or `auto`. The format no longer selects the bounded v0 view or bypasses
 progressive material delivery. `compose_quota_cli_source` calls the same typed
@@ -987,14 +988,20 @@ durable writeback precedes spend, and replay leaves one debit. The native Codex
 profile still requires JSON and its capture destination; this ordinary-reader
 migration does not make native Markdown an executable transport.
 
-| Reader boundary | Candidate behavior and retirement condition |
+The staged proposal keeps ordinary quota and thin heartbeat on the existing
+decision and presentation path until the parent acceptance qualifies a default
+change. Explicit `--complete-turn` and managed handoff keep the checked source
+through selection and native lease preparation. Progressive and Delta remain
+independent of source selection.
+
+| Reader boundary | Current behavior and retirement condition |
 | --- | --- |
-| Ordinary Markdown, omitted delivery / `auto` | Same progressive required view and pinned recovery as JSON. Complete source, original binding and receipt remain recoverable without admission or spend. Optional private-transport failure retains that complete decided input, without following or repairing an unsafe root. |
-| Explicit `off` plus `--turn-envelope` | Retains the bounded compatibility display from the same composition. This explicit caller still owns the v0 display adapter; it is not removed by the ordinary-reader migration. |
-| Native and managed handoff | Keep their checked complete-source presentation and original recovery contracts; a Markdown format does not downgrade a handoff. |
+| Ordinary quota and thin heartbeat | Keep the existing compact decision and settlement. Saved ordinary captures retain their original source and pinned recovery. |
+| Explicit `--complete-turn` and managed handoff | Keep the checked complete source through selection and lease preparation. If a ready capture loses its complete version and binding, it offers receipt diagnosis only. |
+| Explicit `--turn-envelope` | Progressive or Delta uses the complete source. With both off and without a managed handoff, retain the bounded v0 compatibility display from the same composition. |
 | Recorded v0 captures, plans and requests | Keep their pinned integrity/recovery reader until outstanding admitted work and the supported recovery window are reconciled. An invalid new source cannot select this fallback. |
 
-This changes the candidate's default Markdown format contract. A first reference
+In the earlier default-cutover comparison, a first reference
 can be smaller while its necessary reader responses make total output larger.
 The existing probe consumer now decodes either format through the same pinned
 reader, checks the recovered contract and reports literal first output, every
@@ -1012,7 +1019,7 @@ On three matched public SQLite fixtures, Markdown first output changes from
 delivered initial read plan gives 12,233/23,715/44,765 bytes. Traversing the
 entire required-view oracle instead gives 33,213/67,359/71,342 bytes, exceeding
 the previous inline carrier in every case. JSON measurements are unchanged.
-This adjacent C1 migration comparison qualifies the selected-read path only;
+This earlier comparison qualifies the selected-read path only;
 later dependent reads, original-quota outcomes and complete model/IO costs are
 not measured by it. Smaller first output alone is not net efficiency evidence.
 
@@ -1022,7 +1029,8 @@ v0 field instructions. Both schema and confidentiality boundaries finish before
 either actor call. Retained-capture loading preserves the original binding and
 numeric representation, while invalid new sources never fall back to historical
 readers. The [independent mainline slice #8468](https://github.com/loopx-project/loopx/pull/8468) retains main's raw/v0 corpus and
-actual-default portfolio; C1's candidate default remains part of this proposal.
+actual-default portfolio. A default change still needs the original-quota
+outcome and full-cost comparison.
 Local API and scripted-provider validation do not qualify model adoption or
 original-quota outcome/full-cost benefit.
 

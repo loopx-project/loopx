@@ -516,6 +516,8 @@ def native_execution_preparation_request(
             if readback_for is not None and readback_for != source_sha256:
                 return None
             action = {**request, "source_sha256": source_sha256}
+            if _complete_turn_read_scope(state):
+                action["complete_turn"] = True
             claim_source_sha256 = action.get("claim_source_sha256")
             if not _original_native_claim_source(root, session, claim_source_sha256):
                 action.pop("claim_source_sha256", None)
@@ -776,6 +778,11 @@ class NativeContextPreparation:
     stateless_recovery: dict[str, Any] | None = None
 
 
+def _complete_turn_read_scope(state: Mapping[str, Any]) -> bool:
+    read_scope = state.get("read_scope")
+    return isinstance(read_scope, dict) and read_scope.get("surface") == "complete_turn"
+
+
 def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, Any], *, capture_sha256: str) -> None:
     """Keep only the existing claim/lease readback for this exact ready capture."""
     previous = state.get("host_execution_preparation")
@@ -787,8 +794,11 @@ def _preserve_preparation_readback(state: dict[str, Any], recovery: dict[str, An
     if (not isinstance(ready, dict) or ready.get("sha256") != capture_sha256
             or not isinstance(request, dict) or request.get("turn_instance_id") != previous.get("turn_instance_id")):
         return
-    previous["retired_context_readback"] = {key: request[key]
+    readback = {key: request[key]
         for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id", "authority_route") if key in request}
+    if _complete_turn_read_scope(state):
+        readback["complete_turn"] = True
+    previous["retired_context_readback"] = readback
 
 
 def _retire_native_recovery_lookup(root: Path, state: dict[str, Any], *,
@@ -961,7 +971,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         or (native_session and session != native_session)):
                     # Replan still has a verified reader address before native
                     # continuity starts. Use the ordinary stateless projector.
-                    if (surface == "complete_turn" and progressive_enabled and captured_decision_path is not None
+                    if (progressive_enabled and captured_decision_path is not None
                             and isinstance(payload.get("replan_read_path"), str)):
                         return prepare_stateless()
                     if check_saved_source:
