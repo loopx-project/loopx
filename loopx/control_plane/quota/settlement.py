@@ -8,7 +8,8 @@ import shlex
 from typing import Any
 
 from ...command_invocation import loopx_cli_argv
-from ...project_prompt import host_command, shell_arg_for_host
+from ...install_contract import powershell_literal
+from ...project_prompt import host_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -182,7 +183,9 @@ class QuotaSettlementReadback:
 
 
 def render_owed_host_command(argv: list[str]) -> str:
-    return " ".join([host_command(argv[0]), *(shell_arg_for_host(arg) for arg in argv[1:])])
+    # The PowerShell launcher scans its arguments as strings, including numbers.
+    quote = powershell_literal if os.name == "nt" else shlex.quote
+    return " ".join([host_command(argv[0]), *(quote(arg) for arg in argv[1:])])
 
 
 def attach_settlement_progress(

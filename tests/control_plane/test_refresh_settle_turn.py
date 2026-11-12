@@ -494,7 +494,7 @@ def test_legacy_posix_quoted_powershell_launcher_fails_before_settlement(
 def test_pinned_powershell_launcher_settles_original_turn_once(
     tmp_path, monkeypatch, provider, composed, relative_launcher,
 ):
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    powershell = shutil.which("pwsh")
     assert powershell is not None
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
@@ -508,8 +508,11 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
         launcher_arg = str(launcher)
     _initialize_fixture_authority(project, runtime, provider=provider)
     launcher.parent.mkdir()
-    python = sys.executable.replace("'", "''")
-    launcher.write_text(f"& '{python}' -m loopx.entrypoint @args\nexit $LASTEXITCODE\n", encoding="utf-8")
+    shutil.copyfile(REPO_ROOT / "scripts/loopx.ps1", launcher)
+    pointer = tmp_path / "current-release.json"
+    pointer.write_text(
+        json.dumps({"release_root": str(REPO_ROOT), "python": sys.executable}), encoding="utf-8",
+    )
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
     assert rc == 0, guard
@@ -522,7 +525,7 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
 
     def run(args):
         process = subprocess.run([powershell, "-NoProfile", "-NonInteractive", *args], cwd=project,
-            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}, capture_output=True, timeout=60)
+            env={**os.environ, "LOOPX_CURRENT_RELEASE_FILE": str(pointer)}, capture_output=True, timeout=60)
         assert process.returncode == 0, (process.stdout, process.stderr)
         result = json.loads(process.stdout)
         assert result["ok"] and result["settlement_identity"] == identity
