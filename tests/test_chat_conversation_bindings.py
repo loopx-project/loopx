@@ -186,7 +186,8 @@ def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinar
         runtime.close()
 
 
-def test_original_retry_yields_to_a_newer_equivalent_lark_request(ordinary, monkeypatch):
+@pytest.mark.parametrize("lost_receipt", [False, True], ids=["accepted", "lost-outer-receipt"])
+def test_original_retry_yields_to_a_newer_equivalent_lark_request(ordinary, monkeypatch, lost_receipt):
     from datetime import datetime, timedelta, timezone
 
     from loopx.capabilities.native_chat import external_conversations
@@ -235,15 +236,52 @@ def test_original_retry_yields_to_a_newer_equivalent_lark_request(ordinary, monk
             "quota_available": True, "quota_observed_at": AfterBackoff.now().timestamp() - 1}))
         assert transport.core.context_recovery_candidate(original["request_ref"])
 
-        resent = admit("notes-app", "same-source-resend", text)
-        assert resent["session_id"] == sid and resent["status"] == "accepted"
-        assert {row["turn_id"] for row in store.queued_turns(sid)} == {distinct["turn_id"], resent["turn_id"]}
+        resend = provider.event("notes-app", "same-source-resend", text)
+        resend_ref = identity_ref(transport._binding("notes-app")["provider_ref"], resend["message_id"])
+        resend_client = f"external-{resend_ref}"
+        if lost_receipt:
+            def fail_before_queue(**_):
+                raise OSError("Core queue unavailable")
+
+            with monkeypatch.context() as fault:
+                fault.setattr(runtime, "enqueue_turn", fail_before_queue)
+                with pytest.raises(OSError, match="Core queue unavailable"):
+                    transport.admit("notes-app", resend)
+            assert transport.core.read_request(resend_ref)["session_id"] == sid
+            assert store.turn_for_client(sid, resend_client) is None
+            assert transport.core.context_recovery_candidate(original["request_ref"])
+
+            write = external_conversations._atomic_write_json
+
+            def lose_outer_receipt(path, row, **kwargs):
+                if path.stem == resend_ref and row.get("status") == "accepted":
+                    raise OSError("outer receipt unavailable")
+                write(path, row, **kwargs)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(external_conversations, "_atomic_write_json", lose_outer_receipt)
+                with pytest.raises(OSError, match="outer receipt unavailable"):
+                    transport.admit("notes-app", resend)
+            prepared = transport.core.read_request(resend_ref)
+            assert prepared["status"] == "prepared" and prepared["turn_id"] is None
+        else:
+            transport.admit("notes-app", resend)
+            assert transport.core.read_request(resend_ref)["status"] == "accepted"
+
+        resent = store.turn_for_client(sid, resend_client)
+        assert resent["session_id"] == sid and resent["status"] == "queued"
+        assert any(item["kind"] == "turn.queued" for item in store.events_after(sid, resent["turn_id"], None))
+        expected_queue = {distinct["turn_id"], resent["turn_id"]}
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
         transport.reconcile_request(transport.root / f"{original['request_ref']}.json")
         assert transport.core.read_request(original["request_ref"]) == original
         assert not transport.core.context_recovery_candidate(original["request_ref"])
-        assert {row["turn_id"] for row in store.queued_turns(sid)} == {distinct["turn_id"], resent["turn_id"]}
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
         assert store._turn_path(sid, tid).read_bytes() == failed_bytes
         assert provider.writes == lark_failure_writes
+        transport.admit("notes-app", resend)
+        assert transport.core.read_request(resend_ref)["turn_id"] == resent["turn_id"]
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == expected_queue
     finally:
         runtime.close()
 

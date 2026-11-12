@@ -212,8 +212,8 @@ class ChatExternalConversations:
                              if discovery_reads is not None else store.messages(session["session_id"])))
         elif turn.get("status") == "failed" and session.get("agent_id") == "codex":
             # Native history cannot see a newer request that is still in the FIFO.
-            # The source journal can prove acceptance before native history advances.
-            later_equivalent = later_equivalent_source_input(row, read_source_controls)
+            # Read the Core receipt when the source journal has not settled yet.
+            later_equivalent = later_equivalent_source_input(row, read_source_controls, store.turn_for_client)
         from ...chat_manager import steward_machine_defaults
         recovery_row = {key: value for key, value in row.items() if key != "attachments"}
         review_preparation = None
