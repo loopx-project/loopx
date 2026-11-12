@@ -59,6 +59,15 @@ def _repository(tmp_path: Path) -> Path:
     return repo
 
 
+def _repositories_with_trailing_newline(tmp_path: Path) -> tuple[Path, Path]:
+    """Create two independent repositories whose root names differ by LF."""
+    requested = _repository(tmp_path)
+    requested_with_lf = tmp_path / "repo\n"
+    requested.rename(requested_with_lf)
+    adjacent = _repository(tmp_path)
+    return requested_with_lf, adjacent
+
+
 def _remote_repositories(tmp_path: Path) -> tuple[Path, Path]:
     seed_root = tmp_path / "seed"
     seed_root.mkdir()
@@ -528,6 +537,63 @@ def test_adopt_current_integration_head_without_touching_worktree(
     assert _git(repo, "rev-parse", "HEAD") == integration_head
     assert (repo / "shared.txt").read_text(encoding="utf-8") == "local diagnostic\n"
     assert integration_branch_status(repo_path=repo)["status"] == "in_sync"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="newline in a path is POSIX-only")
+def test_sync_root_preserves_a_trailing_newline_in_the_requested_path(
+    tmp_path: Path,
+) -> None:
+    """A requested repository ending in LF must not resolve to its neighbor."""
+    requested, adjacent = _repositories_with_trailing_newline(tmp_path)
+    _configure(requested)
+    _configure(adjacent)
+    sync_integration_branch(repo_path=requested, execute=True)
+    sync_integration_branch(repo_path=adjacent, execute=True)
+    adjacent_plan = adjacent / ".loopx/integration-branch.json"
+    adjacent_plan_before = adjacent_plan.read_text(encoding="utf-8")
+    adjacent_ref = "refs/heads/codex/local-integration"
+    adjacent_head_before = _git(adjacent, "rev-parse", adjacent_ref)
+
+    _git(requested, "switch", "feature-a")
+    _commit(requested, "a.txt", "a2\n", "requested review update")
+    _git(requested, "switch", "main")
+    _git(adjacent, "switch", "fix-b")
+    _commit(adjacent, "b.txt", "b2\n", "adjacent review update")
+    _git(adjacent, "switch", "main")
+
+    synced = sync_integration_branch(repo_path=requested, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(requested, "rev-parse", "refs/heads/codex/local-integration") == synced[
+        "candidate_sha"
+    ]
+    assert integration_branch_status(repo_path=requested)["status"] == "in_sync"
+    assert _git(adjacent, "rev-parse", adjacent_ref) == adjacent_head_before
+    assert adjacent_plan.read_text(encoding="utf-8") == adjacent_plan_before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="newline in a path is POSIX-only")
+def test_sync_root_refuses_an_unconfigured_newline_checkout_without_touching_neighbor(
+    tmp_path: Path,
+) -> None:
+    """A missing local plan must fail before the adjacent repository can be read."""
+    requested, adjacent = _repositories_with_trailing_newline(tmp_path)
+    _configure(adjacent)
+    sync_integration_branch(repo_path=adjacent, execute=True)
+    _git(adjacent, "switch", "fix-b")
+    _commit(adjacent, "b.txt", "b2\n", "adjacent review update")
+    _git(adjacent, "switch", "main")
+    adjacent_plan = adjacent / ".loopx/integration-branch.json"
+    adjacent_plan_before = adjacent_plan.read_text(encoding="utf-8")
+    adjacent_ref = "refs/heads/codex/local-integration"
+    adjacent_head_before = _git(adjacent, "rev-parse", adjacent_ref)
+
+    with pytest.raises(IntegrationBranchError, match="plan not found"):
+        sync_integration_branch(repo_path=requested, execute=True)
+
+    assert not (requested / ".loopx/integration-branch.json").exists()
+    assert _git(adjacent, "rev-parse", adjacent_ref) == adjacent_head_before
+    assert adjacent_plan.read_text(encoding="utf-8") == adjacent_plan_before
 
 
 def test_dirty_checked_out_integration_worktree_fails_closed(

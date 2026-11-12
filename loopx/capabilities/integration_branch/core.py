@@ -129,8 +129,9 @@ def _git_command(
 
 def _repository_root(repo_path: str | Path) -> Path:
     requested = Path(repo_path).expanduser().resolve()
-    result = _git(requested, "rev-parse", "--show-toplevel")
-    return Path(result.stdout.strip()).resolve()
+    return Path(
+        _git_path_output(requested, "rev-parse", "--show-toplevel")
+    ).resolve()
 
 
 def _plan_path(repo: Path, plan_file: str | Path | None) -> Path:
