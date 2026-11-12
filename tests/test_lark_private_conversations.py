@@ -2813,7 +2813,7 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         runtime.close()
 
 
-def test_app_projection_discovers_a_restored_transcript_with_the_same_size_and_mtime(ordinary):
+def test_app_projection_discovers_a_restored_transcript_with_the_same_size_and_mtime(ordinary):  # noqa: F811
     import os
 
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
