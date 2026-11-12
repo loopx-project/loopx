@@ -2736,3 +2736,42 @@ dry-run 拒绝路径的中位数为 142.4→135.1 ms、934.4→911.8 ms。零条
 首次 Goal 夹具使用退出式 Agent：登记及如实显示失败 Turn 的恢复不证明自然语言任务
 完成或模型收益。完整最小闭包、R1/M3、workspace/meta 发布、安装宿主采用及完整成本
 验收仍保持开放。
+
+### 2026-11-13 — 独立发行版的自然语言启动到达既有 owner
+
+独立安装的 core 现在将 `start-goal`、`bootstrap-command-pack`、
+`register-agent` 和 `bind-agent-thread` 路由到普通产品既有的 registrar 与
+handler。此前四条命令都依赖被排除的完整 CLI facade。目标预览保留完整原文，
+保持只读，并返回同一套有序的 bootstrap、身份、Todo 与 host/guard 事务。
+新身份注册、冲突拒绝、global/source 回读和绑定会话复用在默认 SQLite authority
+上真实执行。没有新增 engine、模型服务、权限规则或 capability 激活。
+普通安装仍保留完整 parser 的诊断 fallback；独立 core 的非法参数仍返回既有明确
+unavailable 错误。
+
+安装验证通过 16 项检查，覆盖 guided 身份旅程及既有 SQLite/File 执行、产物拒绝、
+续租/释放后的完成拒绝和已确认结果恢复/重放。八项聚焦对照与普通 parser 和预览
+一致。原始独立安装基线 wheel 拒绝自然语言启动，修复 wheel 能执行这条路径。
+这是真实可执行的行为差异，不是仅修改帮助文案。
+
+另一个隔离 generic-CLI 任务由当前 host 模型实际完成：依据 catalog/movement
+源文件生成可复用库存脚本及 JSON/Markdown 报告，保留精确小数计价和排除记录。
+独立 validator 接受结果。typed result 已入 journal 后杀掉 driver，再用原始 key
+恢复，可完成 Todo 并只结算一次，且不再次调用模型；再次重放无状态或额度副作用。
+更早一次任务前尝试在等待模型输入期间过期，其 unknown-outcome 恢复拒绝仍保留。
+整个实验共两次 host transport dispatch、一个已确认模型结果，不能宣称全实验
+只 dispatch 一次。
+
+三对本地 loading census 使用 macOS arm64、Python 3.13.5、Node 26.0.0，
+新 Python 进程保留普通文件系统/bytecode 缓存，每进程再运行两次 warm 调用。
+core 顶层帮助加载 8 个模块，guided 帮助/预览加载 186 个；直接普通 full-facade
+对照为 1,151/1,164 个。预览出现两次 subprocess 和九次 Python socket audit
+事件，process/IPC 成本必须保留在闭包清单。源码/安装的缓存与启动条件不同、仅三
+个样本、仅 Python audit 范围及缺失模型 token 计数，使其不能支持性能或完整
+V10 结论，也不批准 D2 或 minimal preset。
+
+源码回归因本地磁盘耗尽而中止的尝试仍为失败，恢复后的运行单独记录。
+完整最小 install/load/context 闭包、initial/revised/compacted/lost-ACK 上下文
+资格、受支持 host 采用、完整 V1–V5/V10、R1/M3、Standard/workspace/meta 拆包
+和完整成本仍未完成。回滚路由切片时保留 task authority 并协调原始尝试。
+既有 exact-head 评审、premerge、双语要求、原始失败、预算及独立研究/发布授权
+继续有效。
