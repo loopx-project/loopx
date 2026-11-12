@@ -74,16 +74,21 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
         assert rc != 0 and guard["ok"] is False
         assert "supported declared run mode" in guard["reason"]
         assert not explore_result_log_path(runtime, GOAL_ID).exists()
-        return  # Unsupported native Hosts must not silently acquire a v2 plan.
+        return  # Unsupported native Hosts must not enter the deferred capture path.
     assert rc == 0, json.dumps(guard, ensure_ascii=False)
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
     writeback = plan["ordered_steps"][1]
     assert writeback["optional_attachments"][0]["required"] is False
     assert "--explore-result-json" not in writeback["command_template"]
     rc, compact = _run_cli(path, runtime, *command, "--turn-envelope", cwd=project)
     assert rc == 0, compact
-    assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
-    assert plan["schema_version"] == ("quota_settlement_plan_v2" if context_delivery == "on" else "quota_settlement_plan_v1")
+    if context_delivery == "off":
+        assert compact["schema_version"] == "loopx_turn_envelope_v0"
+        assert compact["writeback"]["settlement_plan"] == plan
+    else:
+        assert compact["schema_version"] == "loopx_turn_envelope_v1"
+        assert compact["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
     rc, completed = _run_cli(path, runtime, "todo", "complete", *binding,
                             "--evidence", "Synthetic deliverable validated", "--no-follow-up", cwd=project)
     assert rc != 0 and completed["settlement_blocked_completion"], completed
@@ -91,7 +96,7 @@ def test_real_cli_settlement_exposes_optional_attachment(tmp_path, monkeypatch, 
     # affordance; evidence attachment never bypasses the ordinary receipt gate.
     def plans(value):
         if isinstance(value, dict):
-            if value.get("schema_version") in {"quota_settlement_plan_v1", "quota_settlement_plan_v2"}:
+            if value.get("schema_version") == "quota_settlement_plan_v1":
                 yield value
             for child in value.values():
                 yield from plans(child)
