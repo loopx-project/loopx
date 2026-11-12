@@ -186,6 +186,68 @@ def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinar
         runtime.close()
 
 
+def test_original_retry_yields_to_a_newer_equivalent_lark_request(ordinary, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from test_lark_private_conversations import connect
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+
+    def admit(profile, name, text):
+        event = provider.event(profile, name, text)
+        transport.admit(profile, event)
+        provider_ref = transport._binding(profile)["provider_ref"]
+        return transport.core.read_request(identity_ref(provider_ref, event["message_id"]))
+
+    text = "typed terminal failure"
+    try:
+        original = admit("notes-app", "quota-original", text)
+        sid, tid = original["session_id"], original["turn_id"]
+        failed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded" and failed["delta_count"] == 0
+        transport.reconcile()
+        original = transport.core.read_request(original["request_ref"])
+        failed_bytes = store._turn_path(sid, tid).read_bytes()
+        lark_failure_writes = list(provider.writes)
+        assert original["delivery_verified"] and lark_failure_writes
+
+        # Leave new source inputs in the real FIFO before they become native Turns.
+        monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: None)
+        unrelated = admit("steward-app", "other-source", text)
+        distinct = admit("notes-app", "different-text", "Another request")
+        assert unrelated["session_id"] != sid and distinct["session_id"] == sid
+
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(timezone.utc) + timedelta(seconds=61)
+
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: {
+            "thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+            "only_original_user_item": True, "codex_error_info": "usageLimitExceeded",
+            "quota_available": True, "quota_observed_at": AfterBackoff.now().timestamp() - 1}))
+        assert transport.core.context_recovery_candidate(original["request_ref"])
+
+        resent = admit("notes-app", "same-source-resend", text)
+        assert resent["session_id"] == sid and resent["status"] == "accepted"
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == {distinct["turn_id"], resent["turn_id"]}
+        transport.reconcile_request(transport.root / f"{original['request_ref']}.json")
+        assert transport.core.read_request(original["request_ref"]) == original
+        assert not transport.core.context_recovery_candidate(original["request_ref"])
+        assert {row["turn_id"] for row in store.queued_turns(sid)} == {distinct["turn_id"], resent["turn_id"]}
+        assert store._turn_path(sid, tid).read_bytes() == failed_bytes
+        assert provider.writes == lark_failure_writes
+    finally:
+        runtime.close()
+
+
 @pytest.fixture
 def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
     """Use the real admission/recovery owners; only model/provider IO is fake."""

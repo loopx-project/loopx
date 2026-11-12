@@ -3,10 +3,52 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from copy import deepcopy
+from datetime import datetime
+import hashlib
 from pathlib import Path
 import sys
 from threading import Lock
 from typing import Any
+
+
+def _ordinary_request_text_digest(row: dict[str, Any]) -> str | None:
+    """Match only canonical, admitted private text; omit the body from discovery."""
+    message = row.get("message")
+    source = row.get("source")
+    if (row.get("status") != "accepted" or row.get("command") is not None
+            or row.get("capture_origin") is not None or row.get("agent_target") is not None
+            or row.get("attachments") not in (None, []) or not isinstance(message, str) or not message
+            or not row.get("session_id") or not row.get("turn_id")
+            or not isinstance(source, dict) or source.get("private_human_message") is not True):
+        return None
+    return hashlib.sha256(message.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def source_control_fields(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep exact source controls and a compact fingerprint of admitted text."""
+    fields = ("binding_id", "source", "command", "created_at")
+    # A tolerant reader can return an incomplete journal after a transient
+    # failure. Do not cache that read as an unchanged-file observation.
+    if not all(key in row for key in fields):
+        return None
+    result = {key: row[key] for key in fields}
+    digest = _ordinary_request_text_digest(row)
+    if digest is not None:
+        result.update(text_sha256=digest, session_id=row["session_id"])
+    return result
+
+
+def later_equivalent_source_input(row: dict[str, Any],
+                                  read_controls: Callable[[], list[dict[str, Any]]]) -> bool | None:
+    """Check canonical acceptance in the same source and Session, even before dispatch."""
+    digest = _ordinary_request_text_digest(row)
+    if digest is None:
+        return None
+    created = datetime.fromisoformat(row["created_at"])
+    return any(item.get("text_sha256") == digest
+        and item["binding_id"] == row["binding_id"] and item["source"] == row["source"]
+        and item["session_id"] == row["session_id"] and datetime.fromisoformat(item["created_at"]) > created
+        for item in read_controls())
 
 
 def file_change_fingerprint(path: Path) -> tuple[int, ...] | None:
