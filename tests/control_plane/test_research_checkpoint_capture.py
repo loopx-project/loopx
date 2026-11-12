@@ -119,6 +119,75 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_handoff_checks_the_original_contract_before_capture(tmp_path, monkeypatch, provider):
+    import socket
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    root = tmp_path / "captures"
+    original_dir = root / "original"
+    root.mkdir(mode=0o700)
+    code, source = cli._run_cli(registry, runtime, "quota", "should-run",
+        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
+        "--context-delivery", "off", "--decision-output-dir", str(original_dir), cwd=project)
+    assert code == 0 and source["schema_version"] == "loopx_turn_envelope_v1"
+    original = original_dir / "decision.json"
+    original_bytes = original.read_bytes()
+    assert json.loads(original_bytes) == source
+    obligation = source["replan_action_packet"]["obligation_id"]
+
+    def transfer(path, error=None):
+        raw = path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        client, channel = socket.socketpair()
+        with client, channel:
+            client.settimeout(5)
+            client.sendall(json.dumps({"path": str(path), "sha256": digest}).encode() + b"\n")
+            handoff = held_quota_decision(None, root, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+                turn_instance_id=cli.TURN_ID, accepted_channel=channel)
+            if error:
+                with pytest.raises(EffectRuntimeRemoteError, match=error), handoff:
+                    pytest.fail("An invalid original contract reached checkpoint capture")
+                assert client.recv(4096) == b""
+            else:
+                with handoff as held:
+                    assert held["intent"]["capture"] and held["intent"]["obligation_id"] == obligation
+                    assert held["intent"]["execution_authority_granted"] is False
+                assert json.loads(client.recv(4096)) == {"released": True, "sha256": digest}
+        assert path.read_bytes() == raw
+
+    def materialize(name, packet):
+        directory = root / name
+        directory.mkdir(mode=0o700)
+        path = directory / "decision.json"
+        path.write_text(json.dumps(packet))
+        return path
+
+    transfer(original)
+    changed = {**source, "replan_action_packet": {**source["replan_action_packet"],
+        "planning_guidance": "Changed after the source was sealed."}}
+    transfer(materialize("changed", changed), "content integrity mismatch")
+    transfer(materialize("future", {**source, "schema_version": "loopx_turn_envelope_future"}),
+             "unsupported complete Turn decision version")
+    transfer(materialize("unbound", {key: value for key, value in source.items() if key != "contract_binding"}),
+             "Turn contract binding")
+    legacy = {key: value for key, value in source.items() if key not in {"schema_version", "contract_binding"}}
+    transfer(materialize("legacy", legacy))
+    precision = compose_turn_decision({**legacy, "precision_fixture": [2**53 + 1, -0.0, 1.0]})
+    transfer(materialize("precision", precision))
+    transfer(materialize("rounded", {**precision, "precision_fixture": [2**53, -0.0, 1.0]}),
+             "content integrity mismatch")
+    assert original.read_bytes() == original_bytes
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1 and cli._spend_run_count(runtime) == 0
+
+
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("closed budget must not read sources")

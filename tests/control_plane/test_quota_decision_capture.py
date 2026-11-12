@@ -743,13 +743,12 @@ def _replan_selection_hop(tmp_path, host):
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
 def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_path):
-    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.hosts.research_checkpoint import select_checkpoint_replan
 
     def typed_host(observed):
         # The Host consults the existing typed selector before releasing.
-        observed['intent'] = effect_runtime_result('runtime.checkpoint_artifacts', {
-            'action': 'select_replan', 'quota': observed['decision'], 'goal_id': GOAL_ID,
-            'agent_id': AGENT_ID, 'turn_instance_id': TURN_ID})
+        observed['intent'] = select_checkpoint_replan(observed['decision'],
+            goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=TURN_ID)
         return True
 
     code, selected, observed, saved, _ = _replan_selection_hop(tmp_path, typed_host)

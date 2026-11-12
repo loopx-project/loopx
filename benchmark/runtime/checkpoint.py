@@ -21,7 +21,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.hosts.research_checkpoint import (
     _participant_id, native_binding_participant, verify_native_binding_participant,
-    research_participants, verify_research_participants,
+    research_participants, select_checkpoint_replan, verify_research_participants,
 )
 from .checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
 from .codex import explicit_turn_display
@@ -122,10 +122,8 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
         if path.resolve(strict=True) != path:
             raise ValueError("prior checkpoint guard must be a physical Host file")
         guard = json.loads(path.read_text())
-        prior = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
-            "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": path.parent.name,
-        }, large_local_snapshot=True)
+        prior = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
+            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=path.parent.name)
         if prior["capture"] and prior["obligation_id"] == obligation_id:
             return True
     return False
@@ -288,10 +286,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:
-        intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": guard, "goal_id": env["LOOPX_GOAL_ID"],
-            "agent_id": env["LOOPX_AGENT_ID"], "turn_instance_id": receipt["turn_id"],
-        }, large_local_snapshot=True)
+        intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
+            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
         from .checkpoint_continuation import restored_capture_gate
         restore_gate = restored_capture_gate(env, intent.get("obligation_id"),
             full_history=not request.get("native_session", False))
@@ -682,11 +678,9 @@ def held_quota_decision(listener, capture_root: Path, *, goal_id: str, agent_id:
         if failed_readback:
             intent = {"capture": False, "reason": "quota_readback_failed", "execution_authority_granted": False}
         else:
-            intent = effect_runtime_result("runtime.checkpoint_artifacts", {
-                "action": "select_replan", "quota": quota, "goal_id": goal_id,
-                "agent_id": agent_id, "turn_instance_id": (turn_instance_id if turn_instance_id is not None
-                    else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")),
-            }, timeout=remaining(), large_local_snapshot=True)
+            intent = select_checkpoint_replan(quota, goal_id=goal_id, agent_id=agent_id,
+                turn_instance_id=(turn_instance_id if turn_instance_id is not None
+                    else (quota.get("heartbeat_receipt") or {}).get("turn_instance_id")), timeout=remaining())
         if not failed_readback and native_process is not None and interrupt_when is not None and interrupt_when(intent):
             from .worker import interrupt_checkpoint_process
 

@@ -686,7 +686,7 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(
         return SimpleNamespace(stdout=original if native_participant else
                                json.dumps({"ok": True, "view": captured.parent.name}))
     monkeypatch.setattr(checkpoint.subprocess, "run", guard)
-    monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
+    monkeypatch.setattr(checkpoint, "select_checkpoint_replan", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
     observed = []
     def gate(*args, full_history):
         observed.append(full_history)

@@ -344,7 +344,9 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     // Typed refusals keep their reason through the runtime boundary, so a
     // refused handoff is diagnosable instead of an opaque internal failure.
     const mismatch = () => new EffectRuntimeRequestError("checkpoint replan does not match the current admitted identity");
-    if (!hasExactAuthorityKeys(request, ["action", "quota", "goal_id", "agent_id", "turn_instance_id"])) {
+    const fields = ["action", "quota", "goal_id", "agent_id", "turn_instance_id"];
+    if (Object.hasOwn(request, "source_number_tokens")) fields.push("source_number_tokens");
+    if (!hasExactAuthorityKeys(request, fields)) {
       throw new Error("checkpoint replan selection fields are invalid");
     }
     const quota = requireJsonObject(request.quota, "checkpoint quota readback");
@@ -352,6 +354,15 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
     const agent = requireNonEmptyString(request.agent_id, "checkpoint agent");
     const turn = requireNonEmptyString(request.turn_instance_id, "checkpoint Turn");
     if (quota.ok !== true || quota.goal_id !== goal) throw new EffectRuntimeRequestError("checkpoint requires a matching current quota readback");
+    // A transport digest covers the file, not the contract sealed inside it.
+    // Historical original quota files were unversioned. A declared version
+    // or binding must go through the current owner before any intent is used.
+    if (Object.hasOwn(quota, "schema_version") || Object.hasOwn(quota, "contract_binding")) {
+      const {requireCompleteTurnDecision} = await import("../quota/turn_envelope.ts");
+      requireCompleteTurnDecision(quota, request.source_number_tokens);
+    } else if (Object.hasOwn(request, "source_number_tokens")) {
+      throw new EffectRuntimeRequestError("checkpoint source numbers require a complete Turn decision");
+    }
     if (quota.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED) {
       return {capture: false, reason: "no_fresh_replan", execution_authority_granted: false};
     }

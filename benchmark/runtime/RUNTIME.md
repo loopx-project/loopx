@@ -176,6 +176,11 @@ a complete-mode binding cannot verify a pending command that uses
 `--complete-turn`. Historical ordinary and envelope guards remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
+Preflight, live handoff and native checkpoint recovery use the current context
+reader's complete-source validator before selecting a replan point. A matching
+file digest cannot replace validation of the contract it contains. Older
+unversioned quota originals retain their receipt and scope checks.
+
 The host-side checkpoint preflight captures the complete original decision.
 With context delivery enabled, its prompt supplies `quota context-project`
 with that original path and hash. The shared presentation owner prepares the

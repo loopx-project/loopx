@@ -405,9 +405,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert followup[followup.index("--context-delivery") + 1] == "on"
             assert followup[followup.index("--codex-context-dir") + 1] == str(native)
             assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
-        selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", {
-            "action": "select_replan", "quota": source, "goal_id": GOAL, "agent_id": AGENT,
-            "turn_instance_id": TURN}, large_local_snapshot=True)
+        selector = checkpoint.select_checkpoint_replan(source, goal_id=GOAL, agent_id=AGENT, turn_instance_id=TURN)
         assert selector["capture"] is replan
         if not replan:
             assert "result_writeback_read" not in explore_source(source)["content"]["graph"]
