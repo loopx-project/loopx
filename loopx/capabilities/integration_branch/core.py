@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,7 +28,7 @@ class IntegrationBranchError(ValueError):
     """A fail-closed integration-branch contract error."""
 
 
-def _retire_owned_read(process: subprocess.Popen[str]) -> None:
+def _retire_owned_read(process: subprocess.Popen[Any]) -> None:
     """Retire the read's own process group and drop its pipes within a deadline.
 
     The shared runtime bounds termination, Windows ``taskkill`` and pipe
@@ -57,15 +58,41 @@ def _git(
     never observed.
     """
 
+    result = _git_command(repo, args, check=check, text=True)
+    return subprocess.CompletedProcess(
+        result.args, result.returncode, result.stdout, result.stderr
+    )
+
+
+def _git_bytes(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one Git read whose byte records are part of the caller's boundary."""
+
+    result = _git_command(repo, args, check=check, text=False)
+    return subprocess.CompletedProcess(
+        result.args, result.returncode, result.stdout, result.stderr
+    )
+
+
+def _git_command(
+    repo: Path,
+    args: Sequence[str],
+    *,
+    check: bool,
+    text: bool,
+) -> subprocess.CompletedProcess[Any]:
     argv = ["git", "-C", str(repo), *args]
     process = subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        text=text,
+        encoding="utf-8" if text else None,
+        errors="replace" if text else None,
         start_new_session=os.name == "posix",
     )
     try:
@@ -84,19 +111,27 @@ def _git(
         raise
     result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
-        detail = (
-            (result.stderr or "").strip()
-            or (result.stdout or "").strip()
-            or "git command failed"
+        stderr_detail = (
+            result.stderr
+            if isinstance(result.stderr, str)
+            else result.stderr.decode("utf-8", "replace")
         )
-        raise IntegrationBranchError(detail)
+        stdout_detail = (
+            result.stdout
+            if isinstance(result.stdout, str)
+            else result.stdout.decode("utf-8", "replace")
+        )
+        raise IntegrationBranchError(
+            stderr_detail.strip() or stdout_detail.strip() or "git command failed"
+        )
     return result
 
 
 def _repository_root(repo_path: str | Path) -> Path:
     requested = Path(repo_path).expanduser().resolve()
-    result = _git(requested, "rev-parse", "--show-toplevel")
-    return Path(result.stdout.strip()).resolve()
+    return Path(
+        _git_path_output(requested, "rev-parse", "--show-toplevel")
+    ).resolve()
 
 
 def _plan_path(repo: Path, plan_file: str | Path | None) -> Path:
@@ -576,21 +611,153 @@ def integration_branch_status(
     }
 
 
+_LEGACY_WORKTREE_PATH_ERROR = (
+    "this Git version cannot safely resolve a worktree path containing a line "
+    "separator because 'git worktree list -z' requires Git 2.36+; upgrade Git "
+    "or resolve the worktree path manually"
+)
+
+
+_GIT_VERSION_PATTERN = re.compile(r"(?:^|\s)([0-9]+)\.([0-9]+)(?:\.|$)")
+
+
+def _worktree_list_uses_nul(repo: Path) -> bool:
+    version = _git(repo, "version").stdout
+    match = _GIT_VERSION_PATTERN.search(version)
+    if match is None:
+        raise IntegrationBranchError(
+            f"cannot determine whether this Git version supports NUL worktree records: {version.strip()}"
+        )
+    return (int(match.group(1)), int(match.group(2))) >= (2, 36)
+
+
 def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
-    result = _git(repo, "worktree", "list", "--porcelain")
-    current_path: Path | None = None
     target_ref = f"refs/heads/{branch}"
-    # `--porcelain` frames records on LF and prints paths verbatim, so a path
-    # containing U+0085/U+2028/U+2029 would be split by `str.splitlines()` and
-    # the prefix returned as the worktree path. Frame on the writer's separator.
-    for line in result.stdout.split("\n"):
-        if line.startswith("worktree "):
-            current_path = Path(line.removeprefix("worktree ")).resolve()
-        elif line == f"branch {target_ref}":
-            return current_path
-        elif not line:
-            current_path = None
+    if not _worktree_list_uses_nul(repo):
+        # NUL framing arrived in Git 2.36. Older Git rejects the switch before
+        # writing a record; keep ordinary paths working through the line-framed
+        # inventory, which stays fail-closed for values it cannot represent.
+        return _worktree_for_branch_line_framed(repo, target_ref)
+    result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
+
+    current_path: Path | None = None
+    # `-z` frames fields on NUL and records on a NUL pair. A worktree path
+    # may contain LF, CR or Unicode line separators, so treating its text as
+    # a line-oriented inventory returns a prefix and can target the wrong
+    # checkout for cleanup or reset.
+    for record in result.stdout.split(b"\0\0"):
+        if not record:
+            continue
+        current_path = None
+        for field in record.split(b"\0"):
+            if field.startswith(b"worktree "):
+                current_path = Path(os.fsdecode(field.removeprefix(b"worktree "))).resolve()
+            elif field == f"branch {target_ref}".encode("utf-8"):
+                return current_path
     return None
+
+
+def _worktree_for_branch_line_framed(repo: Path, target_ref: str) -> Path | None:
+    """Resolve a branch from Git versions without ``worktree list -z`` support."""
+    result = _git(repo, "worktree", "list", "--porcelain")
+    lines = result.stdout.split("\n")
+    index = 0
+    while index < len(lines):
+        if not lines[index]:
+            index += 1
+            continue
+        if not lines[index].startswith("worktree "):
+            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+        path = Path(lines[index].removeprefix("worktree ")).resolve()
+        index += 1
+        saw_head = False
+        saw_bare = False
+        branch_ref: str | None = None
+        while index < len(lines) and lines[index]:
+            field = lines[index]
+            if field.startswith("HEAD "):
+                # A path containing LF or CR can shift the real HEAD field and
+                # leave a second one behind. Duplicate or bare/HEAD mixtures are
+                # not records this format can represent safely.
+                if saw_head or saw_bare:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+                saw_head = True
+            elif field == "bare":
+                if saw_head or saw_bare:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+                saw_bare = True
+            elif field.startswith("branch "):
+                if saw_bare or not saw_head:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+                branch_ref = field.removeprefix("branch ")
+            elif field == "detached":
+                if saw_bare or not saw_head:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+            elif field.startswith(("locked", "prunable")):
+                pass
+            else:
+                raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+            index += 1
+        # A linked checkout has exactly one HEAD; a bare main worktree has a
+        # bare field instead. Anything else is a path torn across fields.
+        if not saw_head and not saw_bare:
+            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+        if branch_ref == target_ref:
+            return path
+        index += 1
+    return None
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
+
+
+def _git_common_dir(base: Path, raw: str) -> Path:
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    return candidate.resolve()
+
+
+def _git_path_output(repo: Path, *args: str) -> str:
+    """Decode one Git path, removing only the newline Git appends to it."""
+
+    output = _git_bytes(repo, *args).stdout
+    if output.endswith(b"\n"):
+        output = output[:-1]
+    return os.fsdecode(output)
+
+
+def _confirm_checkout_ownership(repo: Path, worktree: Path, branch: str) -> None:
+    """Refuse a reset unless Git confirms the checkout is this branch's root."""
+
+    expected_ref = f"refs/heads/{branch}"
+    try:
+        top = _git_path_output(worktree, "rev-parse", "--show-toplevel")
+        worktree_common = _git_path_output(
+            worktree, "rev-parse", "--git-common-dir"
+        )
+        repo_common = _git_path_output(repo, "rev-parse", "--git-common-dir")
+        head = _git_bytes(worktree, "symbolic-ref", "--quiet", "HEAD", check=False)
+    except IntegrationBranchError as exc:
+        raise IntegrationBranchError(
+            f"cannot verify that {worktree} is the checkout for {branch}: {exc}"
+        ) from None
+    if not top or _path_key(Path(top)) != _path_key(worktree):
+        raise IntegrationBranchError(
+            f"worktree path {worktree} is not the top of a checkout"
+        )
+    if _path_key(_git_common_dir(worktree, worktree_common)) != _path_key(
+        _git_common_dir(repo, repo_common)
+    ):
+        raise IntegrationBranchError(
+            f"worktree {worktree} belongs to a different repository than {repo}"
+        )
+    head_ref = head.stdout[:-1] if head.stdout.endswith(b"\n") else head.stdout
+    if head.returncode != 0 or os.fsdecode(head_ref) != expected_ref:
+        raise IntegrationBranchError(
+            f"worktree {worktree} is not checked out on branch {branch}"
+        )
 
 
 def _clean_worktree(path: Path) -> bool:
@@ -808,6 +975,7 @@ def _update_integration_branch(
         )
     checked_out_path = _worktree_for_branch(repo, branch)
     if checked_out_path is not None:
+        _confirm_checkout_ownership(repo, checked_out_path, branch)
         if not _clean_worktree(checked_out_path):
             raise IntegrationBranchError(
                 f"integration branch worktree is dirty: {checked_out_path}"

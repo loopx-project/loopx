@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -31,7 +30,10 @@ from ..goals.source_session_services import (
     register_fresh_source_session_project,
     resolve_source_session_project,
 )
-from ...repository_identity import normalize_repository_identity
+from ...repository_identity import (
+    _SAFE_PROJECT_ID,
+    normalize_repository_identity,
+)
 from .contract import validate_project_record_bindings
 from .registration_state import (
     registration_state_matches,
@@ -45,12 +47,11 @@ from .registry_codec import (
 )
 
 PROJECT_KINDS = ("work", "personal")
-_SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 
 
 def _identifier(value: str, *, field: str) -> str:
     compact = str(value or "").strip()
-    if not _SAFE_ID.fullmatch(compact):
+    if not _SAFE_PROJECT_ID.fullmatch(compact):
         raise ValueError(f"{field} must be a stable identifier")
     return compact
 

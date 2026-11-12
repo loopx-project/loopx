@@ -36,7 +36,8 @@ export async function startAuthority(mode) {
       lines.once("line", line => { clearTimeout(timeout); accept(JSON.parse(line)); });
     });
     assert.ok(Number.isSafeInteger(value.port) && value.port > 0);
-    return {...value, url: `http://127.0.0.1:${value.port}`, close};
+    return {...value, url: `http://127.0.0.1:${value.port}`, root,
+      diagnostic: () => diagnostic, exited: () => ({exitCode: child.exitCode, signalCode: child.signalCode}), close};
   } catch (error) { await close(); throw error; }
 }
 
@@ -76,7 +77,12 @@ export const researchWorkerReadbackScenario = {
                   writes += 1;
                   writePaths.push(path);
                 }
-                const response = await fetchWorkspaceBackend(route, authority.url);
+                let response;
+                try {
+                  response = await fetchWorkspaceBackend(route, authority.url);
+                } catch (error) {
+                  throw new Error(`Worker backend proxy failed: root=${authority.root} child=${JSON.stringify(authority.exited())} stderr=${authority.diagnostic()}`, {cause: error});
+                }
                 if (emptySession) sessionPreparations.push({status: response.status(), payload: await response.json()});
                 if (response.status() >= 400) failedReads.push({path: new URL(route.request().url()).pathname,
                   status: response.status(), body: (await response.text()).slice(0, 800)});

@@ -61,7 +61,10 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       assert.match(await items.first().innerText(), /2,000/);
       await costs.getByRole('combobox').selectOption('elapsed');
       assert.match(await items.first().innerText(), /第 7 轮.*未完成/s);
-      await items.first().getByRole('button').click();
+      const turnCostEvidence = items.first().getByRole('button');
+      const turnCostEvidenceHandle = await turnCostEvidence.elementHandle();
+      assert(turnCostEvidenceHandle);
+      await turnCostEvidence.click();
       const source = page.getByRole('region', {name: '引用原文', exact: true});
       await source.locator('pre').waitFor();
       assert.match(await source.innerText(), /turn-7/);
@@ -69,7 +72,7 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       assert.match(await source.innerText(), /token_count/);
       assert.ok(!(await source.innerText()).includes('SENSITIVE_TEXT_NOT_FOR_BROWSER'));
       await source.focus(); await page.keyboard.press('Escape');
-      assert.equal(await items.first().getByRole('button').evaluate(element => element === document.activeElement), true);
+      await page.waitForFunction(element => element === document.activeElement, turnCostEvidenceHandle);
       await costs.getByRole('combobox').selectOption('time');
       await costs.getByRole('button', {name: '下一页', exact: true}).click();
       assert.equal(await items.count(), 3);

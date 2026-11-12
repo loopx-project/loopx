@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections.abc import Collection
 from typing import Any
 
 from . import __version__
@@ -12,7 +13,7 @@ from .cli_runtime import (
 HELP_FLAGS = {"-h", "--help"}
 
 
-def register_command_reference(subparsers: argparse._SubParsersAction) -> None:
+def register_command_reference(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser(
         "commands",
         help="Show grouped LoopX command reference for operators and contributors.",
@@ -480,8 +481,26 @@ def top_level_help_requested(argv: list[str]) -> bool:
     return True
 
 
-def render_concise_help(program: str = "loopx") -> str:
+def render_concise_help(program: str = "loopx", *, standalone_core: bool = False) -> str:
     program = _program_name(program)
+    if standalone_core:
+        return "\n".join([
+            "LoopX keeps long-running agent work moving with durable state and evidence.",
+            "", "Usage:", f"  {program} [global options] <command> [command options]",
+            "", "Start:",
+            "  loopx connect --help           Connect a project and its objective.",
+            "  loopx configure-goal --help    Configure its Agent and execution budget.",
+            "  loopx todo --help              Create, claim and complete work.",
+            "", "Execute and recover:",
+            "  loopx turn run-once --help     Execute one task with a selected host and validation.",
+            "  loopx turn inspect-journal --help",
+            "                                Inspect an original attempt before resuming it.",
+            "  loopx status                   Read current work and its next action.",
+            "  loopx doctor --installation-only",
+            "                                Check this installation.",
+            "", "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
+            "More: loopx commands; loopx <command> --help", "",
+        ])
     return "\n".join(
         [
             "LoopX keeps long-running agent work moving with durable state and evidence.",
@@ -524,17 +543,38 @@ def render_concise_help(program: str = "loopx") -> str:
     )
 
 
-def build_command_reference_payload() -> dict[str, Any]:
+def build_command_reference_payload(*, available_commands: Collection[str] | None = None) -> dict[str, Any]:
+    groups = COMMAND_GROUPS
+    more = ["loopx <command> --help", "man loopx", "docs/guides/getting-started.md#command-reference"]
+    if available_commands is not None:
+        # Filter display entries against the actual dispatcher, without loading
+        # omitted registrars. This is discovery, never execution admission.
+        groups = []
+        for group in COMMAND_GROUPS:
+            entries = group.get("commands")
+            if not isinstance(entries, list):
+                continue
+            commands = []
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+                    continue
+                match = re.match(r"loopx ([a-z0-9-]+)(?: |$)", entry["command"])
+                if match and match[1] in available_commands:
+                    commands.append(entry)
+            if commands:
+                groups.append({**group, "commands": commands})
+        remaining = set(available_commands) - manpage_top_level_commands()
+        if remaining:
+            groups.append({"title": "Command-specific help", "commands": [
+                {"command": f"loopx {name} --help", "purpose": "Show available command options."}
+                for name in sorted(remaining)]})
+        more = ["loopx <command> --help"]
     return {
         "ok": True,
         "schema_version": "loopx_command_reference_v0",
         "summary": "Grouped LoopX command reference for operators and contributors.",
-        "groups": COMMAND_GROUPS,
-        "more": [
-            "loopx <command> --help",
-            "man loopx",
-            "docs/guides/getting-started.md#command-reference",
-        ],
+        "groups": groups,
+        "more": more,
     }
 
 
@@ -545,13 +585,17 @@ def render_command_reference_markdown(payload: dict[str, Any]) -> str:
         str(payload.get("summary") or ""),
         "",
     ]
-    groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        groups = []
     for group in groups:
         if not isinstance(group, dict):
             continue
         title = str(group.get("title") or "Commands")
         lines.extend([f"## {title}", ""])
-        commands = group.get("commands") if isinstance(group.get("commands"), list) else []
+        commands = group.get("commands")
+        if not isinstance(commands, list):
+            commands = []
         for command in commands:
             if not isinstance(command, dict):
                 continue
