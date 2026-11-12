@@ -16,19 +16,28 @@ import direction is established and ``candidate_evidence`` is the lone holdout.
 ``github_public`` is a leaf module -- it imports only the standard library, no
 relative imports -- so naming it the authority cannot introduce a cycle.
 
-The guard mirrors this repository's other single-owner censuses:
+The guard mirrors this repository's other single-owner censuses, scoped to the
+capability that owns the contract:
 
-1. a **whole-tree member census**: no Python module under ``loopx`` may state a
-   collection literal whose members are exactly this set, except the owner. It
-   folds set / frozenset / list / tuple literals, so a renamed restatement and an
-   inline ``x in {...}`` are the same offender as the original constant;
+1. a **capability-scoped member census**: no Python module under
+   ``loopx/capabilities/issue_fix`` may state a collection literal whose members
+   are exactly this set, except the owner. It folds set / frozenset / list / tuple
+   literals, so a renamed restatement and an inline ``x in {...}`` are the same
+   offender as the original constant. The scope is the capability, not the whole
+   package: these three words are also ordinary ordered display labels elsewhere
+   in ``loopx``, and a package-wide scan would sweep those unrelated tuples;
 2. **identity**: both consumers hold the owner's object, not a copy;
 3. an **AST reader check**: ``candidate_evidence`` loads the borrowed name and
    binds neither the public nor the retired private name;
-4. a **behavioural truth table** through ``github_public._normalise_comment_signal``
-   that holds timing fixed, so the association membership -- not the clock -- is
-   what flips the signal, and a maintainer reply before the anchor still is not a
-   signal.
+4. **behavioural truth tables through both real gates**. The candidate builder
+   ``candidate_evidence.build_public_github_candidate_preflight_input`` is driven
+   with synthetic provider comments: only the three members produce maintainer
+   evidence, a non-member (notably ``CONTRIBUTOR``) produces none, and a member
+   comment missing its ``updatedAt`` revision is rejected. This is the gate a
+   deliberate ``or association == "CONTRIBUTOR"`` expansion would slip past a
+   static-only check. The ``github_public._normalise_comment_signal`` table holds
+   timing fixed, so association membership -- not the clock -- flips the signal,
+   and a maintainer reply before the anchor still is not a signal.
 
 The neighbour this guard deliberately leaves: the TypeScript reviewer set in
 ``control_plane/capabilities/pr_review_approval_closeout.ts`` adds ``CONTRIBUTOR``
@@ -48,6 +57,7 @@ from loopx.capabilities.issue_fix import candidate_evidence, github_public, pr_l
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "loopx"
+ISSUE_FIX_ROOT = PACKAGE_ROOT / "capabilities" / "issue_fix"
 OWNER_PATH = "loopx/capabilities/issue_fix/github_public.py"
 CANDIDATE_PATH = "loopx/capabilities/issue_fix/candidate_evidence.py"
 MAINTAINER_SET = frozenset({"COLLABORATOR", "MEMBER", "OWNER"})
@@ -101,8 +111,11 @@ def _restatement_sites(source: str) -> list[int]:
 
 
 def test_only_the_owner_states_the_maintainer_association_set() -> None:
+    # Scoped to the issue-fix capability that owns the contract (owner +
+    # candidate_evidence + pr_lifecycle). A package-wide scan would also sweep
+    # unrelated ordered display labels elsewhere in loopx that list these words.
     offenders: dict[str, list[int]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in sorted(ISSUE_FIX_ROOT.rglob("*.py")):
         rel = path.relative_to(REPO_ROOT).as_posix()
         if rel == OWNER_PATH:
             continue
@@ -182,6 +195,91 @@ def test_timing_and_anchor_still_gate_the_signal() -> None:
     # table from degenerating into an always-true assertion on the member set.
     assert _signal("OWNER", created_at="2025-12-31T00:00:00Z")["is_maintainer_signal"] is False
     assert _signal("OWNER", url=ANCHOR_URL)["is_maintainer_signal"] is False
+
+
+# --- behavioural truth table through the REAL candidate builder -------------------------
+#
+# build_public_github_candidate_preflight_input is the gate that decides which
+# provider comments become maintainer evidence. Driving it directly -- rather than
+# an isolated copy -- means a deliberate expansion of the predicate at the
+# candidate gate (e.g. `or association == "CONTRIBUTOR"`) is caught here even though
+# every static census and the owner truth table still pass.
+
+CANDIDATE_REPO = "volcengine/OpenViking"
+CANDIDATE_ISSUE = "#3305"
+CANDIDATE_GENERATED_AT = "2026-07-30T12:00:00Z"
+CANDIDATE_COMMENT_URL = (
+    "https://github.com/volcengine/OpenViking/issues/3305#issuecomment-1"
+)
+
+
+def _candidate_source_receipts() -> dict[str, dict[str, object]]:
+    return {
+        field: {
+            "provider": "github_graphql",
+            "observed_at": CANDIDATE_GENERATED_AT,
+            "query_fingerprint": f"sha256:{field}",
+            "page_count": 1,
+            "result_count": 0,
+            "complete": True,
+            "truncated": False,
+            "raw_provider_payload_captured": False,
+        }
+        for field in (
+            "numeric_pr_evidence",
+            "semantic_pr_evidence",
+            "maintainer_comment_evidence",
+        )
+    }
+
+
+def _candidate_comment_rows(
+    association: str,
+    *,
+    updated_at: str | None = CANDIDATE_GENERATED_AT,
+) -> list[dict]:
+    comment: dict[str, object] = {
+        "authorAssociation": association,
+        "url": CANDIDATE_COMMENT_URL,
+    }
+    if updated_at is not None:
+        comment["updatedAt"] = updated_at
+    payload = candidate_evidence.build_public_github_candidate_preflight_input(
+        repo=CANDIDATE_REPO,
+        issue_ref=CANDIDATE_ISSUE,
+        issue_state="OPEN",
+        closing_pull_requests=[],
+        cross_referenced_pull_requests=[],
+        maintainer_comments=[comment],
+        generated_at=CANDIDATE_GENERATED_AT,
+        source_receipts=_candidate_source_receipts(),
+    )
+    return payload["maintainer_comment_evidence"]["rows"]
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+def test_candidate_builder_admits_a_maintainer_comment_at_its_current_revision(
+    association: str,
+) -> None:
+    assert _candidate_comment_rows(association) == [
+        {"ref": CANDIDATE_COMMENT_URL, "revision": CANDIDATE_GENERATED_AT}
+    ]
+
+
+@pytest.mark.parametrize("association", ["CONTRIBUTOR", "NONE", "FIRST_TIME_CONTRIBUTOR"])
+def test_candidate_builder_rejects_a_non_maintainer_comment(association: str) -> None:
+    # Through the real builder: an `or association == "CONTRIBUTOR"` expansion at
+    # the candidate gate would turn this empty result into a row.
+    assert _candidate_comment_rows(association) == []
+
+
+@pytest.mark.parametrize("association", ["OWNER", "MEMBER", "COLLABORATOR"])
+@pytest.mark.parametrize("updated_at", [None, ""], ids=["missing", "empty"])
+def test_candidate_builder_requires_the_current_comment_revision(
+    association: str, updated_at: str | None
+) -> None:
+    with pytest.raises(ValueError, match="updatedAt is required"):
+        _candidate_comment_rows(association, updated_at=updated_at)
 
 
 # --- poison controls: the census must bite a restatement and leave the neighbours -------
