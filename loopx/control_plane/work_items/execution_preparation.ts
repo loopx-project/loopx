@@ -6,6 +6,7 @@ import {
   optionalNonEmptyString,
   requireBoolean,
   requireJsonObject,
+  requireInteger,
   requireNonEmptyString,
   requireStringLiteral,
 } from "../runtime_decode.ts";
@@ -25,7 +26,18 @@ function leaseFact(value: unknown, label: string): JsonObject {
   if (active && status !== "active") {
     throw new EffectRuntimeRequestError(`${label}.active requires status=active`);
   }
-  return {status, active, ...(owner === null ? {} : {owner})};
+  let proof: JsonObject | undefined;
+  if (lease.lease_proof !== undefined) {
+    proof = requireJsonObject(lease.lease_proof, `${label}.lease_proof`);
+    const key = requireNonEmptyString(proof.idempotency_key, `${label}.lease_proof.idempotency_key`);
+    const version = requireInteger(proof.expected_version, `${label}.lease_proof.expected_version`);
+    if (key !== key.trim() || !Number.isSafeInteger(version) || version < 1) {
+      throw new EffectRuntimeRequestError(`${label}.lease_proof requires an exact key and positive safe-integer version`);
+    }
+    proof = {idempotency_key: key, expected_version: version};
+  }
+  return {status, active, ...(owner === null ? {} : {owner}),
+    ...(proof === undefined ? {} : {lease_proof: proof})};
 }
 
 function claimAction(goalId: string, todoId: string, agentId: string): JsonObject {
@@ -113,7 +125,10 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
         reason: "The selected Todo has an active lease owned by another agent; do not take over its execution."};
     }
     return {...base, state: "ready", delivery_allowed: true,
-      reason_code: "matching_active_task_lease"};
+      reason_code: "matching_active_task_lease",
+      // Capture the admitted generation once. Recovery must not borrow a
+      // replacement lease after the original Host result was produced.
+      ...(active[0].lease_proof === undefined ? {} : {lease_proof: active[0].lease_proof})};
   }
 
   const prior = leases[0];

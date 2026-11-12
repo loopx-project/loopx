@@ -28,6 +28,7 @@ from .install_contract import (
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
+    installed_loopx_distribution,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
 )
@@ -142,7 +143,7 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
     """Identify a wheel/sdist install that owns the imported LoopX module."""
 
     try:
-        installed = distribution("loopx")
+        installed = installed_loopx_distribution(distribution)
     except PackageNotFoundError:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
@@ -168,6 +169,8 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         "installer": owner.manager,
         "installer_environment": owner.environment,
         "root": str(Path(cast(Path, installed.locate_file(""))).resolve()),
+        **({"distribution_name": "loopx-core"}
+           if getattr(installed, "name", "loopx") == "loopx-core" else {}),
     }
 
 
@@ -316,6 +319,7 @@ def build_install_freshness(
         owner=distribution_owner,
         python_executable=sys.executable,
         doctor_command=f"loopx doctor{doctor_agent_arg}",
+        distribution_name=str((distribution_install or {}).get("distribution_name") or "loopx"),
     ) if distribution_owner else no_clone_command
     manifest_source_git_commit = manifest_source.get("git_commit")
     manifest_source_revision = (

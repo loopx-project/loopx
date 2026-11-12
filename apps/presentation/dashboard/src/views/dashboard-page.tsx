@@ -3923,18 +3923,22 @@ export function DashboardPage() {
   function selectGoal(goalId: string, view?: WorkspaceGoalTab) {
     void navigate({
       hash: search.goalId === goalId ? keepCaseChapterHash : undefined,
-      search: (current) => ({
-        ...current,
-        ...("goalId" in current && current.goalId === goalId ? {} : clearedResearchSearch),
-        goalId,
-        workspace: undefined,
-        conversationBinding: undefined,
-        conversationSession: undefined,
-        messageSession: undefined, message: undefined,
-        workAgent: undefined, workSession: undefined,
-        todo: undefined,
-        view: view === "chat" ? "conversation" : view,
-      }),
+      search: (current) => {
+        const currentSearch = current as Partial<typeof search>;
+        const keepResearch = Boolean(currentSearch.research_goal) || currentSearch.goalId === goalId;
+        return ({
+          ...current,
+          ...(keepResearch ? {} : clearedResearchSearch),
+          goalId,
+          workspace: undefined,
+          conversationBinding: undefined,
+          conversationSession: undefined,
+          messageSession: undefined, message: undefined,
+          workAgent: undefined, workSession: undefined,
+          todo: undefined,
+          view: view === "chat" ? "conversation" : view,
+        });
+      },
     });
   }
 
@@ -3976,7 +3980,6 @@ export function DashboardPage() {
       onChangeGoalRoot={rootGoalId => void navigate({
         hash: !rootGoalId || rootGoalId === search.goalId ? keepCaseChapterHash : undefined,
         search: current => ({...current,
-          ...(!rootGoalId || ("goalId" in current && current.goalId === rootGoalId) ? {} : clearedResearchSearch),
           workAgent: undefined, workSession: undefined, messageSession: undefined, message: undefined,
           rootGoalId: rootGoalId ?? undefined, goalId: rootGoalId ?? ("goalId" in current ? current.goalId : ""), workspace: undefined}),
       })}

@@ -5,7 +5,10 @@ from typing import Any, cast
 import re
 
 from .control_plane.goals.active_state_metadata import todo_role_for_heading
-from .control_plane.status.active_state_projection import SECTION_HEADING_PATTERN
+from .control_plane.status.active_state_projection import (
+    BACKLOG_HYGIENE_BULLET_PATTERN,
+    SECTION_HEADING_PATTERN,
+)
 from .control_plane.todos.contract import (
     TODO_TASK_PATTERN,
     build_todo_id,
@@ -45,7 +48,6 @@ ACTIVE_STATE_STRUCTURED_PROJECTION_SCHEMA_VERSION = "active_state_structured_pro
 ACTIVE_STATE_PROJECTION_DIAGNOSTICS_SCHEMA_VERSION = "active_state_projection_diagnostics_v0"
 TODO_ITEM_SCHEMA_VERSION = "todo_item_v0"
 
-BULLET_PATTERN = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$")
 PRIORITY_PATTERN = re.compile(r"^\[(P[0-4])\]\s+(.+)$", re.IGNORECASE)
 NEXT_ACTION_EXECUTABLE_PATTERN = re.compile(
     r"(?i)\b(?:run|repair|fix|implement|add|update|write|record|validate|"
@@ -399,7 +401,7 @@ def _section_entries(
     for line in lines:
         if line.strip().startswith("<!--"):
             continue
-        bullet = BULLET_PATTERN.match(line)
+        bullet = BACKLOG_HYGIENE_BULLET_PATTERN.match(line)
         if bullet:
             if current:
                 append_entry(current)

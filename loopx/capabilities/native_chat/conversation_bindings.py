@@ -424,14 +424,19 @@ class ChatConversationBindings:
             raise ValueError("conversation binding is no longer authorized")
         observation = dict(self.observe(row["transport_ref"]))
         store = self.controller.store
+
+        def mentions_binding(session: dict[str, Any]) -> bool:
+            return any(isinstance(session.get(key), dict) and session[key].get("binding_id") == binding_id
+                       for key in ("project_context", "steward_context"))
+
+        # Keep aliases in the candidate set even when their own metadata is
+        # unrelated. Core must still see duplicate canonical Session identities.
+        hints = (session for path, session in store.iter_session_metadata()
+                 if path.parent.name != session["session_id"] or mentions_binding(session))
         sessions: list[dict[str, Any]] = []
-        for summary in store.list_sessions():
-            session = store.load_session(summary["session_id"])
-            # Narrow the IO payload only. Core independently validates every
-            # matching context, audience and canonical Session identity.
-            if session and any(isinstance(session.get(key), dict)
-                    and session[key].get("binding_id") == binding_id
-                    for key in ("project_context", "steward_context")):
+        for hint in sorted(hints, key=lambda item: str(item.get("updated_at") or ""), reverse=True):
+            session = store.load_session(hint["session_id"])
+            if session and mentions_binding(session):
                 sessions.append(session)
         current = self.read()
         if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from loopx.capabilities.integration_branch import (
     integration_branch_status,
     sync_integration_branch,
 )
+from loopx.capabilities.integration_branch import core as integration_core
 from loopx.capabilities.integration_branch.core import (
     IntegrationBranchError,
     _worktree_for_branch,
@@ -54,6 +57,15 @@ def _repository(tmp_path: Path) -> Path:
     _commit(repo, "b.txt", "b1\n", "fix b")
     _git(repo, "switch", "main")
     return repo
+
+
+def _repositories_with_trailing_newline(tmp_path: Path) -> tuple[Path, Path]:
+    """Create two independent repositories whose root names differ by LF."""
+    requested = _repository(tmp_path)
+    requested_with_lf = tmp_path / "repo\n"
+    requested.rename(requested_with_lf)
+    adjacent = _repository(tmp_path)
+    return requested_with_lf, adjacent
 
 
 def _remote_repositories(tmp_path: Path) -> tuple[Path, Path]:
@@ -527,6 +539,63 @@ def test_adopt_current_integration_head_without_touching_worktree(
     assert integration_branch_status(repo_path=repo)["status"] == "in_sync"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="newline in a path is POSIX-only")
+def test_sync_root_preserves_a_trailing_newline_in_the_requested_path(
+    tmp_path: Path,
+) -> None:
+    """A requested repository ending in LF must not resolve to its neighbor."""
+    requested, adjacent = _repositories_with_trailing_newline(tmp_path)
+    _configure(requested)
+    _configure(adjacent)
+    sync_integration_branch(repo_path=requested, execute=True)
+    sync_integration_branch(repo_path=adjacent, execute=True)
+    adjacent_plan = adjacent / ".loopx/integration-branch.json"
+    adjacent_plan_before = adjacent_plan.read_text(encoding="utf-8")
+    adjacent_ref = "refs/heads/codex/local-integration"
+    adjacent_head_before = _git(adjacent, "rev-parse", adjacent_ref)
+
+    _git(requested, "switch", "feature-a")
+    _commit(requested, "a.txt", "a2\n", "requested review update")
+    _git(requested, "switch", "main")
+    _git(adjacent, "switch", "fix-b")
+    _commit(adjacent, "b.txt", "b2\n", "adjacent review update")
+    _git(adjacent, "switch", "main")
+
+    synced = sync_integration_branch(repo_path=requested, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(requested, "rev-parse", "refs/heads/codex/local-integration") == synced[
+        "candidate_sha"
+    ]
+    assert integration_branch_status(repo_path=requested)["status"] == "in_sync"
+    assert _git(adjacent, "rev-parse", adjacent_ref) == adjacent_head_before
+    assert adjacent_plan.read_text(encoding="utf-8") == adjacent_plan_before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="newline in a path is POSIX-only")
+def test_sync_root_refuses_an_unconfigured_newline_checkout_without_touching_neighbor(
+    tmp_path: Path,
+) -> None:
+    """A missing local plan must fail before the adjacent repository can be read."""
+    requested, adjacent = _repositories_with_trailing_newline(tmp_path)
+    _configure(adjacent)
+    sync_integration_branch(repo_path=adjacent, execute=True)
+    _git(adjacent, "switch", "fix-b")
+    _commit(adjacent, "b.txt", "b2\n", "adjacent review update")
+    _git(adjacent, "switch", "main")
+    adjacent_plan = adjacent / ".loopx/integration-branch.json"
+    adjacent_plan_before = adjacent_plan.read_text(encoding="utf-8")
+    adjacent_ref = "refs/heads/codex/local-integration"
+    adjacent_head_before = _git(adjacent, "rev-parse", adjacent_ref)
+
+    with pytest.raises(IntegrationBranchError, match="plan not found"):
+        sync_integration_branch(repo_path=requested, execute=True)
+
+    assert not (requested / ".loopx/integration-branch.json").exists()
+    assert _git(adjacent, "rev-parse", adjacent_ref) == adjacent_head_before
+    assert adjacent_plan.read_text(encoding="utf-8") == adjacent_plan_before
+
+
 def test_dirty_checked_out_integration_worktree_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -644,6 +713,19 @@ def test_cli_rejects_plan_file_outside_loopx_state_root(
     assert not outside_plan.exists()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="line separators in paths are POSIX-only")
+@pytest.mark.parametrize("line_separator", ["\n", "\r"])
+def test_worktree_for_branch_preserves_a_line_break_in_the_path(
+    tmp_path: Path, line_separator: str
+) -> None:
+    """A path with LF or CR must not tear the NUL-framed worktree inventory."""
+    repo = _repository(tmp_path)
+    odd = tmp_path / f"odd{line_separator}worktree"
+    _git(repo, "worktree", "add", str(odd), "feature-a")
+
+    assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
+
+
 def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> None:
     """A worktree path containing U+0085 must resolve to the full path.
 
@@ -657,3 +739,189 @@ def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> N
     _git(repo, "worktree", "add", str(odd), "feature-a")
 
     assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
+
+
+def _install_legacy_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    unknown_switch_error: str = "error: unknown switch 'z'",
+) -> None:
+    """Put a Git wrapper first on PATH that rejects -z like Git 2.35."""
+    real_git = shutil.which("git")
+    assert real_git
+    bin_dir = tmp_path / "legacy-git-bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "$#" -eq 3 ] && [ "$1" = "-C" ] && [ "$3" = "version" ]; then\n'
+        "  echo 'git version 2.35.8'\n"
+        "  exit 0\n"
+        "fi\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$arg" = "-z" ]; then\n'
+        f"    printf '%s\\n' \"{unknown_switch_error}\" >&2\n"
+        "    exit 129\n"
+        "  fi\n"
+        "done\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_worktree_for_branch_supports_legacy_git_without_nul_framing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git 2.35 rejects worktree-list -z; ordinary paths must still resolve."""
+    repo = _repository(tmp_path)
+    ordinary = tmp_path / "ordinary worktree"
+    _git(repo, "worktree", "add", str(ordinary), "feature-a")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    assert _worktree_for_branch(repo, "feature-a") == ordinary.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_legacy_git_format_is_selected_by_version_not_error_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A localized usage error must not change the worktree inventory format."""
+    repo = _repository(tmp_path)
+    ordinary = tmp_path / "ordinary worktree"
+    _git(repo, "worktree", "add", str(ordinary), "feature-a")
+    _install_legacy_git(
+        tmp_path,
+        monkeypatch,
+        unknown_switch_error="erreur : option inconnue 'z'",
+    )
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+
+    assert _worktree_for_branch(repo, "feature-a") == ordinary.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="line separators in paths are POSIX-only")
+@pytest.mark.parametrize("line_separator", ["\n", "\r"])
+def test_legacy_git_fails_closed_on_line_separator_worktree_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, line_separator: str
+) -> None:
+    """A legacy line-framed inventory must refuse a path it cannot represent."""
+    repo = _repository(tmp_path)
+    odd = tmp_path / f"odd{line_separator}worktree"
+    _git(repo, "worktree", "add", str(odd), "feature-a")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    with pytest.raises(IntegrationBranchError, match="Git 2.36"):
+        _worktree_for_branch(repo, "feature-a")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_sync_execute_supports_legacy_git_with_ordinary_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git 2.35 must still sync an ordinary linked integration worktree."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    integration_worktree = tmp_path / "integration worktree"
+    _git(repo, "switch", "main")
+    _git(repo, "worktree", "add", str(integration_worktree), "codex/local-integration")
+    source_worktree = tmp_path / "source worktree"
+    _git(repo, "worktree", "add", str(source_worktree), "feature-a")
+    _commit(source_worktree, "a.txt", "a2\n", "review update")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    synced = sync_integration_branch(repo_path=repo, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="special path names are POSIX-only")
+@pytest.mark.parametrize("suffix", ["\n", "\r", " "])
+def test_sync_execute_preserves_checkout_paths_when_verifying_ownership(
+    tmp_path: Path, suffix: str
+) -> None:
+    """Path output must not strip a checkout name's trailing characters."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    integration_worktree = tmp_path / f"integration worktree{suffix}"
+    _git(repo, "switch", "main")
+    _git(repo, "worktree", "add", str(integration_worktree), "codex/local-integration")
+    source_worktree = tmp_path / "source worktree"
+    _git(repo, "worktree", "add", str(source_worktree), "feature-a")
+    _commit(source_worktree, "a.txt", "a2\n", "review update")
+
+    synced = sync_integration_branch(repo_path=repo, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]
+    assert integration_branch_status(repo_path=repo)["status"] == "in_sync"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_legacy_git_skips_bare_record_and_syncs_linked_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare main record must not hide the linked integration checkout."""
+    (tmp_path / "seed").mkdir()
+    seed = _repository(tmp_path / "seed")
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    _git(seed, "remote", "add", "origin", str(bare))
+    _git(seed, "push", "origin", "main", "feature-a", "fix-b")
+    linked = tmp_path / "linked"
+    _git(bare, "worktree", "add", str(linked), "main")
+    _configure(linked)
+    _git(bare, "branch", "codex/local-integration", "main")
+    integration = tmp_path / "integration worktree"
+    _git(bare, "worktree", "add", str(integration), "codex/local-integration")
+    plan = linked / ".loopx/integration-branch.json"
+    (integration / ".loopx").mkdir()
+    shutil.copy2(plan, integration / ".loopx/integration-branch.json")
+    source = tmp_path / "source worktree"
+    _git(bare, "worktree", "add", str(source), "feature-a")
+    _commit(source, "a.txt", "a2\n", "review update")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    synced = sync_integration_branch(repo_path=integration, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration, "rev-parse", "HEAD") == synced["candidate_sha"]
+    assert integration_branch_status(repo_path=integration)["status"] == "in_sync"
+
+
+def test_sync_refuses_a_checkout_that_is_not_the_integration_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parsed path must prove branch ownership before any reset."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    _git(repo, "switch", "feature-a")
+    _commit(repo, "a.txt", "a2\n", "review update")
+    _git(repo, "switch", "main")
+    wrong = tmp_path / "wrong branch worktree"
+    _git(repo, "worktree", "add", str(wrong), "fix-b")
+    wrong_head = _git(wrong, "rev-parse", "HEAD")
+    integration_head = _git(repo, "rev-parse", "codex/local-integration")
+    plan_path = repo / ".loopx/integration-branch.json"
+    plan_before = plan_path.read_text(encoding="utf-8")
+
+    def wrong_worktree(repo_path: Path, branch: str) -> Path:
+        return wrong
+
+    monkeypatch.setattr(
+        integration_core, "_worktree_for_branch", wrong_worktree
+    )
+
+    with pytest.raises(IntegrationBranchError, match="not checked out on branch"):
+        sync_integration_branch(repo_path=repo, execute=True)
+
+    assert _git(wrong, "rev-parse", "HEAD") == wrong_head
+    assert _git(repo, "rev-parse", "codex/local-integration") == integration_head
+    assert plan_path.read_text(encoding="utf-8") == plan_before

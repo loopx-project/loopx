@@ -825,6 +825,9 @@ def test_quota_accounting_routes_skip_should_run_composition(tmp_path, monkeypat
 
 def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases = [
+		*[[command, flag] for command in ("bootstrap", "connect", "configure-goal")
+		  for flag in ("--help", "--unknown-option")],
+		["connect", "--max-children", "invalid"],
 		["heartbeat-prequota", "--help"],
 		["heartbeat-prequota"],
 		["heartbeat-prequota", "-g", "goal"],
@@ -2038,3 +2041,18 @@ assert seen == [(None, "perf-goal")]
 	result = run_isolated_script(script)
 	assert result.returncode == 0, result.stderr
 	assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("command", ["bootstrap", "connect"])
+def test_selected_connect_preview_keeps_full_cli_result_without_workspace(tmp_path, command):
+    registry = tmp_path / "project/.loopx/registry.json"
+    argv = ["--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"),
+            "--format", "json", command, "--project", str(tmp_path / "project"),
+            "--objective", "Write and validate one artifact.", "--goal-id", "preview-goal",
+            "--no-global-sync", "--dry-run"]
+    selected = run_cli_main("loopx.entrypoint", argv,
+        forbidden_modules=("loopx.cli", "loopx.chat", "loopx.canary"))
+    ordinary = run_cli_main("loopx.cli", argv)
+    assert selected.returncode == ordinary.returncode == 0, (selected.stderr, ordinary.stderr)
+    assert json.loads(selected.stdout) == json.loads(ordinary.stdout)
+    assert not registry.exists()

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-core"
+dynamic = ["version"]
+description = "Standalone LoopX CLI and durable task runtime without the workspace."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+dependencies = ["tzdata; sys_platform == 'win32'"]
+
+[project.scripts]
+loopx = "loopx.entrypoint:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "loopx.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["loopx*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.ts", "*.json", "*.mjs", "*.js", "README.md", "README.zh-CN.md", "docs/*.md", "docs/protocols/*.md"]
+
+[tool.setuptools.exclude-package-data]
+"loopx.semantics" = ["project_registry_io_manifest_v1.json"]

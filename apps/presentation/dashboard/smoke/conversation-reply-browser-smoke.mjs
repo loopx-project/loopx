@@ -29,6 +29,25 @@ function next() {
     if (queue.length) receive(queue.shift()); else waiting.push(receive);
   });
 }
+async function openWhileCheckingOriginalConversation(ready, page) {
+  const isOriginalSource = url => url.pathname === "/api/chat/sessions"
+    && url.searchParams.get("conversation_binding_id") === ready.bindingId;
+  const {promise: allowSourceRead, resolve: finishSourceRead} = Promise.withResolvers();
+  const holdOriginalSource = async route => {
+    await allowSourceRead;
+    await route.continue();
+  };
+  await page.route(isOriginalSource, holdOriginalSource);
+  try {
+    await page.goto(ready.origin + "/chat/", {waitUntil: "domcontentloaded"});
+    await page.getByText("正在核验原会话…", {exact: true}).waitFor({timeout: 4_000});
+    assert.equal(await page.getByTestId("runtime-readiness").count(), 0,
+      "Checking the original conversation must not show machine runtime setup");
+  } finally {
+    finishSourceRead();
+    await page.unrouteAll({behavior: "wait"});
+  }
+}
 async function checkReturnedFiles(ready, page, errors, writes) {
   const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();
   const answer = snapshot.messages.find(row => row.message_id === ready.fileMessageId);
@@ -113,7 +132,11 @@ try {
   const snapshot = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.sessionId}`)).json();
   const source = snapshot.messages.find(row => row.role === "user" && row.turn_id);
   assert.ok(source.text.startsWith("Referenced message ("), "Canonical model input stays unchanged");
-  await page.goto(ready.origin + "/chat/");
+  if (process.env.LOOPX_REPLY_BEFORE === "1") {
+    await page.goto(ready.origin + "/chat/");
+  } else {
+    await openWhileCheckingOriginalConversation(ready, page);
+  }
   await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
   const body = "请比较这次修改，并保留原话题中的限制。Compare this change against the original constraints.";
   const parent = "原要求：保留已有结果和失败记录。Original requirement: retain results and failed attempts.";

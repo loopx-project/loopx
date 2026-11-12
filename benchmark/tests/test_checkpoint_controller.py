@@ -293,14 +293,17 @@ def host_phase_command(tmp_path, monkeypatch):
         profile="heartbeat-resume", cwd="/task", timeout_seconds=43200, task_entry="seeded-todo")
     worker.install_stop_hook(backend, None, logs, None)
     worker.prepared = True
-    # The provider's own phase-file/admission shell executes. Its following
-    # model command is excluded explicitly; candidate writing below is synthetic.
-    return worker.format_run_cmd("/task.md").split(
+    # Execute the provider's actual phase shell between subscription readiness
+    # and model dispatch. Both surrounding operations are outside this fixture.
+    _, readiness, phase = worker.format_run_cmd("/task.md").partition("-m benchmark.runtime.codex_readiness; ")
+    assert readiness
+    return "set -eu; " + phase.split(
         "set +e; timeout --signal=TERM --kill-after=30 ${remaining}s env", 1)[0]
 
 
+@pytest.mark.parametrize("fraction", [None, 0.0, 0.625], ids=["fresh", "resumed", "subsecond"])
 def test_host_phase_and_native_opportunities_continue_without_offline_refill(
-        controllers, tmp_path, monkeypatch, capsys):
+        controllers, tmp_path, monkeypatch, capsys, fraction):
     import requests
     source, destination, first, second, files, grades = controllers
     token = register(source, first, max_agent_submissions=3, submission_cooldown=2)
@@ -309,17 +312,21 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     # An admitted continuation retains about 2h from its original 12h trial.
     # The scheduler publishes a decimal deadline for this phase.
     source_phase = tmp_path / "source-phase"
-    source_deadline = int(time.time()) + 7200.25
-    source_phase.write_text(f"{source_deadline!r}\n")
+    source_epoch = int(time.time()) + 7200
+    if fraction is not None:
+        source_epoch += fraction
+    source_phase.write_text(f"{source_epoch}\n")
     source_bytes = source_phase.read_bytes()
     unit = tmp_path / "unit"
     point = transport.capture(files[0], token=token, capture_id="c" * 32,
                               destination=unit, phase_deadline_file=source_phase)
     body = json.loads((unit / "checkpoint.json").read_bytes())
     budget = body["point_metadata"]["host_phase_budget"]
-    assert budget["source_deadline_epoch"] == source_deadline
     retained = budget["remaining_seconds"]
-    assert 7190 < retained <= 7200.25
+    assert budget["source_deadline_epoch"] == source_epoch
+    assert retained == source_epoch - budget["captured_at_epoch"]
+    assert (unit / "components" / "host_phase_deadline").read_bytes() == source_bytes
+    assert 7190 < retained <= 7200.625
     prefix = host_phase_command(tmp_path, monkeypatch)
     control = tmp_path / "host-control"
     control.mkdir()
@@ -631,7 +638,7 @@ def test_recovery_refuses_mismatched_or_unavailable_original_activation(controll
         assert calls == ["/api/v1/checkpoint/restore"]
 
 
-@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.5\n", b"9007199254740992\n"])
+@pytest.mark.parametrize("raw", [b"", b"nan\n", b"1.5.0\n", b"0.0\n", b"9007199254740992\n"])
 def test_invalid_host_epoch_cannot_create_native_point(controllers, tmp_path, raw):
     source, destination, first, second, files, grades = controllers
     token = register(source, first)

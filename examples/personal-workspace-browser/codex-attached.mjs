@@ -740,28 +740,41 @@ async function runConversation(browser, uncertain) {
     let releasePage, pageStarted;
     const heldPage = new Promise(resolve => {releasePage = resolve;});
     const pagingStarted = new Promise(resolve => {pageStarted = resolve;});
-    let held = false, historyOutage = true;
+    const olderReads = [];
     const holdHistory = async route => {
-      if (!new URL(route.request().url()).searchParams.has('before') || held) return route.continue();
-      if (historyOutage) {
-        historyOutage = false;
-        return route.fulfill({status:503,contentType:'text/html',body:'<html>Temporary history outage</html>'});
-      }
-      held = true;
+      const query = new URL(route.request().url()).searchParams;
+      if (!query.has('before') || olderReads.length === 2) return route.continue();
+      olderReads.push([query.get('before'), query.get('source_ref'), query.get('binding_ref')]);
+      if (olderReads.length === 1) return route.continue();
       const response = await route.fetch(); pageStarted(); await heldPage;
       await route.fulfill({response});
     };
+    await page.request.post(new URL('/fixture/history-body-drop',url).href);
     await page.route('**/api/chat/codex-attached?*',holdHistory);
     const transcript = panel.locator('.attached-conversation-messages');
+    const partial = page.waitForResponse(response =>
+      new URL(response.url()).searchParams.has('before') && response.status() === 200);
     await transcript.focus(); await page.keyboard.press('Home');
+    await partial;
     await panel.getByRole('alert').waitFor();
-    await Promise.race([pagingStarted, page.waitForTimeout(10_000).then(() => {throw new Error('Scrolling to earlier history did not request a source page');})]);
+    assert.equal(await longDialogue.count(),1,'An interrupted page keeps the saved conversation visible');
+    await page.screenshot({path:resolve(outputDir,'attached-history-interrupted-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-history-interrupted-narrow.png'),animations:'disabled'});
+    await page.setViewportSize({width:1512,height:982});
+    await Promise.race([pagingStarted, page.waitForTimeout(4_000).then(() => {throw new Error('An interrupted response with successful headers did not automatically resume history');})]);
+    assert.ok(olderReads[0].every(Boolean),'The request identifies the original history and position');
+    assert.deepEqual(olderReads[1],olderReads[0],'Automatic recovery retries the same source and position');
     await longDialogue.locator('p').first().click();
     const summaryTop = (await workSummary.boundingBox()).y;
     releasePage();
     await work.getByText('Saved output 110',{exact:true}).waitFor({state:'attached'});
     await panel.getByRole('alert').waitFor({state:'hidden'});
     assert.ok(Math.abs((await workSummary.boundingBox()).y - summaryTop) < 2,'Prepending a page keeps the source summary at the same reading position');
+    await page.screenshot({path:resolve(outputDir,'attached-history-recovered-desktop.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:resolve(outputDir,'attached-history-recovered-narrow.png'),animations:'disabled'});
+    await page.setViewportSize({width:1512,height:982});
     await page.unroute('**/api/chat/codex-attached?*',holdHistory);
     await workSummary.focus(); await page.keyboard.press('Enter');
     const expandedGroup = await work.elementHandle();
