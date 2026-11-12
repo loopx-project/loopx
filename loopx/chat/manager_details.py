@@ -43,7 +43,7 @@ def read_manager_goal_details(
             # The Manager service root is a default carrier, not a caller's
             # explicit diagnostic override of a declared source registry.
             runtime_root_arg=None if route["routed_to_source_registry"] else str(runtime_root),
-            goal_id=goal_id, todo_id=todo_id,
+            goal_id=goal_id, todo_id=todo_id, full_text=bool(query),
         )
         if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")

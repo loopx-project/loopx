@@ -208,7 +208,7 @@ def read_remote(
     for gid in ([goal] if goal else (None if owner else before[host])) or []:
         argv += ["--goal-id", gid]
     if args.get("view") in {"agents", "todos"} and args.get("query"):
-        argv += ["--query", args.get("query", "")]
+        argv.append(f"--query={args['query']}")
     if args.get("todo_id"):
         argv += ["--todo-id", args["todo_id"]]
     if args.get("include_stopped"):

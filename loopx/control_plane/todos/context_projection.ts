@@ -80,7 +80,7 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
   if (offset < 0 || limit < 1 || limit > 48) throw new EffectRuntimeRequestError("Todo context page is out of range");
   const exact = input.todo_id !== undefined && input.todo_id !== null;
   const query = input.query ?? "";
-  if (typeof query !== "string" || query.length > 200 || (exact && query)) {
+  if (typeof query !== "string" || Array.from(query).length > 200 || (exact && query)) {
     throw new EffectRuntimeRequestError("invalid Todo context query");
   }
   if (exact && (typeof input.todo_id !== "string" || !input.todo_id)) {

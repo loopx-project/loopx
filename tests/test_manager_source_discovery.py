@@ -1,5 +1,6 @@
 """One ordinary read discovers peers across authorized hosts without status fanout."""
 import json
+import shlex
 import subprocess
 import sys
 
@@ -7,7 +8,7 @@ from loopx.capabilities.manager_context.inspection import ManagerInspection, TOO
 from loopx.capabilities.manager_context import POLICY_SCHEMA, _root
 
 
-def reader_fixture(tmp_path, *, fail=False, revoke=False):
+def reader_fixture(tmp_path, *, fail=False, revoke=False, todo_text=None):
     local = tmp_path / "registry.json"
     local.write_text(json.dumps({"goals": [{"id": "project", "registered_agents":
         [f"local-{i}" for i in range(20)]}]}))
@@ -17,6 +18,23 @@ def reader_fixture(tmp_path, *, fail=False, revoke=False):
             "agent_profiles": {"remote-worker": {"scope_summary": "Current service rollout"}}}},
         {"id": "private", "registered_agents": ["outside-audience"]},
     ]}))
+    remote_runtime = tmp_path / "remote-runtime"
+    if todo_text is not None:
+        for registry, runtime in ((local, tmp_path), (remote, remote_runtime)):
+            registry.unlink()
+            project = tmp_path / registry.stem
+            project.mkdir()
+            for command in (
+                ["bootstrap", "--project", str(project), "--goal-id", "project",
+                 "--objective", "Validate task evidence", "--no-global-sync"],
+                ["todo", "add", "--goal-id", "project", "--role", "agent", "--text", todo_text],
+            ):
+                result = subprocess.run(
+                    [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+                     "--runtime-root", str(runtime), "--format", "json", *command],
+                    capture_output=True, text=True, timeout=60,
+                )
+                assert result.returncode == 0, result.stdout + result.stderr
     config = tmp_path / "ssh_config"
     config.write_text("Host sample-host\n  HostName example.invalid\n")
     policy = _root(tmp_path) / "policy.json"
@@ -27,15 +45,15 @@ def reader_fixture(tmp_path, *, fail=False, revoke=False):
 
     def run(argv, **kwargs):
         calls.append(argv)
-        assert "goal-portfolio --manager-view agents" in argv[-1]
+        view = "agents" if todo_text is None else "todos"
+        assert f"goal-portfolio --manager-view {view}" in argv[-1]
         assert "--goal-id project" in argv[-1]
         if fail:
             raise subprocess.TimeoutExpired("ssh", kwargs["timeout"])
         # Use the real source CLI and registry decoder; only replace SSH transport.
-        import shlex
         command = shlex.split(argv[-1])
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(remote),
-            "--runtime-root", str(tmp_path / "remote-runtime"), "--format", "json",
+            "--runtime-root", str(remote_runtime), "--format", "json",
             *command[command.index("goal-portfolio"):]], capture_output=True, text=True)
         if revoke:
             policy.write_text(json.dumps({"schema_version": POLICY_SCHEMA, "sources": {}}))
@@ -68,6 +86,21 @@ def test_topic_search_is_federated_without_an_explicit_remote_hint(tmp_path):
     result = reader.read(TOOL_NAME, {"view": "agents", "query": "rollout"})
     assert result["matched"] == 1 and result["rows"][0]["source_id"] == "ssh:sample-host"
     assert len(calls) == 1 and result["next_reads"] == []
+
+
+def test_todo_search_reads_canonical_tail_locally_and_over_ssh(tmp_path):
+    astral_query = "𠀀" * 101
+    reader, _ = reader_fixture(tmp_path, todo_text="Repeat the public check. " * 28 + "--execute " + astral_query)
+    for source in ("local", "ssh:sample-host"):
+        scope = {"view": "todos", "goal_id": "project", "source_id": source}
+        overview = reader.read(TOOL_NAME, scope)
+        assert overview["ok"] and len(overview["rows"]) == 1, overview
+        expected_id = overview["rows"][0]["todo_id"]
+        assert "--execute" not in overview["rows"][0]["title"]
+        for query in ("--execute", astral_query):
+            result = reader.read(TOOL_NAME, {**scope, "query": query})
+            assert result["ok"] and result["matched"] == 1, result
+            assert result["rows"][0]["todo_id"] == expected_id
 
 
 def test_source_failure_is_unknown_and_local_scope_remains_explicit(tmp_path):
