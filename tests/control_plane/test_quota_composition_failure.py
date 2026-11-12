@@ -21,9 +21,11 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault", ["action", "interaction", "runtime"])
+@pytest.mark.parametrize("fault,limit", [
+    ("action", None), ("interaction", None), ("runtime", None), ("interaction", 1700),
+])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
-        tmp_path, monkeypatch, provider, fault):
+        tmp_path, monkeypatch, provider, fault, limit):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path, claimed=False)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -48,11 +50,16 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
     identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
 
+    output_bytes = 0
+
     def cli(command, *args):
+        nonlocal output_bytes
         output = StringIO()
         with redirect_stdout(output):
             code = main([*prefix, command, *args])
-        return code, json.loads(output.getvalue())
+        serialized = output.getvalue()
+        output_bytes = len(serialized.encode("utf-8"))
+        return code, json.loads(serialized)
 
     compose = quota.compose_quota_cli_source
     original = {}
@@ -78,40 +85,54 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         injected.setattr(quota, "compose_quota_cli_source", reject_composition)
         code, failed = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
             "--context-delivery", "on", "--codex-context-dir", str(native),
-            "--decision-output-dir", str(capture))
-    assert code == 1 and failed["ok"] is False and failed["should_run"] is False
+            "--decision-output-dir", str(capture),
+            *(("--complete-turn", "--max-page-output-bytes", str(limit)) if limit else ()))
+    assert code == 1 and failed["ok"] is False
+    if limit is not None:
+        assert output_bytes <= limit
     assert failed["error_code"] == "quota_decision_transport_failed"
-    assert failed["reason"] == failed["error"]
     assert failed["diagnostic_code"] == ("runtime_unavailable" if fault == "runtime" else "invalid_request")
-    assert "saved composition diagnostic" in failed["recommended_action"]
     assert "composition_error" not in failed and "source_diagnostic" not in failed
-    assert failed["heartbeat_receipt"] == original["heartbeat_receipt"]
+    if limit is None:
+        assert failed["should_run"] is False and failed["reason"] == failed["error"]
+        assert "saved composition diagnostic" in failed["recommended_action"]
+        assert failed["heartbeat_receipt"] == original["heartbeat_receipt"]
     saved = capture / "decision.json"
     captured = failed["captured_decision"]
     assert captured["path"] == str(saved)
     digest = captured["sha256"]
-    markdown = render_quota_should_run_markdown(failed)
-    assert all(value in markdown for value in (str(saved), digest, TURN_ID, failed["diagnostic_code"], failed["error"]))
+    if limit is None:
+        markdown = render_quota_should_run_markdown(failed)
+        assert all(value in markdown for value in (str(saved), digest, TURN_ID, failed["diagnostic_code"], failed["error"]))
     raw = saved.read_bytes()
     assert digest == hashlib.sha256(raw).hexdigest()
     diagnostic = json.loads(raw)
     assert diagnostic["ok"] is False and diagnostic["should_run"] is False
     assert diagnostic["error_code"] == failed["error_code"]
     assert diagnostic["source_diagnostic"] == original
-    assert diagnostic["heartbeat_receipt"] == failed["heartbeat_receipt"]
+    assert diagnostic["heartbeat_receipt"] == original["heartbeat_receipt"]
     expected_error = "EffectRuntimeStartupError" if fault == "runtime" else "EffectRuntimeRejected"
     assert diagnostic["composition_error"]["type"] == expected_error
     assert diagnostic["composition_error"]["diagnostic_code"] == failed["diagnostic_code"]
     if fault == "runtime":
         assert diagnostic["composition_error"]["message"] == "synthetic composition unavailable"
-        assert "synthetic composition unavailable" not in failed["error"]
+        assert "synthetic composition unavailable" not in diagnostic["error"]
     else:
-        assert diagnostic["composition_error"]["message"] == failed["error"]
+        assert diagnostic["composition_error"]["message"] == diagnostic["error"]
     assert "interaction_contract" not in diagnostic and "execution_preparation" not in diagnostic
     assert (native / "session.json").read_bytes() == original_journal
     assert not (native / "claim-source.json").exists()
 
     reference = ["--capture-file", captured["path"], "--capture-sha256", digest]
+    if limit is not None:
+        command = failed.get("command") or captured["command"]
+        tokens = shlex.split(command)
+        assert tokens[tokens.index("--capture-sha256") + 1] == digest
+        assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(limit)
+        reader = tokens[tokens.index("context-read") + 1:]
+        rc, first_page = cli("context-read", *reader)
+        assert rc == 0 and first_page["ok"], first_page
+        assert first_page["offset"] == 0 and output_bytes <= limit
     for setting in ("off", "on"):
         rc, refused = cli("context-project", *identity, *reference, "--context-delivery", setting,
             "--codex-app", "--codex-context-dir", str(native))

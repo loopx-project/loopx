@@ -457,6 +457,11 @@ def _emit_quota_result(
                             "diagnostic_code": exc.diagnostic_code}})
                     failure = report(args, payload, exc, capture_directory=capture_directory,
                         capture_sha256=digest)
+                    if (context_delivery_enabled and args.format == "json"
+                            and not getattr(args, "defer_context_presentation", False)):
+                        failure = _export("captured_quota_failure_view")(failure,
+                            capture_directory=capture_directory, capture_sha256=digest,
+                            max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
                 print_payload(failure, args.format, _quota_renderer(args))
                 return 1
             # Validate before capture or handoff; the complete source is unchanged.

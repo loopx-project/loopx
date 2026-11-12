@@ -273,6 +273,7 @@ def quota_failure_payload(
 def captured_quota_failure_view(
     payload: Mapping[str, object], *, capture_directory: Path,
     max_page_output_bytes: int | None = None,
+    capture_sha256: str | None = None,
 ) -> dict[str, object]:
     """Bound an opted-in refusal without entering native delivery continuity.
 
@@ -288,15 +289,16 @@ def captured_quota_failure_view(
     if max_page_output_bytes is not None:
         limit = min(limit, max_page_output_bytes)
     saved = capture_directory / "decision.json"
-    digest = hashlib.sha256(saved.read_bytes()).hexdigest()
-    fields = ("ok", "goal_id", "decision", "should_run", "error_code", "reason",
-              "recommended_action", "heartbeat_receipt", "action_selection_conflict")
+    digest = capture_sha256 or hashlib.sha256(saved.read_bytes()).hexdigest()
+    fields = ("ok", "goal_id", "decision", "should_run", "error_code", "diagnostic_code", "error", "reason",
+              "recommended_action", "heartbeat_receipt", "rollout_event", "host_poll_receipt", "action_selection_conflict")
     result = {key: payload[key] for key in fields if key in payload}
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
     if isinstance(cli, Mapping) and "next_cli_actions" in cli:
         result["next_cli_actions"] = cli["next_cli_actions"]
-    result["captured_decision"] = {"path": str(saved), "sha256": digest,
+    reference = {"path": str(saved), "sha256": digest}
+    result["captured_decision"] = {**reference,
         "command": context_capture_read_command(saved, digest,
             page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
     result["instruction"] = (
@@ -313,7 +315,8 @@ def captured_quota_failure_view(
         pointers = ["/" + key for key in fields if key in payload]
         if isinstance(cli, Mapping) and "next_cli_actions" in cli:
             pointers.append("/interaction_contract/cli_channel/next_cli_actions")
-        result = {"ok": False, "captured_decision": result["captured_decision"],
+        result = {"ok": False, "captured_decision": reference,
+            **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
             "instruction": "Read the selected failure and recovery fields before acting; "
                 "the original decision and Turn identity remain unchanged. No execution authority or context baseline was granted.",
             "command": context_capture_read_command(saved, digest, select=pointers,
