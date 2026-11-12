@@ -3559,3 +3559,45 @@ costs remain open. Rollback the routing slice while retaining task authority and
 reconciling original attempts. Existing exact-head review, premerge and bilingual
 requirements, original failures, budgets and separate research/release authority
 remain in force.
+
+### 2026-11-13 — Startup metadata isolation and installed context recovery
+
+Default goal-start help and preview previously imported issue-fix execution,
+candidate preflight and repository analysis merely to render command hints.
+The existing command templates now have a capability-owned metadata module;
+bootstrap and catalog consumers use it, while the workflow module preserves
+its existing Python import API and an explicit issue-fix route retains its complete preflight
+contract. Independently installed base/head startup output is byte-identical;
+default help/preview load 186→171 LoopX modules and the explicit route 186→179.
+Module counts alone establish a narrower loading boundary, not a speed claim.
+
+Thirty alternating installed base/head pairs per workload on macOS arm64,
+Python 3.13.5 and ordinary OS/bytecode caches observe first-entry median/p95
+of 314.73/362.55→181.25/303.01 ms for help and
+542.36/670.44→311.08/572.66 ms for preview. Two subsequent calls per process
+have warm medians 0.66→0.54 ms and 11.83→8.94 ms. Median peak RSS is
+43.22→32.46 MB and 46.05→36.18 MB. All complete outputs match;
+preview remains 52,727 bytes. Retain the head preview maximum 1,092.15 ms.
+First entry includes imports; this is neither OS-cold nor full V10 qualification.
+Source regression passes 348 checks with one native Windows/PowerShell skip;
+the final installed wheel passes 20 checks. Earlier failed attempts remain.
+
+Installed CLI qualification exercises the existing context-project/read/hook
+owners with complete source or explicit recovery: off keeps original values,
+partial delivery and lost ACK cannot establish a baseline, unchanged/revised
+views preserve complete constraints, standalone PostCompact invalidates the
+baseline, and a changed captured file is refused. Warm transport may choose
+full when complete delta framing would cost more. The test runs against the
+original installed core as well; it qualifies the existing installed protocol
+and supplies a regression boundary rather than introducing another context
+owner. Native events are fixtures, not evidence of model retention or adoption.
+
+Instrumented SQLite/File Turn witnesses retain Python, actual Node-loader and
+RPC observations. The selected Turn entry still loads 525 Python modules,
+including 111 capability modules; its Node runtime retains eager shared typed
+support. Complete work contracts and transport costs remain in the inventory.
+This diagnostic does not qualify endpoint/network completeness, OS-cold cost,
+model tokens or the full minimal composition. Keep earlier failed checks and
+the separate startup/context boundary; full V1–V5/V10, R1/M3, independent
+Standard/workspace packages, installed-host adoption and complete original-goal
+regression remain open under their existing owners and acceptance.
