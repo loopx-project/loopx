@@ -69,6 +69,17 @@ def validation_command(source: str) -> str:
     return shlex.join([sys.executable, "-c", source])
 
 
+def chat_runtime_routes(
+    registry: Path, *, host_fallback: bool,
+) -> tuple[str, str | None]:
+    if not host_fallback:
+        return str(registry.parent / "chat-history"), None
+    registration = json.loads(registry.read_text(encoding="utf-8"))
+    runtime = str(registration.pop("common_runtime_root"))
+    registry.write_text(json.dumps(registration), encoding="utf-8")
+    return runtime, runtime
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_validation_failure_preview_and_replay(tmp_path: Path, provider: str) -> None:
     marker = tmp_path / "calls"
@@ -128,14 +139,26 @@ def test_invalid_input_and_permission_do_not_run_validation(tmp_path: Path, prov
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("failure_boundary", ["display", "action_receipt"])
-def test_reviewed_chat_completion_recovers_projection(tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch, failure_boundary: str) -> None:
+@pytest.mark.parametrize(
+    ("failure_boundary", "host_fallback"),
+    [("display", False), ("action_receipt", False), ("action_receipt", True)],
+    ids=["registered-display", "registered-receipt", "host-fallback-receipt"],
+)
+def test_reviewed_chat_completion_recovers_projection(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+    failure_boundary: str, host_fallback: bool,
+) -> None:
     from loopx.chat_action_store import ChatActionStore
     from loopx.chat_actions import ChatActionService
     from loopx.control_plane.todos import provider_projection
 
     registry, state, todo_id = fixture(tmp_path, provider)
-    service = ChatActionService(store=ChatActionStore(tmp_path / "actions"), registry_path=registry)
+    chat_root, todo_root = chat_runtime_routes(registry, host_fallback=host_fallback)
+    route = {"registry_path": registry, "goal_id": "goal-a", "runtime_root_arg": todo_root}
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"), registry_path=registry,
+        runtime_root_override=chat_root,
+    )
     proposal = service.preview({"action_kind": "todo.update", "summary": "Record an observed outcome",
         "normalized_parameters": {"goal_id": "goal-a", "todo_id": todo_id,
             "agent_id": "agent-a", "operation": "complete", "note": "Reviewed observation"},
@@ -154,13 +177,16 @@ def test_reviewed_chat_completion_recovers_projection(tmp_path: Path, provider: 
             patch.setattr(service.store, "apply", lost_response)
             with pytest.raises(ConnectionError):
                 service.apply(proposal["proposal_id"])
-    assert list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"][0]["status"] == "done"
+    committed = list_goal_todos(**route)
+    assert committed["todos"][0]["status"] == "done"
     state.unlink()
     recovered = service.apply(proposal["proposal_id"])["proposal"]
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "todo_completed"
     assert state.exists()
-    dependent = next(row for row in list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"] if row["role"] == "agent")
+    after = list_goal_todos(**route)
+    assert after["authority_read"]["provider_revision"] == committed["authority_read"]["provider_revision"]
+    dependent = next(row for row in after["todos"] if row["role"] == "agent")
     assert (dependent["status"], dependent["claimed_by"]) == ("open", "agent-a")
 
 
@@ -183,7 +209,10 @@ def test_chat_user_validation_failure_never_creates_success_receipt(tmp_path: Pa
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("passed", [True, False])
-def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passed: bool) -> None:
+@pytest.mark.parametrize("host_fallback", [False, True], ids=["registered", "host-fallback"])
+def test_packaged_chat_http_user_completion(
+    tmp_path: Path, provider: str, passed: bool, host_fallback: bool,
+) -> None:
     from http.client import HTTPConnection
     from threading import Thread
     from loopx.chat_action_store import ChatActionStore
@@ -192,12 +221,20 @@ def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passe
 
     registry, _state, todo_id = fixture(tmp_path, provider,
         validation=validation_command(f"raise SystemExit({0 if passed else 1})"))
+    chat_root, todo_root = chat_runtime_routes(registry, host_fallback=host_fallback)
+    route = {"registry_path": registry, "goal_id": "goal-a", "runtime_root_arg": todo_root}
+    before = list_goal_todos(**route)
+    dependent_id = next(row["todo_id"] for row in before["todos"] if row["role"] == "agent")
     store = ChatActionStore(tmp_path / "actions")
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.verbose = False
     server.assets_dir = default_chat_assets_dir()
+    server.registry_path = registry
+    server.runtime_root_override = chat_root
     server.action_store = store
-    server.action_service = ChatActionService(store=store, registry_path=registry)
+    server.action_service = ChatActionService(
+        store=store, registry_path=registry, runtime_root_override=chat_root,
+    )
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=45)
@@ -206,6 +243,11 @@ def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passe
         response = connection.getresponse()
         assert response.status == 200
         assert b"<script" in response.read()
+        detail_path = f"/api/chat/todo/detail?goal_id=goal-a&todo_id={dependent_id}"
+        connection.request("GET", detail_path)
+        response = connection.getresponse()
+        detail = json.loads(response.read())
+        assert response.status == 200 and detail["status"] == "blocked", detail
         body = {"action_kind": "todo.update", "summary": "Complete the observed action", "context": {},
             "idempotency_key": "http-completion", "normalized_parameters": {"goal_id": "goal-a", "todo_id": todo_id,
                 "agent_id": "agent-a", "operation": "complete", "note": "Owner acknowledgement"}}
@@ -213,6 +255,7 @@ def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passe
         response = connection.getresponse()
         preview = json.loads(response.read())
         assert response.status == 201, preview
+        assert preview["proposal"]["canonical_update_basis"]["provider_revision"] == detail["review_basis"]["provider_revision"]
         proposal_id = preview["proposal"]["proposal_id"]
         connection.request("POST", f"/api/actions/{proposal_id}/apply", body="{}", headers={"Content-Type": "application/json"})
         response = connection.getresponse()
@@ -220,11 +263,15 @@ def test_packaged_chat_http_user_completion(tmp_path: Path, provider: str, passe
         assert response.status == 200, result
         assert result["proposal"]["status"] == ("applied" if passed else "failed")
         assert (result["proposal"]["receipt"] is not None) is passed
-        rows = list_goal_todos(registry_path=registry, goal_id="goal-a")["todos"]
+        rows = list_goal_todos(**route)["todos"]
         assert next(row for row in rows if row["todo_id"] == todo_id)["status"] == ("done" if passed else "open")
         dependent = next(row for row in rows if row["role"] == "agent")
         assert dependent["status"] == ("open" if passed else "blocked")
         assert dependent["claimed_by"] == "agent-a"
+        connection.request("GET", detail_path)
+        response = connection.getresponse()
+        detail = json.loads(response.read())
+        assert response.status == 200 and detail["status"] == dependent["status"], detail
     finally:
         connection.close()
         server.shutdown()

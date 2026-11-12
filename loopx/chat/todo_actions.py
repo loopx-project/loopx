@@ -24,6 +24,11 @@ def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
 class ChatTodoActionMixin:
     """Keep Todo preview/apply parity separate from general orchestration."""
 
+    def _todo_runtime_root_arg(self) -> str | None:
+        from .status_api import goal_read_runtime_root
+
+        return goal_read_runtime_root(self)
+
     def _run_todo_update(
         self, parameters: dict[str, Any], *, dry_run: bool,
         basis: dict[str, Any] | None = None, operation_id: str | None = None,
@@ -37,10 +42,12 @@ class ChatTodoActionMixin:
         proof = {key: parameters[key] for key in (
             "task_lease_idempotency_key", "task_lease_expected_version",
         ) if key in parameters} if operation == "complete" else {}
+        runtime_root_arg = self._todo_runtime_root_arg()
         if operation == "complete" and (basis is None or
                 basis.get("schema_version") == "loopx_chat_canonical_terminal_basis_v0"):
             return complete_goal_todo(
                 registry_path=self.registry_path,
+                runtime_root_arg=runtime_root_arg,
                 goal_id=goal_id,
                 todo_id=str(parameters["todo_id"]),
                 note=parameters.get("note"),
@@ -61,6 +68,7 @@ class ChatTodoActionMixin:
             status = "deferred"
         return update_goal_todo(
             registry_path=self.registry_path,
+            runtime_root_arg=runtime_root_arg,
             goal_id=goal_id,
             todo_id=str(parameters["todo_id"]),
             text=parameters.get("text"),
@@ -97,6 +105,7 @@ class ChatTodoActionMixin:
         # the outcome and what it does to the dependent; the App only records it.
         return complete_goal_todo(
             registry_path=self.registry_path,
+            runtime_root_arg=self._todo_runtime_root_arg(),
             goal_id=str(parameters["goal_id"]),
             todo_id=str(parameters["todo_id"]),
             role="user",
@@ -141,7 +150,7 @@ class ChatTodoActionMixin:
     ) -> dict[str, Any] | None:
         registry_sha256 = self._registry_fingerprint()
         authority = read_canonical_todos_if_promoted(
-            runtime_root=effective_runtime_root(self.registry_path, None),
+            runtime_root=effective_runtime_root(self.registry_path, self._todo_runtime_root_arg()),
             goal_id=goal_id, include_leases=True,
         )
         if self._registry_fingerprint() != registry_sha256:

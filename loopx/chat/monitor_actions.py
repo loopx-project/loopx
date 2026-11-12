@@ -20,9 +20,11 @@ class ChatMonitorActionMixin:
 
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
+        runtime_root_arg = self._todo_runtime_root_arg()
         if operation == "stop":
             result = complete_goal_todo(
                 registry_path=self.registry_path,
+                runtime_root_arg=runtime_root_arg,
                 goal_id=goal_id,
                 todo_id=str(parameters["todo_id"]),
                 evidence="Owner stopped the continuous monitor from typed Chat action.",
@@ -36,6 +38,7 @@ class ChatMonitorActionMixin:
         else:
             kwargs: dict[str, Any] = {
                 "registry_path": self.registry_path,
+                "runtime_root_arg": runtime_root_arg,
                 "goal_id": goal_id,
                 "todo_id": str(parameters["todo_id"]),
                 "agent_id": str(parameters["agent_id"]),
