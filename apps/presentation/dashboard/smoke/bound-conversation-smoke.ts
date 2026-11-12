@@ -132,6 +132,11 @@ try {
     assert.equal(complete.messages.length, expectedRows);
     const recoveredOffsets: number[] = [];
     const failedOffsets = new Set<number>();
+    const interruptedHistoryBody = (status: number) => new Response(new ReadableStream({
+      start(controller) {
+        controller.error(new Error("Synthetic interrupted history response body"));
+      },
+    }), {status});
     globalThis.fetch = async (input, init) => {
       const response = await routedRead(input, init);
       if (new URL(String(input), origin).pathname !== `/api/chat/sessions/${sessionId}`) return response;
@@ -140,7 +145,8 @@ try {
       recoveredOffsets.push(offset);
       if (offset > 0 && !failedOffsets.has(offset)) {
         failedOffsets.add(offset);
-        throw new Error("Synthetic interrupted transport after a verified prefix");
+        if (offset === 200) throw new Error("Synthetic interrupted transport after a verified prefix");
+        return interruptedHistoryBody(response.status);
       }
       return response;
     };
@@ -150,6 +156,8 @@ try {
     assert.deepEqual(interrupted.snapshots, []);
     const interruptedAgain = await fetchChatHistory(options, interrupted);
     assert.deepEqual(interruptedAgain.messages, []);
+    assert.equal(interruptedAgain.pendingReads?.get(sessionId)?.messages.length, 400,
+      "A lost body after successful response headers keeps the verified prefix private");
     const recovered = await fetchChatHistory(options, interruptedAgain);
     assert.deepEqual(recovered.unavailableSessionIds, []);
     assert.deepEqual(recovered.snapshots[0].messages, complete.messages);
@@ -188,11 +196,12 @@ try {
     child.stdin.write("recover\n"); assert.equal((await next()).source_verified, true);
     // Permanent denial, a changed source or malformed prefix cannot be retained
     // as transport progress. The following read must validate page zero again.
-    for (const fault of ["denied", "source", "digest"]) {
+    for (const fault of ["denied", "denied-body", "source", "digest"]) {
       globalThis.fetch = async (input, init) => {
         const response = await routedRead(input, init);
         if (!new URL(String(input), origin).searchParams.has("message_cursor")) return response;
         if (fault === "denied") return new Response("{}", {status: 403});
+        if (fault === "denied-body") return interruptedHistoryBody(403);
         const value = await response.json();
         if (fault === "source") value.session.goal_id = "unrelated-goal";
         else value.message_page.snapshot_sha256 = "0".repeat(64);
