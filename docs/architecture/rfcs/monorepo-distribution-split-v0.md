@@ -3468,3 +3468,44 @@ qualifies the consumed replan read cost; full CLI process, durable writeback,
 model and end-to-end outcome costs are not inferred from these timings. The
 complete minimal load/context closure, R1/M3, independent Standard packages,
 workspace/meta publication and installed-host adoption remain open.
+
+
+### 2026-11-12 — Dashboard source acceptance executes its backend journeys
+
+Source coverage now executes the existing first-Goal and runtime-readiness
+journeys through the real disposable Chat service. Both source and packaged
+lanes already prepare the verified Chat bundle. Declared backend journeys
+require successful backend assertions before a PASS receipt; an early return
+cannot qualify them. Scenarios with other legitimate coverage boundaries keep
+their existing behavior. The shared browser proxy adds EPIPE to its existing
+three-attempt GET/HEAD socket recovery, recognizes typed errno or the first
+Playwright socket-error line, and never retries an HTTP write or arbitrary prose.
+Research-record search checks bind help dismissal to its current keyboard trigger
+and require the selected query to survive dismissal.
+
+On immutable source `eedfc5e24`, local macOS/Node26 qualification passes all
+86 scenarios across three non-overlapping 29/29/28 partitions with a common
+catalog and source tree, verified backend-readback markers and nonempty merged
+coverage. The passing partitions take 1,943.74 seconds; earlier failed runs,
+setup and repair remain separate records. This is validation cost, with no
+complete model/service/human cost comparison.
+
+The matched 200-item M2 pair retains all 15 samples and long-task windows.
+Ordinary medians are 225.77/172.99/310.77/128.45/146.52 ms, maximum 366.08 ms;
+coverage medians are 328.21/371.20/332.49/174.73/173.02 ms, maximum 421.22 ms.
+Both have zero samples above the 1-second target. Full-suite coverage M2 also
+passes: medians 325.35/270.28/326.59/164.22/166.47 ms, maximum 463.88 ms.
+The real 1,200 ms repeated Board delay is correctly rejected by ordinary
+qualification (slow median 1491.77 ms, maximum 1519.98 ms; all 15
+samples/windows retained). Existing strict-boundary and missing-sample tests
+pass without a budget change.
+
+Earlier failed source partitions (EPIPE, query loss and temporary-directory
+failure) remain recorded separately, as do historical frozen 1.162-second
+failures and cancelled runs. This repairs
+source-acceptance execution and its bounded transport recovery, with no render
+threshold, kernel runtime or authority change. The first-Goal fixture uses an
+exit-only Agent: registration and honest failed-Turn recovery do not prove
+natural-language task completion or model benefit. Complete minimal closure,
+R1/M3, workspace/meta publication, installed-host adoption and full-cost
+acceptance remain open.
