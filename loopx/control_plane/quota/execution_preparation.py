@@ -83,6 +83,8 @@ def project_selected_todo_execution_preparation(
                     "status": status if status in {"active", "released"} else "unknown",
                     "active": lease_is_active(dict(lease)),
                     **({"owner": lease["owner"]} if normalize_todo_claimed_by(lease.get("owner")) else {}),
+                    "lease_proof": {"idempotency_key": lease.get("idempotency_key"),
+                                    "expected_version": lease.get("version")},
                 })
             facts = {
                 "schema_version": "execution_preparation_facts_v0",

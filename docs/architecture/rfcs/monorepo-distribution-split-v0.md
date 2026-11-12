@@ -3405,3 +3405,35 @@ compatibility to older readers and does not upgrade an installed runtime.
 Real File/SQLite RPC and CLI regressions, plus an isolated PostgreSQL read,
 qualify the failure boundary without rewriting authority. The original
 installed-host qualification and full-cost/adoption gaps remain open.
+
+
+### 2026-11-12 — Standalone core artifact and installation diagnosis
+
+The opt-in `packages/loopx-core` source builder reuses tracked runtime sources
+and produces an independently installed wheel without Chat, web assets, the
+canary fleet or the full CLI facade. It retains existing built-in capability
+and host compatibility imports. This is the core-artifact prerequisite for
+R1/M3; it does not qualify the complete minimal closure or publish a release.
+
+The installed journey uses the existing generic CLI host, independent artifact
+validation and canonical hard leases. The original admitted key/version travels
+through the shared TypeScript preparation and checked Turn context to the
+existing completion owner. Process loss resumes the confirmed result; replay
+does not invoke the host or debit quota again. A renewed/released lease or an
+invalid artifact refuses completion without state or quota effects.
+
+Deep installation diagnosis now selects the actual distribution's RECORD and
+required entrypoints. A healthy core passes; an unrecorded launcher or missing
+runtime file remains a failure. Ordinary distributions still require their full
+CLI. Core supports the advertised history action through its existing handler
+and parses global version options without the omitted facade. The installed
+qualification covers default SQLite and explicitly configured File hard leases;
+help/import remain usable without Node, while governed work retains the existing
+Node prerequisite. Ordinary-distribution CLI and installation parity have their
+own matched checks. The package-smoke lane executes the installed qualification.
+
+Preserve D1-D7 and all original milestones, historical failures and acceptance
+boundaries. Workspace/meta-package publication, complete install/load/context
+closure, independent Standard packages, other host/platform adoption, matched
+model effectiveness and complete costs remain open. This synthetic task and
+recovery evidence establishes neither model benefit nor an installed-host upgrade.
