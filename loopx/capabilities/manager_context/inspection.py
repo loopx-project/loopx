@@ -20,7 +20,7 @@ READ_TOOL = {
     "name": TOOL_NAME,
     "description": (
         "Read authorized LoopX Core evidence on demand: the global Goal portfolio, "
-        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents to search before reporting a missing worker; delivery targets are not the discovery inventory. Use view=agent_route with exact goal_id and agent_id to observe a binding on the selected source host before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
+        "registered Agent responsibilities, one Goal's current Todos, recorded deliveries, or handoff receipt status. Use view=agents without source_id to discover across authorized local and SSH sources equally; delivery targets are not the discovery inventory. Follow next_reads for source-specific remaining pages. Agent search does not search task requirements: browse registrations when shorthand has no match, then read relevant source-qualified Todos. Use view=agent_route with exact goal_id and agent_id to observe a binding on the selected source host before asking the user for a task link. A readable route is not execution readiness or delivery authority. "
         "For a current-work overview, start with the index's bounded Agent Todo summaries; "
         "use view=portfolio for source and coverage, and view=todos for needed detail. "
         "Delivery history answers past results, not live activity. "
@@ -46,7 +46,7 @@ READ_TOOL = {
                 "type": "string",
                 "enum": ["sources", "portfolio", "todos", "deliveries", "handoffs", "agents", "agent_route", "report_source"],
             },
-            "source_id": {"type": "string", "description": "Default local. For SSH use an exact source_id from view=sources; local Goal IDs do not discover remote Goals."},
+            "source_id": {"type": "string", "description": "Agents defaults to all authorized sources; other views default local. Copy a discovered row's source_id for its Goal details. Set local only to deliberately restrict discovery. Follow next_reads for federated continuation; scoped pages use next_offset."},
             "days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "Deliveries lookback; expand for latest known progress older than yesterday."},
             "include_outcome_gaps": {"type": "boolean", "description": "Local deliveries: include recorded outcome_gap counterevidence alongside progress. Default false for ordinary delivery queries; report_source always includes it. Observations and untyped host failures are not delivery outcomes."},
             "window_start": {"type": "string", "description": "Local deliveries/report_source: exact inclusive ISO-8601 timestamp with offset. Pair with window_end instead of days, e.g. a frozen report window."},
@@ -62,7 +62,7 @@ READ_TOOL = {
                              "description": "Agent_route only: optionally narrow to an observed binding's exact host surface. This does not select another machine or grant delivery."},
             "todo_id": {"type": "string", "minLength": 1,
                         "description": "Todos only, with goal_id: read one exact record including its complete permitted text. Recover content_truncated excerpts; a completed record does not authorize new work."},
-            "query": {"type": "string", "maxLength": 200, "description": "Agents only: case-insensitive text match on identity and declared responsibility. Omit to browse all permitted registrations."},
+            "query": {"type": "string", "maxLength": 200, "description": "Agents: match identity/responsibility, not Goal requirements. Todos: search permitted full task text before paging; requires goal_id and the discovered source_id. Omit to browse."},
             "request_id": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$",
@@ -150,10 +150,12 @@ def rejected_read_arguments(arguments: dict[str, Any]) -> list[str]:
         elif type(arguments["include_stopped"]) is not bool:
             rejected.append("include_stopped:must_be_a_boolean")
     if "query" in arguments:
-        if view != "agents":
-            rejected.append("query:only_for_view_agents")
+        if view not in {"agents", "todos"}:
+            rejected.append("query:only_for_view_agents_or_todos")
         elif not isinstance(arguments["query"], str) or len(arguments["query"]) > 200:
             rejected.append("query:must_be_a_string_at_most_200_characters")
+        if view == "todos" and "todo_id" in arguments:
+            rejected.append("query:cannot_combine_with_todo_id")
     offset = arguments.get("offset", 0)
     if type(offset) is not int or offset < 0:
         rejected.append("offset:must_be_an_integer_at_least_0")
@@ -271,6 +273,7 @@ def manager_index(context: dict[str, Any], *, status_on_demand: bool = False) ->
         "goals": [
             {
                 "goal_id": row["goal_id"],
+                "source_id": "local",
                 **(
                     {"goal_instance_id": row["goal_instance_id"]}
                     if row.get("goal_instance_id")
@@ -299,7 +302,9 @@ def manager_index(context: dict[str, Any], *, status_on_demand: bool = False) ->
         "evidence_sources": context.get("evidence_sources", [])[:12],
         "evidence_source_count": len(context.get("evidence_sources", [])),
         "agent_discovery": {"tool": read_tool, "view": "agents", "scope": "permitted_registry",
-                            "independent_of_delivery_targets": True, "route_view": "agent_route"},
+                            "independent_of_delivery_targets": True, "route_view": "agent_route",
+                            "source_scope": "local" if context.get("scope") == "owner_goal" else "all_authorized",
+                            "note": "The initial Goal preview is local only, not a preference or complete inventory. Discover across sources before resolving project shorthand; preserve source_id for detail reads."},
         "read_tool": read_tool,
         "agent_work_note": (
             "Agent Todos are bounded declared work from this portfolio snapshot, not live activity "
@@ -420,6 +425,50 @@ class ManagerInspection:
             raise ValueError("Goal inventory is unreadable")
         return inventory
 
+    def _discover_sources(self, tool, arguments, sources):
+        """Bounded transport fanout; the typed projection owns fair presentation.
+
+        This runs only for an explicit discovery read, never at Turn preparation.
+        Keep per-source continuations instead of conflating host-local offsets.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from .ssh_evidence import grants, read_remote, MANAGER_REMOTE_EVIDENCE_HOST_TIMEOUT_SECONDS
+
+        if arguments.get("offset", 0):
+            return {"ok": False, "error": "invalid_arguments",
+                    "rejected_arguments": ["offset:select_source_id_from_next_reads"]}
+        try:
+            scope = self._goal_scope()
+        except ValueError:
+            return {"ok": False, "error": "authorization_changed"}
+        grant = grants(self.runtime_root, self.channel_id)
+
+        def collect(source):
+            args = {**arguments, "source_id": source["source_id"]}
+            if source["source_id"] == "local":
+                return self.read(tool, args)
+            return read_remote(self.runtime_root, self.channel_id, self.owner_scope, args,
+                self.scope_valid, config_path=self.ssh_config_path,
+                timeout_seconds=MANAGER_REMOTE_EVIDENCE_HOST_TIMEOUT_SECONDS,
+                **({"runner": self.remote_runner} if self.remote_runner else {}))
+
+        # Cap connections and returned evidence, not authorization. Sources past
+        # this bounded batch remain visible with an exact read continuation.
+        with ThreadPoolExecutor(max_workers=min(12, len(sources))) as pool:
+            pages = list(pool.map(collect, sources[:12]))
+        try:
+            current_scope = self._goal_scope()
+        except ValueError:
+            return {"ok": False, "error": "authorization_changed"}
+        if (not self.scope_valid() or current_scope != scope
+                or grants(self.runtime_root, self.channel_id) != grant or self.sources() != sources):
+            return {"ok": False, "error": "authorization_changed"}
+        result = effect_runtime_result("manager.discovery.project", {
+            "arguments": arguments, "sources": sources, "pages": pages,
+        })
+        self.record(result)
+        return result
+
     def _goal_scope(self) -> list[str] | None:
         ids = (self.discovery_scope() if self.discovery_scope else
                None if self.owner_scope and self.context.get("scope") == "owner_global" else
@@ -497,6 +546,10 @@ class ManagerInspection:
             return self._report_source(tool, arguments)
         if self.context.get("scope") == "owner_goal" and source_id != "local":
             return {"ok": False, "error": "source_outside_available_scope"}
+        if view == "agents" and "source_id" not in arguments:
+            sources = self.sources()
+            if len(sources) > 1:
+                return self._discover_sources(tool, arguments, sources)
         if view == "sources":
             rows = self.sources()
             if not self.scope_valid():
@@ -588,11 +641,12 @@ class ManagerInspection:
                 limit=limit,
                 offset=offset,
                 todo_id=arguments.get("todo_id"),
+                query=arguments.get("query", ""),
             )
             page = source.pop("todos", [])
             # Completed title joins remain available through the delivery view.
             source.pop("completed_todos", None)
-            matched = source.get("coverage", {}).get("active")
+            matched = source.get("coverage", {}).get("matched", source.get("coverage", {}).get("active"))
         else:
             source = read_manager_delivery_history(
                 self.runtime_root, goal_id, limit=limit, offset=offset, lookback_days=arguments.get("days", 1),

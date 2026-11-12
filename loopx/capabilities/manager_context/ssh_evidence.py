@@ -207,7 +207,7 @@ def read_remote(
     ]
     for gid in ([goal] if goal else (None if owner else before[host])) or []:
         argv += ["--goal-id", gid]
-    if args.get("view") == "agents":
+    if args.get("view") in {"agents", "todos"} and args.get("query"):
         argv += ["--query", args.get("query", "")]
     if args.get("todo_id"):
         argv += ["--todo-id", args["todo_id"]]
@@ -256,6 +256,12 @@ def read_remote(
             )
             return unavailable(code, reason)
         packet = json.loads(result.stdout)
+        # Older source CLIs accepted --query but ignored it for Todos. Never
+        # report their unfiltered first page as a successful search result.
+        if args.get("view") == "todos" and args.get("query") and (
+            not isinstance(packet, dict) or packet.get("query") != args["query"]
+        ):
+            return unavailable("remote_query_unsupported", "Source CLI must support Todo search; browse scoped pages or upgrade it.")
         if not route_read and (
             not isinstance(packet, dict)
             or packet.get("schema_version") != "manager_evidence_page_v1"
