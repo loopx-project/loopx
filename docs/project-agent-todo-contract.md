@@ -310,9 +310,14 @@ loopx todo update --goal-id <goal-id> --role user --todo-id <gate-id> \
 
 This is an administrative provider-CAS edit, including in `hard_lease`; it does
 not claim work or approve the gate. Optional note/evidence/reason may accompany
-the link. Existing links, gate scope, actor bindings and explicit or unreleased
-lease proofs retain their ordinary admission. Complete the linked gate with the
-actual decision and evidence to consume the target's covered decision scopes.
+the link. The target must already exist as an Agent Todo in the same provider
+snapshot and Goal, with `claimed_by` matching the gate's `bound_agent` /
+`blocks_agent`. Preview and write reject missing or out-of-scope targets without
+writing or consuming the first-link opportunity; the same gate can then be
+linked to a valid target. Existing links, gate scope, actor bindings and explicit
+or unreleased lease proofs retain their ordinary admission. Complete the linked
+gate with the actual decision and evidence to consume the target's covered
+decision scopes.
 `todo_done:<gate-id>` checks dependency readiness only; it does not consume those
 scopes. If an unlinked gate was already completed, reconcile its decision through
 an explicit linked gate using the original owner evidence rather than treating

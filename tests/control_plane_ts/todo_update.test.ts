@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {
   TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT,
 } from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
@@ -359,9 +360,14 @@ async function boundUserAction(overrides: Record<string, unknown> = {}, leases: 
     claimed_by: null, bound_agent: "agent-a", created_by: "agent-a", ...overrides});
   const head = await store.loadAuthority();
   if (head.status !== "loaded") assert.fail("missing fixture");
+  const records = [...head.head.todos as Record<string, unknown>[]];
+  if (overrides.task_class === "user_gate") {
+    records.push(todo({todo_id: "todo_value", task_class: "advancement_task", status: "blocked"}));
+  }
   await store.commitAuthority({operation_id: "hard-lease-user-action",
     expected_provider_revision: head.provider_revision, events: [], receipts: [],
-    next_projection: {...head.head, handoff_mode: "hard_lease", leases}});
+    next_projection: {...head.head, handoff_mode: "hard_lease", todos: records, leases,
+      todo_read_model: coordinationTodoReadModel(records, TODO_DOMAIN_READ_RECORD_SCHEMA)}});
   return {store, request: {...request, expected_role: "user", clear_fields: [],
     patch: {text: "Corrected reminder", note: "Still awaits the user"},
     planning_intent: {evidence: "Synthetic disposition receipt"}}};

@@ -236,6 +236,13 @@ export function todoUpdateAdmissionRejection(
       input.lease_idempotency_key == null && input.lease_expected_version == null) {
     try {
       if (lease !== undefined) canonicalTaskLease(lease, input.goal_id, input.todo_id);
+      if (boundUserGateLink) {
+        const target = indexCoordinationProjection(head, input.goal_id).todos.get(intent.unblocks_todo_id as string);
+        if (target?.role !== "agent" || target.claimed_by !== todo.blocks_agent) {
+          return reject("user_gate_link_target_invalid",
+            "Initial gate link requires an existing Agent Todo in this Goal claimed by the gate's bound/blocked agent");
+        }
+      }
     } catch (error) {
       return reject("invalid_coordination_projection",
         error instanceof Error ? error.message : "invalid retained lease facts");

@@ -17,6 +17,65 @@ def tmp_path(tmp_path_factory):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "write"])
+@pytest.mark.parametrize("invalid_target", ["missing", "user", "other_goal", "other_lane", "unclaimed"])
+def test_gate_first_link_rejects_invalid_target_without_consuming_link(
+    tmp_path, monkeypatch, provider, dry_run, invalid_target,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = promoted_create_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease", registered_agents=["agent-a", "agent-b"])
+
+    def cli(*args):
+        return run_json_cli(*args, "--goal-id", "goal-a", registry_path=registry, runtime_root=runtime)
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a", include_leases=True)
+
+    gate = cli("todo", "add", "--role", "user", "--task-class", "user_gate", "--agent-id", "agent-a",
+        "--decision-scope", "resource:action:prices_file", "--text", "Provide prices")
+    target = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task", "--claimed-by", "agent-a",
+        "--status", "blocked", "--required-decision-scope", "resource:action:prices_file",
+        "--resume-when", f"todo_done:{gate['todo_id']}", "--text", "Use the supplied prices")
+    invalid_id = "todo_missing"
+    if invalid_target == "user":
+        invalid_id = gate["todo_id"]
+    elif invalid_target == "other_goal":
+        other_registry, other_runtime, _ = promoted_create_fixture(
+            tmp_path / "x", goal_id="goal-b", provider=provider, handoff_mode="hard_lease")
+        other = run_json_cli("todo", "add", "--goal-id", "goal-b", "--role", "agent",
+            "--task-class", "advancement_task", "--claimed-by", "agent-a", "--text", "Other Goal work",
+            registry_path=other_registry, runtime_root=other_runtime)
+        invalid_id = other["todo_id"]
+    elif invalid_target in {"other_lane", "unclaimed"}:
+        claim = ("--claimed-by", "agent-b") if invalid_target == "other_lane" else ()
+        invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
+            *claim, "--text", "Work outside the gate's lane")["todo_id"]
+
+    before, state_before = snapshot(), state.read_bytes()
+    link_args = ("todo", "update", "--role", "user", "--todo-id", gate["todo_id"], "--agent-id", "agent-a",
+        "--update-operation-id", "link-file-gate", "--update-expected-provider-revision", before["provider_revision"])
+    code, rejected = run_json_cli_result(*link_args, "--goal-id", "goal-a", "--unblocks-todo-id", invalid_id,
+        *(("--dry-run",) if dry_run else ()), registry_path=registry, runtime_root=runtime)
+    assert code != 0, rejected
+    assert rejected["reason_code"] == "user_gate_link_target_invalid"
+    assert snapshot() == before
+    assert state.read_bytes() == state_before
+
+    valid_link = (*link_args, "--unblocks-todo-id", target["todo_id"])
+    assert cli(*valid_link, "--dry-run")["status"] == "planned"
+    assert snapshot() == before
+    assert cli(*valid_link)["status"] == "applied"
+    assert cli(*valid_link)["status"] == "replayed"
+    linked = cli("todo", "list", "--todo-id", gate["todo_id"])["todo"]
+    assert linked["unblocks_todo_id"] == target["todo_id"]
+    assert linked["status"] == "open"
+    dependent = cli("todo", "list", "--todo-id", target["todo_id"])["todo"]
+    assert dependent["status"] == "blocked"
+    assert dependent["required_decision_scopes"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_gate_first_link_consumes_scope_and_resumes_dependent(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = promoted_create_fixture(
