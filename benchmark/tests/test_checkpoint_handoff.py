@@ -364,6 +364,62 @@ def test_foreign_capture_root_does_not_commit_quota_guard(tmp_path, provider, in
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Requires the Host Unix rendezvous")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_current_handoff_rejects_complete_source_stripped_to_legacy(tmp_path, provider):
+    import socket
+    import tempfile
+    from pathlib import Path
+
+    from benchmark.runtime.checkpoint import held_quota_decision
+    from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TURN_ID, _heartbeat_receipt_count, _run_cli, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    root = tmp_path / "guard-captures"
+    root.mkdir(mode=0o700)
+    directory = root / "original"
+    rc, packet = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID, "--runtime-profile", "generic_cli",
+        "--complete-turn", "--context-delivery", "off", "--decision-output-dir", str(directory), cwd=project)
+    assert rc == 0 and packet["ok"], packet
+    original = directory / "decision.json"
+    stripped = json.loads(original.read_bytes())
+    assert stripped.pop("schema_version") == "loopx_turn_envelope_v1"
+    assert stripped.pop("contract_binding")
+    other = root / "altered"
+    other.mkdir(mode=0o700)
+    altered = other / "decision.json"
+    altered.write_text(json.dumps(stripped))
+    altered.chmod(0o600)
+
+    with tempfile.TemporaryDirectory(prefix="guard-format-", dir="/tmp") as short:
+        address = str(Path(short).resolve() / "host.sock")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(address)
+            listener.listen(1)
+            for source in (original, altered):
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as writer:
+                    writer.settimeout(5)
+                    writer.connect(address)
+                    writer.sendall(json.dumps({"path": str(source), "sha256": digest}).encode() + b"\n")
+                    if source == original:
+                        with held_quota_decision(listener, root, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                                turn_instance_id=TURN_ID) as held:
+                            assert held["sha256"] == digest
+                        assert json.loads(writer.recv(4096)) == {"released": True, "sha256": digest}
+                    else:
+                        with pytest.raises(EffectRuntimeRemoteError):
+                            with held_quota_decision(listener, root, goal_id=GOAL_ID, agent_id=AGENT_ID,
+                                                    turn_instance_id=TURN_ID):
+                                pytest.fail("stripped current source reached the Host")
+                        assert writer.recv(4096) == b""
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Qualifies the Linux writer process group")
 @pytest.mark.parametrize("use_selector,closeout,settlement_only", [
     (False, False, False), (True, False, False), (True, True, False), (True, False, True),
