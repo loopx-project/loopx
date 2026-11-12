@@ -353,14 +353,18 @@ class ChatExternalConversations:
     def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
         store = self.controller.store
         turn = store.load_turn(row["session_id"], row["turn_id"])
+        session = store.load_session(row["session_id"])
+        # Keep the full request/response evidence. The related Session and
+        # Turn need only identity, lifecycle and result for this read.
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": store.load_session(row["session_id"]),
-            # Pending-work semantics use status/response, not image bytes.
-            # Accepted Chat images can exceed the ordinary Core message limit;
-            # retain them in the canonical Turn, outside this read-only view.
-            "pending_observation": {"turn": ({key: value for key, value in turn.items() if key != "attachments"}
-                                             if turn is not None else None), "stop_observed": False},
+            "current_session": ({key: session[key] for key in ("session_id", "status") if key in session}
+                                if session is not None else None),
+            "pending_observation": {
+                "turn": ({key: turn[key] for key in ("session_id", "turn_id", "client_turn_id", "status",
+                    "error_code", "response") if key in turn} if turn is not None else None),
+                "stop_observed": False,
+            },
         }
 
     def quota_backlog_pending(self, row: dict[str, Any], *,
