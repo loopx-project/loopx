@@ -996,24 +996,28 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (turnBindingRequired)
     for (const field of ["turn_binding_required", ...admissionFields])
       include("interaction_contract", "cli_channel", field);
-  include("interaction_contract", "agent_channel", "required_reads");
-  const work = ["interaction_contract", "agent_channel", "work_context"];
-  include(...work, "instruction");
-  if (deferredReentry) {
-    // Surface the owner's reopen and same-Turn guard before the long read.
-    for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
-  }
   const channel = object(interaction.agent_channel);
   const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
     && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const attentionSources = sourceRows.filter(({source}) => managerReturnAttention(source, requiredInboxReads));
+  const requiredReadsPath = ["interaction_contract", "agent_channel", "required_reads"];
+  if (!attentionSources.length) include(...requiredReadsPath);
+  const work = ["interaction_contract", "agent_channel", "work_context"];
+  include(...work, "instruction");
+  if (deferredReentry) {
+    // Surface the owner's reopen and same-Turn guard before the long read.
+    for (const field of admissionFields) include("interaction_contract", "cli_channel", field);
+  }
   // A long Manager Inbox agenda stays behind its required read. Surface only
   // the bounded returned-result identities before work so paging or context
   // recovery cannot hide that the requester has a result to consume.
-  for (const {source, index} of sourceRows) {
-    if (managerReturnAttention(source, requiredInboxReads)) {
+  const cueStart = pointers.length;
+  if (attentionSources.length) {
+    include(...requiredReadsPath);
+    for (const {index} of attentionSources) {
       include(...work, "sources", index, "content", "unfinished_delegations", "return_attention");
     }
   }
@@ -1022,7 +1026,6 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const agentId = context.agent_id ?? identityAgent;
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
-  const cueStart = pointers.length;
   if (replanReversal) {
     for (const field of replanReversal.fields) include(...replanReversal.path, field);
   }

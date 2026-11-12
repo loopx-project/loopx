@@ -44,6 +44,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const purpose = String(control?.brief && (control.brief as JsonObject).purpose
     || request.purpose || "").replace(/\s+/g, " ").trim();
   const todos = Array.isArray(row.todo_ids) ? row.todo_ids : [];
+  const visibleReturns = (step === "consume_peer_result" ? unconsumed : results).slice(-3);
   return {
     request_id: request.request_id, direction,
     ...(request.goal_ref ? {goal_ref: request.goal_ref} : {}),
@@ -57,9 +58,9 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     ...(receipt.remaining_work ? {remaining_work: receipt.remaining_work} : {}),
     ...(todos.length ? {todo_ids: todos.slice(0, 4), additional_todo_count: Math.max(0, todos.length - 4)} : {}),
     ...(results.length ? {pending_return_count: incomplete.length, unconsumed_return_count: unconsumed.length,
-      returns: results.slice(-3).map(result => ({result_key: result.result_key,
+      returns: visibleReturns.map(result => ({result_key: result.result_key,
         request_revision: result.request_revision, status: result.status, consumed: result.consumed})),
-      additional_return_count: Math.max(0, results.length - 3)} : {}),
+      additional_return_count: results.length - visibleReturns.length} : {}),
   };
 }
 
