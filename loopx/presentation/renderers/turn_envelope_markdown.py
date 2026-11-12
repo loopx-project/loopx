@@ -44,10 +44,10 @@ def turn_envelope_budget_warning_lines(payload: dict[str, Any]) -> list[str]:
 
 def render_turn_context_markdown(payload: dict[str, Any]) -> str:
     """Render the current complete carrier or progressive reference verbatim."""
-    # One root field per line, without nested pretty-print padding. Escaping
-    # preserves arbitrary source text and reader commands in one JSON block.
+    # Keep one root field per line without padding. JSON escaping preserves
+    # arbitrary source text and reader commands in one parseable block.
     fields = ",\n".join(
-        "  " + json.dumps(key, ensure_ascii=False) + ": "
+        json.dumps(key, ensure_ascii=False) + ":"
         + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         for key, value in payload.items()
     )

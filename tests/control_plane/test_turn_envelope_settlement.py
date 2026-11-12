@@ -62,7 +62,7 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
         assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
         assert "- should_run: `True`" in result.stdout
         assert "- effective_action: `normal_run`" in result.stdout
-        assert '"schema_version": "loopx_turn_envelope_v1"' not in result.stdout
+        assert not result.stdout.startswith("# LoopX Turn Envelope\n\n```json\n")
         assert len(result.stdout) <= 4800
     else:
         # Follow the same pinned recovery as JSON; no second admission is
