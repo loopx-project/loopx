@@ -2,14 +2,39 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from .status_api import goal_read_runtime_root
+from ..chat import apply_todo_review_preview, build_todo_review_preview
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
+from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..paths import effective_runtime_root
 from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
+
+
+def todo_create_source(host: Any, goal_id: str) -> tuple[Path, str | None]:
+    """Use the Task read route before handing creation to the canonical writer."""
+    override = goal_read_runtime_root(host)
+    if override is not None:
+        return host.registry_path, override
+    route = resolve_goal_source_runtime_route(registry_path=host.registry_path, goal_id=goal_id)
+    return Path(route["source_registry"]), None
+
+
+def review_todo_create(
+    host: Any, *, goal_id: str, text: str, preview_id: str | None,
+) -> dict[str, Any]:
+    """Route the standalone Todo review endpoint through the same source."""
+    registry_path, runtime_root_arg = todo_create_source(host, goal_id)
+    if preview_id is None:
+        return build_todo_review_preview(registry_path=registry_path, goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg, text=text)
+    return apply_todo_review_preview(registry_path=registry_path, goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg, text=text, preview_id=preview_id)
 
 
 def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:

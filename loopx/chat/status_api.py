@@ -56,7 +56,7 @@ from ..control_plane.todos.list_readback import list_goal_todos
 def goal_read_runtime_root(server: Any) -> str | None:
     """Keep registry source routing; Chat storage is only an unbound fallback."""
     registry = _discovery_registry(server.registry_path)
-    if registry.get("common_runtime_root"):
+    if registry.get("common_runtime_root") or registry.get("registry_role") == "global-local":
         # Passing the coordinator's resolved root as an explicit override
         # suppresses the collector's per-Goal source_registry routing. A
         # global directory may contain Goals owned by different runtimes.

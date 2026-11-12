@@ -1106,6 +1106,7 @@ def _add_review_todo(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_arg: str | None,
     text: str,
     priority: str | None = None,
     dry_run: bool,
@@ -1115,6 +1116,7 @@ def _add_review_todo(
     return add_goal_todo(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         role="agent",
         text=_normalize_todo_text(text),
         priority=priority,
@@ -1134,12 +1136,14 @@ def _bound_todo_review_preview(
     *,
     registry_path: Path,
     goal_id: str,
+    runtime_root_arg: str | None,
     text: str,
     priority: str | None,
 ) -> dict[str, Any]:
     payload = _add_review_todo(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
         dry_run=True,
@@ -1153,6 +1157,7 @@ def _bound_todo_review_preview(
         return _add_review_todo(
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg,
             text=text,
             priority=priority,
             dry_run=True,
@@ -1178,10 +1183,12 @@ def build_todo_review_preview(
     goal_id: str,
     text: str,
     priority: str | None = None,
+    runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
     payload = _bound_todo_review_preview(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
     )
@@ -1197,10 +1204,12 @@ def apply_todo_review_preview(
     text: str,
     priority: str | None = None,
     preview_id: str,
+    runtime_root_arg: str | None = None,
 ) -> dict[str, Any]:
     current_preview = _bound_todo_review_preview(
         registry_path=registry_path,
         goal_id=goal_id,
+        runtime_root_arg=runtime_root_arg,
         text=text,
         priority=priority,
     )
@@ -1216,6 +1225,7 @@ def apply_todo_review_preview(
         applied = _add_review_todo(
             registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg,
             text=text,
             priority=priority,
             dry_run=False,

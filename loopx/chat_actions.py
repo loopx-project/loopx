@@ -8,7 +8,11 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
-from .agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
+from .agent_registry import (
+    agent_profile_for_goal,
+    registered_agent_ids_for_goal,
+    registered_agent_ids_from_registry,
+)
 from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
@@ -21,7 +25,7 @@ from .chat_action_store import (
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
-from .chat.todo_actions import ChatTodoActionMixin
+from .chat.todo_actions import ChatTodoActionMixin, todo_create_source
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
@@ -292,11 +296,12 @@ class ChatActionService(
     def _registry(self) -> dict[str, Any]:
         return load_registry(self.registry_path)
 
-    def _goal(self, goal_id: str) -> dict[str, Any]:
+    def _goal(self, goal_id: str, *, registry_path: Path | None = None) -> dict[str, Any]:
+        registry = self._registry() if registry_path is None else load_registry(registry_path)
         goal = next(
             (
                 goal
-                for goal in registry_goals(self._registry())
+                for goal in registry_goals(registry)
                 if str(goal.get("id") or "") == goal_id
             ),
             None,
@@ -305,7 +310,7 @@ class ChatActionService(
             raise ValueError("goal_id was not found in the active LoopX registry")
         return goal
 
-    def _registry_fingerprint(self) -> str:
+    def _registry_fingerprint(self, registry_path: Path | None = None) -> str:
         """Identity of the registry a proposal was previewed against.
 
         A fresh install has no registry until its first Goal is created. That
@@ -315,12 +320,21 @@ class ChatActionService(
         """
 
         try:
-            content = self.registry_path.read_bytes()
+            content = (registry_path or self.registry_path).read_bytes()
         except FileNotFoundError:
             return "registry-absent"
         except OSError as exc:
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
+
+    def _monitor_create_fingerprint(self, source_registry: Path) -> str:
+        invoked = self._registry_fingerprint()
+        if source_registry == self.registry_path:
+            return invoked
+        # A directory can stay unchanged while the Goal moves to a different
+        # provider or changes its registered Agents in its source registry.
+        return _digest({"directory": invoked, "source": self._registry_fingerprint(source_registry),
+                        "source_registry": str(source_registry)})
 
     def _creation_agent_eligibility(
         self, agent_id: str, *, project: Path | None = None
@@ -1093,15 +1107,16 @@ class ChatActionService(
     def _apply_monitor_create(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        current_fingerprint = self._registry_fingerprint()
+        goal_id = str(parameters["goal_id"])
+        registry_path, runtime_root_arg = todo_create_source(self, goal_id)
+        current_fingerprint = self._monitor_create_fingerprint(registry_path)
         if current_fingerprint != proposal.get("expected_state_fingerprint"):
             stale = self.store.apply(
                 proposal_id, current_state_fingerprint=current_fingerprint, receipt={}
             )
             return {"proposal": stale, "turn": None}
-        goal_id = str(parameters["goal_id"])
         agent_id = str(parameters["agent_id"])
-        if agent_id not in registered_agent_ids_for_goal(self._goal(goal_id)):
+        if agent_id not in registered_agent_ids_from_registry(registry_path, goal_id):
             raise ValueError("monitor Agent must be registered for the Goal")
         stop_condition = str(parameters.get("stop_condition") or "").strip()
         resume_when = None
@@ -1118,8 +1133,9 @@ class ChatActionService(
         ):
             metadata["watch_only"] = "true"
         result = add_goal_todo(
-            registry_path=self.registry_path,
+            registry_path=registry_path,
             goal_id=goal_id,
+            runtime_root_arg=runtime_root_arg,
             role="agent",
             text=_monitor_text(parameters) or str(parameters["target"]),
             task_class="continuous_monitor",
@@ -1300,14 +1316,21 @@ class ChatActionService(
             ]
             permission = "protected"
         elif action_kind == "todo.create":
+            registry_path, runtime_root_arg = todo_create_source(self, normalized["goal_id"])
             canonical_preview = build_todo_review_preview(
-                registry_path=self.registry_path,
+                registry_path=registry_path,
                 goal_id=normalized["goal_id"],
+                runtime_root_arg=runtime_root_arg,
                 text=normalized["text"],
                 priority=normalized.get("priority"),
             )
             fingerprint = str(canonical_preview["preview_id"])
             evidence = ["Canonical LoopX Todo dry-run validated the proposal."]
+            permission = "durable_write"
+        elif action_kind == "monitor.create":
+            registry_path, _ = todo_create_source(self, normalized["goal_id"])
+            fingerprint = self._monitor_create_fingerprint(registry_path)
+            evidence = ["Canonical LoopX contracts validated the bounded request shape."]
             permission = "durable_write"
         elif action_kind == "run.correct":
             fingerprint = self._session_fingerprint(
@@ -1587,6 +1610,11 @@ class ChatActionService(
                 },
             )
         if action_kind == "todo.create":
+            goal_id = str(parameters["goal_id"])
+            registry_path, runtime_root_arg = todo_create_source(self, goal_id)
+            agent_id = parameters.get("agent_id")
+            if agent_id and agent_id not in registered_agent_ids_from_registry(registry_path, goal_id):
+                raise ValueError("the selected Agent is no longer registered for this Goal")
             checkpoint = proposal.get("checkpoint")
             steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else {}
             steps = steps if isinstance(steps, dict) else {}
@@ -1601,8 +1629,9 @@ class ChatActionService(
                 )
             else:
                 current = build_todo_review_preview(
-                    registry_path=self.registry_path,
-                    goal_id=str(parameters["goal_id"]),
+                    registry_path=registry_path,
+                    goal_id=goal_id,
+                    runtime_root_arg=runtime_root_arg,
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
                 )
@@ -1615,8 +1644,9 @@ class ChatActionService(
                     )
                     return {"proposal": stale, "turn": None}
                 applied = apply_todo_review_preview(
-                    registry_path=self.registry_path,
-                    goal_id=str(parameters["goal_id"]),
+                    registry_path=registry_path,
+                    goal_id=goal_id,
+                    runtime_root_arg=runtime_root_arg,
                     text=str(parameters["text"]),
                     priority=parameters.get("priority"),
                     preview_id=current_fingerprint,
@@ -1631,11 +1661,11 @@ class ChatActionService(
                         "canonical_receipt": canonical_receipt,
                     },
                 )
-            agent_id = parameters.get("agent_id")
             if agent_id and not isinstance(steps.get("todo_assigned"), dict):
                 update_goal_todo(
-                    registry_path=self.registry_path,
-                    goal_id=str(parameters["goal_id"]),
+                    registry_path=registry_path,
+                    goal_id=goal_id,
+                    runtime_root_arg=runtime_root_arg,
                     todo_id=todo_id,
                     claimed_by=str(agent_id),
                     agent_id=str(agent_id),
@@ -1675,7 +1705,7 @@ class ChatActionService(
                     turn_id = _opaque(execution_step.get("turn_id"), field="turn_id")
                     created = False
                 else:
-                    goal = self._goal(str(parameters["goal_id"]))
+                    goal = self._goal(goal_id, registry_path=registry_path)
                     project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
                     if not project.is_dir():
                         raise ValueError("the Goal project root is unavailable")
