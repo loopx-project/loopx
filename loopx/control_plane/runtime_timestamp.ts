@@ -1,7 +1,13 @@
-/** Calendar-checked ISO codec; Date.parse alone silently rolls invalid dates. */
+/** Calendar-checked ISO codec; Date.parse alone silently rolls invalid dates.
+ * RFC 3339 §5.6 allows a lowercase "t" separator. Normalize only that
+ * separator before the existing calendar grammar. */
 export function parseIsoTimestamp(value: string): Date | null {
+  const source = value.trim().replace(
+    /^(\d{4}-\d{2}-\d{2})t(?=\d{2}:)/u,
+    "$1T",
+  );
   const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|z|[+-]\d{2}(?::?\d{2})?)?)?$/u.exec(
-    value.trim(),
+    source,
   );
   if (match === null) return null;
   const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction, timezone] = match;
@@ -30,7 +36,7 @@ export function parseIsoTimestamp(value: string): Date | null {
     calendar.getUTCMilliseconds() !== millisecond
   ) return null;
   if (hourText === undefined) return calendar;
-  let text = value.trim().replace(" ", "T").replace(/z$/u, "Z");
+  let text = source.replace(" ", "T").replace(/z$/u, "Z");
   if (fraction !== undefined) text = text.replace(`.${fraction}`, `.${fraction.slice(0, 3)}`);
   if (timezone === undefined) text += "Z";
   else text = text.replace(/([+-]\d{2})$/u, "$1:00");
