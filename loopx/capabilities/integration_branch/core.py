@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -616,17 +617,27 @@ _LEGACY_WORKTREE_PATH_ERROR = (
 )
 
 
+_GIT_VERSION_PATTERN = re.compile(r"(?:^|\s)([0-9]+)\.([0-9]+)(?:\.|$)")
+
+
+def _worktree_list_uses_nul(repo: Path) -> bool:
+    version = _git(repo, "version").stdout
+    match = _GIT_VERSION_PATTERN.search(version)
+    if match is None:
+        raise IntegrationBranchError(
+            f"cannot determine whether this Git version supports NUL worktree records: {version.strip()}"
+        )
+    return (int(match.group(1)), int(match.group(2))) >= (2, 36)
+
+
 def _worktree_for_branch(repo: Path, branch: str) -> Path | None:
     target_ref = f"refs/heads/{branch}"
-    try:
-        result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
-    except IntegrationBranchError as exc:
+    if not _worktree_list_uses_nul(repo):
         # NUL framing arrived in Git 2.36. Older Git rejects the switch before
         # writing a record; keep ordinary paths working through the line-framed
         # inventory, which stays fail-closed for values it cannot represent.
-        if "unknown switch" not in str(exc).lower() and "unknown option" not in str(exc).lower():
-            raise
         return _worktree_for_branch_line_framed(repo, target_ref)
+    result = _git_bytes(repo, "worktree", "list", "--porcelain", "-z")
 
     current_path: Path | None = None
     # `-z` frames fields on NUL and records on a NUL pair. A worktree path
@@ -707,17 +718,26 @@ def _git_common_dir(base: Path, raw: str) -> Path:
     return candidate.resolve()
 
 
+def _git_path_output(repo: Path, *args: str) -> str:
+    """Decode one Git path, removing only the newline Git appends to it."""
+
+    output = _git_bytes(repo, *args).stdout
+    if output.endswith(b"\n"):
+        output = output[:-1]
+    return os.fsdecode(output)
+
+
 def _confirm_checkout_ownership(repo: Path, worktree: Path, branch: str) -> None:
     """Refuse a reset unless Git confirms the checkout is this branch's root."""
 
     expected_ref = f"refs/heads/{branch}"
     try:
-        top = _git(worktree, "rev-parse", "--show-toplevel").stdout.strip()
-        worktree_common = _git(
+        top = _git_path_output(worktree, "rev-parse", "--show-toplevel")
+        worktree_common = _git_path_output(
             worktree, "rev-parse", "--git-common-dir"
-        ).stdout.strip()
-        repo_common = _git(repo, "rev-parse", "--git-common-dir").stdout.strip()
-        head = _git(worktree, "symbolic-ref", "--quiet", "HEAD", check=False)
+        )
+        repo_common = _git_path_output(repo, "rev-parse", "--git-common-dir")
+        head = _git_bytes(worktree, "symbolic-ref", "--quiet", "HEAD", check=False)
     except IntegrationBranchError as exc:
         raise IntegrationBranchError(
             f"cannot verify that {worktree} is the checkout for {branch}: {exc}"
@@ -732,7 +752,8 @@ def _confirm_checkout_ownership(repo: Path, worktree: Path, branch: str) -> None
         raise IntegrationBranchError(
             f"worktree {worktree} belongs to a different repository than {repo}"
         )
-    if head.returncode != 0 or head.stdout.strip() != expected_ref:
+    head_ref = head.stdout[:-1] if head.stdout.endswith(b"\n") else head.stdout
+    if head.returncode != 0 or os.fsdecode(head_ref) != expected_ref:
         raise IntegrationBranchError(
             f"worktree {worktree} is not checked out on branch {branch}"
         )

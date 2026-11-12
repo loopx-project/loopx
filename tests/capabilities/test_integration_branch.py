@@ -675,7 +675,12 @@ def test_worktree_for_branch_frames_porcelain_records_on_lf(tmp_path: Path) -> N
     assert _worktree_for_branch(repo, "feature-a") == odd.resolve()
 
 
-def _install_legacy_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _install_legacy_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    unknown_switch_error: str = "error: unknown switch 'z'",
+) -> None:
     """Put a Git wrapper first on PATH that rejects -z like Git 2.35."""
     real_git = shutil.which("git")
     assert real_git
@@ -684,9 +689,13 @@ def _install_legacy_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     wrapper = bin_dir / "git"
     wrapper.write_text(
         "#!/bin/sh\n"
+        'if [ "$#" -eq 3 ] && [ "$1" = "-C" ] && [ "$3" = "version" ]; then\n'
+        "  echo 'git version 2.35.8'\n"
+        "  exit 0\n"
+        "fi\n"
         'for arg in "$@"; do\n'
         '  if [ "$arg" = "-z" ]; then\n'
-        "    echo \"error: unknown switch 'z'\" >&2\n"
+        f"    printf '%s\\n' \"{unknown_switch_error}\" >&2\n"
         "    exit 129\n"
         "  fi\n"
         "done\n"
@@ -706,6 +715,24 @@ def test_worktree_for_branch_supports_legacy_git_without_nul_framing(
     ordinary = tmp_path / "ordinary worktree"
     _git(repo, "worktree", "add", str(ordinary), "feature-a")
     _install_legacy_git(tmp_path, monkeypatch)
+
+    assert _worktree_for_branch(repo, "feature-a") == ordinary.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_legacy_git_format_is_selected_by_version_not_error_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A localized usage error must not change the worktree inventory format."""
+    repo = _repository(tmp_path)
+    ordinary = tmp_path / "ordinary worktree"
+    _git(repo, "worktree", "add", str(ordinary), "feature-a")
+    _install_legacy_git(
+        tmp_path,
+        monkeypatch,
+        unknown_switch_error="erreur : option inconnue 'z'",
+    )
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
 
     assert _worktree_for_branch(repo, "feature-a") == ordinary.resolve()
 
@@ -745,6 +772,29 @@ def test_sync_execute_supports_legacy_git_with_ordinary_worktree(
 
     assert synced["status"] == "synced"
     assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="special path names are POSIX-only")
+@pytest.mark.parametrize("suffix", ["\n", "\r", " "])
+def test_sync_execute_preserves_checkout_paths_when_verifying_ownership(
+    tmp_path: Path, suffix: str
+) -> None:
+    """Path output must not strip a checkout name's trailing characters."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    integration_worktree = tmp_path / f"integration worktree{suffix}"
+    _git(repo, "switch", "main")
+    _git(repo, "worktree", "add", str(integration_worktree), "codex/local-integration")
+    source_worktree = tmp_path / "source worktree"
+    _git(repo, "worktree", "add", str(source_worktree), "feature-a")
+    _commit(source_worktree, "a.txt", "a2\n", "review update")
+
+    synced = sync_integration_branch(repo_path=repo, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]
+    assert integration_branch_status(repo_path=repo)["status"] == "in_sync"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
