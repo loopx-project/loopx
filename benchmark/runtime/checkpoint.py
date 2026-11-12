@@ -235,6 +235,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     if display.complete_turn:
         command.append("--complete-turn")
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
+    legacy_display = display.turn_envelope and env.get("LOOPX_CONTEXT_DELIVERY", "off") == "off"
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
         # existing preparation route for the committed capture reference now.
@@ -244,6 +245,10 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                     "--defer-context-presentation"]
     else:
         command += ["--decision-output-root", str(capture_root)]
+        if legacy_display:
+            # Forward the explicit raw display to the same CLI that renders
+            # ordinary wakes. The checkpoint selector still reads the source.
+            command += ["--turn-envelope", "--context-delivery", "off"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
@@ -275,7 +280,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view_path = guard_path.with_name("checkpoint-start-view.json")
         view_path.write_text(guard_run.stdout, encoding="utf-8")
         view_path.chmod(0o600)
-        reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
+        action = "action, required reads and settlement instructions" if legacy_display else "interaction_contract"
+        reading = (f"Read the complete CLI view at {view_path} before work, then follow its {action} "
             "and replan review/writeback reads when present. ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
