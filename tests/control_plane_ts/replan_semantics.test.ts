@@ -153,6 +153,28 @@ test("verified original writeback projects only its outstanding debit even after
     current_obligation: null, transition_candidates: []}), /malformed/);
 });
 
+test("an open Vision reconstruction must come from the exact scoped receipt source", () => {
+  const id = "replan-1111111111111111";
+  const original = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: id, agent_id: "reviewer", triggers: [{kind: "vision_outcome_checkpoint_required"}]};
+  const candidate = {obligation: original, ack: null, reconstructed_vision_review: true};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: id, agent_id: "reviewer",
+    current_obligation: null, transition_candidates: [candidate]};
+  assert.deepEqual(projectReplanSemantics(request).obligation,
+    {...original, selection_binding: "heartbeat_receipt"});
+  for (const changes of [
+    {guard_scoped: false}, {agent_id: "peer"}, {selected_obligation_id: "replan-2222222222222222"},
+    {transition_candidates: [{...candidate, reconstructed_vision_review: false}]},
+    {transition_candidates: [{...candidate, obligation: {...original,
+      triggers: [...original.triggers, {kind: "periodic_review_due"}]}}]},
+    {transition_candidates: [{...candidate, obligation: {...original,
+      capability_guard: {schema_version: "semantic_replan_capability_guard_v0"}}}]},
+  ]) {
+    assert.throws(() => projectReplanSemantics({...request, ...changes}), /identity conflicts/);
+  }
+});
+
 test("only plain vision and outcome reviews have a scalar receipt source", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
     obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
