@@ -111,6 +111,8 @@ def handle_turn_command(
                     registry_path=registry_path.expanduser().resolve(),
                     runtime_root=runtime_root.resolve(),
                     cwd=project_cwd,
+                    turn_instance_id=args.turn_instance_id,
+                    goal_ref=goal_ref,
                 )
 
         resume_instance = getattr(args, "resume_turn_instance_id", None)

@@ -26,6 +26,42 @@ TODO = "todo_execution_preparation"
 AGENT = "agent-a"
 
 
+def test_default_runner_keeps_a_valid_receipt_when_stderr_is_undecodable(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+
+    completed = codex_execution_preparation._default_runner(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('{\"ok\": true}'); "
+            "sys.stderr.buffer.write(b'\\xff\\n')",
+        ],
+        cwd=tmp_path,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {"ok": True}
+    assert "\ufffd" in completed.stderr
+
+
+def test_default_runner_keeps_receipt_stdout_strict(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+
+    with pytest.raises(UnicodeDecodeError):
+        codex_execution_preparation._default_runner(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(b'\\xff')",
+            ],
+            cwd=tmp_path,
+            timeout=30,
+        )
+
+
 @pytest.mark.parametrize("status", ["open", "deferred"])
 def test_explicit_non_delivery_obligation_does_not_prepare_selected_execution(monkeypatch, status):
     from loopx.control_plane.quota import execution_preparation

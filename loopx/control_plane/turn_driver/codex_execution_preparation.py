@@ -100,10 +100,21 @@ def compact_execution_preparation_request(
 def _default_runner(
     command: Sequence[str], *, cwd: Path, timeout: float,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        list(command), cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="strict", timeout=timeout,
+    completed = subprocess.run(
+        list(command), cwd=str(cwd), capture_output=True, text=False,
+        timeout=timeout,
         check=False,
+    )
+    # The receipt is protocol data and must decode exactly.  Stderr is only
+    # diagnostic output from the launcher; an unrelated invalid byte there
+    # must not turn a valid receipt into a failed preparation.
+    stdout = (completed.stdout or b"").decode("utf-8", errors="strict")
+    stderr = (completed.stderr or b"").decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        stdout,
+        stderr,
     )
 
 
@@ -176,6 +187,8 @@ def builtin_execution_preparation_claim(
     registry_path: Path,
     runtime_root: Path,
     cwd: Path,
+    turn_instance_id: str | None = None,
+    goal_ref: Mapping[str, object] | None = None,
     runner: CommandRunner | None = None,
     timeout: float = 30,
 ) -> str | None:
@@ -238,6 +251,43 @@ def builtin_execution_preparation_claim(
         or not cwd.is_absolute()
     ):
         return None
+    heartbeat = decision.get("heartbeat_receipt")
+    exact_turn_instance_id = _exact_identity(turn_instance_id)
+    if exact_turn_instance_id is None and isinstance(heartbeat, Mapping):
+        exact_turn_instance_id = _exact_identity(heartbeat.get("turn_instance_id"))
+    if exact_turn_instance_id is not None:
+        # The receipt lookup and the ordinary claim are separate operations.
+        # Refuse a conflicting binding before the claim can create a lease for
+        # a different Todo; planning also re-reads this identity after the
+        # claim, so this check remains side-effect free.
+        from ..quota.effect_program import SettlementIdentity
+        from ..quota.heartbeat_receipt import (
+            assert_turn_heartbeat_settlement_receipt_identity,
+        )
+        from ..quota.turn_envelope import turn_envelope_scoped_settlement_identity
+
+        raw_identity = turn_envelope_scoped_settlement_identity(
+            decision, turn_instance_id=exact_turn_instance_id,
+        )
+        # A blocked pre-claim decision has no completed transaction to project.
+        # The ordinary Todo claim already fixes the remaining identity fields,
+        # so derive the same settlement binding directly and compare it with
+        # the receipt before the claim can create a lease.
+        settlement_identity = (
+            SettlementIdentity.from_runtime_payload(raw_identity)
+            if raw_identity is not None
+            else SettlementIdentity(
+                goal_id=goal_id,
+                agent_id=caller_agent_id,
+                todo_id=todo_id,
+                turn_instance_id=exact_turn_instance_id,
+            )
+        )
+        assert_turn_heartbeat_settlement_receipt_identity(
+            runtime_root,
+            settlement_identity,
+            goal_ref=goal_ref,
+        )
     try:
         _run_json(
             expected_claim,
