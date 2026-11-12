@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import shutil
 import sqlite3
 import stat
@@ -85,9 +86,9 @@ def _open_regular(path: Path) -> tuple[BinaryIO, os.stat_result]:
 
 
 def _same_file(before: os.stat_result, after: os.stat_result) -> bool:
-    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
-    # Windows ctime alone does not reliably identify a file change.
-    if os.name != "nt":
+    identity_fields: tuple[str, ...] = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+    # Only a complete Windows volume/file identity can tolerate ctime skew.
+    if os.name != "nt" or not all(info.st_dev and info.st_ino for info in (before, after)):
         identity_fields += ("st_ctime_ns",)
     return all(
         getattr(before, field) == getattr(after, field)
@@ -118,7 +119,7 @@ def _safe_link(name: str, target: str, *, hardlink: bool) -> str:
         raise ColdSourceBackupError("cold_import_backup_link_unsafe")
     if hardlink:
         return _member_name(target)
-    resolved = os.path.normpath(str(PurePosixPath(name).parent / target))
+    resolved = posixpath.normpath(str(PurePosixPath(name).parent / target))
     if resolved == ".." or resolved.startswith("../"):
         raise ColdSourceBackupError("cold_import_backup_link_unsafe")
     return _member_name(resolved)
