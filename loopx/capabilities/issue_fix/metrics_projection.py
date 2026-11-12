@@ -10,8 +10,11 @@ from typing import Any
 # a different document's version that happens to share a name prefix, so it stays.
 # The same rule runs the other way for the snapshot name: `repository_snapshot`
 # builds and stamps those payloads and this file only compares against them, so
-# the value is imported rather than restated here.
+# the value is imported rather than restated here. The supplement also owns the
+# issue-close event-type set: it filters activity by `_ISSUE_CLOSE_EVENT_TYPES`
+# and this projection only validates the compacted rows against that same set.
 from .metrics_supplement import (
+    _ISSUE_CLOSE_EVENT_TYPES,
     _SUPPLEMENT_FIELDS,
     SUPPLEMENT_SCHEMA_VERSION,
 )
@@ -255,12 +258,6 @@ def _issue_close_activity(
     if not isinstance(raw_activity, list):
         raise ValueError("supplement.issue_close_activity must be a list")
 
-    known_types = {
-        "issue_close_recommended",
-        "issue_close_request_published",
-        "issue_closed_observed",
-        "issue_reopened_observed",
-    }
     seen_issue_refs: set[str] = set()
     seen_event_ids: set[str] = set()
     activity: list[dict[str, Any]] = []
@@ -297,7 +294,7 @@ def _issue_close_activity(
             if (
                 not event_id
                 or event_id in seen_event_ids
-                or event_type not in known_types
+                or event_type not in _ISSUE_CLOSE_EVENT_TYPES
             ):
                 raise ValueError(
                     "issue close activity requires unique event_id values and known event types"
