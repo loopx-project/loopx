@@ -250,13 +250,9 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
   }
 
   const seenPairIds = new Set<string>();
-  const acceptedWorkspaces = new Set<string>();
-  const acceptedExecutions = new Set<string>();
-  const evaluatedPairs: EvaluatedCounterfactualPair[] = [];
-
-  for (let idx = 0; idx < root.pairs.length; idx++) {
+  const declaredPairs = root.pairs.map((value, idx) => {
     const pairRow = exactObject(
-      root.pairs[idx],
+      value,
       ["pair_id", "task_id", "checkpoint", "treatment", "control"],
       ["pair_id", "task_id", "checkpoint", "treatment", "control"],
       `pairs[${idx}]`,
@@ -321,11 +317,7 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     if (treatment.workspace_isolation_id === control.workspace_isolation_id) {
       violations.push("shared_workspace_interference");
     }
-    if (acceptedWorkspaces.has(treatment.workspace_isolation_id) || acceptedWorkspaces.has(control.workspace_isolation_id)) {
-      violations.push("reused_run_workspace");
-    }
-    if (treatmentExecution === controlExecution || acceptedExecutions.has(treatmentExecution) ||
-        acceptedExecutions.has(controlExecution)) {
+    if (treatmentExecution === controlExecution) {
       violations.push("reused_arm_execution");
     }
     if (treatment.terminal_boundary_ref !== scope.terminal_boundary_ref ||
@@ -339,6 +331,40 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
         ((treatment.decision_context_latest_at !== null && treatment.decision_context_latest_at > forkAt) ||
          (control.decision_context_latest_at !== null && control.decision_context_latest_at > forkAt))) {
       violations.push("future_timestamp_context_leakage");
+    }
+    const signature = JSON.stringify([taskId, cpId, cpSha, scope, incumbentAtFork, forkAt, treatment, control],
+      (_key, value) => typeof value === "bigint" ? value.toString() : value);
+    return {pairId, taskId, cpId, scope, higherIsBetter, incumbentAtFork, treatment, control, violations,
+      signature, executionKeys: [treatmentExecution, controlExecution],
+      workspaceKeys: [treatment.workspace_isolation_id, control.workspace_isolation_id]};
+  });
+
+  // Only individually valid declarations participate in the batch check.
+  // Identical normalized evidence has one deterministic representative.
+  // All distinct declarations sharing a run or workspace are excluded.
+  const representatives = new Map<string, typeof declaredPairs[number]>();
+  for (const pair of declaredPairs) {
+    if (pair.violations.length) continue;
+    const prior = representatives.get(pair.signature);
+    if (!prior || pair.pairId < prior.pairId) representatives.set(pair.signature, pair);
+  }
+  const executions = new Map<string, number>();
+  const workspaces = new Map<string, number>();
+  for (const pair of representatives.values()) {
+    for (const key of pair.executionKeys) executions.set(key, (executions.get(key) ?? 0) + 1);
+    for (const key of pair.workspaceKeys) workspaces.set(key, (workspaces.get(key) ?? 0) + 1);
+  }
+
+  const evaluatedPairs: EvaluatedCounterfactualPair[] = declaredPairs.map(pair => {
+    const {pairId, taskId, cpId, scope, higherIsBetter, incumbentAtFork, treatment, control, violations} = pair;
+    if (violations.length === 0) {
+      const replay = representatives.get(pair.signature) !== pair;
+      if (replay || pair.workspaceKeys.some(key => (workspaces.get(key) ?? 0) > 1)) {
+        violations.push("reused_run_workspace");
+      }
+      if (replay || pair.executionKeys.some(key => (executions.get(key) ?? 0) > 1)) {
+        violations.push("reused_arm_execution");
+      }
     }
     if (violations.length > 0 && strict) {
       throw new EffectRuntimeRequestError(
@@ -364,12 +390,6 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
     }
 
     const validPair = violations.length === 0;
-    if (validPair) {
-      acceptedWorkspaces.add(treatment.workspace_isolation_id);
-      acceptedWorkspaces.add(control.workspace_isolation_id);
-      acceptedExecutions.add(treatmentExecution);
-      acceptedExecutions.add(controlExecution);
-    }
     const bothScored = validPair && treatment.valid_submission && control.valid_submission
       && treatment.terminal_value !== null && control.terminal_value !== null;
 
@@ -398,7 +418,7 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
       else outcomeClass = "diverged_regressed";
     }
 
-    evaluatedPairs.push({
+    return {
       pair_id: pairId,
       task_id: taskId,
       checkpoint_id: cpId,
@@ -417,8 +437,8 @@ export function evaluateCounterfactualContinuations(params: JsonObject): Counter
       control_gain_over_incumbent: cGain,
       marginal_cost_delta: marginalDelta,
       unknown_cost_dimensions: unknownDims,
-    });
-  }
+    };
+  });
 
   const validRows = evaluatedPairs.filter(p => p.identification_valid);
   const scoredRows = validRows.filter(p => p.tau_b_direction_normalized !== null);

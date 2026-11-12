@@ -531,21 +531,33 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     replicas = [independent_workspace(f"replica-{i}") for i in range(5)]
     inflated = [clean, *replicas]
     audited = counterfactual(inflated, strict=False)
-    assert audited["counts"]["valid_pairs"] == audited["counts"]["wins"] == 1
-    assert audited["counts"]["contaminated_pairs"] == 5
-    assert audited["estimand_summary"]["exact_sign_flip_p_value"] == 1
-    assert audited["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 20
+    assert audited["counts"]["valid_pairs"] == audited["counts"]["wins"] == 0
+    assert audited["counts"]["contaminated_pairs"] == 6
     assert all(row["identification_violations"] == ["reused_arm_execution"]
-               for row in audited["pairs"][1:])
+               for row in audited["pairs"])
     assert "reused_arm_execution" in json.dumps(counterfactual(inflated, expect_rc=1))
 
     # A distinct partner or a side swap does not make a consumed arm independent.
     shared_arm = independent_workspace("shared-arm")
-    shared_arm["treatment"]["arm_id"] = clean["control"]["arm_id"]
+    shared_arm["treatment"] = deepcopy(clean["treatment"])
     shared_arm["control"]["arm_id"] = "arm:new-control"
-    audited = counterfactual([clean, shared_arm], strict=False)
-    assert audited["counts"]["valid_pairs"] == 1
-    assert audited["pairs"][1]["identification_violations"] == ["reused_arm_execution"]
+    shared_arm["control"]["terminal_value"] = 100
+    shared_arm["control"]["costs"]["wall_seconds"] = 900
+    independent = independent_workspace("independent-pair")
+    for side in ("treatment", "control"):
+        independent[side]["arm_id"] = f"arm:independent-{side}"
+    batch = [clean, shared_arm, independent]
+    for order in (batch, list(reversed(batch))):
+        audited = counterfactual(order, strict=False)
+        assert audited["counts"]["valid_pairs"] == 1
+        assert audited["counts"]["contaminated_pairs"] == 2
+        assert audited["estimand_summary"]["mean_tau_b"] == 13
+        assert audited["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 20
+        accepted_rows = [row for row in audited["pairs"] if row["identification_valid"]]
+        assert [row["pair_id"] for row in accepted_rows] == [independent["pair_id"]]
+        assert all("reused_arm_execution" in row["identification_violations"]
+                   for row in audited["pairs"] if row not in accepted_rows)
+    assert "reused_arm_execution" in json.dumps(counterfactual(batch, expect_rc=1))
 
     same_arm = independent_workspace("same-arm-both-sides")
     same_arm["control"]["arm_id"] = same_arm["treatment"]["arm_id"]
@@ -555,11 +567,16 @@ def test_stateless_planning_cli_commands_end_to_end(tmp_path: Path) -> None:
     assert audited["pairs"][0]["identification_violations"] == ["reused_arm_execution"]
 
     duplicate = {**clean, "pair_id": "pair:relabeled"}
-    audited = counterfactual([clean, duplicate], strict=False)
-    assert audited["counts"]["valid_pairs"] == 1
-    assert set(audited["pairs"][1]["identification_violations"]) == {
-        "reused_run_workspace", "reused_arm_execution",
-    }
+    for order in ([clean, duplicate], [duplicate, clean]):
+        audited = counterfactual(order, strict=False)
+        assert audited["counts"]["valid_pairs"] == audited["counts"]["wins"] == 1
+        assert audited["estimand_summary"]["exact_sign_flip_p_value"] == 1
+        assert audited["complete_marginal_costs"]["observed_delta_sums"]["wall_seconds"] == 20
+        by_id = {row["pair_id"]: row for row in audited["pairs"]}
+        assert by_id[clean["pair_id"]]["identification_valid"]
+        assert set(by_id[duplicate["pair_id"]]["identification_violations"]) == {
+            "reused_run_workspace", "reused_arm_execution",
+        }
 
     # Independent declared executions under the same checkpoint can still pool.
     for i, pair in enumerate(replicas):
