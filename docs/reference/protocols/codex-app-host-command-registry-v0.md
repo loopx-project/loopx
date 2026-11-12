@@ -235,6 +235,11 @@ fields can rerun the advertised command or pass
 `--include-command-pack-detail`. Both modes must produce the same host-action
 projection before a compact default is promoted.
 
+If the recommendation repeats the planning prompt, the default packet supplies
+`recommended_next_step.plan_prompt_ref` as a JSON Pointer to the complete
+prompt in that same packet. Follow it without a second command. The ordered
+planning step and the explicit detail view retain their inline text.
+
 `start-goal --project <path>` keeps that exact project route. In particular, a
 fresh linked worktree must not silently inherit a goal registered by another
 worktree that shares its Git common directory. The lower-level

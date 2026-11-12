@@ -102,6 +102,10 @@ def _build(project: Path, *, include_detail: bool) -> dict[str, Any]:
 def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
     command_pack = payload["command_pack"]
     transaction = payload["guided_transaction"]
+    recommendation = dict(payload["recommended_next_step"])
+    if "plan_prompt_ref" in recommendation:
+        assert "plan_prompt" not in recommendation
+        recommendation["plan_prompt"] = _resolve_pointer(payload, recommendation.pop("plan_prompt_ref"))
     return {
         "schema_version": payload["schema_version"],
         "project": payload["project"],
@@ -110,7 +114,7 @@ def _host_shadow_document(payload: dict[str, Any]) -> dict[str, Any]:
         "agent_id": payload["agent_id"],
         "host_surface": payload["host_surface"],
         "goal_text": payload["goal_text"],
-        "recommended_next_step": payload["recommended_next_step"],
+        "recommended_next_step": recommendation,
         "ordered_steps": transaction["ordered_steps"],
         "idempotency_policy": transaction["idempotency_policy"],
         "preserve_todos_policy": transaction["preserve_todos_policy"],
@@ -551,14 +555,24 @@ def test_invalid_idle_timeout_remediation_reuses_typed_runtime_message(
 
 
 def test_default_projection_preserves_host_actions_and_json_anchors(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = _write_connected_project(tmp_path)
-    compact = _build(project, include_detail=False)
-    detailed = _build(project, include_detail=True)
+    code, compact = _invoke_start_goal_for_host(project, "codex-app")
+    detail_code, detailed = _invoke_start_goal_for_host(project, "codex-app", include_detail=True)
+    assert code == detail_code == 0
 
     assert set(compact) == set(detailed)
     assert _host_shadow_document(compact) == _host_shadow_document(detailed)
+    recommendation = compact["recommended_next_step"]
+    assert "plan_prompt" not in recommendation
+    assert recommendation["plan_prompt_ref"] == "#/command_pack/commands/goal_start_plan_prompt"
+    assert _resolve_pointer(compact, recommendation["plan_prompt_ref"]) == (
+        detailed["recommended_next_step"]["plan_prompt"]
+    )
+    assert "plan_prompt_ref" not in detailed["recommended_next_step"]
+    assert compact["message"] == detailed["message"]
     assert compact["command_pack_detail_included"] is False
     assert detailed["command_pack_detail_included"] is True
     assert compact["guided_transaction"]["ordered_steps"][-1]["id"] == (
