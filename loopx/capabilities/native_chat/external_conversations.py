@@ -27,6 +27,7 @@ from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from . import result_review_evidence
 from .codex_context import checked_session_home
 from .file_discovery import FileChatDiscovery
+from .steward_commands import todo_confirmation_readback
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -1896,14 +1897,12 @@ class ChatExternalConversations:
                     else:
                         result = self.actions.apply(argument, steward_context=context, steward_confirmed_at=row["created_at"])
                         applied = result["proposal"]
-                        if applied.get("status") != "applied":
-                            raise ValueError("the creation preview became stale; prepare a new preview")
-                        resources = applied["receipt"]["resource_ids"]
                         if applied["action_kind"] == "todo.create":
-                            row.update(todo_receipt=applied["receipt"], response=(
-                                f"已记录待办：{applied['normalized_parameters']['text']}\n"
-                                f"目标：{resources['goal_id']}；规范写入回执已读回。本次没有启动执行。"))
+                            row.update(todo_confirmation_readback(applied, argument))
                         else:
+                            if applied.get("status") != "applied":
+                                raise ValueError("the creation preview became stale; prepare a new preview")
+                            resources = applied["receipt"]["resource_ids"]
                             # Persist a committed creation before fallible adoption.
                             row.update(commission_resources=resources, commission_adoption_pending=True,
                                        commission_gate=bool(result.get("gate")))

@@ -22,6 +22,7 @@ from .chat import (
     todo_create_was_duplicate,
 )
 from .chat_action_normalization import ChatActionNormalizationMixin
+from .control_plane.todos.provider_projection import projection_delivery_requires_ack
 from .chat_action_store import (
     ACTION_KINDS as SUPPORTED_ACTION_KINDS,
     ActionConflictError,
@@ -1163,6 +1164,11 @@ class ChatActionService(
         except LocalCoordinationAuthorityUnavailable as error:
             return self._create_confirmation_conflict(proposal, error)
         todo_id = _opaque(result.get("todo_id"), field="todo_id")
+        delivery = result["projection_delivery"]
+        if not projection_delivery_requires_ack(delivery):
+            return self._pending_create_projection(
+                proposal, todo_id=todo_id, operation_id=arguments["operation_id"],
+            )
         receipt = {
             "receipt_id": _digest(
                 {"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}
@@ -1171,6 +1177,7 @@ class ChatActionService(
             if todo_create_was_duplicate(result)
             else "monitor_created",
             "projection_verified": True,
+            "projection_delivery": delivery,
             "resource_ids": {
                 "goal_id": goal_id,
                 "todo_id": todo_id,
@@ -1537,6 +1544,10 @@ class ChatActionService(
             )
         if proposal.get("action_kind") == "goal.create" and (proposal.get("checkpoint") or {}).get("steps"):
             raise ActionConflictError("Creation already recorded effects; recover the original operation instead of regenerating")
+        if (proposal.get("action_kind") in {"todo.create", "monitor.create"}
+            and proposal.get("status") != "stale"
+            and ({"todo_create_prepared", "todo_created"} & create_checkpoint_steps(proposal).keys())):
+            raise ActionConflictError("Retry the original task confirmation to recover its result.")
         if proposal.get("status") not in {"stale", "failed", "gated", "rejected"}:
             raise ActionConflictError(
                 f"proposal in {proposal.get('status')} state cannot be regenerated"
@@ -1655,9 +1666,19 @@ class ChatActionService(
                 canonical_receipt = todo_step.get("canonical_receipt")
                 if not isinstance(canonical_receipt, dict):
                     raise ValueError("Todo creation checkpoint is malformed")
+                delivery = todo_step.get("projection_delivery")
+                if delivery is None or not projection_delivery_requires_ack(delivery):
+                    operation_id = arguments.get("operation_id") or f"chat-todo:{preview_id}"
+                    delivery = self._recover_saved_create_projection(
+                        registry_path=registry_path, runtime_root=Path(runtime_root_arg),
+                        goal_id=goal_id, todo_id=todo_id, operation_id=operation_id,
+                    )
+                    if not projection_delivery_requires_ack(delivery):
+                        return self._pending_create_projection(proposal, todo_id=todo_id,
+                            operation_id=operation_id)
             else:
                 try:
-                    canonical_receipt = apply_prepared_todo_review(
+                    canonical_receipt, delivery = apply_prepared_todo_review(
                         registry_path=registry_path, goal_id=goal_id, runtime_root_arg=runtime_root_arg,
                         text=str(parameters["text"]), priority=parameters.get("priority"),
                         preview_id=preview_id, **arguments,
@@ -1665,12 +1686,17 @@ class ChatActionService(
                 except LocalCoordinationAuthorityUnavailable as error:
                     return self._create_confirmation_conflict(proposal, error)
                 todo_id = _opaque(canonical_receipt["todo_id"], field="todo_id")
+                if not projection_delivery_requires_ack(delivery):
+                    return self._pending_create_projection(
+                        proposal, todo_id=todo_id, operation_id=arguments["operation_id"],
+                    )
                 proposal = self.store.save_checkpoint(
                     proposal_id,
                     step="todo_created",
                     receipt={
                         "todo_id": todo_id,
                         "canonical_receipt": canonical_receipt,
+                        "projection_delivery": delivery,
                     },
                     once=True,
                 )
@@ -1678,7 +1704,8 @@ class ChatActionService(
                     return {"proposal": proposal, "turn": self._turn_from_receipt(proposal.get("receipt"))}
                 steps = create_checkpoint_steps(proposal)
             if agent_id and not isinstance(steps.get("todo_assigned"), dict):
-                update_goal_todo(
+                assignment_operation_id = f"chat-assign:{proposal_id}"
+                assignment = update_goal_todo(
                     registry_path=registry_path,
                     goal_id=goal_id,
                     runtime_root_arg=runtime_root_arg,
@@ -1686,13 +1713,18 @@ class ChatActionService(
                     claimed_by=str(agent_id),
                     agent_id=str(agent_id),
                     authority_reason="owner-confirmed typed Chat action",
-                    update_operation_id=f"chat-assign:{proposal_id}",
+                    update_operation_id=assignment_operation_id,
                     dry_run=False,
                 )
+                delivery = assignment["projection_delivery"]
+                if not projection_delivery_requires_ack(delivery):
+                    return self._pending_create_projection(
+                        proposal, todo_id=todo_id, operation_id=assignment_operation_id,
+                    )
                 proposal = self.store.save_checkpoint(
                     proposal_id,
                     step="todo_assigned",
-                    receipt={"todo_id": todo_id, "agent_id": str(agent_id)},
+                    receipt={"todo_id": todo_id, "agent_id": str(agent_id), "projection_delivery": delivery},
                     once=True,
                 )
                 if proposal["status"] == "applied":
@@ -1702,6 +1734,7 @@ class ChatActionService(
                 "receipt_id": str(canonical_receipt["receipt_id"]),
                 "outcome": str(canonical_receipt["outcome"]),
                 "projection_verified": True,
+                "projection_delivery": delivery,
                 "resource_ids": {
                     "goal_id": str(canonical_receipt["goal_id"]),
                     "todo_id": todo_id,

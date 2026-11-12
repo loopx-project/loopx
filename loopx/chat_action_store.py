@@ -1371,6 +1371,7 @@ class ChatActionStore:
         error_code: str,
         message: str,
         details: Mapping[str, Any] | None = None,
+        keep_applied: bool = False,
     ) -> dict[str, Any]:
         # A failure that happened after part of the work was committed has to
         # carry those identities, or the retry cannot tell what already exists
@@ -1389,7 +1390,7 @@ class ChatActionStore:
             from_states={"applying", "preview_ready", "gated"},
             to_state="failed",
             updates={"failure": failure},
-            idempotent_states={"failed"},
+            idempotent_states={"failed", "applied"} if keep_applied else {"failed"},
         )
 
     def save_checkpoint(
@@ -1536,7 +1537,11 @@ class ChatActionStore:
             status = str(proposal.get("status") or "")
             if status == "applied":
                 return proposal
-            if status not in {"preview_ready", "applying"}:
+            recovering_create_projection = (
+                status == "failed" and proposal.get("action_kind") in {"todo.create", "monitor.create"}
+                and (proposal.get("failure") or {}).get("error_code") == "canonical_create_projection_pending"
+            )
+            if status not in {"preview_ready", "applying"} and not recovering_create_projection:
                 raise ActionConflictError(
                     f"proposal in {status} state cannot be applied"
                 )
@@ -1567,6 +1572,8 @@ class ChatActionStore:
                 raise ValueError("receipt.projection_verified must be true")
             proposal["status"] = "applied"
             proposal["receipt"] = safe_receipt
+            if recovering_create_projection:
+                proposal["failure"] = None
             proposal["applied_at"] = now
             proposal["updated_at"] = now
             self._write(payload)

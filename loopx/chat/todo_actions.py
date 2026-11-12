@@ -14,7 +14,10 @@ from ..control_plane.coordination.local_authority import (
 )
 from ..control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..paths import effective_runtime_root
-from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
+from ..control_plane.effect_runtime import effect_runtime_result
+from ..control_plane.todos.provider_projection import (
+    projection_delivery_requires_ack, settle_canonical_todo_projection,
+)
 
 
 def todo_create_source(host: Any, goal_id: str) -> tuple[Path, str | None]:
@@ -104,6 +107,39 @@ class ChatTodoActionMixin:
             "provider_revision": error.payload.get("current_provider_revision"),
         }), receipt={})
         return {"proposal": stale, "turn": self._turn_from_receipt(stale.get("receipt"))}
+
+    def _pending_create_projection(
+        self, proposal: dict[str, Any], *, todo_id: str, operation_id: str,
+    ) -> dict[str, Any]:
+        saved = self.store.mark_failed(
+            proposal["proposal_id"],
+            error_code="canonical_create_projection_pending",
+            message="The task was committed. Retry this confirmation to finish updating its display.",
+            details={"canonical_committed": True, "todo_id": todo_id, "operation_id": operation_id,
+                     "projection_delivery": "pending"},
+            keep_applied=True,
+        )
+        return {"proposal": saved, "turn": self._turn_from_receipt(saved.get("receipt"))}
+
+    @staticmethod
+    def _recover_saved_create_projection(
+        *, registry_path: Path, runtime_root: Path, goal_id: str, todo_id: str, operation_id: str,
+    ) -> str:
+        # Older checkpoints kept the business receipt without display proof.
+        # Check its original provider operation before writing any projection.
+        result = effect_runtime_result("coordination.local_authority.operation_receipt", {
+            "schema_version": "loopx_local_coordination_operation_receipt_request_v0",
+            "runtime_root": str(runtime_root),
+            "goal_id": goal_id,
+            "operation_id": operation_id,
+        })
+        if not isinstance(result, dict) or result.get("status") != "found" or not any(
+            isinstance(row, dict) and row.get("todo_id") == todo_id for row in result.get("receipts", [])
+        ):
+            raise ValueError("The original task creation receipt could not be verified in its Goal source.")
+        return settle_canonical_todo_projection(
+            {}, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
+        )["projection_delivery"]
 
     def _run_todo_update(
         self, parameters: dict[str, Any], *, dry_run: bool,

@@ -16,7 +16,8 @@ export type ActionReviewReason =
   | "apply_failed" | "inactive_proposal"
   | "operation_authorization_pending" | "operation_outcome_pending"
   | "operation_confirmation_expired" | "operation_expiry_unknown" | "team_plan_retry"
-  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry";
+  | "canonical_update_retry" | "canonical_update_projection_pending" | "goal_creation_retry"
+  | "canonical_create_retry" | "canonical_create_projection_pending";
 
 export type OperationReviewContent = {
   title: string;
@@ -573,6 +574,30 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
       && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)
       && creationProgress) {
     return {...finish({interaction: "review", canApply: true, reason: "goal_creation_retry"}), retryOriginal: true};
+  }
+  if ((proposal.action_kind === "todo.create" || proposal.action_kind === "monitor.create")
+      && proposal.schema_version === "loopx_chat_action_proposal_v1"
+      && proposal.permission_classification === "durable_write"
+      && identity.proposalId && identity.sourceFingerprint && textValue(parameters?.goal_id)) {
+    const failure = objectValue(proposal.failure);
+    if (proposal.status === "applying" || (proposal.status === "failed" && failure?.retry_safe === true)) {
+      const steps = objectValue(objectValue(proposal.checkpoint)?.steps);
+      const prepared = objectValue(steps?.todo_create_prepared);
+      const created = objectValue(steps?.todo_created);
+      const receipt = objectValue(created?.canonical_receipt);
+      const hasPrepared = prepared?.operation_id === `chat-create:${identity.proposalId}`
+        && textValue(prepared?.expected_provider_revision) !== null
+        && BARE_SHA256_PATTERN.test(String(prepared?.source_binding ?? ""));
+      const hasSavedTodo = proposal.action_kind === "todo.create" && textValue(created?.todo_id) !== null
+        && receipt?.todo_id === created?.todo_id && receipt?.goal_id === parameters?.goal_id
+        && receipt?.preview_id === identity.sourceFingerprint;
+      if (hasPrepared || hasSavedTodo) {
+        const pending = failure?.error_code === "canonical_create_projection_pending"
+          && objectValue(failure.details)?.canonical_committed === true;
+        return {...finish({interaction: "review", canApply: true,
+          reason: pending ? "canonical_create_projection_pending" : "canonical_create_retry"}), retryOriginal: true};
+      }
+    }
   }
   const isCanonicalUpdate = basis?.schema_version === "loopx_chat_canonical_update_basis_v0"
     && textValue(basis.provider_revision) !== null && textValue(basis.registry_sha256) !== null
