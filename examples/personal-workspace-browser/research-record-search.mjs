@@ -8,9 +8,19 @@ import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
 
 async function readEmptyScope(page, results, message) {
-  await results.getByRole('button',{name:'No matches in loaded records',exact:true}).focus();
+  const search = results.getByRole('searchbox');
+  const query = await search.inputValue();
+  const trigger = results.getByRole('button',{name:'No matches in loaded records',exact:true});
+  await trigger.focus();
+  // Enter opens the help even when the trigger retained focus after an earlier
+  // dismissal; focusing an already focused element does not fire onFocus.
+  await trigger.press('Enter');
   await page.getByRole('tooltip').getByText(message,{exact:true}).waitFor();
-  await page.keyboard.press('Escape');
+  // Bind dismissal to the current trigger after rendering. A global Escape
+  // can reach the search input and clear the filter instead of only the help.
+  await trigger.press('Escape');
+  await page.getByRole('tooltip').waitFor({state:'hidden'});
+  assert.equal(await search.inputValue(), query, 'Dismissing scope help preserves the selected query');
 }
 
 export const researchRecordSearchScenario = {

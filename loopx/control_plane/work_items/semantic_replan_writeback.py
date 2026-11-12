@@ -20,8 +20,7 @@ from ..status.autonomous_replan_projection import (
 )
 from ..todos.active_state_todo_parser import parse_active_state_todos
 from ..todos.quota_summary import (
-    select_planning_inventory_source_items,
-    select_quota_todo_summaries,
+    select_quota_todo_summaries_with_terminal,
 )
 from ..todos.succession_warning import todo_succession_gap_items
 from .autonomous_replan_ack import (
@@ -264,13 +263,8 @@ def qualify_replan_writeback(
     )
     raw_user_todos = todo_projection.get("user_todos")
     raw_agent_todos = todo_projection.get("agent_todos")
-    user_todos, agent_todos = select_quota_todo_summaries(
+    user_todos, agent_todos, agent_todo_source_items = select_quota_todo_summaries_with_terminal(
         raw_user_todos, raw_agent_todos, agent_identity=agent_identity,
-    )
-    agent_todo_source_items = select_planning_inventory_source_items(
-        raw_agent_todos,
-        None,
-        include_terminal=True,
     )
     agent_todo_completion_items = (
         [

@@ -27,15 +27,21 @@ export function projectTodoContextPage(input: JsonObject): JsonObject {
   if (input.summary_display_views !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display views cannot be combined with other views");
     const source = requireJsonObject(input.summary_display_views, "summary display views");
-    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates")) {
+    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates" && key !== "view_names")) {
       throw new EffectRuntimeRequestError("invalid summary display views fields");
     }
     requireJsonObject(source.source, "summary source");
-    return {
-      summary: projectTodoSummaryDisplay(source),
-      planning: projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
-      terminal: projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
+    const views: Record<string, () => JsonObject[]> = {
+      summary: () => projectTodoSummaryDisplay(source),
+      planning: () => projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
+      terminal: () => projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
     };
+    const names = source.view_names === undefined ? Object.keys(views) : source.view_names;
+    if (!Array.isArray(names) || names.length === 0 || new Set(names).size !== names.length ||
+        names.some(name => typeof name !== "string" || !Object.hasOwn(views, name))) {
+      throw new EffectRuntimeRequestError("summary display views must name distinct supported views");
+    }
+    return Object.fromEntries(names.map(name => [name, views[name as string]()]));
   }
   if (input.summary_display !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display cannot be combined with other views");

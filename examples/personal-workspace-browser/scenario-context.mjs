@@ -14,8 +14,13 @@ export async function fetchWorkspaceBackend(route, backendUrl, { pathname } = {}
     try {
       return await route.fetch({ url: target.href, headers });
     } catch (error) {
+      // Playwright preserves the native socket code in its first error line.
+      // Only that transport signature (or a typed errno), never response prose,
+      // permits the existing bounded read retry. Writes remain single-attempt.
+      const socketCode = error?.code ?? /^route\.fetch: (?:connect|read|write) (ECONNRESET|ECONNREFUSED|EPIPE)(?:\s|$)/u
+        .exec(String(error?.message ?? error).split("\n", 1)[0])?.[1];
       const retryable = ["GET", "HEAD"].includes(request.method())
-        && /\b(?:ECONNRESET|ECONNREFUSED)\b/u.test(String(error?.message ?? error))
+        && ["ECONNRESET", "ECONNREFUSED", "EPIPE"].includes(socketCode)
         && attempt < 2;
       if (!retryable) throw error;
       await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
