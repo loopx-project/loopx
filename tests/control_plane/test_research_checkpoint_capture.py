@@ -126,6 +126,7 @@ def test_checkpoint_handoff_checks_the_original_contract_before_capture(tmp_path
     from benchmark.runtime.checkpoint import held_quota_decision
     from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
     from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.hosts.research_checkpoint import select_checkpoint_replan
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path)
@@ -179,7 +180,11 @@ def test_checkpoint_handoff_checks_the_original_contract_before_capture(tmp_path
     transfer(materialize("unbound", {key: value for key, value in source.items() if key != "contract_binding"}),
              "Turn contract binding")
     legacy = {key: value for key, value in source.items() if key not in {"schema_version", "contract_binding"}}
-    transfer(materialize("legacy", legacy))
+    stripped = {key: value for key, value in changed.items() if key not in {"schema_version", "contract_binding"}}
+    transfer(materialize("stripped", stripped), "unsupported complete Turn decision version")
+    historical = select_checkpoint_replan(legacy, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        turn_instance_id=cli.TURN_ID, allow_legacy_source=True)
+    assert historical["capture"] and historical["obligation_id"] == obligation
     precision = compose_turn_decision({**legacy, "precision_fixture": [2**53 + 1, -0.0, 1.0]})
     transfer(materialize("precision", precision))
     transfer(materialize("rounded", {**precision, "precision_fixture": [2**53, -0.0, 1.0]}),

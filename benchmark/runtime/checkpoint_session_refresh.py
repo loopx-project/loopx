@@ -63,7 +63,8 @@ def _prepare_fresh_replan(env, session, wake, declaration):
         raise ValueError("fresh replan pending packet digest differs")
     packet = json.loads(raw)
     selected = select_checkpoint_replan(packet, goal_id=metadata["loopx_state"]["goal_id"],
-        agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"])
+        agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"],
+        allow_legacy_source=True)
     if selected.get("capture") is not True or selected != (
             metadata.get("replan") or metadata.get("operator_metadata", {}).get("replan")):
         raise ValueError("fresh replan requires the original pending decision boundary")

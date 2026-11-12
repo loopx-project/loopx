@@ -639,7 +639,7 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
         guard = native["interrupted_guard"]
         intent = select_checkpoint_replan(json.loads(raw), goal_id=guard["goal_id"],
             agent_id=guard["agent_id"], turn_instance_id=guard["turn_instance_id"],
-            timeout=max(.1, deadline - time.monotonic()))
+            timeout=max(.1, deadline - time.monotonic()), allow_legacy_source=True)
         if not intent["capture"] or intent != manifest["point_metadata"].get("replan"):
             raise ValueError("interrupted checkpoint original replan binding differs")
     home = Path(env["CODEX_HOME"])

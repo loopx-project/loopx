@@ -84,7 +84,8 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
             raise ValueError("restored pending replan packet digest differs")
         packet = json.loads(raw)
         intent = select_checkpoint_replan(packet, goal_id=metadata["loopx_state"]["goal_id"],
-            agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"])
+            agent_id=metadata["loopx_state"]["agent_id"], turn_instance_id=packet["heartbeat_receipt"]["turn_instance_id"],
+            allow_legacy_source=True)
         if intent != pending or intent.get("capture") is not True:
             raise ValueError("restored original replan binding differs")
     result = effect_runtime_result("runtime.checkpoint_artifacts", {

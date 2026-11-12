@@ -24,10 +24,13 @@ from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSI
 
 
 def select_checkpoint_replan(quota: dict[str, Any], *, goal_id: str, agent_id: str, turn_instance_id: str | None,
-                             timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS) -> dict[str, Any]:
+                             timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                             allow_legacy_source: bool = False) -> dict[str, Any]:
     """Pass the original quota source and its exact numbers to the artifact owner."""
     request: dict[str, Any] = {"action": "select_replan", "quota": quota, "goal_id": goal_id,
                               "agent_id": agent_id, "turn_instance_id": turn_instance_id}
+    if allow_legacy_source:
+        request["allow_legacy_source"] = True
     if isinstance(quota, dict) and quota.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
         tokens = source_number_tokens(quota)
         if tokens:

@@ -377,24 +377,34 @@ def test_non_capture_guard_returns_to_original_writer_without_interrupt(tmp_path
 
     from benchmark.runtime.checkpoint import held_quota_decision
     from benchmark.runtime.worker import child_process
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from tests.control_plane import test_quota_settlement_cli as quota_fixture
+
     project = tmp_path / "source"
     project.mkdir()
     capture_root = project / "captures"
     capture_root.mkdir(mode=0o700)
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    goal, agent, turn = quota_fixture.GOAL_ID, quota_fixture.AGENT_ID, quota_fixture.TURN_ID
     with tempfile.TemporaryDirectory(prefix="failed-guard-", dir="/tmp") as short:
         socket_path = Path(short).resolve() / "host.sock"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(str(socket_path))
             listener.listen(1)
             listener.settimeout(30)
-            failed = {"ok": False, "mode": "should-run", "goal_id": "failed-source",
+            failed = {"ok": False, "mode": "should-run", "goal_id": goal,
                       "decision": "skip", "should_run": False,
                       "error_code": "quota_unexpected_collection_error"}
-            if closeout:
-                failed = closeout_guard("failed-source", "failed-agent", "failed-guard")
-            elif settlement_only:
-                failed = replan_settlement_guard("failed-source", "failed-agent", "failed-guard")
+            if closeout or settlement_only:
+                source_project, runtime, registry = quota_fixture._write_fixture(tmp_path / "guard-source")
+                quota_fixture._initialize_fixture_authority(source_project, runtime)
+                rc, basis = quota_fixture._run_cli(registry, runtime, "quota", "should-run",
+                    "--goal-id", goal, "--agent-id", agent, "--todo-id", quota_fixture.TODO_ID,
+                    "--turn-instance-id", turn, "--context-delivery", "off", cwd=source_project)
+                assert rc == 0
+                source = {key: value for key, value in basis.items() if key not in {"schema_version", "contract_binding"}}
+                marker = closeout_guard if closeout else replan_settlement_guard
+                failed = compose_turn_decision({**source, **marker(goal, agent, turn)})
             packet = capture_root / "original"
             packet.mkdir()
             decision = packet / "decision.json"
@@ -415,8 +425,8 @@ def test_non_capture_guard_returns_to_original_writer_without_interrupt(tmp_path
             with child_process([sys.executable, "-c", code], env={**env, "LOOPX_PROJECT": str(project)},
                                stdout=None, stderr=None) as process:
                 process.stdin.close()
-                with held_quota_decision(listener, capture_root, goal_id="failed-source",
-                        agent_id="failed-agent", turn_instance_id="failed-guard",
+                with held_quota_decision(listener, capture_root, goal_id=goal,
+                        agent_id=agent, turn_instance_id=turn,
                         native_process=process,
                         interrupt_when=(lambda _: False) if use_selector else None) as held:
                     assert held["quota"]["ok"] is (closeout or settlement_only)
@@ -502,7 +512,7 @@ def test_closeout_is_not_a_fresh_capture_but_next_bound_replan_is():
     from loopx.control_plane.effect_runtime import effect_runtime_result
     quota = closeout_guard()
     request = {"action": "select_replan", "quota": quota,
-               "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"}
+               "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn", "allow_legacy_source": True}
     result = effect_runtime_result("runtime.checkpoint_artifacts", request)
     assert result == {"capture": False, "reason": "turn_closeout_pending", "execution_authority_granted": False}
     receipt = quota["heartbeat_receipt"]
@@ -520,7 +530,7 @@ def test_closeout_does_not_relax_settlement_identity(field, value):
     quota["heartbeat_receipt"]["settlement_identity"][field] = value
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "select_replan", "quota": quota,
-            "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn"})
+            "goal_id": "source", "agent_id": "agent", "turn_instance_id": "turn", "allow_legacy_source": True})
 
 
 @pytest.mark.parametrize("fault", [None, "first_read", "probe", "cursor_moved", "source_moved", "capture"])

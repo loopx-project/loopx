@@ -123,7 +123,7 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
             raise ValueError("prior checkpoint guard must be a physical Host file")
         guard = json.loads(path.read_text())
         prior = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
-            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=path.parent.name)
+            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=path.parent.name, allow_legacy_source=True)
         if prior["capture"] and prior["obligation_id"] == obligation_id:
             return True
     return False
@@ -262,6 +262,10 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("checkpoint requires a successful original quota guard")
     if native_context and projected.get("capture_sha256") != guard_digest:
         raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
+    # This is the current live producer. Refuse an invalid source before any
+    # preflight instruction or saved guard can give it to the model.
+    intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
+        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.
@@ -286,8 +290,6 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False, "phase": "before_replan"}
     try:
-        intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
-            agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
         from .checkpoint_continuation import restored_capture_gate
         restore_gate = restored_capture_gate(env, intent.get("obligation_id"),
             full_history=not request.get("native_session", False))
