@@ -197,37 +197,6 @@ def find_heartbeat_receipt(
     )
 
 
-def assert_turn_heartbeat_settlement_receipt_identity(
-    runtime_root: Path,
-    identity: SettlementIdentity,
-    *,
-    goal_ref: Mapping[str, object] | None = None,
-) -> None:
-    """Reject a conflicting settlement identity without mutating the receipt log."""
-
-    receipt = find_heartbeat_receipt(
-        runtime_root,
-        goal_id=identity.goal_id,
-        agent_id=identity.agent_id,
-        turn_instance_id=identity.turn_instance_id,
-        goal_ref=goal_ref,
-    )
-    if receipt is None:
-        return
-    observed = _receipt_settlement_identity(receipt)
-    if observed is None:
-        return
-    expected = (
-        identity.binding_kind,
-        identity.binding_id,
-        identity.effect_id,
-    )
-    if observed != expected:
-        raise HeartbeatReceiptIdentityConflictError(
-            "Turn heartbeat receipt belongs to another settlement identity"
-        )
-
-
 def ensure_turn_heartbeat_settlement_receipt(
     runtime_root: Path,
     identity: SettlementIdentity,

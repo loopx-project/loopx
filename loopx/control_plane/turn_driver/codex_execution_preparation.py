@@ -257,13 +257,11 @@ def builtin_execution_preparation_claim(
         exact_turn_instance_id = _exact_identity(heartbeat.get("turn_instance_id"))
     if exact_turn_instance_id is not None:
         # The receipt lookup and the ordinary claim are separate operations.
-        # Refuse a conflicting binding before the claim can create a lease for
-        # a different Todo; planning also re-reads this identity after the
-        # claim, so this check remains side-effect free.
-        from ..quota.effect_program import SettlementIdentity
-        from ..quota.heartbeat_receipt import (
-            assert_turn_heartbeat_settlement_receipt_identity,
-        )
+        # Reserve the exact Turn binding before the claim can create a lease for
+        # a different Todo. The reservation owner serializes this write with every
+        # later guard, and planning re-reads the same identity after the claim.
+        from ..quota.effect_program import SettlementBindingKind, SettlementIdentity
+        from ..quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
         from ..quota.turn_envelope import turn_envelope_scoped_settlement_identity
 
         raw_identity = turn_envelope_scoped_settlement_identity(
@@ -283,9 +281,23 @@ def builtin_execution_preparation_claim(
                 turn_instance_id=exact_turn_instance_id,
             )
         )
-        assert_turn_heartbeat_settlement_receipt_identity(
+        if (
+            settlement_identity.goal_id != goal_id
+            or settlement_identity.agent_id != caller_agent_id
+            or settlement_identity.turn_instance_id != exact_turn_instance_id
+            or settlement_identity.binding_kind is not SettlementBindingKind.TODO
+            or settlement_identity.binding_id != todo_id
+        ):
+            raise ValueError("execution preparation identity does not match its ordinary claim")
+        # The receipt owner serializes this reservation with every later guard
+        # binding.  Reserving the Turn before the ordinary claim closes the
+        # check-to-claim race: a conflicting Todo either wins here or is refused
+        # here, so the losing caller cannot acquire a lease first.
+        ensure_turn_heartbeat_settlement_receipt(
             runtime_root,
             settlement_identity,
+            semantic_replan_guard_scoped=False,
+            semantic_replan_obligation_id=None,
             goal_ref=goal_ref,
         )
     try:

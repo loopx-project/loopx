@@ -1250,6 +1250,104 @@ def test_run_once_conflicting_turn_identity_does_not_claim_another_todo(
     assert lease["lease"] is None, lease
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_reserves_turn_before_claim_under_competing_guard(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Compete for the same Turn fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    original_runner = codex_execution_preparation._default_runner
+    competing_guard: dict[str, object] = {}
+
+    def interleaving_runner(command, *, cwd, timeout):
+        # This runs after the Turn reservation and immediately before the
+        # ordinary claim subprocess, the exact window that previously let a
+        # competing guard bind the same Turn to a different Todo first.
+        if "claim" in command and "todo" in command:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                guard_code = cli_main([
+                    "--registry", str(registry), "--runtime-root", str(runtime),
+                    "--format", "json", "quota", "should-run",
+                    "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+                    "--todo-id", "todo_fixture0001",
+                    "--turn-instance-id", "reserved-preparation-turn",
+                    "--context-delivery", "off",
+                ])
+            competing_guard["code"] = guard_code
+            competing_guard["payload"] = json.loads(output.getvalue())
+        return original_runner(command, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", interleaving_runner)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "turn", "run-once",
+            "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--todo-id", "todo_fixture0002",
+            "--turn-instance-id", "reserved-preparation-turn",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    result = json.loads(output.getvalue())
+    assert exit_code == 0, result
+    assert result["status"] == "committed", result
+    assert competing_guard["code"] == 1, competing_guard
+    assert (
+        competing_guard["payload"]["error_code"]
+        == "heartbeat_receipt_identity_conflict"
+    ), competing_guard
+    assert (
+        "settlement identity conflicts with the current selected Todo"
+        in competing_guard["payload"]["reason"]
+    ), competing_guard
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+
+    for todo_id, expected_active in (
+        ("todo_fixture0001", False),
+        ("todo_fixture0002", True),
+    ):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            lease_code = cli_main([
+                "--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", "task-lease", "inspect",
+                "--goal-id", "loopx-turn-fixture", "--todo-id", todo_id,
+            ])
+        lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+        assert lease_code == 0, lease
+        assert lease["active"] is expected_active, lease
+        if not expected_active:
+            assert lease["lease"] is None, lease
+
+
 def test_turn_plan_transaction_key_is_stable_and_todo_scoped() -> None:
     first = build_loopx_turn_plan(
         _envelope(),
