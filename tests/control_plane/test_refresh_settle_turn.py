@@ -499,12 +499,12 @@ def test_pinned_powershell_launcher_settles_original_turn_once(
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     if relative_launcher:
-        # The executable needs no quoting, but a later argument still does.
-        registry = registry.rename(registry.with_name("operator's registry.json"))
+        # A later argument needs quoting even though the executable does not.
+        registry = registry.rename(registry.with_name("operator's O\u2019Neil registry.json"))
         launcher_arg = "./bin/loopx.ps1"
         launcher = project / launcher_arg
     else:
-        launcher = tmp_path / "candidate's launcher" / "loopx.ps1"
+        launcher = tmp_path / "candidate's O\u2019Neil launcher" / "loopx.ps1"
         launcher_arg = str(launcher)
     _initialize_fixture_authority(project, runtime, provider=provider)
     launcher.parent.mkdir()

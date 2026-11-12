@@ -98,17 +98,20 @@ def test_guided_bootstrap_commands_do_not_require_posix_continuations(
     ]
 
 
+@pytest.mark.parametrize("quote", ["'", "\u2018", "\u2019", "\u201a", "\u201b"])
 def test_host_shell_arg_escapes_powershell_apostrophes(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, quote: str,
 ) -> None:
     monkeypatch.setattr(project_prompt, "_is_windows_host", lambda: True)
+    monkeypatch.setattr(project_prompt.install_contract, "_is_windows_host", lambda: True)
 
     assert project_prompt.shell_arg_for_host("read_only_project_map_v0") == (
         "read_only_project_map_v0"
     )
-    assert project_prompt.shell_arg_for_host("Fix user's login") == (
-        "'Fix user''s login'"
-    )
+    path = f"C:\\O{quote}Neil\\loopx.ps1"
+    literal = f"'C:\\O{quote}{quote}Neil\\loopx.ps1'"
+    assert project_prompt.shell_arg_for_host(path) == literal
+    assert project_prompt.host_command(path) == f"& {literal}"
 
 
 def test_windows_guided_packet_quotes_every_executable_command(
