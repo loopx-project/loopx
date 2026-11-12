@@ -43,6 +43,16 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
+Goal-start help and preview use issue-fix command metadata without importing
+its execution providers. An explicit `--capability-route issue-fix` retains
+the existing candidate-preflight contract. The installed context qualification
+in [`test_installed_core_context.py`](../../tests/control_plane/test_installed_core_context.py)
+executes the existing `quota context-project`, `context-read` and `context-hook`
+commands: incomplete delivery cannot establish a baseline, revisions preserve
+complete constraints, compaction requires recovery, and changed capture bytes
+are refused. Its native events are protocol fixtures; they do not establish
+model retention or installed-host adoption.
+
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
 installation by switching back to its environment; preserve task state and

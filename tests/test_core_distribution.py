@@ -179,6 +179,30 @@ def test_installed_core_guided_start_identity_and_readback(core_python, tmp_path
     assert pack["goal_start_contract"]["explicit_invocation_confirms_project_local_state_writes"] is True
 
 
+@pytest.mark.parametrize("route", ["help", "preview", "catalog"])
+def test_installed_core_start_metadata_defers_issue_fix_execution(core_python, tmp_path, route):
+    arguments = ["start-goal", "--help"] if route == "help" else [
+        "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+        "start-goal", "--guided", "--project", str(tmp_path / "project"),
+        "--goal-id", GOAL, "--host-surface", "shell", "--goal-text", "Verify the complete report."]
+    script = '''import json,sys
+if sys.argv[2]=='catalog':
+ from loopx.capabilities.issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
+ assert ISSUE_FIX_CATALOG_ENTRY['default_enabled'] is False
+else:
+ from loopx.entrypoint import main
+ try:code=main(json.loads(sys.argv[1]))
+ except SystemExit as error:code=error.code
+ assert code==0
+for name in ('workflow_plan','candidate_preflight','acceptance_loop','metadata_preview','repository_context'):
+ assert 'loopx.capabilities.issue_fix.'+name not in sys.modules,name
+'''
+    result = subprocess.run([core_python, "-I", "-c", script, json.dumps(arguments), route],
+        cwd=tmp_path, env=_environment(core_python), capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert not list(tmp_path.iterdir())
+
+
 def test_installed_core_catalog_entries_have_executable_parsers(core_python, tmp_path):
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     for group in reference["groups"]:

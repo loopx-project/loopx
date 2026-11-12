@@ -33,7 +33,7 @@ consequential meaning or authority is genuinely missing, not merely because the
 user gave a correction.
 
 For obsolete work covered by executable checks, follow the
-[owner check-scope reconciliation example](../../../docs/reference/goal-acceptance-observations.md#owner-check-scope-reconciliation).
+[owner check-scope reconciliation example](https://github.com/loopx-project/loopx/blob/ce69003c73378fdb067a6b86e7b60feb50cb1b77/docs/reference/goal-acceptance-observations.md#owner-check-scope-reconciliation).
 It preserves accepted work and current/final checks in an explicit
 `selected_work` replacement before lease-fenced supersession. Removing a binding
 alone does not remove work from `all_advancement`. This owner configuration path

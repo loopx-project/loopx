@@ -15,6 +15,29 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("preview", [False, True])
+def test_goal_start_does_not_load_unselected_issue_fix_execution(tmp_path, preview):
+    arguments = ["start-goal", "--help"]
+    if preview:
+        arguments = ["--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+            "start-goal", "--guided", "--project", str(tmp_path / "project"),
+            "--goal-id", "fixture", "--host-surface", "shell",
+            "--goal-text", "Produce a verified report; preserve 总计."]
+    result = run_cli_main("loopx.entrypoint", arguments,
+        forbidden_modules=("loopx.cli", "loopx.capabilities.issue_fix.workflow_plan",
+            "loopx.capabilities.issue_fix.candidate_preflight",
+            "loopx.capabilities.issue_fix.acceptance_loop",
+            "loopx.capabilities.issue_fix.metadata_preview",
+            "loopx.capabilities.issue_fix.repository_context"),
+        environment={"LOOPX_USAGE_PING": "0"})
+    assert result.returncode == 0, result.stderr
+    if preview:
+        packet = json.loads(result.stdout)
+        assert packet["goal_text"] == "Produce a verified report; preserve 总计."
+        assert packet["guided_transaction"]["writes_now"] is False
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
 @pytest.mark.parametrize("command", ["auto-research", "multi-agent"])
 def test_retired_demo_commands_reject_execution_without_writing_state(
