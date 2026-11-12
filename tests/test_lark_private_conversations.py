@@ -20,6 +20,58 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+def test_app_steward_discovery_only_projects_the_bound_session(tmp_path, monkeypatch):
+    from collections import Counter
+    from loopx import chat_store
+    from test_native_steward_private import finish, steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        event = provider.event("steward-app", "discovery-source", "Read the fixture workspace")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        assert finish(runtime, request)["status"] == "completed"
+        original_id = request["session_id"]
+        other = store.create_session(goal_id="different-goal", agent_id="codex", adapter_kind="codex_app_server",
+                                     upstream_thread_id="other-thread", upstream_mode="chat")
+        bindings = transport.bindings
+        bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        before = capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id)
+        metadata, transcripts = Counter(), []
+        read, revision = chat_store._read_json, store._event_revision
+
+        def read_session(path):
+            if path.name == "session.json":
+                metadata[path.parent.name] += 1
+            return read(path)
+
+        def read_revision(path):
+            if path.name == "messages.jsonl":
+                transcripts.append(path.parent.name)
+            return revision(path)
+
+        with monkeypatch.context() as observations:
+            observations.setattr(chat_store, "_read_json", read_session)
+            observations.setattr(store, "_event_revision", read_revision)
+            start = len(provider.calls)
+            assert bindings.app_steward_target() == {"binding_id": binding["binding_id"], "session_id": original_id}
+            assert sum("auth" in args and "--verify" in args for args in provider.calls[start:]) == 1
+        assert metadata == {original_id: 2, other["session_id"]: 1}
+        assert transcripts == [original_id]
+        assert before == (capture.read_bytes(), bindings.path.read_bytes(), store.messages(original_id))
+
+        # The alias's own context is unrelated, but its declared ID still
+        # resolves to the same canonical bound record. Core must see both.
+        alias_path = store._session_path(other["session_id"])
+        alias_path.write_text(json.dumps({**other, "session_id": original_id}))
+        with pytest.raises(ValueError, match="canonical bound Session identity is ambiguous"):
+            bindings.app_steward_target()
+    finally:
+        runtime.close()
+        fixture.close()
+
+
 @pytest.mark.parametrize("outcome", ["adopted", "closed", "interrupted"])
 def test_private_steward_holds_original_request_during_executor_adoption(tmp_path, monkeypatch, outcome):
     from test_native_steward_private import finish, steward
