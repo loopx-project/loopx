@@ -470,9 +470,12 @@ class ManagerInspection:
         return result
 
     def _goal_scope(self) -> list[str] | None:
-        ids = (self.discovery_scope() if self.discovery_scope else
-               None if self.owner_scope and self.context.get("scope") == "owner_global" else
-               [r["goal_id"] for r in self.context.get("goals", [])])
+        try:
+            ids = (self.discovery_scope() if self.discovery_scope else
+                   None if self.owner_scope and self.context.get("scope") == "owner_global" else
+                   [r["goal_id"] for r in self.context.get("goals", [])])
+        except (OSError, KeyError, TypeError) as error:
+            raise ValueError("current audience scope unavailable") from error
         if ids is None:
             if not (self.owner_scope and self.context.get("scope") == "owner_global"):
                 raise ValueError("current audience scope unavailable")
