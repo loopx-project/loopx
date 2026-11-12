@@ -303,6 +303,71 @@ test("backoff rejects illegal calendar clocks instead of rolling them", () => {
   }
 });
 
+test("backoff identity reset does not read an obsolete illegal updated_at", () => {
+  const obsolete = {
+    progression_index: 1,
+    last_applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+    reset_token: "old-reset-token",
+    identity_signature: "old-identity",
+    updated_at: "2026-02-31T12:00:00Z",
+  };
+  const reset = evaluateSchedulerStateTransition(backoffRequest({
+    scheduler_state: obsolete,
+    reset_token: "new-reset-token",
+    identity_signature: "new-identity",
+    current_time: "2026-01-01T12:10:00Z",
+  }));
+  assert.equal(reset.state_status, "reset_required");
+  assert.equal(reset.cadence_transition, "identity_reset");
+  assert.equal(reset.current_index, 0);
+  assert.equal(reset.current_interval_minutes, 15);
+  assert.equal(reset.current_rrule, "FREQ=MINUTELY;INTERVAL=15");
+  assert.equal(reset.host_transition, "apply_required");
+
+  const legalClock = evaluateSchedulerStateTransition(backoffRequest({
+    scheduler_state: { ...obsolete, updated_at: "2026-01-01T12:00:00Z" },
+    reset_token: "new-reset-token",
+    identity_signature: "new-identity",
+    current_time: "2026-01-01T12:10:00Z",
+  }));
+  assert.equal(legalClock.cadence_transition, "identity_reset");
+  assert.equal(legalClock.current_interval_minutes, 15);
+  assert.equal(legalClock.host_transition, "apply_required");
+
+  const retry = evaluateSchedulerStateTransition(backoffRequest({
+    scheduler_state: {
+      progression_index: 0,
+      last_applied_rrule: "FREQ=MINUTELY;INTERVAL=60",
+      reset_token: "reset-token",
+      identity_signature: "identity-signature",
+      updated_at: "2026-11-31T12:00:00Z",
+      host_update_failures: [{
+        schema_version: "scheduler_host_update_failure_v0",
+        target_rrule: "FREQ=MINUTELY;INTERVAL=15",
+        observed_host_rrule: "FREQ=MINUTELY;INTERVAL=60",
+        failure_kind: "timeout",
+        failure_count: 1,
+        failed_at: "2026-01-01T11:30:00Z",
+      }],
+    },
+    observed_host_rrule: "RRULE:FREQ=MINUTELY;INTERVAL=60",
+  }));
+  assert.equal(retry.cadence_transition, "retry_unacknowledged_failure");
+
+  const heldInitial = evaluateSchedulerStateTransition(backoffRequest({
+    scheduler_state: {
+      progression_index: 1,
+      last_applied_rrule: "FREQ=MINUTELY;INTERVAL=30",
+      reset_token: "reset-token",
+      identity_signature: "identity-signature",
+      updated_at: "2026-01-32T12:00:00Z",
+    },
+    advance_same_identity: false,
+  }));
+  assert.equal(heldInitial.cadence_transition, "hold_active_initial");
+  assert.equal(heldInitial.current_index, 0);
+});
+
 test("backoff still treats a missing or blank updated_at as an elapsed interval", () => {
   const schedulerState = {
     progression_index: 1,
