@@ -1126,6 +1126,52 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     }
 
 
+def test_run_once_claims_zero_lease_before_codex_host(tmp_path, monkeypatch):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    project, runtime, registry = _write_live_fixture(tmp_path, handoff_mode="hard_lease")
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        guard_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--context-delivery", "off",
+        ])
+    before = read_cli_policy_payload(output.getvalue(), returncode=guard_code)
+    assert guard_code == 0, before
+    preparation = before["execution_preparation"]
+    assert preparation["state"] == "claim_required", before
+    assert preparation["reason_code"] == "task_lease_missing", before
+    assert preparation["claim"]["host_execution_allowed"] is True, before
+    assert before["normal_delivery_allowed"] is False, before
+    assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    result = json.loads(output.getvalue())
+    assert exit_code == 0, result
+    assert result["status"] == "committed", result
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+
+
 def test_turn_plan_transaction_key_is_stable_and_todo_scoped() -> None:
     first = build_loopx_turn_plan(
         _envelope(),
@@ -1494,6 +1540,7 @@ def _write_live_fixture(
     todo_metadata_extra: str = "",
     extra_agent_todo_lines: tuple[str, ...] = (),
     provider: str = "file",
+    handoff_mode: str = "soft_claim",
 ) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -1574,7 +1621,7 @@ def _write_live_fixture(
     )
     projection = build_todo_runtime_shadow_projection(
         goal_id="loopx-turn-fixture",
-        handoff_mode="soft_claim",
+        handoff_mode=handoff_mode,
         todos=parsed["agent_todos"]["items"],
     )
     initialize_canonical_authority(

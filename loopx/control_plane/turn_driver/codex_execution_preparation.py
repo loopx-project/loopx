@@ -152,6 +152,82 @@ def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[
     }
 
 
+class ExecutionPreparationClaimFailed(ValueError):
+    """The decision's advertised managed claim was refused before delivery."""
+
+    code = "turn_execution_preparation_claim_failed"
+
+
+def builtin_execution_preparation_claim(
+    decision: Mapping[str, Any],
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    cwd: Path,
+    runner: CommandRunner | None = None,
+    timeout: float = 30,
+) -> str | None:
+    """Execute the exact ordinary claim a decision advertised for a Host.
+
+    The decision stays the owner of readiness: this adapter runs only the
+    claim the decision already published as Host-executable, then the caller
+    re-reads the same decision and must observe the same Todo ready.  A
+    preparation this adapter does not recognise is left untouched so its
+    original typed wait keeps its meaning.
+    """
+
+    preparation = decision.get("execution_preparation")
+    selected = decision.get("selected_todo")
+    if not isinstance(preparation, Mapping) or not isinstance(selected, Mapping):
+        return None
+    if preparation.get("state") != "claim_required":
+        return None
+    claim = preparation.get("claim")
+    if not isinstance(claim, Mapping) or claim.get("host_execution_allowed") is not True:
+        return None
+    goal_id = str(decision.get("goal_id") or "").strip()
+    decision_agent_id = str(
+        decision.get("agent_id") or selected.get("agent_id") or ""
+    ).strip()
+    agent_id = str(preparation.get("agent_id") or "").strip()
+    todo_id = str(preparation.get("todo_id") or "").strip()
+    expected_claim = [
+        "todo", "claim", "--goal-id", goal_id, "--todo-id", todo_id,
+        "--agent-id", agent_id, "--claimed-by", agent_id,
+    ]
+    if (
+        preparation.get("schema_version") != "execution_preparation_v0"
+        or preparation.get("delivery_allowed") is not False
+        or decision.get("normal_delivery_allowed") is not False
+        or decision.get("should_run") is not True
+        or not decision_agent_id
+        or decision_agent_id != agent_id
+        or not goal_id
+        or not agent_id
+        or not todo_id
+        or str(selected.get("todo_id") or "").strip() != todo_id
+        or claim.get("cli_args") != expected_claim
+        or not registry_path.is_absolute()
+        or not runtime_root.is_absolute()
+        or not cwd.is_absolute()
+    ):
+        return None
+    try:
+        _run_json(
+            expected_claim,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            cwd=cwd,
+            timeout=timeout,
+            runner=runner or _default_runner,
+        )
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        raise ExecutionPreparationClaimFailed(
+            f"managed claim for Todo {todo_id} was refused before delivery: {exc}"
+        ) from exc
+    return todo_id
+
+
 def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
     """Reuse the captured managed claim identity on an authorized retry."""
     digest = request.get("claim_source_sha256")
