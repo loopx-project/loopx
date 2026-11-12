@@ -857,9 +857,13 @@ export function scopedReplanYardstickReversal(decision: JsonObject) {
   });
   if (index < 0) return undefined;
   const cue = explore.work_yardsticks[index] as JsonObject;
-  const fields = ["todo_id", "source_finding_id", "comparison_candidate_ref", "proxy_order_reversed",
+  const fields = ["todo_id", "source_finding_id", "comparison_candidate_ref", "proxy_order_reversed", "proxy_comparison_scope",
     "fidelity_status", "paired_candidates"].filter(field =>
     ["string", "boolean", "number"].includes(typeof cue[field]));
+  if (Array.isArray(cue.comparison_finding_ids) && cue.comparison_finding_ids.length > 0
+      && cue.comparison_finding_ids.length <= 4 && cue.comparison_finding_ids.every(id => typeof id === "string")) {
+    fields.push("comparison_finding_ids");
+  }
   return {cue, fields, path: [...REPLAN_CONTEXT_PATH, "explore_basis", "work_yardsticks", index]};
 }
 
@@ -923,6 +927,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
+  let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
   if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
       replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
@@ -948,10 +953,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include("autonomous_replan_obligation", "replan_context", "context_id");
       if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
         include("autonomous_replan_obligation", "triggers", index, "kind"));
-      const reversal = scopedReplanYardstickReversal(context);
-      if (reversal) {
-        for (const field of reversal.fields) include(...reversal.path, field);
-      }
+      replanReversal = scopedReplanYardstickReversal(context);
     }
   }
   include("agent_lane_next_action", "next_step");
@@ -986,6 +988,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
   const cueStart = pointers.length;
+  if (replanReversal) {
+    for (const field of replanReversal.fields) include(...replanReversal.path, field);
+  }
   if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
       && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string"
       && (identityAgent === undefined || identityAgent === agentId)) {

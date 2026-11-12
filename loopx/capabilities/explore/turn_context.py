@@ -49,7 +49,7 @@ def _policy(registry_path: Path, goal_id: str, runtime_root: Path | None = None)
 
 
 def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: str, agent_id: str | None,
-                               review_pages: Any = None) -> dict[str, Any] | None:
+                               review_pages: Any = None, preferred_yardstick_todo_id: str | None = None) -> dict[str, Any] | None:
     """Outer read adapter; the replan owner invokes it only for enabled reviews.
 
     Unavailable IO is distinct from an empty or disabled evidence source. No
@@ -61,6 +61,7 @@ def read_replan_explore_context(*, source_status: Mapping[str, Any], goal_id: st
         return explore_turn_context(
             registry_path=Path(source_status["registry"]), runtime_root=Path(source_status["runtime_root"]),
             goal_id=goal_id, agent_id=agent_id, include_finding_digests=True,
+            preferred_yardstick_todo_id=preferred_yardstick_todo_id,
             **({"review_pages": review_pages} if review_pages is not None else {}))
     except (OSError, ValueError, RuntimeError):
         return {"ok": False, "goal_id": goal_id, "agent_id": agent_id}
@@ -70,6 +71,7 @@ def project_work_yardstick_sources(
     *, events: list[dict[str, Any]], projection: Mapping[str, Any],
     goal_id: str, agent_id: str, work_todos: list[dict[str, Any]],
     enabled: bool, todo_id: str | None = None, result_node: str | None = None,
+    preferred_yardstick_todo_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Replay typed-owner-selected prefixes from one already-read canonical log.
 
@@ -82,6 +84,7 @@ def project_work_yardstick_sources(
     requests = effect_runtime_result("work_item.yardstick.sources", {
         "yardstick_enabled": enabled, "work_todos": work_todos,
         "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id, "result_node": result_node,
+        "preferred_yardstick_todo_id": preferred_yardstick_todo_id,
         "findings": projection.get("findings", []),
         "source_events": [{"goal_id": row["goal_id"], "event_id": row["event_id"]} for row in events],
     })
@@ -108,6 +111,7 @@ def explore_turn_context(
     result_node: str | None = None, result_revision: str | None = None,
     include_finding_digests: bool = False,
     review_pages: Any = None, todo_id: str | None = None,
+    preferred_yardstick_todo_id: str | None = None,
 ) -> dict[str, Any]:
     if type(include_finding_digests) is not bool:
         raise ValueError("include_finding_digests must be an explicit boolean")
@@ -165,7 +169,7 @@ def explore_turn_context(
     if yardstick and graph:
         sources = project_work_yardstick_sources(events=events, projection=projection,
             goal_id=goal_id, agent_id=agent_id, work_todos=work_todos, enabled=yardstick,
-            todo_id=todo_id, result_node=result_node)
+            todo_id=todo_id, result_node=result_node, preferred_yardstick_todo_id=preferred_yardstick_todo_id)
     return cast(dict[str, Any], effect_runtime_result(
         "explore.turn_context",
         {
@@ -175,7 +179,8 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
-            **({"yardstick_enabled": True, "work_todos": work_todos, "yardstick_sources": sources} if yardstick else {}),
+            **({"yardstick_enabled": True, "work_todos": work_todos, "yardstick_sources": sources,
+                "preferred_yardstick_todo_id": preferred_yardstick_todo_id} if yardstick else {}),
             **focus,
             **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,

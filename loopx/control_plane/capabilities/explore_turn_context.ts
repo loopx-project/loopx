@@ -10,7 +10,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreInTurnFeedbackGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectWorkMeasurementFacts, projectWorkYardstickCue, workYardstickTodos, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
-import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
+import {projectExploreMeasurementFeedback, type ExploreMeasurementPoint} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
  * selection, eligibility, source revisions and pagination stay outside this
@@ -374,13 +374,23 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
         ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => {
           if (resultNode !== null) return cue;
           const comparison = cue.search_comparison as JsonObject | undefined;
+          const goalPair = comparison?.goal as JsonObject | undefined;
+          const proxyPair = comparison?.proxy as JsonObject | undefined;
+          const supportingFindings = comparison?.proxy_order_reversed === true && goalPair && proxyPair
+            ? [...new Set([goalPair.previous_best, goalPair.latest, proxyPair.previous_best, proxyPair.latest]
+              .map(point => (point as ExploreMeasurementPoint).finding_id))]
+            : undefined;
           return {source_finding_id: cue.source_finding_id, node_id: cue.node_id,
             todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
             cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
             ...(comparison ? {comparison_cue: comparison.guidance,
-              comparison_candidate_ref: (comparison.goal as JsonObject).preferred_candidate_ref,
+              comparison_candidate_ref: goalPair?.preferred_candidate_ref,
               ...(typeof comparison.proxy_order_reversed === "boolean"
-                ? {proxy_order_reversed: comparison.proxy_order_reversed} : {})} : {}),
+                ? {proxy_order_reversed: comparison.proxy_order_reversed} : {}),
+              ...(supportingFindings ? {
+                comparison_finding_ids: supportingFindings,
+                proxy_comparison_scope: (cue.proxy as JsonObject).comparison_scope,
+              } : {})} : {}),
             details_command: resultRead("--result-node", String(cue.node_id))};
         }), omitted_work_yardsticks: Math.max(0, workCues.length - 3),
           work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),

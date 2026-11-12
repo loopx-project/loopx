@@ -336,6 +336,7 @@ function completeAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject
 test("both replan readers surface an opted-in reversal for the bound task only", () => {
   const conflict = {todo_id: "todo-1", source_finding_id: "finding-1",
     comparison_candidate_ref: "candidate:outcome-best", proxy_order_reversed: true,
+    proxy_comparison_scope: "validation:screen-slice", comparison_finding_ids: ["finding-2", "finding-3"],
     fidelity_status: "order_reversed", paired_candidates: 4, counterevidence_refs: ["result:counter"]};
   const other = {...conflict, todo_id: "todo-foreign", comparison_candidate_ref: "candidate:foreign"};
   const cases = [
@@ -381,7 +382,8 @@ test("both replan readers surface an opted-in reversal for the bound task only",
     if (scoped) {
       assert.deepEqual(explore.work_yardstick_reversal, {
         todo_id: "todo-1", source_finding_id: "finding-1", comparison_candidate_ref: "candidate:outcome-best",
-        proxy_order_reversed: true, fidelity_status: "order_reversed", paired_candidates: 4,
+        proxy_order_reversed: true, proxy_comparison_scope: "validation:screen-slice",
+        fidelity_status: "order_reversed", paired_candidates: 4, comparison_finding_ids: ["finding-2", "finding-3"],
       });
       assert.match(String(explore.read_action), /--replan-stage explore$/);
       const prefix = "/autonomous_replan_obligation/replan_context/explore_basis/work_yardsticks/1/";
