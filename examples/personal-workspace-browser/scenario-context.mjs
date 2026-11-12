@@ -2,7 +2,7 @@ import { installApi } from "./fixture.mjs";
 
 // A disposable backend has a different port from the browser fixture. Rebase
 // same-origin requests with it; foreign origins must still reach the real guard.
-export function fetchWorkspaceBackend(route, backendUrl, { pathname } = {}) {
+export async function fetchWorkspaceBackend(route, backendUrl, { pathname } = {}) {
   const request = route.request();
   const source = new URL(request.url());
   const target = new URL(backendUrl);
@@ -10,7 +10,17 @@ export function fetchWorkspaceBackend(route, backendUrl, { pathname } = {}) {
   target.search = source.search;
   const headers = { ...request.headers(), host: target.host };
   if (headers.origin === source.origin) headers.origin = target.origin;
-  return route.fetch({ url: target.href, headers });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await route.fetch({ url: target.href, headers });
+    } catch (error) {
+      const retryable = ["GET", "HEAD"].includes(request.method())
+        && /\b(?:ECONNRESET|ECONNREFUSED)\b/u.test(String(error?.message ?? error))
+        && attempt < 2;
+      if (!retryable) throw error;
+      await new Promise(resolve => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
 }
 
 export async function openWorkspacePage(

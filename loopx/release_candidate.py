@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .command_invocation import command_argv
+from .python_install_owner import installed_loopx_distribution
 from .release_manifest import release_runtime_identity
 
 
@@ -40,11 +41,15 @@ REPRESENTATIVE_PACKAGE_PATHS = (
     *REPRESENTATIVE_DISTRIBUTION_PATHS,
     "scripts/loopx",
 )
+CORE_CLI_IMPORTS = ("loopx.cli_runtime", *REPRESENTATIVE_CLI_IMPORTS[1:])
+CORE_DISTRIBUTION_PATHS = (
+    "loopx/entrypoint.py", "loopx/cli_runtime.py", *REPRESENTATIVE_DISTRIBUTION_PATHS[1:],
+)
 
 
-def _import_summary() -> dict[str, Any]:
+def _import_summary(module_names: Sequence[str] = REPRESENTATIVE_CLI_IMPORTS) -> dict[str, Any]:
     results: dict[str, str] = {}
-    for module_name in REPRESENTATIVE_CLI_IMPORTS:
+    for module_name in module_names:
         try:
             importlib.import_module(module_name)
         except Exception as exc:  # pragma: no cover - partial-package errors vary
@@ -115,7 +120,7 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
         }
 
     try:
-        installed = distribution("loopx")
+        installed = installed_loopx_distribution(distribution)
     except PackageNotFoundError:
         return {
             "ok": False,
@@ -142,6 +147,7 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
     resolved_command = command_path.resolve()
     return {
         "ok": resolved_command in recorded_commands,
+        **({"distribution_name": "loopx-core"} if getattr(installed, "name", None) == "loopx-core" else {}),
         "command": str(resolved_command),
         "recorded_commands": [str(path) for path in recorded_commands],
         "error": None if recorded_commands else "console_script_not_recorded",
@@ -218,13 +224,14 @@ def collect_python_distribution_checks(
 ) -> dict[str, Any]:
     """Validate a wheel/sdist install without requiring source-only wrappers."""
 
-    imports = _import_summary()
+    distribution_command = _distribution_command_summary(command_path)
+    standalone_core = distribution_command.get("distribution_name") == "loopx-core"
+    imports = _import_summary(CORE_CLI_IMPORTS) if standalone_core else _import_summary()
     commands = _command_summary(command_path)
     package_paths = _package_path_summary(
         package_root,
-        REPRESENTATIVE_DISTRIBUTION_PATHS,
+        CORE_DISTRIBUTION_PATHS if standalone_core else REPRESENTATIVE_DISTRIBUTION_PATHS,
     )
-    distribution_command = _distribution_command_summary(command_path)
     checks = [
         {
             "id": "command_package_same_distribution",

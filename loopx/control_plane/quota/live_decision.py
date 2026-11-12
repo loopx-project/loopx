@@ -829,6 +829,7 @@ def build_live_quota_should_run_decision(
         ),
         receipt_bound_todo_id=receipt_bound_todo_id,
         requested_action_todo_id=requested_action_todo_id,
+        retained_action_selection_todo_id=retained_action_selection_todo_id,
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,

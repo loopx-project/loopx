@@ -6,6 +6,8 @@ of their remaining callers, or full Goal history recovery.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import gzip
 import hashlib
 import io
 import json
@@ -15,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,6 +95,75 @@ def workspace(tmp_path, monkeypatch, *, storage_target=None, retained_lease=None
         return json.loads(child.stdout) if output_format == "json" else child.stdout
 
     return cli, state, backup, body, runtime, receiver, env
+
+
+def test_prepare_rejects_archive_swap_and_restore_during_member_scan(tmp_path, monkeypatch, capsys):
+    from loopx.cli import main
+    from loopx.control_plane.coordination import cold_source_backup
+
+    _, state, backup, _, runtime, _, _ = workspace(tmp_path, monkeypatch)
+    manifest_path = Path(backup["manifest_path"])
+    manifest = json.loads(manifest_path.read_text())
+    archive = Path(manifest["execution"]["archive_path"])
+    original = archive.read_bytes()
+    source_a = state.read_bytes()
+    source_b = source_a.replace(b"Complete cold source requirement", b"Tampered cold source requirement")
+    assert source_a != source_b and len(source_a) == len(source_b)
+    expanded = gzip.decompress(original)
+    assert source_a in expanded
+    variant = gzip.compress(expanded.replace(source_a, source_b), mtime=0)
+    size = max(len(original), len(variant))
+    original, variant = original.ljust(size, b"\0"), variant.ljust(size, b"\0")
+    archive.write_bytes(original)
+    manifest["execution"].update(archive_sha256=hashlib.sha256(original).hexdigest(), archive_size_bytes=size)
+    manifest_path.write_text(json.dumps(manifest))
+    state.write_bytes(source_b)
+    os.utime(archive, (1_700_000_000, 1_700_000_000))
+    before = archive.stat()
+    original_open, original_fstat = tarfile.open, os.fstat
+    scans = 0
+
+    def overwrite(data):
+        with archive.open("r+b") as handle:
+            handle.write(data)
+        os.utime(archive, ns=(before.st_atime_ns, before.st_mtime_ns))
+        observed = archive.stat()
+        assert (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns) == (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+
+    @contextmanager
+    def swap_during_scan(*args, **kwargs):
+        nonlocal scans
+        scans += 1
+        overwrite(variant)
+        try:
+            with original_open(*args, **kwargs) as tar:
+                yield tar
+        finally:
+            overwrite(original)
+
+    def descriptor_stat(fd):
+        observed = original_fstat(fd)
+        if (observed.st_dev, observed.st_ino) != (before.st_dev, before.st_ino):
+            return observed
+        fields = {name: getattr(observed, name) for name in dir(observed) if name.startswith("st_")}
+        fields["st_ctime_ns"] = before.st_ctime_ns + scans
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(tarfile, "open", swap_during_scan)
+    monkeypatch.setattr(cold_source_backup, "os", SimpleNamespace(**{
+        **vars(os), "name": "nt", "fstat": descriptor_stat,
+    }))
+    code = main(["--registry", str(tmp_path / "project/.loopx/registry.json"),
+        "--runtime-root", str(runtime), "--format", "json", "coordination-shadow", "prepare-import",
+        "--goal-id", "cold", "--operation-id", "cold-original", "--backup-manifest", str(manifest_path),
+        "--provider", "file", "--target-handoff-mode", "hard_lease"])
+    result = json.loads(capsys.readouterr().out)["cold_import"]
+    assert scans == 1 and archive.read_bytes() == original
+    assert code == 1, result
+    assert result["reason_code"] == "cold_import_backup_source_missing_or_changed"
+    assert result.get("coordination_source_backup_verified") is not True
+    assert not list((runtime / "authority-transition").rglob("writer-fence.json"))
 
 
 def test_coordination_command_help_and_rejections_match_full_cli(tmp_path):

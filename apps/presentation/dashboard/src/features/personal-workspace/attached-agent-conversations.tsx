@@ -16,7 +16,12 @@ type LiveObservation = {kind: "records"; revision: number; records: Message[]} |
   {kind: "unavailable"; retry: boolean};
 
 class ConversationRequestError extends Error {
-  constructor(message: string, readonly unsubmittedOperation?: string, readonly httpStatus?: number) {super(message);}
+  constructor(
+    message: string,
+    readonly unsubmittedOperation?: string,
+    readonly httpStatus?: number,
+    readonly interruptedSuccessfulResponse = false,
+  ) {super(message);}
 }
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -30,11 +35,9 @@ export async function request<T>(url: string, options?: RequestInit): Promise<T>
   try {
     body = await response.text();
   } catch {
-    // The headers arrived, so the status is already known even though the body
-    // did not. Drop the status here and a stalled 503 body looks like a plain
-    // transport failure while a truncated 403 body looks retryable; the caller
-    // must classify on this status, not on how the body read failed.
-    throw new ConversationRequestError("Conversation unavailable", undefined, response.status);
+    // Preserve rejected statuses even when their bodies drop. A successful
+    // response interrupted in transit is different from a complete invalid body.
+    throw new ConversationRequestError("Conversation unavailable", undefined, response.status, response.ok);
   }
   let value: Record<string, unknown> | null = null;
   try {value = body ? JSON.parse(body) as Record<string, unknown> : null;} catch {value = null;}
@@ -51,7 +54,8 @@ function interruptedRead(failure: unknown): boolean {
 }
 
 export function retryableRead(failure: unknown): boolean {
-  return interruptedRead(failure) || (failure instanceof ConversationRequestError && (failure.httpStatus ?? 0) >= 500);
+  return interruptedRead(failure) || (failure instanceof ConversationRequestError &&
+    (failure.interruptedSuccessfulResponse || (failure.httpStatus ?? 0) >= 500));
 }
 
 export function readFailureMessage(failure: unknown, zh: boolean): string {

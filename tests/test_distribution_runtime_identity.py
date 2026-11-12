@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -63,6 +64,7 @@ def test_real_pip_compiled_and_uncompiled_wheel_have_the_same_identity(tmp_path:
         "loopx/__init__.py": Path(manifest.__file__).with_name("__init__.py").read_text(),
         "loopx/release_manifest.py": Path(manifest.__file__).read_text(),
         "loopx/doctor_git.py": Path(manifest.__file__).with_name("doctor_git.py").read_text(),
+        "loopx/python_install_owner.py": Path(manifest.__file__).with_name("python_install_owner.py").read_text(),
         "loopx/extensions/__init__.py": "",
         "loopx/extensions/process_runtime.py": Path(manifest.__file__).with_name(
             "extensions"
@@ -78,7 +80,7 @@ def test_real_pip_compiled_and_uncompiled_wheel_have_the_same_identity(tmp_path:
     identities = []
     for compile_bytecode in (True, False):
         environment = tmp_path / ("compiled" if compile_bytecode else "uncompiled")
-        venv.EnvBuilder(with_pip=True).create(environment)
+        venv.EnvBuilder(with_pip=True, symlinks=os.name != "nt").create(environment)
         python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
         subprocess.run([str(python), "-I", "-m", "pip", "install", "--no-index", "--no-deps",
                         "--disable-pip-version-check", *([] if compile_bytecode else ["--no-compile"]),
@@ -121,3 +123,14 @@ def test_incomplete_or_redirected_distribution_cannot_claim_an_artifact(owned_pa
 
 def test_unrelated_source_root_cannot_adopt_an_installed_distribution(owned_package, tmp_path):
     assert "package_fingerprint" not in manifest.release_runtime_identity(tmp_path / "checkout")
+
+
+def test_record_root_alias_keeps_exact_physical_ownership(owned_package):
+    package, installed = owned_package
+    before = manifest.release_runtime_identity()
+    alias = package.parent.parent / "site-alias"
+    alias.symlink_to(package.parent, target_is_directory=True)
+    for item in installed.files:
+        name = item.as_posix()
+        item.locate = lambda name=name: alias / name
+    assert manifest.release_runtime_identity() == before

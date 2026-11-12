@@ -2242,6 +2242,10 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
         # does not retire the retained original work or authorize a replay.
         transport.reconcile()
         assert json.loads((transport.root / f"{row['request_ref']}.json").read_text())["status"] == "delivered"
+        # An old Turn can retain a large diagnostic without changing its
+        # structured failure. The read-only health route must still show the
+        # pending original, even when that diagnostic cannot fit a Core RPC.
+        store.update_turn(row["session_id"], row["turn_id"], error="synthetic diagnostic " * 450_000)
 
         def durable_state():
             return {path: path.read_bytes() for path in store.root.rglob("*")
@@ -2249,8 +2253,6 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
 
         before = durable_state()
         writes = list(provider.writes)
-        assert transport.core.quota_backlog_pending(row)
-        assert transport.core.quota_backlog_observer()([row]) == [True]
         connection = http.client.HTTPConnection(*server.server_address, timeout=15)
         try:
             connection.request("GET", "/api/chat/lark/private-conversations")
@@ -2261,6 +2263,8 @@ def test_large_original_images_do_not_block_pending_work_or_connection_health(or
             connection.close()
         binding = next(item for item in result["connections"] if item["binding_id"] == row["binding_id"])
         assert binding["pending_count"] == 1 and binding["recovery_count"] == 0
+        assert transport.core.quota_backlog_pending(row)
+        assert transport.core.quota_backlog_observer()([row]) == [True]
         assert durable_state() == before and provider.writes == writes
         assert not ordinary[4].exists() or '"method": "turn/start"' not in ordinary[4].read_text()
         store.update_session(row["session_id"], status="closed")
