@@ -20,6 +20,7 @@ from .quota_capture import (
     bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
     handle_native_context_command, prepare_quota_capture,
     native_context_activation, progressive_context_or_current, project_native_quota_context,
+    settlement_capture_failure_view,
 )
 from ..control_plane.turn_driver.decision_capture import (
     project_captured_context,
@@ -317,15 +318,7 @@ def _emit_bounded_settlement(payload, args, *, runtime_root, reader_argv, print_
         view = budgeted_settlement_result(payload, runtime_root=runtime_root,
             output_bytes=args.max_page_output_bytes, reader_argv=reader_argv)
     except QuotaDecisionTransportError as exc:
-        # Transport failure cannot replace an already evaluated refusal or
-        # committed receipt. Preserve unknown controls as well as identity;
-        # only the bulky diagnostic snapshots are omitted on this fallback.
-        view = {key: value for key, value in payload.items() if key not in ("before", "after")}
-        view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
-            "recommended_action": "Preserve the original result controls and Turn identity. "
-                "Repair capture privacy or remove --max-page-output-bytes and read back the "
-                "same operation; do not repeat admission or assume it did not commit.",
-            "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
+        view = settlement_capture_failure_view(payload, output_bytes=args.max_page_output_bytes, error=exc)
         print_payload(view, args.format, _quota_renderer(args, failure=True))
         return 1
     print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))
