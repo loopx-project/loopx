@@ -141,6 +141,22 @@ test("monitor schedule materializes cadence and preserves explicit due time", ()
   assert.equal(explicit.schedule_source, "explicit");
   assert.equal(explicit.cadence_seconds, 3600);
 
+  const lowercaseDue = evaluateSchedulerStateTransition({
+    schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+    operation: "monitor_schedule",
+    generated_at: "2026-08-25T10:00:00Z",
+    explicit_next_due_at: "2026-12-04t01:15:00z",
+  });
+  assert.equal(lowercaseDue.next_due_at, "2026-12-04t01:15:00z");
+  assert.equal(lowercaseDue.schedule_source, "explicit");
+  const lowercaseGenerated = evaluateSchedulerStateTransition({
+    schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
+    operation: "monitor_schedule",
+    generated_at: "2026-08-25t10:00:00z",
+    cadence: "30 minutes",
+  });
+  assert.equal(lowercaseGenerated.next_due_at, "2026-08-25T10:30:00Z");
+
   const missing = evaluateSchedulerStateTransition({
     schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
     operation: "monitor_schedule",
@@ -173,7 +189,7 @@ test("monitor schedule rejects malformed timestamps without wall-clock fallback"
 });
 
 test("monitor schedule rejects illegal calendar timestamps without wall-clock fallback", () => {
-  for (const generatedAt of ["2026-02-29T00:00:00Z", "2026-02-31T00:00:00Z", "2026-11-31T10:04:00Z"]) {
+  for (const generatedAt of ["2026-02-29T00:00:00Z", "2026-02-31T00:00:00Z", "2026-11-31T10:04:00Z", "2026-02-31t00:00:00z"]) {
     assert.throws(
       () => evaluateSchedulerStateTransition({
         schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,
@@ -185,7 +201,7 @@ test("monitor schedule rejects illegal calendar timestamps without wall-clock fa
       generatedAt,
     );
   }
-  for (const explicitNextDueAt of ["2026-02-31T12:00:00Z", "2026-11-31T10:04:00Z"]) {
+  for (const explicitNextDueAt of ["2026-02-31T12:00:00Z", "2026-11-31T10:04:00Z", "2026-11-31t10:04:00z"]) {
     assert.throws(
       () => evaluateSchedulerStateTransition({
         schema_version: SCHEDULER_STATE_TRANSITION_REQUEST_SCHEMA,

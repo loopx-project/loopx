@@ -191,6 +191,20 @@ test("scheduler timestamp codec rejects illegal calendars and keeps offset insta
     schedulerTimestampMilliseconds("2026-01-01T12:00:00+0000"),
     Date.UTC(2026, 0, 1, 12, 0, 0),
   );
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-12-04t01:15:00z"),
+    Date.UTC(2026, 11, 4, 1, 15, 0),
+  );
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-12-04t01:15:00z"),
+    schedulerTimestampMilliseconds("2026-12-04T01:15:00Z"),
+  );
+  assert.equal(
+    schedulerTimestampMilliseconds("2026-08-25t10:00:00+08:00"),
+    schedulerTimestampMilliseconds("2026-08-25T10:00:00+08:00"),
+  );
+  assert.equal(schedulerTimestampMilliseconds("2026-11-31t10:04:00z"), null);
+  assert.equal(schedulerTimestampMilliseconds("2026-02-31t00:00:00z"), null);
 });
 
 test("failure retention does not roll illegal calendar timestamps into the TTL window", () => {
