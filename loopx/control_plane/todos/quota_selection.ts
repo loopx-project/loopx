@@ -501,8 +501,12 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   if (request.summary_request !== undefined) {
     const wire = composeQuotaSummary(request, planning);
     const summary = requireJsonObject(request.summary_request, "summary request");
+    if (summary.display_view_names !== undefined && summary.consume_display_views !== true) {
+      throw new EffectRuntimeRequestError("display view names require consumed display views");
+    }
     if (summary.consume_display_views === true) {
-      const display = {source: summary.source, handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)};
+      const display = {source: summary.source, handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display),
+        ...(summary.display_view_names === undefined ? {} : {view_names: summary.display_view_names})};
       wire.display_views = projectTodoContextPage({summary_display_views: display});
     }
     if (summary.consume_vision_wait_basis === true) {
