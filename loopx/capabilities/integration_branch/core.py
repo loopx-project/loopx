@@ -658,28 +658,84 @@ def _worktree_for_branch_line_framed(repo: Path, target_ref: str) -> Path | None
             raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
         path = Path(lines[index].removeprefix("worktree ")).resolve()
         index += 1
-        # The porcelain format puts exactly one HEAD field directly after the
-        # worktree line. A path containing LF or CR shifts that field, so the
-        # record is no longer safely attributable to a checkout.
-        if index >= len(lines) or not lines[index].startswith("HEAD "):
-            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
-        index += 1
+        saw_head = False
+        saw_bare = False
         branch_ref: str | None = None
         while index < len(lines) and lines[index]:
             field = lines[index]
-            if field.startswith("branch "):
+            if field.startswith("HEAD "):
+                # A path containing LF or CR can shift the real HEAD field and
+                # leave a second one behind. Duplicate or bare/HEAD mixtures are
+                # not records this format can represent safely.
+                if saw_head or saw_bare:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+                saw_head = True
+            elif field == "bare":
+                if saw_head or saw_bare:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+                saw_bare = True
+            elif field.startswith("branch "):
+                if saw_bare or not saw_head:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
                 branch_ref = field.removeprefix("branch ")
-            elif field.startswith("HEAD "):
-                raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
-            elif field in ("detached", "bare") or field.startswith(("locked", "prunable")):
+            elif field == "detached":
+                if saw_bare or not saw_head:
+                    raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
+            elif field.startswith(("locked", "prunable")):
                 pass
             else:
                 raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
             index += 1
+        # A linked checkout has exactly one HEAD; a bare main worktree has a
+        # bare field instead. Anything else is a path torn across fields.
+        if not saw_head and not saw_bare:
+            raise IntegrationBranchError(_LEGACY_WORKTREE_PATH_ERROR)
         if branch_ref == target_ref:
             return path
         index += 1
     return None
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
+
+
+def _git_common_dir(base: Path, raw: str) -> Path:
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    return candidate.resolve()
+
+
+def _confirm_checkout_ownership(repo: Path, worktree: Path, branch: str) -> None:
+    """Refuse a reset unless Git confirms the checkout is this branch's root."""
+
+    expected_ref = f"refs/heads/{branch}"
+    try:
+        top = _git(worktree, "rev-parse", "--show-toplevel").stdout.strip()
+        worktree_common = _git(
+            worktree, "rev-parse", "--git-common-dir"
+        ).stdout.strip()
+        repo_common = _git(repo, "rev-parse", "--git-common-dir").stdout.strip()
+        head = _git(worktree, "symbolic-ref", "--quiet", "HEAD", check=False)
+    except IntegrationBranchError as exc:
+        raise IntegrationBranchError(
+            f"cannot verify that {worktree} is the checkout for {branch}: {exc}"
+        ) from None
+    if not top or _path_key(Path(top)) != _path_key(worktree):
+        raise IntegrationBranchError(
+            f"worktree path {worktree} is not the top of a checkout"
+        )
+    if _path_key(_git_common_dir(worktree, worktree_common)) != _path_key(
+        _git_common_dir(repo, repo_common)
+    ):
+        raise IntegrationBranchError(
+            f"worktree {worktree} belongs to a different repository than {repo}"
+        )
+    if head.returncode != 0 or head.stdout.strip() != expected_ref:
+        raise IntegrationBranchError(
+            f"worktree {worktree} is not checked out on branch {branch}"
+        )
 
 
 def _clean_worktree(path: Path) -> bool:
@@ -897,6 +953,7 @@ def _update_integration_branch(
         )
     checked_out_path = _worktree_for_branch(repo, branch)
     if checked_out_path is not None:
+        _confirm_checkout_ownership(repo, checked_out_path, branch)
         if not _clean_worktree(checked_out_path):
             raise IntegrationBranchError(
                 f"integration branch worktree is dirty: {checked_out_path}"

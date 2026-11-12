@@ -13,6 +13,7 @@ from loopx.capabilities.integration_branch import (
     integration_branch_status,
     sync_integration_branch,
 )
+from loopx.capabilities.integration_branch import core as integration_core
 from loopx.capabilities.integration_branch.core import (
     IntegrationBranchError,
     _worktree_for_branch,
@@ -744,3 +745,67 @@ def test_sync_execute_supports_legacy_git_with_ordinary_worktree(
 
     assert synced["status"] == "synced"
     assert _git(integration_worktree, "rev-parse", "HEAD") == synced["candidate_sha"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="legacy Git stub is POSIX-only")
+def test_legacy_git_skips_bare_record_and_syncs_linked_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare main record must not hide the linked integration checkout."""
+    (tmp_path / "seed").mkdir()
+    seed = _repository(tmp_path / "seed")
+    bare = tmp_path / "bare.git"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    _git(seed, "remote", "add", "origin", str(bare))
+    _git(seed, "push", "origin", "main", "feature-a", "fix-b")
+    linked = tmp_path / "linked"
+    _git(bare, "worktree", "add", str(linked), "main")
+    _configure(linked)
+    _git(bare, "branch", "codex/local-integration", "main")
+    integration = tmp_path / "integration worktree"
+    _git(bare, "worktree", "add", str(integration), "codex/local-integration")
+    plan = linked / ".loopx/integration-branch.json"
+    (integration / ".loopx").mkdir()
+    shutil.copy2(plan, integration / ".loopx/integration-branch.json")
+    source = tmp_path / "source worktree"
+    _git(bare, "worktree", "add", str(source), "feature-a")
+    _commit(source, "a.txt", "a2\n", "review update")
+    _install_legacy_git(tmp_path, monkeypatch)
+
+    synced = sync_integration_branch(repo_path=integration, execute=True)
+
+    assert synced["status"] == "synced"
+    assert _git(integration, "rev-parse", "HEAD") == synced["candidate_sha"]
+    assert integration_branch_status(repo_path=integration)["status"] == "in_sync"
+
+
+def test_sync_refuses_a_checkout_that_is_not_the_integration_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parsed path must prove branch ownership before any reset."""
+    repo = _repository(tmp_path)
+    _configure(repo)
+    sync_integration_branch(repo_path=repo, execute=True)
+    _git(repo, "switch", "feature-a")
+    _commit(repo, "a.txt", "a2\n", "review update")
+    _git(repo, "switch", "main")
+    wrong = tmp_path / "wrong branch worktree"
+    _git(repo, "worktree", "add", str(wrong), "fix-b")
+    wrong_head = _git(wrong, "rev-parse", "HEAD")
+    integration_head = _git(repo, "rev-parse", "codex/local-integration")
+    plan_path = repo / ".loopx/integration-branch.json"
+    plan_before = plan_path.read_text(encoding="utf-8")
+
+    def wrong_worktree(repo_path: Path, branch: str) -> Path:
+        return wrong
+
+    monkeypatch.setattr(
+        integration_core, "_worktree_for_branch", wrong_worktree
+    )
+
+    with pytest.raises(IntegrationBranchError, match="not checked out on branch"):
+        sync_integration_branch(repo_path=repo, execute=True)
+
+    assert _git(wrong, "rev-parse", "HEAD") == wrong_head
+    assert _git(repo, "rev-parse", "codex/local-integration") == integration_head
+    assert plan_path.read_text(encoding="utf-8") == plan_before
