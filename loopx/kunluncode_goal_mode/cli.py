@@ -76,9 +76,10 @@ def _compatible_python(value: str | Path) -> bool:
             "-c",
             (
                 "from importlib.metadata import version; "
+                "import sys; "
                 "from mcp.server.fastmcp import FastMCP; "
                 "import loopx.kunluncode_goal_mode.server; "
-                f"assert version('mcp') == '{MCP_SDK_VERSION}'"
+                f"sys.exit(version('mcp') != '{MCP_SDK_VERSION}')"
             ),
         ],
         timeout=30,

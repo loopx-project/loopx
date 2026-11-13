@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1793,3 +1794,22 @@ def test_mcp_pin_has_one_source_of_truth() -> None:
     assert cli.MCP_REQUIREMENT.startswith("mcp==")
     assert cli.MCP_SDK_VERSION not in probe_source
     assert "MCP_SDK_VERSION" in probe_source
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_optimized_python_rejects_wrong_mcp_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, matches: bool
+) -> None:
+    version = cli.MCP_SDK_VERSION if matches else "0.0.0"
+    (tmp_path / "sitecustomize.py").write_text(
+        "import importlib.metadata, sys, types\n"
+        f"importlib.metadata.version = lambda name: {version!r}\n"
+        "for name in ('mcp', 'mcp.server', 'mcp.server.fastmcp', "
+        "'loopx.kunluncode_goal_mode.server'):\n"
+        "    sys.modules[name] = types.ModuleType(name)\n"
+        "sys.modules['mcp.server.fastmcp'].FastMCP = object\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    assert cli._compatible_python(sys.executable) is matches
