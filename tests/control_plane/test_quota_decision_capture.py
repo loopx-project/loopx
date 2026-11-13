@@ -503,18 +503,19 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize(('release', 'native_context', 'output_limit', 'long_capture', 'metadata_error'), [
-    pytest.param(release, native, 1700 if native and release != 'exact' else None, False, False,
+@pytest.mark.parametrize(('release', 'native_context', 'output_limit', 'capture_path_bytes'), [
+    pytest.param(release, native, 1700 if native and release != 'exact' else None, None,
                  id=f"{'native' if native else 'ordinary'}-{release}")
     for native in (False, True)
     for release in ('exact', 'wrong_digest', 'disconnect', 'changed_capture')
 ] + [
-    pytest.param('changed_capture', True, 720, True, False, id='bounded-long-capture'),
-    pytest.param('changed_capture', True, 671, True, False, id='tight-long-capture'),
-    pytest.param('changed_capture', True, 600, True, True, id='insufficient-metadata-budget'),
+    pytest.param('changed_capture', True, 720, 426, id='bounded-long-capture'),
+    pytest.param('changed_capture', True, 671, 423, id='tight-long-capture'),
+    pytest.param('changed_capture', True, 720, 482, id='tight-deep-capture'),
+    pytest.param('changed_capture', True, 600, 426, id='insufficient-inline-metadata-budget'),
 ])
 def test_real_cli_handoff_preserves_original_receipt(
-    tmp_path, provider, release, native_context, output_limit, long_capture, metadata_error,
+    tmp_path, provider, release, native_context, output_limit, capture_path_bytes,
 ):
     import hashlib
     import socket
@@ -527,14 +528,14 @@ def test_real_cli_handoff_preserves_original_receipt(
     state = _configure_read_only_todo(project)
     initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     capture = tmp_path / 'handoff-capture'
-    if long_capture:
+    if capture_path_bytes:
         # Keep each path component below filesystem limits. Non-ASCII text
         # also catches counting characters instead of serialized UTF-8 bytes.
-        remainder = 426 - len(os.fsencode(tmp_path / 'decision.json')) - 2
+        remainder = capture_path_bytes - len(os.fsencode(tmp_path / 'decision.json')) - 2
         parent = tmp_path / ('测' * (remainder // 6))
         parent.mkdir()
         capture = parent / ('c' * (remainder - len(os.fsencode(parent.name))))
-        assert len(os.fsencode(capture / 'decision.json')) == 426
+        assert len(os.fsencode(capture / 'decision.json')) == capture_path_bytes
     context = tmp_path / 'native-context'
     if native_context:
         context.mkdir(mode=0o700)
@@ -601,25 +602,38 @@ def test_real_cli_handoff_preserves_original_receipt(
         if output_limit is None:
             assert 'Do not blindly rerun' in stderr + stdout
         else:
-            if not metadata_error:
-                assert len(stdout.encode()) <= output_limit
+            assert len(stdout.encode()) <= output_limit
             failure = json.loads(stdout)
             assert failure['error_code'] == 'quota_decision_transport_failed'
-            reference = failure['captured_decision']
-            assert reference['sha256'] == digest
             if release == 'changed_capture':
-                assert reference['path'] == str(capture / 'decision.json')
+                if output_limit == 600:
+                    # If a long locator cannot fit, the command reads private
+                    # diagnostics with the original receipt, not changed bytes.
+                    assert 'captured_decision' not in failure
+                    failure = _read_bounded_handoff_reply(failure['command'], cwd=project, env=env,
+                                                          output_limit=output_limit)
+                    assert failure['heartbeat_receipt'] == original_source['heartbeat_receipt']
+                reference = failure['captured_decision']
+                assert reference == {'path': str(capture / 'decision.json'), 'sha256': digest}
                 assert 'Do not rerun admission.' in failure['instruction']
-                if metadata_error:
-                    assert 'too small for recovery metadata' in failure['reason']
-                elif long_capture:
-                    assert 'Restore capture' in failure['instruction'] and 'Read receipt' in failure['instruction']
-                    assert 'reason' not in failure
-                else:
-                    assert 'cannot be verified' in failure['reason']
+                assert 'Restore' in failure['instruction'] and 'receipt' in failure['instruction']
                 assert 'command' not in failure and 'command' not in reference
                 assert (capture / 'decision.json').read_bytes() == original + b'\n'
+                if capture_path_bytes:
+                    # The direct reader still refuses the changed bytes. Restoring
+                    # the exact original file recovers its receipt without a guard.
+                    read_original = [sys.executable, '-m', 'loopx.cli', '--format', 'json', 'quota', 'context-read', '--capture-file', reference['path'],
+                                     '--capture-sha256', reference['sha256'], '--select', '/heartbeat_receipt',
+                                     '--max-page-output-bytes', '4096']
+                    rejected = subprocess.run(read_original, cwd=project, env=env, capture_output=True, timeout=30)
+                    assert rejected.returncode == 1 and 'digest mismatch' in json.loads(rejected.stdout)['reason']
+                    (capture / 'decision.json').write_bytes(original)
+                    recovered = _read_bounded_handoff_reply(shlex.join(read_original), cwd=project, env=env,
+                                                            output_limit=4096)
+                    assert recovered['heartbeat_receipt'] == original_source['heartbeat_receipt']
             else:
+                reference = failure['captured_decision']
+                assert reference['sha256'] == digest
                 recovery = failure.get('command') or reference['command']
                 assert (capture / 'decision.json').read_bytes() == original
                 if release == 'wrong_digest':
@@ -632,6 +646,12 @@ def test_real_cli_handoff_preserves_original_receipt(
 
 
 def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
+    recovered = _read_bounded_handoff_reply(command, cwd=cwd, env=env, output_limit=output_limit)
+    assert recovered['heartbeat_receipt'] == source['heartbeat_receipt']
+    assert recovered['rollout_event'] == source['rollout_event']
+
+
+def _read_bounded_handoff_reply(command, *, cwd, env, output_limit):
     pages = bytearray()
     while command:
         run = subprocess.run(shlex.split(command), cwd=cwd, env=env, capture_output=True,
@@ -650,8 +670,7 @@ def _assert_captured_receipts(command, source, *, cwd, env, output_limit):
     recovered = json.loads(pages)
     if 'selections' in recovered:
         recovered = {row['pointer'].lstrip('/'): row['value'] for row in recovered['selections']}
-    assert recovered['heartbeat_receipt'] == source['heartbeat_receipt']
-    assert recovered['rollout_event'] == source['rollout_event']
+    return recovered
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Exercises the POSIX release launcher and Host socket")

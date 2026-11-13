@@ -560,7 +560,7 @@ def _bounded_quota_transport_failure(
     if original is None and _failure_output_size(failure) <= limit:
         return failure
     receipt = failure.get("heartbeat_receipt")
-    command = str(original["command"]) if isinstance(original, Mapping) else None
+    command = str(original["command"]) if isinstance(original, Mapping) and "command" in original else None
     reference_written = False
     if reader is not None:
         try:
@@ -572,7 +572,7 @@ def _bounded_quota_transport_failure(
         else:
             reference_written = True
             command = reader.command
-            if isinstance(original, Mapping):
+            if isinstance(original, Mapping) and path is not None and digest is not None:
                 failure = {**failure, "captured_decision": {**original, "command": command}}
     if _failure_output_size(failure) <= limit:
         return failure
@@ -710,11 +710,13 @@ def quota_captured_transport_failure_view(
         "instruction": "Restore the original capture and inspect its Turn receipt. Do not rerun admission."}
     if not _fits_failure_output(result, output_limit):
         result.pop("reason")
-        result["instruction"] = "Restore capture. Read receipt. Do not rerun admission."
+        result["instruction"] = "Restore file. Read receipt. Do not rerun admission."
         if not _fits_failure_output(result, output_limit):
-            # The locator and recovery rule must survive even below the metadata floor.
-            result["reason"] = "Output limit is too small for recovery metadata."
-            return result
+            # The reserved reader can carry the original locator and receipt in
+            # private diagnostics. It must never read the unverified capture.
+            diagnostic = {**result, **{key: failure[key] for key in
+                ("heartbeat_receipt", "rollout_event", "host_poll_receipt") if key in failure}}
+            return _bounded_quota_transport_failure(diagnostic, output_limit, reader, None, None)
     for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in failure:
             candidate = {**result, key: failure[key]}
