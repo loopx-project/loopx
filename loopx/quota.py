@@ -404,7 +404,10 @@ def goal_quota_with_spend_ledger(
     except OverflowError:
         # A window longer than datetime can represent still covers every
         # representable event. It must not crash the Goal-wide history read.
-        window_start = datetime.min.replace(tzinfo=current_time.tzinfo)
+        # Ledger timestamps are parsed to UTC, so the bound is UTC regardless of
+        # the caller's offset; a local-offset bound would drop the earliest
+        # hours of a negative-offset host.
+        window_start = datetime.min.replace(tzinfo=timezone.utc)
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
