@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 import os
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from ..command_invocation import current_loopx_cli_argv, same_context_reader_route
+from ..command_invocation import current_loopx_cli_argv, same_context_reader_route, validate_context_reader_route
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaDecisionTransportError
@@ -260,18 +262,20 @@ def _render_capture_page(path: Path, text: str, digest: str, *, offset: int, tot
     return result
 
 
-def validate_compact_recovery_budget(reference: Path, limit: int, reader_argv: list[str]) -> None:
+def validate_compact_recovery_budget(reference: Path, limit: int, reader_argv: list[str], *,
+                                     page_bytes: int | None = None, pinned_selection: bool = False) -> None:
     """Reserve enough for one escaped character and the longest compact cursor."""
     # Use the largest decimal width of the bounded transport. A selected
     # view may grow beyond the source when it repeats requested values.
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
     offset = 10 ** len(str(MAX_REQUEST_BYTES))
-    selected = reference.with_name(reference.name + "." + "0" * 16)
-    for path, selection in ((reference, None), (selected, [""])):
+    selected = reference if pinned_selection else reference.with_name(reference.name + "." + "0" * 16)
+    frames = ((selected, [""]),) if pinned_selection else ((reference, None), (selected, [""]))
+    for path, selection in frames:
         frame = _render_capture_page(path, "\x00", "0" * 64, offset=offset,
             total=offset * 9, size=1, output_limit=limit, instruction=False, select=selection,
-            list_fields=selection is not None,
+            list_fields=selection is not None, next_page_bytes=page_bytes,
             reference_file=path, reader_argv=reader_argv, compact_reader=True)
         if _page_output_size(frame) > limit:
             raise ValueError("Output limit cannot fit a recovery page.")
@@ -379,6 +383,74 @@ def _validate_pinned_selection(selection: dict[str, Any]) -> None:
         raise ValueError("reader selection reference is incomplete or unsupported")
 
 
+def _bounded_context_read_failure(payload: dict[str, Any], limit: int | None, *,
+                                  restart: Callable[[], str | None] | None = None,
+                                  restart_fits: bool = True) -> dict[str, Any]:
+    """Keep an intact diagnostic and a usable original-capture locator when they fit."""
+    if type(limit) is not int or limit <= 0 or (restart_fits and _page_output_size(payload) <= limit):
+        return payload
+    diagnostic = {key: payload[key] for key in ("ok", "schema_version", "error_kind", "diagnostic_code")
+                  if key in payload}
+    command = payload.get("recovery_command") if restart_fits else None
+    if command is None or _page_output_size({**diagnostic, "recovery_command": command}) > limit:
+        command = restart() if restart is not None else None
+    if command is not None:
+        located = {**diagnostic, "recovery_command": command}
+        for candidate in ({**located, "reason": payload["reason"],
+                           "recovery": "Read the same capture from offset zero. Do not rerun admission."},
+                          {**located, "reason": payload["reason"]}, located):
+            if _page_output_size(candidate) <= limit:
+                return candidate
+    retry = "Retry this read with a larger output budget. Keep the original capture; do not rerun admission."
+    for candidate in ({**diagnostic, "reason": payload["reason"], "recovery": retry},
+                      {**diagnostic, "reason": payload["reason"]}, diagnostic, {"ok": False}):
+        if _page_output_size(candidate) <= limit:
+            return candidate
+    return {}
+
+
+def _compact_context_restart(path: Path, digest: str, *, limit: int, page_bytes: int,
+                             reader_argv: list[str] | None, select: list[str] | None = None,
+                             list_fields: bool = False, list_depth: int | None = None,
+                             initial_read: bool = False, pinned: dict[str, Any] | None = None) -> str | None:
+    """Reuse the private reader protocol; never expose a new or unverified capture."""
+    if limit < 128:
+        return None  # A command and the minimum successful page cannot fit.
+    # The existing private recovery transport uses a short same-user POSIX
+    # directory. The source directory or CLI path can consume most of the
+    # caller's budget; the private descriptor keeps the exact source digest.
+    from ..control_plane.turn_driver.decision_capture import private_capture_uid
+
+    directory = None
+    try:
+        route = validate_context_reader_route(reader_argv or current_loopx_cli_argv())
+        private_capture_uid()
+        directory = Path(tempfile.mkdtemp(prefix="lx-", dir="/tmp"))
+        locator = directory / "r"
+        expected = locator.with_name("r." + "0" * 16) if pinned else locator
+        validate_compact_recovery_budget(expected, limit, route, page_bytes=page_bytes,
+            pinned_selection=pinned is not None)
+        command = context_capture_read_command(path, digest, reference_file=expected, reader_argv=route,
+            compact=True, page_bytes=page_bytes, max_page_output_bytes=limit, select=select,
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
+        if _page_output_size({"ok": False, "recovery_command": command}) > limit:
+            return None
+        reference = write_context_read_reference(path, digest, reference_file=locator, reader_argv=route,
+            selection=pinned["selection"] if pinned else None,
+            selection_paths=pinned.get("selection_paths") if pinned else None)
+        return context_capture_read_command(path, digest, reference_file=reference, reader_argv=route,
+            compact=True, page_bytes=page_bytes, max_page_output_bytes=limit, select=select,
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
+    except (OSError, ValueError):
+        return None
+    finally:
+        if directory is not None:
+            try:
+                directory.rmdir()
+            except OSError:
+                pass  # Keep the published recovery descriptor.
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None,
@@ -390,6 +462,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     cannot silently mix two decisions or detail views.
     EOF describes this page, never a model's complete-consumption receipt.
     """
+    output_limit = getattr(args, "max_page_output_bytes", None)
     try:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
@@ -411,7 +484,6 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 reader_argv = bound_route
                 reference_file = requested_reference
         offset, size = args.offset, args.page_bytes
-        output_limit = getattr(args, "max_page_output_bytes", None)
         if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
                 or getattr(args, "format", None) != "json"):
             raise ValueError("max-page-output-bytes requires JSON output and a positive integer")
@@ -437,6 +509,35 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
         _validate_context_page_window(offset, size, output_limit)
         path, raw, payload = _read_capture(value, digest)
+
+        def restart(failure: dict[str, Any], *, select: list[str] | None = None, list_fields: bool = False,
+                    list_depth: int | None = None, initial_read: bool = False,
+                    fallback: tuple[Path, dict[str, Any]] | None = None) -> dict[str, Any]:
+            page_bytes = next_page_bytes or size
+            restart_limit = next_page_output_bytes or output_limit
+            reference = fallback[0] if fallback else None
+            failure["recovery_command"] = context_capture_read_command(path, digest, select=select,
+                list_fields=list_fields, list_depth=list_depth, initial_read=initial_read,
+                reference_file=reference, page_bytes=page_bytes, max_page_output_bytes=restart_limit, reader_argv=reader_argv)
+            if output_limit is None:
+                return failure
+            # A short refusal alone is insufficient. Its returned command must
+            # also have room to advance, including the longest legacy cursor.
+            from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+            width = 10 ** len(str(MAX_REQUEST_BYTES))
+            selectors = fallback[1]["selection"]["select"] if fallback else select
+            frame = _render_capture_page(path, "\x00", digest, offset=width, total=width * 9,
+                size=page_bytes, output_limit=restart_limit, instruction=False,
+                select=[] if selectors is None else selectors, selection_sha256=digest,
+                list_fields=list_fields, list_depth=list_depth, initial_read=initial_read,
+                reference_file=reference, reader_argv=reader_argv)
+            return _bounded_context_read_failure(failure, output_limit,
+                restart_fits=_page_output_size(frame) <= output_limit,
+                restart=lambda: _compact_context_restart(path, digest, limit=output_limit,
+                    page_bytes=page_bytes, reader_argv=reader_argv, select=select, list_fields=list_fields,
+                    list_depth=list_depth, initial_read=initial_read, pinned=fallback[1] if fallback else None))
+
         list_fields = getattr(args, "list_fields", False)
         list_depth = getattr(args, "list_depth", None)
         if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
@@ -460,10 +561,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                         except ValueError:
                             fallback = None
                     if offset:
-                        return {"ok": False, "reason": "Observed first-read scope changed during paging.",
-                            "recovery_command": context_capture_read_command(path, digest, initial_read=fallback is None,
-                                reference_file=fallback[0] if fallback is not None else None,
-                                page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
+                        return restart({"ok": False, "reason": "Observed first-read scope changed during paging."},
+                            initial_read=fallback is None, fallback=fallback)
                     # Restart in the ordinary complete view of this same capture.
                     if fallback is not None:
                         reference_file, reference = fallback
@@ -511,14 +610,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 # A verified file digest only binds bytes. Preserve an explicit
                 # selection or listing, including a receipt-only diagnostic.
                 # Historical initial-read has no explicit scope to preserve.
-                return {"ok": False, "schema_version": "context_capture_page_v1", "reason": str(exc),
-                    "recovery_command": context_capture_read_command(path, digest,
-                        page_bytes=next_page_bytes or size,
-                        max_page_output_bytes=next_page_output_bytes or output_limit,
-                        select=selectors, list_fields=list_fields, list_depth=list_depth, reader_argv=reader_argv),
+                return restart({"ok": False, "schema_version": "context_capture_page_v1", "reason": str(exc),
                     "recovery": ("Use recovery_command to read the original capture from offset zero; "
                         if initial_read else "Use recovery_command to restart the original selected read from offset zero; ")
-                    + "this read performs no guard, admission or spend."}
+                    + "this read performs no guard, admission or spend."},
+                    select=selectors, list_fields=list_fields, list_depth=list_depth)
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -527,15 +623,12 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     raise ValueError("context reader rejected an initial view without explicit selectors")
                 pointer = selectors[rejection["argument_index"] - 1]
                 parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
-                command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
-                    page_bytes=next_page_bytes or size,
-                    max_page_output_bytes=next_page_output_bytes or output_limit,
-                    reader_argv=reader_argv)
-                return {"ok": False, "schema_version": "context_capture_page_v1",
+                return restart({"ok": False, "schema_version": "context_capture_page_v1",
                     "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
-                    "reason": rejection["message"], "recovery_command": command,
+                    "reason": rejection["message"],
                     "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
-                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
+                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."},
+                    select=[parent], list_fields=True)
             if selected_raw is None or expected is None:
                 raise ValueError("selected view is unavailable")
             raw = selected_raw
@@ -561,7 +654,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
-            presentation=presentation, next_page_bytes=next_page_bytes,
+            presentation=presentation, next_page_bytes=next_page_bytes or (args.page_bytes if bound_route else None),
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
             list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file,
             reader_argv=reader_argv, compact_reader=bound_route is not None)
@@ -581,7 +674,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             if exc.error_kind == "request_rejected":
                 result["recovery"] = ("Correct the rejected read request; for unknown fields use --list on a known parent. "
                     "Keep the original capture and digest; no guard, admission or spend was performed.")
-        return result
+        return _bounded_context_read_failure(result, output_limit)
 
 
 def _capture_read_reference(value: dict[str, Any], *, page_bytes: int,
@@ -885,7 +978,7 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         "max_page_output_bytes": output_limit,
         "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
     page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
-    if page["ok"]:
+    if page.get("ok") is True:
         if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
                 and "previously_delivered_fields" not in page
                 and (opening := _bounded_initial_read(navigation, initial_read_plan,
@@ -895,7 +988,7 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")
     elif "recovery_command" not in page:
-        page["recovery_command"] = recovery["command"]
+        return {"ok": False, **page, "recovery_command": recovery["command"]}
     return page
 
 
