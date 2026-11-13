@@ -1067,6 +1067,100 @@ No model busy-polling loop or new recurring automation follows from this RFC.
 
 <a id="delivery-path-from-current-state"></a>
 
+<a id="heartbeat-turn-convergence"></a>
+
+### Proposed refinement: heartbeat, quota and Turn share one execution path
+
+**Decision.** Converge their execution semantics and implementation around the
+existing quota, Turn and Host owners. Heartbeat remains the continuation trigger;
+quota supplies scheduling/admission facts; Turn owns one admitted execution and
+its receipt. Their public entries remain composable. Single-worker and
+controller-worker are execution choices on that path, not separate benchmark
+controllers. This is a proposed cutover, not a claim that the current entries
+already share the whole lifecycle.
+
+The current candidate exposes a useful but incomplete convergence. Both benchmark
+entries use the same external scheduler and phase clock. Heartbeat runs the native
+conversation with context delivery on and model-side typed CLI writeback; the
+single-worker Turn Host delivers C1 and requests a structured result for independent
+validation and Core settlement. Context delivery is off on that entry. These are
+real behavior differences, beyond the command name. The current Turn design is a
+candidate to refine, not a required replacement for every heartbeat behavior.
+
+```mermaid
+flowchart LR
+  H[Heartbeat or managed wake] --> O[Quota observation and cadence]
+  O --> A[Shared Turn admission and preparation]
+  D[Direct Turn request] --> A
+  A --> X[Existing Host adapter: single or controller-worker]
+  X --> V[Validate, write back and settle original Turn]
+  V --> O
+```
+
+A scheduler observation may decide whether to wake; it is not another work
+admission. The execution owner captures the authoritative decision once, claims
+and rereads the same Todo/lease, and binds the selected Host and original attempt.
+A monitor/no-work tick does not manufacture a model call or Spend. After a result,
+continuation returns to current quota policy for a fresh admission; receipt
+recovery keeps the original identity.
+
+**What becomes common.**
+
+- **Source and context delivery — C1/C2.** Resolve the canonical source,
+  capture/view, Progressive/Delta choices and recovery through the same owner.
+  Choose and record a supported context profile explicitly; do not silently make
+  delivery on/off a consequence of choosing heartbeat versus Turn. The first
+  parity comparison uses one native Worker and aligns this factor before adding
+  another role. Ordinary-quota and explicit-C1 evidence remain separate.
+- **Execution and receipt — C4/C5.** Reuse preparation, Host launch/observation,
+  independent validation, typed writeback and once-only settlement. A model can
+  supply its judgment through supported typed CLI operations or a structured Host
+  result, but both must reach the same original Turn/result owner. Inventory and
+  retire duplicated normal writers; never interpret free-form prose as authority
+  or perform both settlement paths. The host fills mechanical identity and
+  execution facts rather than asking the Worker to reproduce bookkeeping.
+- **Work and topology — C3/C6.** Deliver the original objective, acceptance and
+  task materials, with ordinary tools and room to choose the method. A dual
+  Controller authors the Core-facing judgment; its Worker does not inherit a
+  second set of Core duties. Execution-time observation and feedback use existing
+  session, request revision and interruption owners, with actual artifact
+  adoption. A blocking serial handoff does not satisfy live feedback.
+- **Budget and recovery — C4/C7.** Use the same absolute phase deadline across
+  preparation, all roles and work. Do not introduce an entry-specific early-stop
+  reserve to make receipts look complete. Cleanup can finish after cancellation;
+  new model work cannot. Preserve the last verifiable artifact separately from an
+  incomplete receipt. An unconfirmed native identity at the deadline remains
+  unresolved; neither a new session nor a fabricated success repairs it.
+
+**Host differences remain explicit.** A headless CLI can supply owned
+create/resume/observe/interrupt callbacks. An already-running App or Chat session
+must supply its verified native binding and supported callbacks to the same
+lifecycle; wrapping its heartbeat in a second CLI process would duplicate the
+worker and lose the original conversation. Missing ownership, interruption or
+role isolation remains unsupported. No new authentication, MCP registration or
+copied native session database follows from this proposal. The topology provider
+belongs to LoopX; benchmark supplies task/evaluation settings, while Managed Host,
+Chat and Steward supply their existing caller and return routes.
+
+**Cutover and acceptance.** Keep the present heartbeat path as the live reference
+while qualifying the shared path on explicit new admissions. First inventory and
+align source/context, model/tools, task entry, session policy, result authoring,
+validator and budget. Then compare one-Worker before/after outcomes and complete
+costs; introduce dual topology as a separate treatment. One task or fewer native
+tokens cannot establish non-regression or default promotion.
+
+The same public-entry tests must cover plan/observation without work claims, Host
+dispatch or debit; ordinary claim and same-Todo readback, foreign/stale leases, changed input, failed
+validation, lost replies and exactly one settlement, Stop with no surviving
+native tool or delayed write, and deadline/restart without a fresh fork. Live
+qualification follows evidence into subsequent work and independently accepted
+outcomes, including negative results and justified continuation. C8 adoption must
+show the same authorized operation, busy/error/recovery state and result readback
+in the relevant product journey. C9 retires each replaced normal producer/caller
+only after its replacement passes; retain versioned historical readers. Rollback
+selects the qualified old path for new admissions and reconciles pending attempts
+through their original Host and receipt.
+
 ### From current code to a useful product: dependencies and delivery slices
 
 ```mermaid
@@ -1083,7 +1177,11 @@ flowchart TB
 ```
 
 **First consumer and reference.** Run the public Turn provider through EdgeBench.
-Keep standard `heartbeat-resume` with its ordinary quota decision as the reference.
+Keep standard `heartbeat-resume` as the reference and record its actual decision
+source. The current C1 candidate defaults new benchmark heartbeats to the complete
+Turn source; ordinary CLI quota/heartbeat still requires explicit C1 activation.
+A three-arm comparison on that candidate measures topology and entry behavior.
+It does not replace C1's separate comparison against the original quota source.
 At a new admission, select `--turn-topology single-worker` or `controller-worker`
 on the same benchmark entry. The standalone product entry is
 `loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`.
@@ -1134,6 +1232,27 @@ provides independent acceptance. The private Turn record binds the role steps
 and message digests to their native sessions. An operator can match those
 digests to retained native messages without duplicating transcripts in Core.
 
+**Shared workspace checkpoint.** The isolated CLI provider now gives both roles
+the caller's ordinary workspace tools, capped at workspace write. A native CLI
+qualification with a controlled Responses backend has the Controller read the Worker's observation, write a checked
+artifact and send feedback that changes the Worker's independently validated
+output. This checks transport and adoption, not model judgment or outcome benefit.
+Both roles still fail to read private Core state. A read-only grant stays
+read-only; the original Controller's receipt-only retry stays read-only and does
+not rerun the completed Worker. Role execution is serial, so this qualifies
+handoff-time access, not concurrent writing or inspection during active work.
+Stop uses the native interrupt-and-drain path; qualification checks actual shell
+and child process exit and absence of their delayed write, rather than only the
+CLI exit code. Failure to confirm native cleanup remains an unresolved stop.
+
+The session discovery and shared-environment requirements added in
+[the session-discovery update](https://github.com/loopx-project/loopx/pull/8655)
+remain the next C3/C6 acceptance boundary. Current role IDs and message digests
+are retained evidence, not a shipped discovery/read journey. Bounded authorized
+session/event reads, feedback while a Worker is executing, request revisions,
+and App/Chat/Steward adoption remain unqualified. Reuse their existing owners;
+do not add a benchmark-specific controller or another session database.
+
 **Same effective budget.** Give all three arms the full standard heartbeat
 phase deadline, including preparation, dispatch, work, validation and settlement.
 An expired phase stops new work and interrupts the active Host. Preserve its
@@ -1143,6 +1262,12 @@ solver time and end-to-end time, scored rounds, native score and pass rate,
 verifiable artifacts, calls, input/cached/output tokens per distinct thread,
 retries, quota spend and human intervention. Keep unavailable counts unknown.
 Native/plain controls retain their own protocol.
+For a claimed feedback benefit, follow the existing
+[decision-episode readback](long-horizon-harness-benchmark-research-program-v0.md#action-value-episode):
+connect the observed state, prior choice, actual work, returned evidence and next
+decision to the frozen terminal outcome. Justified continuation counts; a missing
+prior forecast stays missing. Session survival, a delivered message or a synthetic
+feedback test alone cannot establish a model-outcome gain.
 
 **What the first case establishes.** With a 600-second solver budget on the
 public permutation case, standard heartbeat and unified single worker used
@@ -1176,6 +1301,26 @@ deadline before returning a receipt. Report the last verified score, black-box
 call count, full tokens, and Core settlement separately. The implementation PR
 records the observed outcomes for each topology and the guest qualification
 boundary. [Experiment readback](https://github.com/loopx-project/loopx/pull/8484)
+
+**One-hour follow-up.** Three sequential 1,200-second native diagnostics at
+`771b8ec8b0` used the same public task, model/effort, offline two-CPU work image
+and phase deadline. Heartbeat, single-worker Turn and controller-worker scored
+1.1265403166, 0.4637035725 and 1.6457014069; all artifacts passed independent
+cost recomputation. Observed cumulative native tokens, including cached input,
+were 4,569,942, 2,211,239 and 1,321,569; these are not billing-complete costs.
+Core spends were 1, 0 and 0. Both Turn runs reached the deadline without a
+completed receipt. Heartbeat's final resume began 28 ms before the deadline and
+ended before native identity confirmation; it remains unresolved, not successful.
+The dual Controller dispatched in 10.738 seconds, then the Worker used the phase
+without returning an intermediate report: this is not evidence of feedback gain.
+The single-worker result still falls below the live reference. Context delivery
+and result-authoring differences prevent isolating topology as the cause.
+This is one case per arm, with native-host isolation not fully attested and the
+same pristine-judge 4/5 limitation; no result is an official promotion claim.
+Two failed setup preflights additionally cost 229.99 seconds and 707,673 observed
+tokens. Retain their failures separately. The next acceptance is the
+[one-Worker convergence comparison](#heartbeat-turn-convergence), followed by
+execution-time feedback qualification, not an automatic dual-role default.
 
 **Product adoption.** Managed Host, Chat and Steward consume the same admitted
 Turn provider after qualification. Both headless roles use `codex exec`, the same CLI entry as

@@ -208,15 +208,20 @@ session while the admission and phase budget remain live, or send its receipt
 to Core. Both roles use `codex exec` and resume by exact session ID.
 The guest needs a kernel that supports the native Codex CLI filesystem sandbox.
 The sandbox enforces the two roles' file and tool grants at execution.
+Both roles can use the caller's ordinary workspace tools, capped at workspace
+write, and hand off that workspace serially. Only receipt repair restricts the
+Controller to reading. This provider does not yet deliver feedback while the
+Worker's native Turn is still running.
 
 From the heartbeat trial entry, specify
 `--worker heartbeat-resume --turn-topology single-worker` or `--worker heartbeat-resume --turn-topology controller-worker` and
 supply the same validator. Both use the existing heartbeat scheduler, quota decision
 and public Turn transaction. The unqualified heartbeat profile keeps its native
 context transport for baseline comparisons. Receipts distinguish the requested
-entry from the effective treatment. During fresh execution, `--prepare-selected-todo`
-lets Turn perform the exact ordinary claim supplied by quota and reread the same
-Todo before dispatch. Existing native heartbeat consumes the same claim contract.
+entry from the effective treatment. During fresh execution, Turn's built-in
+preparation owner performs the exact ordinary claim supplied by quota and rereads
+the same Todo before dispatch. This needs no extra preparation switch. Existing
+native heartbeat consumes the same claim contract.
 
 The original Turn’s private `turns/controller-worker/` record includes role evidence with native thread and turn IDs,
 message digests, step wall time and reported cumulative token use per thread.

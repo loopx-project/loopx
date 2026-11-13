@@ -86,7 +86,7 @@ Controller–Worker provider. From the same configured registry and runtime:
 ```sh
 loopx turn plan --goal-id GOAL --agent-id AGENT --host codex-cli \
   --execution-mode isolated-headless --topology controller-worker
-loopx turn run-once --execute --prepare-selected-todo --goal-id GOAL --agent-id AGENT \
+loopx turn run-once --execute --goal-id GOAL --agent-id AGENT \
   --project "$PWD" --host codex-cli --execution-mode isolated-headless \
   --topology controller-worker --timeout-seconds 300 --codex-sandbox workspace-write \
   --validation-command-json '["./check-work"]'
@@ -97,8 +97,12 @@ The dual provider opens two fresh native threads per admission. The Controller
 receives the complete original decision inline, delegates task work and assesses
 the return. The Host verifies the journal capture against the delivered C1 work
 contract and marks this read fulfilled for the Controller. Private Core files
-remain outside both role sandboxes. The Worker has the caller's workspace grant
-capped at workspace write. Use `--task-material FILE` to give the Worker the original UTF-8 task unchanged
+remain outside both role sandboxes. During ordinary execution, both roles have
+the caller's workspace grant capped at workspace write. They share the same
+working directory, files and tools, with separate native contexts. The provider
+executes the roles serially: the Controller can check or update an artifact
+after the Worker returns and before handing work back. A read-only caller keeps
+both roles read-only. Use `--task-material FILE` to give the Worker the original UTF-8 task unchanged
 after the Controller chooses `dispatch`. Use `--controller-material FILE` for
 Controller-only context. These options share a 128 KiB limit. The original
 admission pins the content digest and its audience.
