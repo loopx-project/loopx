@@ -143,9 +143,10 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 
 
 @pytest.mark.parametrize("replay", [
-    "present", "pinned", "paged", "out_of_order", "lost_page", "missing_hook",
+    "present", "direct", "pinned", "paged", "out_of_order", "lost_page", "missing_hook", "batched",
     "lost_output", "partial", "compacted", "changed_source",
     "reread", "reread_lost_page", "reread_changed_page",
+    "reread_present_unhooked", "reread_lost_unhooked", "reread_lost_verified",
 ])
 def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monkeypatch, replay):
     """A selected read can survive a qualified replay without proving full input."""
@@ -180,8 +181,8 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
 
-    reread = replay in {"reread", "reread_lost_page", "reread_changed_page"}
-    paged = reread or replay in {"paged", "out_of_order", "lost_page", "missing_hook"}
+    reread = replay.startswith("reread")
+    paged = reread or replay in {"paged", "out_of_order", "lost_page", "missing_hook", "batched"}
     if paged or replay == "pinned":
         from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
 
@@ -204,38 +205,67 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         pages = [pages[-1], *pages[:-1]]
     replay_pages = list(pages)
     extra_address = "/goal_boundary/stop_condition"
+    later_turn = {**event, "turn_id": "reread-turn"}
     if reread:
         extra = command(["context-read", *source, "--select", extra_address])
         assert extra["ok"] and extra["eof"]
         replay_pages.insert(0, extra)
+    emissions = []
     for index, page in enumerate(replay_pages):
         # A code-mode parent may append its actual output after the nested hook.
-        parent = f"parent-{index}"
-        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent})
+        reader = f"reader-{index}"
+        parent = "parent-batch" if replay == "batched" else f"parent-{index}"
+        if replay == "direct":
+            append(history, "response_item", {"type": "function_call", "call_id": reader, "name": "exec_command"})
+        elif not emissions:
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": "initial-turn"}})
+        append(history, "event_msg", {"type": "item_completed",
+            "turn_id": "initial-turn", "item": {"type": "CommandExecution", "id": reader, "exit_code": 0}})
         if replay != "missing_hook" or index != 1:
-            command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": f"reader-{index}",
+            command(hook, {**event, "turn_id": "initial-turn", "hook_event_name": "PostToolUse", "tool_use_id": reader,
                 "tool_response": json.dumps(page)})
-        missing_page = (replay == "lost_page" and index == 1) or (replay == "reread_lost_page" and index == 2)
+        missing_page = ((replay == "lost_page" and index == 1)
+            or (replay == "reread_lost_page" and index == 2)
+            or (replay in {"reread_lost_unhooked", "reread_lost_verified"} and index == 1))
         if replay != "lost_output" and not missing_page:
             retained_page = {**page, "content": page["content"] + " changed"} \
                 if replay == "reread_changed_page" and index == 2 else page
-            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
-                "output": [{"type": "input_text", "text": json.dumps(retained_page)}]})
+            if replay == "direct":
+                append(history, "response_item", {"type": "function_call_output",
+                    "call_id": reader, "output": json.dumps(retained_page)})
+            else:
+                emissions.append({"type": "input_text", "text": json.dumps(retained_page)})
+        if emissions and (replay != "batched" or index == len(replay_pages) - 1):
+            append(history, "response_item", {"type": "custom_tool_call_output",
+                "call_id": parent, "output": emissions})
+            emissions = []
+        elif missing_page:
+            # A complete parent result may omit the nested emission altogether.
+            append(history, "response_item", {"type": "custom_tool_call_output",
+                "call_id": parent, "output": []})
     if reread:
         again = command(["context-read", *source, "--select", address, "--page-bytes", "3000",
             "--max-page-output-bytes", "64000"])
         assert again == pages[0]
-        parent = "parent-reread"
-        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent})
-        command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": "reader-reread",
-            "tool_response": json.dumps(again)})
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "initial-turn"})
+        append(history, "event_msg", {"type": "task_started", "turn_id": later_turn["turn_id"]})
+        # The host may reuse the earlier parent's ID in the next Turn.
+        parent = "parent-1"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": later_turn["turn_id"]}})
+        append(history, "event_msg", {"type": "item_completed",
+            "turn_id": later_turn["turn_id"],
+            "item": {"type": "CommandExecution", "id": "reader-reread", "exit_code": 0}})
+        if not replay.endswith("_unhooked"):
+            command(hook, {**later_turn, "hook_event_name": "PostToolUse", "tool_use_id": "reader-reread",
+                "tool_response": json.dumps(again)})
         append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
             "output": [{"type": "input_text", "text": json.dumps(again)}]})
     before = context._state(tmp_path)
     assert (address in before.get("consumed_pointers", {})) == (replay not in {"partial", "missing_hook"})
     if reread:
         assert extra_address in before["consumed_pointers"]
-        assert len(before["selected_resume"]["reads"]) == len(replay_pages)
     assert "candidate" not in before
     if replay == "compacted":
         append(history, "compacted", {"message": "Earlier model context was replaced."})
@@ -247,8 +277,10 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     command(hook, {**event, "source": "resume"})
     after = context._state(tmp_path)
     assert "candidate" not in after
-    retained = replay in {"present", "pinned", "paged", "out_of_order", "reread"}
-    expected = before["consumed_pointers"] if retained else {}
+    retained = replay in {"present", "direct", "pinned", "paged", "out_of_order", "batched",
+                          "reread", "reread_present_unhooked", "reread_lost_verified"}
+    expected = before["consumed_pointers"] if retained else (
+        {extra_address: before["consumed_pointers"][extra_address]} if reread else {})
     assert after.get("consumed_pointers", {}) == expected
     if paged:
         delivered_bytes = sum(len(page["content"].encode("utf-8")) for page in pages)

@@ -153,6 +153,96 @@ def _configure_provider(home, url):
         'wire_api="responses"\nrequires_openai_auth=false\n')
 
 
+@pytest.mark.parametrize("restore_missing", ["original", "unobserved", "verified"])
+def test_native_code_mode_resume_requires_observed_selection_coverage(tmp_path, monkeypatch, restore_missing):
+    """Native Bash hooks and replayed Code Mode emissions must cover the same bytes."""
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
+    from tests.control_plane.codex_checkpoint_fixture import last_context_page
+    from tests.control_plane.test_codex_context_lifecycle import project
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
+    context = workspace / "context"
+    context.mkdir(mode=0o700)
+    program = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))
+    cli = [program, "--cli-bin", program, "--format", "json", "quota"]
+    hook = shlex.join(cli + ["context-hook", "--context-delivery", "on", "--codex-app",
+                             "--codex-context-dir", str(context)])
+    (home / "hooks.json").write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command", "command": hook, "timeout": 10}]}],
+        "PostToolUse": [{"matcher": "^Bash$", "hooks": [{"type": "command", "command": hook, "timeout": 10}]}],
+    }}))
+    short_pointer, long_pointer = "/goal_boundary/stop_condition", "/required_work"
+    payload = {"ok": True, "goal_id": "fixture",
+        "goal_boundary": {"stop_condition": "Keep the original scope."},
+        "required_work": "Verify the selected evidence before publishing. " * 220}
+    errors = []
+    opening = ""
+    saved_page = workspace / "first-page.json"
+
+    def read_command(cmd):
+        return "await tools.exec_command(" + json.dumps({"cmd": cmd, "max_output_tokens": 8000}) + ")"
+
+    def response(request, number, message):
+        nonlocal opening
+        try:
+            if number == 1:
+                # The real SessionStart initialized the journal before inference.
+                session = json.loads((context / "session.json").read_bytes())["session_id"]
+                monkeypatch.setenv("CODEX_THREAD_ID", session)
+                monkeypatch.chdir(workspace)
+                _, wire = project(context, payload=payload)
+                source = wire["recovery"]
+                reader = cli + ["context-read", "--capture-file", source["path"], "--capture-sha256", source["sha256"]]
+                opening = shlex.join(reader + ["--select", long_pointer, "--page-bytes", "3000"])
+                independent = shlex.join(reader + ["--select", short_pointer])
+                code = "{const result=" + read_command(independent) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";}"
+                if restore_missing == "original":
+                    code += "const result=" + read_command(opening) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";"
+                else:
+                    # The nested Bash hook observes the first page. Suppress
+                    # its original parent emission and preserve an exact copy.
+                    code += read_command("set -o pipefail\n" + opening + " | " + shlex.join(["tee", str(saved_page)])) + ";"
+            elif number == 2:
+                first = (last_context_page(request, allow_selection=True) if restore_missing == "original"
+                         else json.loads(saved_page.read_bytes()))
+                assert first and first["ok"] and not first["eof"]
+                code = ("let cmd=" + json.dumps(first["next_command"]) + ";while(cmd){"
+                        "const result=await tools.exec_command({cmd,max_output_tokens:8000});"
+                        + CODE_MODE_EXEC_RESULT_FORWARDER +
+                        ";const page=JSON.parse(result.output);if(!page.ok)throw Error('read failed');"
+                        "cmd=page.next_command;}")
+            elif number == 3 and restore_missing != "original":
+                if restore_missing == "verified":
+                    code = "const result=" + read_command(opening) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";"
+                else:
+                    # Code Mode can re-emit known bytes without a new Bash hook.
+                    code = "text(" + json.dumps(saved_page.read_text()) + ");"
+            else:
+                return message
+            return {"type": "custom_tool_call", "id": f"fixture-{number}", "call_id": f"call_{number}",
+                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\n' + code}
+        except Exception as error:
+            errors.append(error)
+            return message
+
+    with local_inference_provider(response) as (url, _, _):
+        _configure_provider(home, url)
+        config = home / "config.toml"
+        config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
+        session = _app_server(binary, env, workspace, home, True, sandbox="danger-full-access")
+        assert not errors, errors
+        before = json.loads((context / "session.json").read_bytes()).get("consumed_pointers", {})
+        assert set(before) == {short_pointer, long_pointer}
+        assert _app_server(binary, env, workspace, home, True,
+                           sandbox="danger-full-access", resume=session) == session
+    after = json.loads((context / "session.json").read_bytes()).get("consumed_pointers", {})
+    assert not errors and after == (before if restore_missing != "unobserved" else {short_pointer: before[short_pointer]})
+
+
 @pytest.mark.parametrize("early_yield", [False, True])
 def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tmp_path, early_yield):
     """A completed process cannot turn an unobserved early page into a baseline.

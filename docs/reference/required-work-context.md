@@ -1044,12 +1044,14 @@ limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
 For a complete selection from the current capture, the adapter can verify
-that exact output across an ordinary resume. Paged selections require verified
-coverage of every byte and the exact native output for each observed page. The
-source and read scope must still match. Only replayed literal sections remain
-eligible for reuse in the next progressive view. Partial or inherited
-selections still need their ordinary recovery. A selected read cannot
-establish a whole-input baseline.
+that exact output across an ordinary resume. Each observed page is bound to
+its native call occurrence. Several nested reads can share one Code Mode call.
+An independently verified reread can fill a missing range when its own output
+is present in replay. An emission with no matching hook observation contributes
+no coverage. The original source and scope must still match. Only selections
+with complete byte coverage can carry their literal sections into the next
+progressive view. Partial or inherited selections still use ordinary recovery.
+A selected read cannot establish a whole-input baseline.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
@@ -1350,6 +1352,10 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 证据缺失、改写或重放记录不受支持时回退全量；单条记录的解码内存仍有边界，
 不是历史文件容量限制。旧版全前缀检查点须重新完整读取后建立新检查点。仍采用正常读取后的
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
+普通 resume 可以单独核对当前捕获中已读的选区。每页绑定到 hook 观察到的原生调用，
+同一个 Code Mode 父调用可以有多份嵌套读取输出。只有独立核验、且其自身输出出现在重放中的
+重读才能补齐缺页。没有对应 hook 观察的同字节输出不计入覆盖。原捕获和读取范围必须匹配，
+每个选区完整覆盖所有字节后，其原文才可在下一轮渐进式交付中复用。选读不能建立全量基线。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。
 新的独立决定走正常准入与上下文命令。实际压缩后，下一个新工作 Turn 建立新的完整
