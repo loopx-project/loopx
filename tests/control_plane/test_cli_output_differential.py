@@ -2306,16 +2306,18 @@ def test_equal_but_malformed_quota_witnesses_do_not_qualify(damage):
 
 
 def test_thin_source_read_guidance_requires_complete_ordered_recovery_contract():
-    from pathlib import Path
     from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe
     from loopx.control_plane.testing.cli_output_differential import _compare_row
-    from loopx.heartbeat_prompt import build_heartbeat_prompt
 
     # Independent before observation: the former instruction required current
     # context before work but had no explicit original-section recovery block.
     before = {"source_read_before": True, "source_read_after": False}
-    body = build_heartbeat_prompt(goal_id="fixture", active_state=Path("goal.md"),
-        agent_id="worker-a", thin=True)["task_body"]
+    # This growth allowance belongs only to the historical wording. The
+    # current public prompt has its own recovery checks in the transport suite.
+    body = """Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
+Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs.
+Recover execution/lost context from needed original sections/identity; never re-admit.
+Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair."""
     after = observe(body)
     assert after["source_read_after"] and not after["source_read_before"]
     assert observe(json.dumps({"task_body": body}))["source_read_after"]

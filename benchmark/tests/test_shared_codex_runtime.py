@@ -549,15 +549,46 @@ def test_turn_uses_public_cli_and_core_session_policy(tmp_path):
     assert parsed.codex_sandbox == "danger-full-access"
 
 
-def test_turn_defaults_and_retired_context_rejection():
+@pytest.mark.parametrize("entry", ["plan", "run-once"])
+def test_turn_defaults_and_retired_context_rejection(tmp_path, monkeypatch, entry):
+    import runpy
     from loopx.cli import build_parser
+    from loopx.cli_commands import turn
 
-    parser = build_parser()
-    argv = ["turn", "plan", "--goal-id", "fixture-goal", "--agent-id", "fixture-agent"]
-    parsed = parser.parse_args(argv)
-    assert parsed.iteration_context == "resume" and parsed.session_scope == "agent"
+    src = Path(__file__).resolve().parents[2]
+    fixture = runpy.run_path(str(src / "examples/loopx-turn-codex-cli-e2e-smoke.py"))
+    project, runtime, _, registry = fixture["_write_fixture"](tmp_path, turn_count=1)
+    goal = fixture["GOAL_ID"]
+    fixture["initialize_canonical_source_fixture"](runtime, goal, provider="sqlite",
+        state_path=project / ".codex" / "goals" / goal / "ACTIVE_GOAL_STATE.md")
+    argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "turn", entry,
+            "--goal-id", goal, "--agent-id", fixture["AGENT_ID"], "--host", "codex-cli",
+            "--execution-mode", "isolated-headless"]
+    if entry == "run-once":
+        argv.extend(["--project", str(project), "--timeout-seconds", "20"])
+    else:
+        argv.append("--include-transaction-detail")
+
+    # The preview is intentionally compact. Observe the real plan consumed by
+    # both public entry points, including the mode passed to the Host.
+    make_plan = turn.build_loopx_turn_plan
+    policies = []
+    def observe_plan(*args, **kwargs):
+        plan = make_plan(*args, **kwargs)
+        policy = plan["session"]["context_policy"]
+        policies.append((policy["mode"], policy["binding_scope"]))
+        return plan
+
+    monkeypatch.setattr(turn, "build_loopx_turn_plan", observe_plan)
+    for options in ([], ["--topology", "controller-worker"],
+                    ["--topology", "controller-worker", "--iteration-context", "fresh"]):
+        code, _ = fixture["_run_cli"]([*argv, *options])
+        assert code == 0
+    code, held = fixture["_run_cli"]([*argv, "--topology", "controller-worker", "--iteration-context", "resume"])
+    assert code != 0 and "fresh role threads" in held["error"]
+    assert policies == [("resume", "agent"), ("fresh", "agent"), ("fresh", "agent")]
     with pytest.raises(SystemExit):
-        parser.parse_args([*argv, "--iteration-context", "resume-if-available"])
+        build_parser().parse_args([*argv, "--iteration-context", "resume-if-available"])
 
 
 def test_failed_turn_restarts_same_transaction_until_core_recovers(tmp_path):

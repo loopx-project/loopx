@@ -159,6 +159,7 @@ def render_loopx_turn_plan_markdown(
             "# LoopX Turn Plan",
             *(_turn_plan_readback_lines(payload) if include_transaction_detail else []),
             f"- host: {host.get('kind')}",
+            *([f"- topology: {host['topology']}"] if host.get("topology") else []),
             f"- execution_mode: {host.get('execution_mode')}",
             f"- route: {route.get('kind')}",
             f"- would_invoke_host: {route.get('would_invoke_host')}",
@@ -223,6 +224,8 @@ def render_loopx_turn_execution_markdown(payload: dict[str, object]) -> str:
         [
             "# LoopX Turn Run Once",
             f"- status: {payload.get('status')}",
+            *(["- topology: controller-worker"] if isinstance(payload.get("host"), dict)
+              and payload["host"].get("topology") == "controller-worker" else []),
             f"- result_kind: {payload.get('result_kind')}",
             *(
                 [f"- interval_reason: {admission.get('reason')}",

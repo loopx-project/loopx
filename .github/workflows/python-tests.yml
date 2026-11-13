@@ -956,6 +956,9 @@ jobs:
 
       - name: Qualify the native Windows CLI output differential
         timeout-minutes: 12
+        env:
+          LOOPX_CLI_OUTPUT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          LOOPX_CLI_OUTPUT_MAIN_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: python examples/control_plane/cli-output-budget-regression-smoke.py
 
       - name: Run native Windows lifecycle tests

@@ -9,8 +9,11 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Mapping
+
+from ...control_plane.turn_driver.codex_stdio import disable_mcp_servers as disable_mcp_servers
 
 
 def codex_home(base_home: Path, policy: Mapping[str, Any] | None) -> Path:
@@ -141,23 +144,18 @@ def verify_conversation_provider(session, requested: str, observed: Mapping[str,
         raise session._runtime_error("Codex did not apply the requested conversation provider.")
 
 
-def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Disable private native tool sources, including project/managed layers.
-
-    An empty map does not erase lower-layer entries. Only names are forwarded;
-    commands, environment and credentials remain with the native config owner.
-    Apps connectors are a separate native source, so disable them explicitly.
-    """
-    effective = config.get("mcp_servers", {})
-    requested = host_config.get("mcp_servers", {})
-    if not isinstance(effective, dict) or not isinstance(requested, dict):
-        raise ValueError("invalid native MCP server configuration")
-    features = host_config.get("features", {})
-    if not isinstance(features, dict):
-        raise ValueError("invalid native feature configuration")
-    return {**host_config, "features": {**features, "apps": False}, "mcp_servers": {
-        name: {"enabled": False} for name in effective.keys() | requested.keys()
-    }}
+def conversation_tool_sources(
+    config: Mapping[str, Any], host_config: Mapping[str, Any], *,
+    read_only_review: bool, runtime_error: Callable[[str], Exception],
+) -> dict[str, Any]:
+    """Compose the shared native tool isolation with Chat's explicit public reader."""
+    isolated = disable_mcp_servers(config, host_config)
+    if read_only_review:
+        return isolated
+    try:
+        return public_source_reader(config, isolated)
+    except ValueError as exc:
+        raise runtime_error(str(exc)) from None
 
 
 def public_source_reader(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:

@@ -970,12 +970,8 @@ class CodexChatAgentSession:
                     host_config = {**(host_config or {}), "sandbox_workspace_write": {
                         **settings, "writable_roots": list(dict.fromkeys([*writable, *owner_git_write_roots]))}}
                 if permissions_profile:
-                    host_config = codex_context.disable_mcp_servers(effective, host_config or {})
-                    if not read_only_review:
-                        try:
-                            host_config = codex_context.public_source_reader(effective, host_config)
-                        except ValueError as exc:
-                            raise session._runtime_error(str(exc)) from None
+                    host_config = codex_context.conversation_tool_sources(
+                        effective, host_config or {}, read_only_review=read_only_review, runtime_error=session._runtime_error)
                     if session._host_model_auth is not None:
                         # Use public native transport defaults, not the
                         # account's configuration or environment. Reject a

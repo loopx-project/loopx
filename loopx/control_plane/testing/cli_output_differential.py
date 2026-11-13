@@ -717,12 +717,21 @@ def _matching_quota_controls(base: dict[str, Any], candidate: dict[str, Any]) ->
     # The frozen probe owns the source-field inventory; its independent tests
     # pin every field and mutation. Compare its bounded witness here without
     # creating another inventory/consumer of retired source fields.
-    return bool(isinstance(fields, dict) and len(fields) == 19
-        and all(isinstance(key, str) and key for key in fields)
-        and all(isinstance(value, str) and len(value) == 64 for value in fields.values())
-        and fields == after.get("field_sha256")
-        and isinstance(before.get("controls_sha256"), str) and len(before["controls_sha256"]) == 64
-        and before["controls_sha256"] == after.get("controls_sha256"))
+    def valid(witness: dict[str, Any]) -> bool:
+        values = witness.get("field_sha256")
+        return bool(isinstance(values, dict) and len(values) == 19
+            and all(isinstance(key, str) and key for key in values)
+            and all(isinstance(value, str) and len(value) == 64 for value in values.values())
+            and isinstance(witness.get("controls_sha256"), str) and len(witness["controls_sha256"]) == 64)
+    if not valid(before) or not valid(after):
+        return False
+    current = after["field_sha256"]
+    if fields == current:
+        return before["controls_sha256"] == after["controls_sha256"]
+    prior = after.get("prior_reward_boundary")
+    return bool(isinstance(prior, dict) and "boundary" in current
+                and fields == {**current, "boundary": prior.get("boundary")}
+                and before["controls_sha256"] == prior.get("controls_sha256"))
 
 
 def _complete_quota_source_migration(base: dict[str, Any], candidate: dict[str, Any]) -> bool:

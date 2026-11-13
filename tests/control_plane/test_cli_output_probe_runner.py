@@ -83,6 +83,26 @@ def test_quota_observation_preserves_current_controls_across_declared_carriers()
     assert observe({**complete, "schema_version": "unknown"}) is None
 
 
+def test_reward_boundary_refinement_is_directional_and_preserves_all_other_controls():
+    from loopx.control_plane.testing.cli_output_differential import _matching_quota_controls
+    observe = runpy.run_path(str(RUNNER))["_quota_control_observation"]
+    def row(payload):
+        return {"quota_controls": observe(payload)}
+    before = _quota_control_fixture()
+    before["goal_boundary"]["stop_condition"] = (
+        "stop if the next action needs reward, gate approval, write control, or production access")
+    after = copy.deepcopy(before)
+    after["goal_boundary"]["stop_condition"] = (
+        "stop before unauthorized reward assignment, gate approval, write-control changes, or production access")
+    assert _matching_quota_controls(row(before), row(after))
+    assert not _matching_quota_controls(row(after), row(before))
+    for path, value in ((("goal_boundary", "stop_condition"), "stop only on reward"),
+                        (("goal_boundary", "write_scope"), ["**"]), (("selected_todo", "claimed_by"), "other")):
+        changed = copy.deepcopy(after)
+        changed[path[0]][path[1]] = value
+        assert not _matching_quota_controls(row(before), row(changed))
+
+
 @pytest.mark.parametrize("path,replacement", [
     (("goal_id",), "wrong-goal"), (("agent_identity", "agent_id"), "other-worker"),
     (("decision",), "skip"), (("should_run",), False), (("effective_action",), "quota_skip"),

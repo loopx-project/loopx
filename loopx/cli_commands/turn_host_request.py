@@ -14,6 +14,43 @@ from typing import Any, cast
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 
 
+def controller_worker_launch(args, registry: Path, runtime: Path) -> tuple[list[str], str]:
+    """Bind the product's isolated native provider to the caller's Turn configuration."""
+    import hashlib
+    import math
+    import os
+    import sys
+
+    if args.timeout_seconds is None or not math.isfinite(args.timeout_seconds) or args.timeout_seconds <= 0:
+        raise ValueError("controller-worker execution requires a finite positive --timeout-seconds")
+    project = Path(args.project).expanduser().resolve()
+    argv = [sys.executable, "-P", "-m", "loopx.control_plane.turn_driver.controller_worker",
+            "--project", str(project), "--registry", str(registry.resolve()), "--runtime", str(runtime.resolve()),
+            "--codex-bin", args.codex_bin, "--sandbox", args.codex_sandbox]
+    for option, value in (("--model", args.codex_model), ("--effort", args.codex_reasoning_effort)):
+        if value is not None:
+            argv.extend([option, value])
+    task_material = getattr(args, "task_material", None)
+    material = task_material or getattr(args, "controller_material", None)
+    if material is not None:
+        from ..control_plane.turn_driver.controller_worker import read_material
+
+        source = material.expanduser().resolve(strict=True)
+        if not source.is_file():
+            raise ValueError("Role material must be a regular UTF-8 file")
+        data = read_material(source)
+        if task_material and not data.strip():
+            raise ValueError("Worker task material is empty")
+        argv.extend(["--material", str(source), "--material-sha256", hashlib.sha256(data).hexdigest()])
+        if task_material:
+            argv.append("--dispatch-task-material")
+    # The deadline may shrink on recovery. Model, permissions, workspace and
+    # private binding paths belong to the original admission.
+    home = str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve())
+    key = hashlib.sha256(json.dumps([home, *argv]).encode()).hexdigest()
+    return [*argv, "--timeout", str(args.timeout_seconds)], key
+
+
 def prepare_turn_host_arguments(
     args: argparse.Namespace, *,
     native_host_runner: Callable[..., dict[str, Any]] | None,
@@ -112,7 +149,7 @@ def build_codex_cli_host_runner(
             "model": args.codex_model,
             "reasoning_effort": args.codex_reasoning_effort,
             "mcp_server": args.codex_mcp_server_json,
-            "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
+            "timeout_seconds": args.timeout_seconds,
         }
         options["goal_admission"] = (
             goal_admission or FirstPartyHostGoalAdmission.for_plan(
@@ -125,6 +162,8 @@ def build_codex_cli_host_runner(
                 run_codex_operation_host,
             )
 
+            if args.timeout_seconds is not None:
+                options["timeout_seconds"] = max(1.0, args.timeout_seconds - 5.0)
             return run_codex_operation_host(
                 request,
                 registry_path=registry_path,

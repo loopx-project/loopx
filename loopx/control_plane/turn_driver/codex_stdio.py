@@ -12,6 +12,25 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Self, TextIO
 
 
+def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Disable private native tool sources, including project/managed layers.
+
+    An empty map does not erase lower-layer entries. Only names are forwarded;
+    commands, environment and credentials remain with the native config owner.
+    Apps connectors are a separate native source, so disable them explicitly.
+    """
+    effective = config.get("mcp_servers", {})
+    requested = host_config.get("mcp_servers", {})
+    if not isinstance(effective, dict) or not isinstance(requested, dict):
+        raise ValueError("invalid native MCP server configuration")
+    features = host_config.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError("invalid native feature configuration")
+    return {**host_config, "features": {**features, "apps": False}, "mcp_servers": {
+        name: {"enabled": False} for name in effective.keys() | requested.keys()
+    }}
+
+
 class NativeGoalProtocolError(RuntimeError):
     """The native app-server exchange did not prove the requested transaction."""
 

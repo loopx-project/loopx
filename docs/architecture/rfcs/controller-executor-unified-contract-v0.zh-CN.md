@@ -158,7 +158,7 @@ flowchart TB
 | 统一工作契约 | [#7430](https://github.com/loopx-project/loopx/pull/7430) 已合入，随后由 [#8265](https://github.com/loopx-project/loopx/pull/8265) 回退；C1 替换由 [#8266](https://github.com/loopx-project/loopx/pull/8266) 继续。[#8238](https://github.com/loopx-project/loopx/pull/8238) 和 [#8323](https://github.com/loopx-project/loopx/pull/8323) 已分别改善结算读取和叙事读取。[#8304](https://github.com/loopx-project/loopx/pull/8304) 已合入分阶段重规划路径。 [#8499](https://github.com/loopx-project/loopx/pull/8499) 独立交付 EdgeBench 单 Worker 入口和按原唤醒恢复，C1 写入格式切换另行推进。 | 继续将可独立验收的修复合入主干。切换 profile 前，按原 quota 单会话验收替换路径。此前传输或写回测量只适用于各自测过的路径。 |
 | 通用 Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) 仍为 Draft，本次核对头 `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | 可作为适配器候选；bounded 调用不证明双向长期 session/异步控制，不把 OAR 或全 Host 重写设为先决条件 |
 
-在 C1 `853eb8f56c1a` 上，benchmark 已走通任务规划、quota 准入，以及在隔离 SQLite 环境下经过独立验证的两次 Turn 结算。原生 Codex 连接脚本化模型端点，Host 收到了 v1 工作契约。quota 原有兼容视图通过哈希标识签名 capture。这些检查覆盖派发和恢复。比较成果与成本仍需在同等条件下运行原生评分器。
+在 C1 `853eb8f56c1a` 上，benchmark 已走通任务规划、quota 准入，以及在隔离 SQLite 环境下经过独立验证的两次 Turn 结算。原生 Codex 连接脚本化模型端点，Host 收到了 v1 工作契约。quota 原有兼容视图通过哈希标识签名 capture。这些检查覆盖派发和恢复。§11 记录了同题原生对照及仍待验证的多题效果与完整成本。
 
 旧的逐字段审计与实验保留原版本，位于下面的技术附录；其中历史 Draft/测试记录不能
 代替本表的状态，也不能用本表给旧结果重新标注版本。下一次认领须重查实时 PR 与任务。

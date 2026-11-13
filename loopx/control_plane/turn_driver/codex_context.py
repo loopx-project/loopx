@@ -28,7 +28,7 @@ from .native_context_profile import (
     native_context_page_budget,
 )
 from ..content_digest import BARE_SHA256_PATTERN
-from .codex_execution_preparation import compact_execution_preparation_request
+from .execution_preparation import compact_execution_preparation_request
 
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.

@@ -31,9 +31,21 @@ def _validate_feedback_payload(runner, profile):
         raise ValueError("Unsupported feedback payload for this mode")
 
 
-def _validate_turn_validator(runner, profile):
+def _validate_worker_settings(runner, profile):
+    if "container_cpus" in runner and (type(runner["container_cpus"]) is not int or runner["container_cpus"] < 1):
+        raise ValueError("Invalid runtime container CPU limit")
+    if "requested_worker" in runner:
+        from benchmark.runtime.codex import governed_worker_profile
+
+        effective = governed_worker_profile(runner["requested_worker"], runner.get("turn_topology", "single-worker"))
+        if effective != runner["worker"]:
+            raise ValueError("Requested entry disagrees with governed Turn topology")
     key = "validation_argv_sha256"
-    if runner["worker"] == "turn-resume":
+    dual = runner["worker"] == "turn-controller-worker"
+    for source in (runner, profile):
+        if source.get("turn_topology") != ("controller-worker" if dual else None):
+            raise ValueError("Worker topology missing or mismatched")
+    if dual or runner["worker"] == "turn-resume":
         digest = runner.get(key)
         if not isinstance(digest, str) or not re.fullmatch("[0-9a-f]{64}", digest) or profile.get(key) != digest:
             raise ValueError("Turn validator argv digest missing or mismatched")
@@ -141,7 +153,7 @@ def _validate_run_data(row, config, summary, points):
             raise ValueError(f"Settings identity mismatch: {key}")
     runner, profile = config["runner"], config["worker_profile"]
     _validate_feedback_payload(runner, profile)
-    _validate_turn_validator(runner, profile)
+    _validate_worker_settings(runner, profile)
     if (
         runner["runner_commit"] != row["runner_revision"]
         or runner["model"] != row["model_id"]
@@ -269,7 +281,7 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         if row.get("runner_revision") != receipt["runner_commit"]:
             raise ValueError("Board and runner revision disagree")
         _validate_feedback_payload(receipt, profile)
-        _validate_turn_validator(receipt, profile)
+        _validate_worker_settings(receipt, profile)
         if receipt.get("planning_horizon_goal") != profile.get("planning_horizon_goal"):
             raise ValueError("Profile disagrees with runtime: planning_horizon_goal")
         for source in (receipt, profile):
@@ -347,9 +359,13 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
         }
         # Old notification-only attempts retain absent/unknown payload metadata;
         # never relabel them using today's default or operator-supplied settings.
-        if "validation_argv_sha256" in receipt:
-            for target in ("runner", "worker_profile"):
-                config[target]["validation_argv_sha256"] = receipt["validation_argv_sha256"]
+        for key in ("validation_argv_sha256", "turn_topology"):
+            if key in receipt:
+                for target in ("runner", "worker_profile"):
+                    config[target][key] = receipt[key]
+        for key in ("requested_worker", "container_cpus"):
+            if key in receipt:
+                config["runner"][key] = receipt[key]
         if "feedback_payload" in receipt:
             config["runner"]["feedback_payload"] = receipt["feedback_payload"]
             config["worker_profile"]["feedback_payload"] = profile["feedback_payload"]

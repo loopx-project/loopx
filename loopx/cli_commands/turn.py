@@ -81,6 +81,15 @@ def handle_turn_command(
         if preparation_state_written is not False and effects.get("state_written") is not True:
             effects["state_written"] = preparation_state_written
     try:
+        dual = getattr(args, "topology", "single-worker") == "controller-worker"
+        if getattr(args, "iteration_context", None) is None:
+            args.iteration_context = "fresh" if dual else "resume"
+        if dual and (args.host != "codex-cli" or args.execution_mode != "isolated-headless"
+                     or args.iteration_context != "fresh" or getattr(args, "codex_operation_tools", False)
+                     or getattr(args, "delegation_context_json", None)):
+            raise ValueError("controller-worker requires isolated-headless codex-cli with fresh role threads and no operation transport")
+        if not dual and (getattr(args, "controller_material", None) or getattr(args, "task_material", None)):
+            raise ValueError("role task material requires controller-worker topology")
         if (native_host_runner is not None or native_session_binding_resolver is not None) and (
             args.host != "codex-app-server" or native_host_runner is None or native_session_binding_resolver is None
         ):
@@ -150,6 +159,11 @@ def handle_turn_command(
                     on_claim=record_claim,
                 )
 
+        topology_config = None
+        if dual and args.turn_command == "run-once":
+            from .turn_host_request import controller_worker_launch
+
+            _, topology_config = controller_worker_launch(args, registry_path, runtime_root)
         resume_instance = getattr(args, "resume_turn_instance_id", None)
         if resume_instance is not None:
             from ..control_plane.turn_driver.journal_store import find_loopx_turn_key_by_instance
@@ -243,6 +257,10 @@ def handle_turn_command(
                 turn_key=args.resume_turn_key,
                 agent_id=args.agent_id,
             )
+            recorded_host = payload.get("host") or {}
+            if (recorded_host.get("topology", "single-worker") != getattr(args, "topology", "single-worker")
+                    or recorded_host.get("topology_config_sha256") != topology_config):
+                raise ValueError("Recovery requires the original Turn topology and Host configuration")
             goal_admission = FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path,
                 goal_id=args.goal_id,
@@ -398,6 +416,10 @@ def handle_turn_command(
                 inspect_plan=(args.turn_command == "plan" and not args.include_transaction_detail
                               and output_format(args) == "json"),
             )
+            if dual:
+                payload["host"] = {**payload["host"], "topology": "controller-worker"}
+                if topology_config is not None:
+                    payload["host"]["topology_config_sha256"] = topology_config
             if delegated_context and delegated_context.get("request_subject") is not None:
                 import json
                 # Private operation metadata stays outside model input. A resumed

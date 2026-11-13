@@ -767,6 +767,7 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
+        adapter_schema = getattr(args, "host_adapter_request_schema", None)
         if args.host == "codex-app-server":
             def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 return current_turn_host_launch_decision(args, registry_path=current_registry,
@@ -786,6 +787,15 @@ def execute_turn_run_once(
 
             host_runner = run_native_host
             session_binding_resolver = native_session_binding_resolver
+        elif (payload.get("host") or {}).get("topology") == "controller-worker":
+            from ..control_plane.quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA
+            from .turn_host_request import controller_worker_launch
+
+            adapter_schema = COMPLETE_TURN_HOST_REQUEST_SCHEMA
+
+            raw_argv, binding = controller_worker_launch(args, registry_path, runtime_root)
+            if binding != payload["host"].get("topology_config_sha256"):
+                raise ValueError("Controller-worker launch differs from the captured Host configuration")
         elif args.host == "codex-cli":
 
             def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
@@ -891,7 +901,7 @@ def execute_turn_run_once(
             decision_capture_payload=decision,
             require_decision_capture=True,
             host_argv=raw_argv,
-            host_adapter_request_schema=getattr(args, "host_adapter_request_schema", None),
+            host_adapter_request_schema=adapter_schema,
             host_runner=host_runner,
             session_binding_resolver=session_binding_resolver,
             project=project,

@@ -755,7 +755,7 @@ def test_pending_turn_prevents_phase_input_replacement(tmp_path, monkeypatch):
         )
 
 
-def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, monkeypatch):
+def test_expired_scheduler_wake_does_not_open_a_turn(planning_env, monkeypatch):
     from benchmark.runtime import worker
 
     env = planning_env | {
@@ -763,7 +763,7 @@ def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, mo
         "LOOPX_TASK_STAGE": "execute",
         "LOOPX_VALIDATION_COMMAND_JSON": '["python", "check.py"]',
         "LOOPX_CODEX_TURN_TIMEOUT_SEC": "60",
-        "LOOPX_PHASE_DEADLINE_EPOCH": "260",
+        "LOOPX_PHASE_DEADLINE_EPOCH": "100",
     }
     monkeypatch.setattr(worker.time, "time", lambda: 100)
     monkeypatch.setattr(worker, "prepare_codex_home", lambda *a, **kw: pytest.fail("late wake must not launch a host"))
@@ -774,6 +774,27 @@ def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, mo
     assert not (Path(env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json").exists()
 
 
+def test_turn_interrupts_inflight_cli_at_phase_deadline(planning_env, tmp_path):
+    cli = tmp_path / "sleeping-cli"
+    pid_file = tmp_path / "invoked"
+    cli.write_text(
+        f"#!{sys.executable}\nimport os, pathlib, time\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\ntime.sleep(90)\n"
+    )
+    cli.chmod(0o755)
+    receipt = run_once(planning_env | {
+        "LOOPX_EXECUTION_MODE": "turn", "LOOPX_TASK_STAGE": "execute",
+        "LOOPX_CLI": str(cli), "LOOPX_VALIDATION_COMMAND_JSON": '["validator"]',
+        "LOOPX_CODEX_TURN_TIMEOUT_SEC": "60", "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 2),
+    })
+    assert receipt["budget_exhausted"] and receipt["timed_out"] and not receipt["ok"]
+    assert "turn_execution" not in receipt
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    pending = Path(planning_env["LOOPX_RUNTIME_ROOT"]) / "benchmark-pending-turn.json"
+    assert json.loads(pending.read_text())["turn_instance_id"] == receipt["turn_id"]
+
+
 @pytest.mark.parametrize("mode", ["heartbeat", "turn", "plain", "native-goal", "loopx-goal"])
 def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode):
     from benchmark.runtime.scheduler import worker_command
@@ -781,7 +802,7 @@ def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode
     env = planning_env | {
         "LOOPX_EXECUTION_MODE": mode, "LOOPX_TASK_STAGE": "execute",
         "LOOPX_TASK_ENTRY": "seeded-todo",
-        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + (0 if mode == "heartbeat" else 100)),
+        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + (0 if mode in {"heartbeat", "turn"} else 100)),
     }
     if mode == "turn":
         env["LOOPX_VALIDATION_COMMAND_JSON"] = '["python", "check.py"]'
@@ -981,19 +1002,14 @@ def test_shared_harbor_rejects_retired_planning_limit(tmp_path, legacy_limit):
     BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", planning_timeout_sec=None)
 
 
-@pytest.mark.parametrize("mode,planning_elapsed,host_timeout", [
-    ("heartbeat", 400, 500), ("heartbeat", 850, 150), ("heartbeat", 1000, None),
-    ("turn", 400, 440), ("turn", 840, None), ("turn", 850, None),
-])
-def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(
-    tmp_path, monkeypatch, mode, planning_elapsed, host_timeout,
-):
+@pytest.mark.parametrize("planning_elapsed", [400, 850, 1000])
+@pytest.mark.parametrize("mode", ["heartbeat", "turn"])
+def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, monkeypatch, planning_elapsed, mode):
     pytest.importorskip("harbor")
     from benchmark.runtime import harbor
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
-                                 execution_mode=mode,
-                                 validation_command=["trusted-validator"] if mode == "turn" else (),
+                                 execution_mode=mode, validation_command=["validator"] if mode == "turn" else None,
                                  turn_timeout_sec=500, scheduler_timeout_sec=1000)
     clock = [0.0]
     planning = []
@@ -1021,9 +1037,7 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_populate_context", lambda *args: None)
     invocation = agent.run("Synthetic task", SimpleNamespace(exec=result, is_mounted=True), SimpleNamespace())
-    # Heartbeat retains the whole solver window; Turn reserves 160 seconds.
-    # These expected budgets are independent of the helper under test.
-    if host_timeout is None:
+    if planning_elapsed == 1000:
         with pytest.raises(TimeoutError, match="before execution handoff"):
             asyncio.run(invocation)
         assert len(planning) == 1 and not execution
@@ -1035,8 +1049,9 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(
     assert "LOOPX_PLANNING_TIMEOUT_SEC" not in env
     assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
     assert options["timeout_sec"] >= 1000
-    assert f"--kill-after=30 {1000 - planning_elapsed}s" in execution[0][0]
-    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == host_timeout
+    remaining = 1000 - planning_elapsed
+    assert f"--kill-after=30 {remaining}s" in execution[0][0]
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == min(500, remaining)
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
