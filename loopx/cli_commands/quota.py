@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from importlib import import_module
 from os import getenv
 from pathlib import Path
@@ -151,6 +152,12 @@ PrintPayload = Callable[
 RolloutEventAppender = Callable[..., dict[str, object]]
 
 
+@dataclass(frozen=True)
+class _QuotaTurnStartObservation:
+    goal_ref: dict[str, str] | None
+    dispatch: dict[str, object] | None
+
+
 def _quota_goal_ref(
     args: argparse.Namespace,
     *,
@@ -281,17 +288,23 @@ def _prepare_quota_command_execution(
     *,
     registry_path: Path,
     runtime_root_arg: str | None,
+    turn_start: _QuotaTurnStartObservation | None = None,
 ) -> tuple[
     dict[str, str] | None,
     dict[str, object] | None,
     QuotaCommandContext,
 ]:
-    goal_ref = _quota_goal_ref(args, registry_path=registry_path)
-    turn_start_hook_dispatch, turn_start_mutated = _dispatch_quota_turn_start_hooks(
-        args,
-        registry_path=registry_path,
-        runtime_root_arg=runtime_root_arg,
-    )
+    if turn_start is None:
+        goal_ref = _quota_goal_ref(args, registry_path=registry_path)
+        turn_start_hook_dispatch, force_projection_refresh = _dispatch_quota_turn_start_hooks(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+        )
+    else:
+        # Re-enter the live decision with the same observation and GoalRef.
+        # The authority reader checks that instance against current state.
+        goal_ref = turn_start.goal_ref
+        turn_start_hook_dispatch = turn_start.dispatch
+        force_projection_refresh = True
     context = _export("prepare_quota_command_context")(
         args,
         registry_path=registry_path,
@@ -300,7 +313,7 @@ def _prepare_quota_command_execution(
         operator_inbox_urgency_projector_factory=(
             _export("build_lark_operator_inbox_urgency_projector")
         ),
-        force_projection_refresh=turn_start_mutated,
+        force_projection_refresh=force_projection_refresh,
     )
     return goal_ref, turn_start_hook_dispatch, context
 
@@ -658,6 +671,7 @@ def handle_quota_command(
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
     retained_action_selection_todo_id: str | None = None,
+    _turn_start: _QuotaTurnStartObservation | None = None,
 ) -> int:
     native_result = handle_native_context_command(args, print_payload=print_payload,
         registry_path=registry_path, runtime_root_arg=runtime_root_arg)
@@ -683,6 +697,7 @@ def handle_quota_command(
                 args,
                 registry_path=registry_path,
                 runtime_root_arg=runtime_root_arg,
+                turn_start=_turn_start,
             )
         )
         (
@@ -707,6 +722,7 @@ def handle_quota_command(
             context.operator_inbox_urgency_projector,
         )
         if args.quota_command == "should-run":
+            turn_start = _QuotaTurnStartObservation(goal_ref, turn_start_hook_dispatch)
             interaction_projection_hooks = (
                 _export("repository_delivery_interaction_hook")(repo_path=Path.cwd()),
                 _export("periodic_report_pending_intent_interaction_hook")(
@@ -780,6 +796,7 @@ def handle_quota_command(
                     registry_path=registry_path, runtime_root_arg=runtime_root_arg,
                     print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
                     capture_directory=capture_directory,
+                    _turn_start=turn_start,
                 )
             action_selection_preflight = (
                 _export("reconcile_requested_quota_action_selection")(
@@ -810,6 +827,7 @@ def handle_quota_command(
                             action_selection.requested_todo_id
                             if action_selection_preflight.receipt is None else None
                         ),
+                        _turn_start=turn_start,
                     )
                 heartbeat_receipt_existing = action_selection_preflight.receipt
                 heartbeat_receipt_existing_status = (

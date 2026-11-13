@@ -26,6 +26,120 @@ def _advance_frontier(project, runtime, operation_id):
     )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_mcp_replan_reentry_reuses_turn_start_observation(tmp_path, monkeypatch, provider):
+    import asyncio
+    import os
+    import sys
+
+    import loopx
+    from loopx.claude_goal_mode.scripts.goalmode_cmd import write_loop_md
+    from loopx.control_plane.host_adapter_settlement import (
+        HostTodoSettlementRequest, host_adapter_turn_instance_id,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+
+    pytest.importorskip("mcp.server.fastmcp")
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_git_checkout(project)
+    (project / ".gitignore").write_text(".loopx/\n")
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    write_loop_md(project, GOAL_ID, AGENT_ID)
+    code, installed = _run_cli(registry, runtime, "extension", "install",
+                               "--bundled", "loopx-lark", "--execute")
+    assert code == 0, installed
+
+    registered = json.loads(registry.read_text())
+    registered["goals"][0].setdefault("control_plane", {})["lark_event_inbox"] = {
+        "enabled": True, "config_path": ".loopx/collector.json",
+    }
+    registry.write_text(json.dumps(registered))
+    (project / ".loopx/collector.json").write_text(json.dumps({
+        "schema_version": "lark_event_collector_config_v1",
+        "enabled": True, "service_name": "loopx-fixture-inbox", "supervisor": "systemd",
+        "consume_timeout": "30m", "profile": "fixture-bot", "turn_start_sync": {"enabled": True},
+        "routes": [{"route_key": "requirements", "chat_id": "oc_fixture",
+                    "event_inbox_config": ".loopx/inbox.json"}],
+    }))
+    (project / ".loopx/inbox.json").write_text(json.dumps({
+        "schema_version": "lark_event_inbox_config_v0", "enabled": True,
+        "inbox_dir": ".loopx/inbox/requirements", "capture_scope": "configured_chat_all",
+        "material_review": {"enabled": True, "drain_limit": 20}, "reply": {"enabled": False},
+    }))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "provider-calls"
+    write_python_host_fixture(bin_dir / "lark-cli", f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+assert "+chat-messages-list" in sys.argv
+calls = Path({str(calls)!r})
+previous = calls.exists()
+with calls.open("a", encoding="utf-8") as log:
+    log.write("history\\n")
+if previous:
+    print(json.dumps({{"ok": False, "error": {{"code": 429}}}}))
+    sys.exit(1)
+print(json.dumps({{"ok": True, "data": {{"messages": [], "has_more": False}}}}))
+""")
+    # Keep both the stdio tool and the same-package quota subprocess real.
+    launcher = """
+import sys
+from loopx.claude_goal_mode.mcp.loopx_mcp import control, mcp
+
+run_cli = control.run_cli
+control.run_cli = lambda args: run_cli(["--runtime-root", sys.argv[1], *args])
+mcp.run()
+"""
+    params = StdioServerParameters(
+        command=sys.executable, args=["-c", launcher, str(runtime)], cwd=str(project),
+        env={"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", os.defpath),
+             "PYTHONPATH": str(Path(loopx.__file__).resolve().parents[1]),
+             "TMPDIR": str(tmp_path), "TEMP": str(tmp_path), "TMP": str(tmp_path),
+             "NODE_OPTIONS": "--experimental-sqlite", "LOOPX_USAGE_PING": "0"},
+    )
+
+    async def exercise():
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                for count, arguments, expected_status in (
+                    (1, {"todo_id": SELECTED_REPLAN_TODO_ID}, "empty"),
+                    (2, {}, "unavailable"),
+                ):
+                    response = await session.call_tool("should_run", arguments)
+                    assert not response.isError, response.content
+                    decision = json.loads(response.structuredContent["result"])
+                    assert decision["effective_action"] == "autonomous_replan_required"
+                    assert not decision["normal_delivery_allowed"]
+                    assert "heartbeat_receipt" not in decision
+                    dispatch = decision["turn_start_capability_hook_dispatch"]
+                    results = [item for item in dispatch["results"]
+                               if item["hook_id"] == "lark.turn_start_inbox_sync"]
+                    assert len(results) == 1, dispatch
+                    result, = results
+                    assert (calls.read_text().splitlines(), result["status"]) == (
+                        ["history"] * count, expected_status,
+                    )
+                    assert result["external_reads_performed"] is True
+
+    asyncio.run(exercise())
+    turn_id = host_adapter_turn_instance_id(HostTodoSettlementRequest(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=SELECTED_REPLAN_TODO_ID,
+        runtime_profile="claude_code", completion_args=(),
+    ))
+    assert _heartbeat_receipt_count(runtime, turn_id) == 0
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize(("binding", "initial_replan"), [
     ("todo", False), ("autonomous_replan", False), ("todo", True),
 ])
