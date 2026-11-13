@@ -458,6 +458,20 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
   return contextReadSectionDigests(request, paths, exactBody);
 }
 
+function summaryReferenceInstructions(references: JsonObject[]): JsonObject[] {
+  return references.length ? [{path: ["context_reference_instruction"], value:
+    "A Todo row with context_ref is exactly the complete row at that JSON pointer in THIS required view. "
+    + "Use that row for every referenced lane; all constraints, evidence, ownership and order still apply. "
+    + "No detail read or older baseline is needed. Missing target content requires recovery of this same capture before dependent work."}] : [];
+}
+
+/** Stage the replan through its owner before reusing rows within that view. */
+export function stagedReplanContextPlan(view: JsonObject, shareSummaryRows: boolean): JsonObject {
+  const references = shareSummaryRows && view.context_reference_instruction === undefined
+    ? quotaSummaryReferences(view) : [];
+  return {staged_context: view, deferred: [], instructions: summaryReferenceInstructions(references), references};
+}
+
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
@@ -536,10 +550,7 @@ export function progressiveContextPlan(request: JsonObject,
     if (scope.marker_path) instructions.push({path: scope.marker_path, value: pointer(scope.path)});
   }
   if (!deferred.length && !references.length) return unchanged;
-  if (references.length) instructions.push({path: ["context_reference_instruction"], value:
-    "A Todo row with context_ref is exactly the complete row at that JSON pointer in THIS required view. "
-    + "Use that row for every referenced lane; all constraints, evidence, ownership and order still apply. "
-    + "No detail read or older baseline is needed. Missing target content requires recovery of this same capture before dependent work."});
+  instructions.push(...summaryReferenceInstructions(references));
   return {deferred, instructions, ...(references.length ? {references} : {})};
 }
 
@@ -550,8 +561,13 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const original = requireJsonObject(request.context, "current projection");
   const staged = jsonObject(plan.staged_context);
-  const context = staged ?? original;
   const details = requireJsonObject(request.native_projection, "supporting material reference");
+  const sourceNavigation = typeof details.command_template === "string"
+    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
+  // Staging already needs an original-source reader, even without any row
+  // references. Price that reader on both sides of the size comparison.
+  const context = staged && staged.context_details === undefined
+    ? {...staged, context_details: sourceNavigation} : staged ?? original;
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const edits = details.progressive_enabled === false ? {deferred: [], instructions: []} : plan;
   const deferred = edits.deferred as JsonObject[], references = (edits.references ?? []) as JsonObject[];
@@ -650,8 +666,6 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   // when the only edit is a same-view Todo reference. Keep an address for the
   // original and include its cost when deciding whether the projection wins.
   const signedSource = request.surface === "complete_turn";
-  const sourceNavigation = typeof details.command_template === "string"
-    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
   if (signedSource && required !== context && required.context_details === undefined)
     required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
@@ -674,9 +688,6 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       required.context_details = sourceNavigation;
   }
   if (staged) {
-    if (required.context_details === undefined) {
-      required = {...required, context_details: sourceNavigation};
-    }
     // Staging can omit whole subtrees, but the retained numeric facts still
     // refer to the same source fields, including in the encoded full/delta.
     const retained = tokens.filter(([path]) => {

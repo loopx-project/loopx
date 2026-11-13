@@ -1,7 +1,7 @@
 import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
-  progressiveContextPlan, scopedReplanYardstickReversal, successorReplanReadSelection,
+  progressiveContextPlan, scopedReplanYardstickReversal, stagedReplanContextPlan, successorReplanReadSelection,
   type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -2465,7 +2465,7 @@ function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
   const identity = precision?.identity ?? contextSourceIdentity(request);
   const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
     replanReadCommands(source, path, undefined, undefined, true), precision);
-  return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
+  return view === source ? undefined : stagedReplanContextPlan(view, request.surface === "complete_turn");
 }
 
 export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source"): JsonObject {

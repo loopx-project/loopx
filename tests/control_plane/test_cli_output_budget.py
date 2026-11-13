@@ -1377,6 +1377,46 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
     assert "do not rewrite criteria after failure" in guidance
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_staged_complete_replan_shares_exact_todo_rows_in_its_required_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path / "replan-todo-rows") as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[1])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+        code, text = _invoke_cli([*command, "--complete-turn", "--decision-output-dir", str(capture),
+            "--turn-instance-id", "replan-todo-rows"])
+        assert code == 0, text
+        view = _json_payload(text)
+        original_bytes = (capture / "decision.json").read_bytes()
+        original = json.loads(original_bytes)
+        assert_complete_turn_decision(original)
+        assert view["effective_action"] == original["effective_action"] == "autonomous_replan_required"
+        assert view["contract_binding"] == original["contract_binding"]
+        assert "context_ref" in view["context_reference_instruction"]
+        visible = view["agent_todo_summary"]
+        saved = original["agent_todo_summary"]
+        assert visible["first_executable_items"] == saved["first_executable_items"]
+        assert visible["backlog_items"] == [
+            {"todo_id": row["todo_id"], "context_ref": f"/agent_todo_summary/first_executable_items/{index}"}
+            for index, row in enumerate(saved["backlog_items"])
+        ]
+        assert [visible["first_executable_items"][int(row["context_ref"].split("/")[-1])]
+                for row in visible["backlog_items"]] == saved["backlog_items"]
+        review = shlex.split(view["replan_action_packet"]["review"])
+        code, detail = _invoke_cli(["--format", "json", *review[review.index("quota"):]])
+        assert code == 0, detail
+        assert json.loads(detail)["obligation_id"] == original["replan_action_packet"]["obligation_id"]
+        assert (capture / "decision.json").read_bytes() == original_bytes
+
+
 @pytest.mark.parametrize("surface", ["quota_should_run", "loopx_turn_plan"])
 @pytest.mark.parametrize("include_agent_vision", [False, True])
 def test_native_stride_projection_rejects_each_missing_decision_field(
