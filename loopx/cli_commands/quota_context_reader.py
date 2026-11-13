@@ -97,15 +97,23 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         options["--codex-context-root"] = args.codex_context_root
     if getattr(args, "max_page_output_bytes", None) is not None:
         options["--max-page-output-bytes"] = str(args.max_page_output_bytes)
-    replaced = set(options)
-    if replaced & {"--codex-context-dir", "--codex-context-root"}:
-        replaced.update(("--codex-context-dir", "--codex-context-root"))
-    for option in replaced:
-        while option in words:
+    replacements: dict[str, str | None] = dict(options)
+    if options.keys() & {"--codex-context-dir", "--codex-context-root"}:
+        for option in ("--codex-context-dir", "--codex-context-root"):
+            replacements.setdefault(option, None)
+    for option, value in replacements.items():
+        start = 0
+        if value is not None:
+            if option not in words:
+                words.extend((option, value))
+                continue
+            # Preserve the saved option's position when rebinding its route.
             index = words.index(option)
+            words[index + 1] = value
+            start = index + 2
+        while option in words[start:]:
+            index = words.index(option, start)
             del words[index:index + 2]
-    for option, value in options.items():
-        words.extend((option, value))
     if turn_envelope and "--turn-envelope" not in words:
         words.append("--turn-envelope")
     if complete_turn and "--complete-turn" not in words:
