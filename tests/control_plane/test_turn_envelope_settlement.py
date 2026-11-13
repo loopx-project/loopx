@@ -224,14 +224,19 @@ def test_absent_plan_is_not_invented_for_historical_or_unbound_packets():
     assert envelope["writeback"]["spend_after_validation"] is False
 
 
-@pytest.mark.parametrize("profile_args, output_format, provider", [
-    (("--codex-app",), "json", "file"),
-    (("--runtime-profile", "generic_cli"), "json", "file"),
-    (("--runtime-profile", "codex_app_ssh_goal"), "json", "file"),
-    (("--runtime-profile", "generic_cli"), "markdown", "file"),
-    (("--runtime-profile", "generic_cli"), "markdown", "sqlite"),
+@pytest.mark.parametrize("profile_args, output_format, provider, ordinary_app", [
+    (("--codex-app",), "json", "file", False),
+    (("--runtime-profile", "generic_cli"), "json", "file", False),
+    (("--runtime-profile", "codex_app_ssh_goal"), "json", "file", False),
+    (("--runtime-profile", "generic_cli"), "markdown", "file", False),
+    (("--runtime-profile", "generic_cli"), "markdown", "sqlite", False),
+    (("--codex-app",), "json", "file", True),
+    (("--runtime-profile", "codex_app_heartbeat"), "json", "sqlite", True),
+    (("--codex-app",), "markdown", "sqlite", True),
 ])
-def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, profile_args, output_format, provider):
+def test_generated_commands_settle_original_turn_once(
+    tmp_path, monkeypatch, profile_args, output_format, provider, ordinary_app,
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
@@ -241,17 +246,22 @@ def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, pro
     args = ("quota", "should-run", *profile_args, "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
             "--turn-instance-id", TURN_ID, )
+    presentation = ("--context-delivery", "off") if ordinary_app else ("--turn-envelope",)
     if output_format == "markdown":
         root = Path(loopx.__file__).resolve().parent.parent
         delivered = subprocess.run(
             [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
-             "--runtime-root", str(runtime), "--format", "markdown", *args, "--turn-envelope"],
+             "--runtime-root", str(runtime), "--format", "markdown", *args, *presentation],
             cwd=root, env={**os.environ, "PYTHONPATH": str(root)},
             capture_output=True, text=True, check=False,
         )
         assert delivered.returncode == 0, delivered.stderr or delivered.stdout
         body, _ = read_cli_context_for_oracle(delivered.stdout, output_format="markdown")
         full = json.loads(body)
+        plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
+    elif ordinary_app:
+        rc, full = _run_cli(registry, runtime, *args, *presentation, cwd=project)
+        assert rc == 0, full
         plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
     else:
         rc, response = _run_cli(registry, runtime, *args, "--context-delivery", "auto", "--turn-envelope")
@@ -263,6 +273,13 @@ def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, pro
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"
         plan = envelope["writeback"]["settlement_plan"]
     assert full["schema_version"] == "loopx_turn_envelope_v1"
+    if ordinary_app:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(full)
+        assert not {"context_delivery", "reference_file", "first_read_command"} & full.keys()
+        assert plan["schema_version"] == "quota_settlement_plan_v1"
+        assert plan["ordered_steps"][2]["owner"] == "agent"
     assert plan == full["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == full["heartbeat_receipt"]["settlement_identity"]
     assert [step["kind"] for step in plan["ordered_steps"]] == [

@@ -505,12 +505,8 @@ def test_public_quota_cli_delivers_required_view_and_signed_original_evidence(ac
     assert context._state(lifecycle)["source_recovery"]["path"] == str(original_path)
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
-    if complete:
-        assert required["schema_version"] == "loopx_turn_envelope_v1"
-        assert_complete_turn_decision(decision)
-    else:
-        assert "schema_version" not in decision and "contract_binding" not in decision
-        assert "schema_version" not in required and "contract_binding" not in required
+    assert required["schema_version"] == "loopx_turn_envelope_v1"
+    assert_complete_turn_decision(decision)
     details = required["context_details"]
     assert details["path"] == str(original_path)
     assert json.loads(Path(details["path"]).read_bytes()) == decision

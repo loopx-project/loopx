@@ -190,7 +190,7 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     args = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
-            '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
+            '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--runtime-profile', 'generic_cli',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-decision'
     code, ordinary = _run_cli(registry, runtime, *args, '--decision-output-dir', str(capture))
