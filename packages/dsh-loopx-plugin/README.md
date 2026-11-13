@@ -549,7 +549,9 @@ pre-step revalidation order remains authoritative.
 DSH's LLM retry plugin owns provider-request retries. For CLI calls, this Driver
 retries only safe fixed-argv LoopX reads and an idempotent `quota should-run`
 receipt, at most twice beyond the first attempt. Every retry uses the same
-`--turn-instance-id`. Typed authority denials, incompatible schemas,
+`--turn-instance-id`. If a saved quota page loses its CLI response, retry
+only that page with the same reference, selection and offset. This also
+applies during pre-step revalidation. Typed authority denials, incompatible schemas,
 cancellation, and human input are never retried. There is no cumulative
 eight-failure breaker or plugin-owned durable activation state. The small
 process-local activation projection is bound to one exact Session and is

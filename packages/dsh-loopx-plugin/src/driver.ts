@@ -356,7 +356,7 @@ const QUOTA_REQUIRED_POINTERS = ['/ok', '/mode', '/goal_id', '/should_run', '/ag
 const QUOTA_RECEIPT_POINTER = '/heartbeat_receipt'
 const QUOTA_OPTIONAL_POINTERS = [QUOTA_RECEIPT_POINTER, '/scheduler_hint', '/reward_memory_recall']
 
-type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal'>
+type QuotaReadOptions = Pick<JsonCommandOptions, 'runner' | 'cwd' | 'signal' | 'attempts' | 'retryDelaysMs'>
 
 function quotaNavigationReference(payload: Record<string, unknown>): string | undefined {
   if (payload.schema_version !== QUOTA_NAVIGATION_SCHEMA || payload.ok !== true) return undefined
@@ -1278,7 +1278,13 @@ export class LoopXContinuationDriver {
     // The 2.3 CLI supplies immutable navigation and its bounded reader. Older
     // supported CLIs continue to answer this Host-only call with raw JSON.
     const progressive = supportedLoopXVersion(command.version, '2.3.0') !== undefined
-    const options = { runner: this.runner, cwd: agent.session.header.cwd, signal }
+    const options = {
+      runner: this.runner,
+      cwd: agent.session.header.cwd,
+      signal,
+      attempts: 3,
+      retryDelaysMs: this.retryDelaysMs,
+    }
     const rawAdmission = (payload: Record<string, unknown>) => payload.goal_id === binding.goalId
       && typeof payload.ok === 'boolean' && typeof payload.should_run === 'boolean'
     const quota = await runJsonCommand(
@@ -1295,15 +1301,13 @@ export class LoopXContinuationDriver {
       ],
       {
         ...options,
-        attempts: 3,
-        retryDelaysMs: this.retryDelaysMs,
         ...(progressive ? {} : { env: { ...process.env, LOOPX_CONTEXT_DELIVERY: 'off' } }),
         validate: payload => rawAdmission(payload) || (progressive && quotaNavigationReference(payload) !== undefined),
       },
     )
     const reference = progressive ? quotaNavigationReference(quota) : undefined
     if (reference === undefined) return quota
-    // Reading a saved capture is outside the guard's transport retry.
+    // Retry the exact saved page on transport loss, outside the guard retry.
     const decision = await readQuotaCapture(command, reference, options, revalidateOnly)
     if (!rawAdmission(decision)) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
