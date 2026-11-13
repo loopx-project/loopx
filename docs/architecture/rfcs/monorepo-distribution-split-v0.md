@@ -3764,3 +3764,19 @@ entry and instruction repair, not proof that a model adopted the guidance.
 No new lifecycle owner, model execution, preset or installed-host release is
 introduced. Full R1/V1–V5/V10, progressive control, complete cost evidence and
 the original-goal regression remain open; all original failures are retained.
+
+### 2026-11-13 — Original record reads stop when their disclosure closes
+
+The optional attached-work conversation retries an interrupted detail read once
+at the same source, record and character offset. Closing either the record or
+its work-activity group cancels that read, including its hidden retry; reopening
+retains the loaded text and position for an explicit continuation. The existing
+HTTP reader, fingerprints and native-input boundary remain the owners.
+
+The unrepaired candidate's real HTTP/browser negative case issued a second read
+after closure. Source and an isolated Python 3.11 wheel now qualify both closure
+boundaries, interrupted-success recovery, denied-body refusal and complete
+Unicode readback through the real LoopX reader with a synthetic Desktop peer.
+This qualifies optional record reading, not model-context retention, managed
+V4/R1, split-package M3, installed-App adoption or complete costs. The original
+Goal regression, acceptance gaps, authority and frozen failures remain intact.

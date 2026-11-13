@@ -61,6 +61,7 @@ with (
         live_revision = 0
         live_updates = 0
         body_fault = None
+        content_release = threading.Event()
 
         def open_spy(argv, **options):
             global fail_next_open
@@ -94,13 +95,22 @@ with (
                     and (
                         "before" in parse_qs(urlsplit(self.path).query)
                         if body_fault == "history"
+                        else "entry_id" in parse_qs(urlsplit(self.path).query)
+                        if body_fault in {"content", "content-denied", "content-held"}
                         else "agent_id" not in parse_qs(urlsplit(self.path).query)
                     )
                 ):
                     # Send actual headers, then end the connection short of the
                     # declared body length (or let the browser's read time out).
                     mode, body_fault = body_fault, None
-                    status = {"timeout": 503, "drop": 403, "history": 200}[mode]
+                    status = {
+                        "timeout": 503,
+                        "drop": 403,
+                        "history": 200,
+                        "content": 200,
+                        "content-denied": 403,
+                        "content-held": 200,
+                    }[mode]
                     self.send_response(status)
                     self.send_header(
                         "Content-Type",
@@ -118,6 +128,8 @@ with (
                     self.wfile.flush()
                     if mode == "timeout":
                         time.sleep(7.5)
+                    elif mode == "content-held":
+                        content_release.wait(7.5)
                     self.close_connection = True
                 else:
                     super().do_GET()
@@ -138,9 +150,18 @@ with (
                     "/fixture/discovery-body-timeout": "timeout",
                     "/fixture/discovery-body-drop": "drop",
                     "/fixture/history-body-drop": "history",
+                    "/fixture/content-body-drop": "content",
+                    "/fixture/content-body-denied": "content-denied",
+                    "/fixture/content-body-hold": "content-held",
                 }
                 if self.path in faults:
+                    if self.path == "/fixture/content-body-hold":
+                        content_release.clear()
                     body_fault = faults[self.path]
+                    self._send_json({"ok": True})
+                    return
+                if self.path == "/fixture/content-body-release":
+                    content_release.set()
                     self._send_json({"ok": True})
                     return
                 if self.path == "/fixture/work-records":

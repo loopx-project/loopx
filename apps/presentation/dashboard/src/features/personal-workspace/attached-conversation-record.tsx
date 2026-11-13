@@ -10,11 +10,12 @@ export type ConversationRecord = {
   tool_exit_codes?: number[];
 };
 export type ContentPage = {text: string; next_offset: number; has_more: boolean};
+type LoadContent = (record: ConversationRecord, offset: number, signal: AbortSignal) => Promise<ContentPage>;
 
 /** Keep source order, but give dialogue priority over consecutive tool events. */
 export function AttachedConversationTimeline({records, ...props}: {
   records: ConversationRecord[]; agent: string; zh: boolean;
-  load: (record: ConversationRecord, offset: number) => Promise<ContentPage>;
+  load: LoadContent;
   live?: boolean; active?: boolean;
 }) {
   const groupKeys = useRef(new Map<string, string>());
@@ -80,7 +81,7 @@ function ToolContent({text, complete, zh}: {text: string; complete: boolean; zh:
 
 export function AttachedConversationRecord({record, agent, zh, load, live = false, active = false}: {
   record: ConversationRecord; agent: string; zh: boolean;
-  load: (record: ConversationRecord, offset: number) => Promise<ContentPage>;
+  load: LoadContent;
   live?: boolean;
   active?: boolean;
 }) {
@@ -90,6 +91,8 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [offset, setOffset] = useState(Array.from(record.text).length);
+  const contentRead = useRef<AbortController | null>(null);
+  useLayoutEffect(() => () => contentRead.current?.abort(), []);
   const labels: Record<string, string> = zh ? {
     task_started: "开始执行", task_complete: "本轮结束", turn_aborted: "执行中断", error: "执行报错",
     function_call: "工具调用", custom_tool_call: "工具调用",
@@ -103,18 +106,51 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     record.role === "user" ? (zh ? "你" : "You") : record.role === "assistant" ? agent :
     `${labels[record.kind] ?? (zh ? "记录暂不可读" : "Record unavailable")}${record.label && record.label !== record.kind ? ` · ${record.label}` : ""}`;
   const nonzeroCodes = [...new Set(record.tool_exit_codes?.filter(code => code !== 0))];
-  async function continueReading() {
-    if (loading) return;
+  async function continueReading(button: HTMLButtonElement) {
+    if (contentRead.current) return;
+    const disclosures: HTMLDetailsElement[] = [];
+    for (let element = button.parentElement; element; element = element.parentElement) {
+      if (element instanceof HTMLDetailsElement) {
+        if (!element.open) return;
+        disclosures.push(element);
+      }
+    }
+    const controller = new AbortController();
+    contentRead.current = controller;
     setLoading(true); setError("");
+    const finish = () => {
+      if (contentRead.current !== controller) return;
+      contentRead.current = null;
+      setLoading(false);
+    };
+    // Native details can hide the record without unmounting it. Observe the
+    // open attributes while reading, including a close followed by a reopen.
+    const visibility = new MutationObserver(onVisibilityChange);
+    controller.signal.addEventListener("abort", () => visibility.disconnect(), {once: true});
+    function onVisibilityChange(changes: MutationRecord[]) {
+      const reopened = changes.some(change => change.oldValue === null);
+      const closed = disclosures.some(disclosure => !disclosure.open);
+      if (!reopened && !closed) return;
+      controller.abort();
+      finish();
+    }
+    for (const disclosure of disclosures) {
+      visibility.observe(disclosure, {attributeFilter: ["open"], attributeOldValue: true});
+    }
     try {
-      const page = await load(record, offset);
+      const page = await load(record, offset, controller.signal);
+      if (controller.signal.aborted) return;
       setText(previous => previous + page.text); setOffset(page.next_offset); setMore(page.has_more);
-    } catch (failure) {setError(String(failure));}
-    finally {setLoading(false);}
+    } catch (failure) {
+      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      visibility.disconnect();
+      if (!controller.signal.aborted) finish();
+    }
   }
   const content = <>
     {record.redacted ? <p>{zh ? "此段包含疑似凭据，内容已隐藏。" : "This content contains credential-shaped data and has been withheld."}</p> : record.role === "tool" ? <ToolContent text={text} complete={!more} zh={zh}/> : <MarkdownText text={text}/>}
-    {more ? <button type="button" disabled={loading} onClick={() => void continueReading()}>{loading ? (zh ? "正在读取…" : "Loading…") : (zh ? "继续读取完整内容" : "Read more of this record")}</button> : null}
+    {more ? <button type="button" disabled={loading} onClick={event => void continueReading(event.currentTarget)}>{loading ? (zh ? "正在读取…" : "Loading…") : (zh ? "继续读取完整内容" : "Read more of this record")}</button> : null}
     {error ? <p role="alert">{error}</p> : null}
   </>;
   const heading = <><strong>{live && record.role !== "activity" ? <ActivityMark active={active} zh={zh}/> : null}{title}</strong>{nonzeroCodes.length ? <span className="attached-record-warning">{zh ? "退出码" : "Exit code"} {nonzeroCodes.join(", ")}</span> : null}{record.timestamp ? <time dateTime={record.timestamp}>{new Date(record.timestamp).toLocaleString()}</time> : null}</>;
