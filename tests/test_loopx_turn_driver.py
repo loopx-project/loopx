@@ -1251,6 +1251,84 @@ def test_run_once_conflicting_turn_identity_does_not_claim_another_todo(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("requested_turn", "expected_error"),
+    [
+        (" bound-preparation-turn ", "belongs to another settlement identity"),
+        ("bound preparation turn", "turn_instance_id must be"),
+    ],
+    ids=["padded-valid", "explicit-invalid"],
+)
+def test_run_once_validates_the_turn_identity_before_claiming(
+    tmp_path, monkeypatch, provider, requested_turn, expected_error,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the conflicting successor fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        guard_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0001",
+            "--turn-instance-id", "bound-preparation-turn", "--context-delivery", "off",
+        ])
+    bound = read_cli_policy_payload(output.getvalue(), returncode=guard_code)
+    assert guard_code == 0, bound
+    assert bound["heartbeat_receipt"]["settlement_identity"]["todo_id"] == "todo_fixture0001"
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--todo-id", "todo_fixture0002",
+            "--turn-instance-id", requested_turn,
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    refused = json.loads(output.getvalue())
+    assert exit_code == 1, refused
+    assert expected_error in refused["error"]
+    assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        lease_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", "inspect", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", "todo_fixture0002",
+        ])
+    lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+    assert lease_code == 0, lease
+    assert lease["active"] is False, lease
+    assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_run_once_reserves_turn_before_claim_under_competing_guard(
     tmp_path, monkeypatch, provider,
 ):

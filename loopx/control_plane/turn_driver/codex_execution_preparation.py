@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ...command_invocation import command_argv, current_loopx_cli_argv
+from ...turn_identity import normalize_turn_instance_id
 from ..content_digest import BARE_SHA256_PATTERN
 
 
@@ -252,9 +253,17 @@ def builtin_execution_preparation_claim(
     ):
         return None
     heartbeat = decision.get("heartbeat_receipt")
-    exact_turn_instance_id = _exact_identity(turn_instance_id)
+    # Resolve one Turn identity before reading a receipt or running the claim.
+    # The transaction plan applies the same normalization, so a padded or
+    # invalid identity must be refused here; otherwise the claim could lease a
+    # different Todo before planning rejects the mismatch.
+    exact_turn_instance_id = normalize_turn_instance_id(turn_instance_id)
     if exact_turn_instance_id is None and isinstance(heartbeat, Mapping):
-        exact_turn_instance_id = _exact_identity(heartbeat.get("turn_instance_id"))
+        receipt_turn_instance_id = heartbeat.get("turn_instance_id")
+        if isinstance(receipt_turn_instance_id, str):
+            exact_turn_instance_id = normalize_turn_instance_id(
+                receipt_turn_instance_id
+            )
     if exact_turn_instance_id is not None:
         # The receipt lookup and the ordinary claim are separate operations.
         # Reserve the exact Turn binding before the claim can create a lease for
