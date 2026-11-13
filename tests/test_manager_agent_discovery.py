@@ -17,7 +17,7 @@ def setup(tmp_path, *, owner=True, scope=None, valid=lambda: True):
             "registered_agents": [f"worker-{i:02}" for i in range(35)],
             "agent_profiles": {"worker-34": {"profile_role": "reviewer", "scope_summary": "Independent PR review"}},
         }},
-        {"id": "history", "activation_state": "stopped", "registered_agents": ["old-worker"]},
+        {"id": "history", "activation": {"state": "stopped"}, "registered_agents": ["old-worker"]},
         {"id": "private", "registered_agents": ["hidden-worker"]},
     ]}))
     records = []
