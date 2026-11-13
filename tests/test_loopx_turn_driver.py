@@ -46,6 +46,7 @@ from loopx.control_plane.turn_driver.subagent_execution_topology import (
 )
 from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.quota.live_decision import bind_scheduler_followup_cli_routes
+from loopx.rollout_event_log import rollout_event_log_path
 
 
 def _envelope(
@@ -1314,6 +1315,166 @@ def test_run_once_validates_the_turn_identity_before_claiming(
     assert exit_code == 1, refused
     assert expected_error in refused["error"]
     assert not log.exists()
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        lease_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", "inspect", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", "todo_fixture0002",
+        ])
+    lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+    assert lease_code == 0, lease
+    assert lease["active"] is False, lease
+    assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("validation_json", "expected_error"),
+    [
+        ("not-json", "Expecting value"),
+        ('{"not": "an-array"}', "must be a JSON string array"),
+    ],
+    ids=["malformed", "wrong-shape"],
+)
+def test_run_once_rejects_invalid_validator_json_before_claiming(
+    tmp_path, monkeypatch, provider, validation_json, expected_error,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+    rollout_log = rollout_event_log_path(runtime, "loopx-turn-fixture")
+    before_log = rollout_log.read_bytes() if rollout_log.exists() else b""
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json", validation_json,
+            "--execute",
+        ])
+    refused = json.loads(output.getvalue())
+    assert exit_code == 1, refused
+    assert expected_error in refused["error"]
+    assert not log.exists()
+    assert (rollout_log.read_bytes() if rollout_log.exists() else b"") == before_log
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        lease_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "task-lease", "inspect", "--goal-id", "loopx-turn-fixture",
+            "--todo-id", "todo_fixture0001",
+        ])
+    lease = read_cli_policy_payload(output.getvalue(), returncode=lease_code)
+    assert lease_code == 0, lease
+    assert lease["active"] is False, lease
+    assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_interval_wait_does_not_claim_the_next_todo(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the interval successor fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        read_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "automation-cadence", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture",
+        ])
+    policy = read_cli_policy_payload(output.getvalue(), returncode=read_code)
+    assert read_code == 0, policy
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        configure_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "automation-cadence", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--min-interval-minutes", "3",
+            "--expected-revision", str(policy["configuration_revision"]),
+            "--owner-reference", "interval fixture", "--execute",
+        ])
+    configured = read_cli_policy_payload(output.getvalue(), returncode=configure_code)
+    assert configure_code == 0 and configured["written"] is True, configured
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        first_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--turn-instance-id", "interval-first", "--host", "codex-cli",
+            "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    first = json.loads(output.getvalue())
+    assert first_code == 0 and first["status"] == "committed", first
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+    rollout_log = rollout_event_log_path(runtime, "loopx-turn-fixture")
+    before_log = rollout_log.read_bytes() if rollout_log.exists() else b""
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        waiting_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--todo-id", "todo_fixture0002", "--turn-instance-id", "interval-second",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    waiting = json.loads(output.getvalue())
+    assert waiting_code == 1, waiting
+    assert waiting["status"] == "interval_wait", waiting
+    assert waiting["effects"]["host_invoked"] is False, waiting
+    assert waiting["effects"]["state_written"] is False, waiting
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 1, calls
+    assert (rollout_log.read_bytes() if rollout_log.exists() else b"") == before_log
 
     output = io.StringIO()
     with contextlib.redirect_stdout(output):

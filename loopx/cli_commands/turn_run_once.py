@@ -92,6 +92,7 @@ def execute_turn_run_once(
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    preclaim_cadence_wait: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -108,6 +109,35 @@ def execute_turn_run_once(
             native_task_validator=native_task_validator,
             validator_builder=build_loopx_turn_command_validator,
         )
+        if preclaim_cadence_wait is not None:
+            # The owner's interval read refused the start before any Turn write.
+            # Return its wait through the normal execution projection without
+            # reserving an interval, claiming a Todo, or journaling a Turn.
+            from ..control_plane.turn_driver.execution_readback import execution_payload
+
+            planned_host = payload.get("host")
+            waiting = {
+                "status": "interval_wait",
+                "host": planned_host if isinstance(planned_host, Mapping) else {},
+                "completed_phases": [],
+                "reason": str(
+                    preclaim_cadence_wait.get("reason")
+                    or "automatic start not admitted"
+                ),
+                "admission": dict(preclaim_cadence_wait),
+            }
+            return execution_payload(
+                payload,
+                waiting,
+                execute=True,
+                replayed=False,
+                effects={
+                    "host_invoked": False,
+                    "state_written": False,
+                    "quota_spent": False,
+                    "scheduler_acknowledged": False,
+                },
+            )
         selected_todo = execution_context["selected_todo"]
         expected_todo_text_sha256 = execution_context["sha256"]
         transaction = (

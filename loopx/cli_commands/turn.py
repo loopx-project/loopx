@@ -190,6 +190,7 @@ def handle_turn_command(
                 "--operation-source-route-json requires --codex-operation-tools for codex-cli or --dsh-operation-module for dsh"
             )
         decision: dict[str, Any] | None = None
+        preclaim_cadence_wait: dict[str, Any] | None = None
         # A resumed Turn already chose its transaction. New work and context
         # belong to the next Turn, not to recovery of this journal.
         if args.turn_command == "run-once" and args.resume_turn_key:
@@ -298,7 +299,23 @@ def handle_turn_command(
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
             if execution_preparer is not None and args.turn_command == "run-once" and args.execute:
-                prepared_todo = execution_preparer(decision)
+                from .turn_cadence import managed_cadence_wait_projection
+                from .turn_host_request import validate_turn_host_inputs
+
+                # Transport and interval refusals land before the Turn receipt
+                # reservation and the ordinary claim can write a lease.
+                validate_turn_host_inputs(args)
+                preclaim_cadence_wait = managed_cadence_wait_projection(
+                    runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    automation_id=getattr(args, "automation_id", None),
+                )
+                prepared_todo = (
+                    None
+                    if preclaim_cadence_wait is not None
+                    else execution_preparer(decision)
+                )
                 if prepared_todo is not None:
                     # Host preparation changes canonical lease state. Plan and
                     # settle against a fresh read of the same Turn and Todo.
@@ -431,6 +448,7 @@ def handle_turn_command(
                 native_session_binding_resolver=native_session_binding_resolver,
                 native_completion_lease_resolver=native_completion_lease_resolver,
                 native_task_validator=native_task_validator,
+                preclaim_cadence_wait=preclaim_cadence_wait,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

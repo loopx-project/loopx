@@ -21,6 +21,52 @@ class ManagedCadenceStart(NamedTuple):
     confirm: Callable[[], None]
 
 
+def managed_cadence_wait_projection(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    automation_id: str | None,
+) -> dict[str, Any] | None:
+    """Read the owner interval before any Turn write and report a wait.
+
+    The authoritative reservation stays with the driver; this read only keeps
+    an interval refusal from claiming a Todo or appending a Turn receipt first.
+    """
+
+    if not agent_id:
+        return None
+    from ..control_plane.quota.automation_cadence_readback import (
+        automation_cadence_readback,
+    )
+
+    readback = automation_cadence_readback(
+        effect_runtime_result(
+            "quota.automation_cadence.manage",
+            {
+                "operation": "read",
+                "runtime_root": str(runtime_root),
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "automation_id": automation_id,
+            },
+        ),
+        expected_goal_id=goal_id,
+        expected_agent_id=agent_id,
+        expected_automation_id=automation_id,
+    )
+    eligibility = readback["eligibility"]
+    if eligibility.get("state") != "waiting":
+        return None
+    return {
+        "admitted": False,
+        "reason": eligibility["reason"],
+        "next_eligible_at_ms": eligibility["next_eligible_at_ms"],
+        "min_interval_minutes": readback["min_interval_minutes"],
+        "pre_model_admission": "managed_turn_only",
+    }
+
+
 def managed_cadence_start(
     *,
     runtime_root: Path,

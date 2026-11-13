@@ -14,6 +14,42 @@ from typing import Any, cast
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 
 
+def validate_turn_host_inputs(
+    args: argparse.Namespace,
+) -> tuple[list[str] | None, list[str] | None]:
+    """Validate transport input without reading a Turn or writing state."""
+
+    if args.host == "generic-cli":
+        if not args.host_command_json:
+            raise ValueError(
+                "generic-cli requires --host-adapter-command-json "
+                "(alias --host-command-json)"
+            )
+        raw_argv = json.loads(args.host_command_json)
+        if not isinstance(raw_argv, list) or not all(
+            isinstance(item, str) for item in raw_argv
+        ):
+            raise ValueError(
+                "--host-adapter-command-json must be a JSON string array"
+            )
+    else:
+        if args.host_command_json:
+            raise ValueError(f"{args.host} does not accept --host-command-json")
+        if getattr(args, "host_adapter_request_schema", None):
+            raise ValueError("--host-adapter-request-schema is only for generic-cli")
+        raw_argv = None
+    raw_validation_argv = None
+    if args.validation_command_json:
+        raw_validation_argv = json.loads(args.validation_command_json)
+        if not isinstance(raw_validation_argv, list) or not all(
+            isinstance(item, str) for item in raw_validation_argv
+        ):
+            raise ValueError(
+                "--validation-command-json must be a JSON string array"
+            )
+    return raw_argv, raw_validation_argv
+
+
 def prepare_turn_host_request(
     args: argparse.Namespace, payload: Mapping[str, Any], *,
     native_host_runner: Callable[..., dict[str, Any]] | None,
@@ -35,36 +71,11 @@ def prepare_turn_host_request(
         native_host_runner is not None or native_session_binding_resolver is not None
     ):
         raise ValueError("a native Chat connection cannot replace a selected CLI host")
-    if args.host == "generic-cli":
-        if not args.host_command_json:
-            raise ValueError(
-                "generic-cli requires --host-adapter-command-json "
-                "(alias --host-command-json)"
-            )
-        raw_argv = json.loads(args.host_command_json)
-        if not isinstance(raw_argv, list) or not all(
-            isinstance(item, str) for item in raw_argv
-        ):
-            raise ValueError(
-                "--host-adapter-command-json must be a JSON string array"
-            )
-    else:
-        if args.host_command_json:
-            raise ValueError(f"{args.host} does not accept --host-command-json")
-        if getattr(args, "host_adapter_request_schema", None):
-            raise ValueError("--host-adapter-request-schema is only for generic-cli")
-        raw_argv = None
+    raw_argv, raw_validation_argv = validate_turn_host_inputs(args)
     if native_task_validator is not None and args.host != "codex-app-server":
         raise ValueError("a native task validator cannot replace a selected CLI validator")
     task_validator = native_task_validator
-    if args.validation_command_json:
-        raw_validation_argv = json.loads(args.validation_command_json)
-        if not isinstance(raw_validation_argv, list) or not all(
-            isinstance(item, str) for item in raw_validation_argv
-        ):
-            raise ValueError(
-                "--validation-command-json must be a JSON string array"
-            )
+    if raw_validation_argv is not None:
         if task_validator is None:
             task_validator = validator_builder(
                 raw_validation_argv,
