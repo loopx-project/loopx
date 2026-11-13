@@ -362,6 +362,13 @@ def prepare_quota_command_context(
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
             include_presentation_projections=False,
+            # A scheduler ACK/failure return writes cadence, not settlement
+            # facts. One damaged audit row must not fail the whole status read
+            # before the tolerant native fence can answer it.
+            tolerate_malformed_settlement_history=command in {
+                "scheduler-ack-current",
+                "scheduler-fail-current",
+            },
         )
         if bool(getattr(args, "write_projection_cache", False)):
             cache_metadata = write_status_projection_cache(

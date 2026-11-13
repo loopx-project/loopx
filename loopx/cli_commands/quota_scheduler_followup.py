@@ -76,6 +76,11 @@ def _build_scheduler_followup_decision(
             repository_delivery_interaction_hook(repo_path=Path.cwd()),
         ),
         goal_ref=goal_ref,
+        # The compatibility ACK/failure route writes scheduler cadence, not
+        # settlement facts: one damaged audit row must not turn a valid return
+        # into a failure before the tolerant native fence runs. Exact
+        # settlement branches keep the strict readback.
+        tolerate_malformed_settlement_history=True,
     )
 
 

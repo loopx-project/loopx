@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from examples.control_plane.quota_plan_fixtures import (
+    SCOPED_AGENT_ID,
+    write_cli_fixture,
+)
 from loopx.cli_commands import quota_scheduler_followup
 from loopx.control_plane.quota.scheduler_ack import _run_native_followup
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.rollout_event_log import build_rollout_event, rollout_event_log_path
 
 
@@ -158,6 +163,34 @@ def test_superseded_receipt_is_decided_by_the_native_fence(
     assert calls and calls[0]["turn_instance_id"] == "turn-1"
 
 
+def test_scheduler_followup_builds_from_the_tolerant_settlement_view(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def _decision(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"effective_action": "execute_todo"}
+
+    monkeypatch.setattr(
+        quota_scheduler_followup,
+        "build_live_quota_should_run_decision",
+        _decision,
+    )
+    quota_scheduler_followup._build_scheduler_followup_decision(
+        {},
+        _followup_args(),
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        heartbeat_receipt=None,
+        turn_instance_id=None,
+        codex_app_current_rrule=None,
+        scheduler_context=None,
+        operator_inbox_urgency_projector=lambda **_kwargs: {},
+    )
+    assert captured["tolerate_malformed_settlement_history"] is True
+
+
 def test_malformed_log_line_does_not_block_the_ack_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -235,3 +268,65 @@ def test_fresh_receipt_still_reaches_the_ack_with_its_turn_fence(
 
     assert payload == {"ok": True}
     assert calls and calls[0]["turn_instance_id"] == "turn-1"
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("command", ["scheduler-ack-current", "scheduler-fail-current"])
+def test_real_compatibility_cli_survives_a_damaged_audit_row(
+    tmp_path: Path, provider: str, command: str
+) -> None:
+    registry, runtime_root, project = write_cli_fixture(
+        tmp_path / provider, scoped_agents=True, provider=provider,
+    )
+    goal_id = "needs-operator"
+    turn_id = "turn-damaged-history"
+    code, guard = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--app-automation-current-rrule",
+        "FREQ=MINUTELY;INTERVAL=3",
+        "--turn-instance-id",
+        turn_id,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, guard
+
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    with log_path.open("ab") as handle:
+        handle.write(
+            b'{"schema_version":"loopx_rollout_event_v0",'
+            b'"event_kind":"quota_should_run","goal_id":"needs-operator",'
+            b'"agent_id":"' + SCOPED_AGENT_ID.encode() + b'",'
+            b'"run_id":"later-turn","summary":"'
+            b"\xff"
+            b'"}\n'
+        )
+
+    # The ACK derives its applied RRULE from the current hint; the failure
+    # return records the hint target. Both are ordinary scheduler writebacks.
+    operation_args = ()
+    code, result = run_json_cli_result(
+        "quota",
+        command,
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--trae_app",
+        "--turn-instance-id",
+        turn_id,
+        "--execute",
+        *operation_args,
+        registry_path=registry,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert code == 0, result
+    assert result["ok"] is True, result
+    assert result["scheduler_state_mutated"] is True

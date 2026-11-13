@@ -558,6 +558,31 @@ test("scoped supersede settles only its exact Turn and never terminal acceptance
   });
 });
 
+test("only the tolerant readback route survives a damaged audit row", async () => {
+  const root = await fixture({writeback: true, spend: true});
+  try {
+    const clean = await readQuotaSettlement(request(root));
+    const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+    await appendFile(path, Buffer.concat([
+      Buffer.from('{"schema_version":"loopx_rollout_event_v0","event_kind":"quota_should_run","goal_id":"'),
+      Buffer.from(goalId),
+      Buffer.from('","agent_id":"'),
+      Buffer.from(agentId),
+      Buffer.from('","run_id":"later-turn","summary":"'),
+      Buffer.from([0xff]),
+      Buffer.from('"}\n'),
+    ]));
+    await assert.rejects(readQuotaSettlement(request(root)), {
+      code: "malformed_settlement_state",
+    });
+    const tolerant = await readQuotaSettlement(request(root, {
+      tolerate_malformed_history: true,
+    }));
+    assert.deepEqual(tolerant, clean,
+      "a damaged row must not change the settlement facts a valid return can read");
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("settlement progress requires both effects and exact receipts", async t => {
   const cases = [
     { guard: false, state: "identity_required", next: "validation" },

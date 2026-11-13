@@ -1093,6 +1093,7 @@ def build_attention_queue(
     current_registry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     include_goal_channel_projection: bool = True,
+    tolerate_malformed_settlement_history: bool = False,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1155,6 +1156,9 @@ def build_attention_queue(
             monitor_signal_waiting_on=MONITOR_SIGNAL_WAITING_ON,
             external_progress_review_context=external_progress_review_context,
             registry_path=registry_path,
+            tolerate_malformed_settlement_history=(
+                tolerate_malformed_settlement_history
+            ),
         ),
         runtime_root=runtime_root,
         include_task_graph=include_task_graph,
@@ -1325,7 +1329,10 @@ def build_status_runtime_summaries(
     )
 
 
-def build_status_collection_context() -> StatusCollectionContext:
+def build_status_collection_context(
+    *,
+    tolerate_malformed_settlement_history: bool = False,
+) -> StatusCollectionContext:
     return StatusCollectionContext(
         load_registry=load_registry,
         resolve_runtime_root=resolve_runtime_root,
@@ -1341,6 +1348,9 @@ def build_status_collection_context() -> StatusCollectionContext:
         build_goal_channel_notification_projection=build_goal_channel_notification_projection,
         status_control_plane_context_limit=STATUS_CONTROL_PLANE_CONTEXT_LIMIT,
         max_todo_index_items=MAX_TODO_INDEX_ITEMS,
+        tolerate_malformed_settlement_history=(
+            tolerate_malformed_settlement_history
+        ),
     )
 
 
@@ -1359,6 +1369,7 @@ def collect_status(
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
+    tolerate_malformed_settlement_history: bool = False,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1377,5 +1388,9 @@ def collect_status(
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
             include_presentation_projections=include_presentation_projections,
-            context=build_status_collection_context(),
+            context=build_status_collection_context(
+                tolerate_malformed_settlement_history=(
+                    tolerate_malformed_settlement_history
+                ),
+            ),
         )
