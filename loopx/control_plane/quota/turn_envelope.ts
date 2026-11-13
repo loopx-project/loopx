@@ -4,6 +4,7 @@ import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiv
   progressiveContextPlan, scopedReplanYardstickReversal, stagedReplanContextPlan, successorReplanReadSelection,
   type PreparationScopeDetail, type ReusableExactBody} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import { projectHostTodoSettlementGuard } from "../turn_driver/host_todo_settlement_guard.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
@@ -2563,6 +2564,14 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       : requireBoolean(request.include_legacy_envelope, "include_legacy_envelope");
     if (legacy && request.source_edits !== true) {
       throw new EffectRuntimeRequestError("legacy Turn view requires raw complete source edits");
+    }
+    if (request.host_todo_settlement === true) {
+      if (request.source_edits === true || legacy) {
+        throw new EffectRuntimeRequestError("Host Todo settlement cannot request a second decision view");
+      }
+      // The result is composed and checked here. For a supplied complete
+      // source, composition first verifies its original binding and digest.
+      return projectHostTodoSettlementGuard(composeCompleteTurnDecision(request));
     }
     const result = composeCompleteTurnDecision(request);
     if (request.source_edits !== true) return result;

@@ -326,7 +326,7 @@ def _prepare_quota_result_context(
         # Preserve the original validation error when activation itself failed.
         activation = {"progressive_enabled": False, "enabled": False}
     if args.quota_command == "should-run":
-        if getattr(args, "complete_turn", False):
+        if getattr(args, "complete_turn", False) or getattr(args, "host_todo_settlement", False):
             payload = _project_native_cli_settlement(payload, explicit_complete=True)
         elif (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
                 and activation.get("scenario") == "codex_app_heartbeat"
@@ -413,7 +413,8 @@ def _emit_quota_result(
             runtime_root=context.runtime_root if context is not None else None)
     # The ordinary quota caller retains its existing source and view until
     # the complete contract is qualified for default adoption.
-    complete_source = any(getattr(args, name, None) for name in (
+    host_todo_settlement = getattr(args, "host_todo_settlement", False)
+    complete_source = host_todo_settlement or any(getattr(args, name, None) for name in (
         "complete_turn", "turn_envelope", "decision_handoff_socket",
     ))
     activation = None
@@ -452,6 +453,16 @@ def _emit_quota_result(
             from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
             try:
+                if host_todo_settlement:
+                    from ..control_plane.quota.turn_envelope import compose_host_todo_settlement_guard
+
+                    # A collection failure has no decided contract to compose.
+                    observation = (compose_host_todo_settlement_guard(
+                        payload, scheduler_execution_context=context.scheduler_context if context is not None else None,
+                        capability_context=capability_context,
+                    ) if isinstance(payload.get("interaction_contract"), Mapping) else payload)
+                    print_payload(observation, args.format, _quota_renderer(args))
+                    return 0 if observation.get("ok") is True else 1
                 payload, raw_envelope, legacy_view = compose_quota_cli_source(
                     payload, args, activation, compose=_export("compose_turn_decision"),
                     scheduler_context=context.scheduler_context if context is not None else None,

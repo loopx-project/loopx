@@ -4,7 +4,6 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -29,8 +28,6 @@ class GoalModeMCPConfig:
     server_name: str
     runtime_profile: str
     legacy_host_surface: str
-    scheduler_owner: str = "agent_cli_loop"
-    execution_mode: str = "interactive"
     setup_hint: str = "connect this host adapter first"
 
 
@@ -92,29 +89,18 @@ class GoalModeMCPControlPlane:
         return (effective.get("execution_profile") or {}).get("stride_strategy") == "evidence_conditioned_v1"
 
     def command_prefix(self) -> list[str]:
-        executable = shutil.which("loopx")
-        return [executable] if executable else [sys.executable, "-m", "loopx.cli"]
-
-    @staticmethod
-    def _runtime_profile_flag_is_unsupported(
-        result: subprocess.CompletedProcess[str],
-    ) -> bool:
-        diagnostic = str(result.stderr or "").lower()
-        return (
-            result.returncode == 2
-            and "--runtime-profile" in diagnostic
-            and (
-                "unrecognized arguments" in diagnostic
-                or "invalid choice" in diagnostic
-            )
+        # The MCP server and its CLI exchange a private settlement contract.
+        # Resolve the CLI from this server's package, even if PATH or the
+        # current workspace contains a different LoopX version.
+        package_root = Path(__file__).resolve().parent.parent
+        launcher = (
+            "import runpy,sys;"
+            "sys.path.insert(0,sys.argv.pop(1));"
+            "runpy.run_module('loopx.entrypoint',run_name='__main__')"
         )
+        return [sys.executable, "-P", "-c", launcher, str(package_root)]
 
-    def run_cli(
-        self,
-        args: list[str],
-        *,
-        legacy_args: list[str] | None = None,
-    ) -> str:
+    def run_cli(self, args: list[str]) -> str:
         _, registry = self.context()
         command = self.command_prefix()
         if registry:
@@ -127,11 +113,6 @@ class GoalModeMCPControlPlane:
             [*command, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             env=environment,
         )
-        if legacy_args is not None and self._runtime_profile_flag_is_unsupported(result):
-            result = subprocess.run(
-                [*command, *legacy_args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-                env=environment,
-            )
         return (result.stdout or "") + (
             ("\n" + result.stderr) if result.returncode else ""
         )
@@ -270,9 +251,6 @@ class GoalModeMCPControlPlane:
             agent_id=agent_id,
             todo_id=todo_id,
             runtime_profile=self.config.runtime_profile,
-            legacy_host_surface=self.config.legacy_host_surface,
-            scheduler_owner=self.config.scheduler_owner,
-            execution_mode=self.config.execution_mode,
             completion_args=tuple(args),
             no_follow_up=no_follow_up,
             goal_ref=self.goal_ref(),
@@ -295,8 +273,6 @@ class GoalModeMCPControlPlane:
         request = HostTodoSettlementRequest(
             goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
             runtime_profile=self.config.runtime_profile,
-            legacy_host_surface=self.config.legacy_host_surface,
-            scheduler_owner=self.config.scheduler_owner, execution_mode=self.config.execution_mode,
             completion_args=(),
             checkpoint_read_context_id=read_context_id or None,
             goal_ref=self.goal_ref(),

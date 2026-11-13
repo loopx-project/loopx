@@ -317,6 +317,18 @@ def _compose_turn_source(
     legacy_output: Mapping[str, Any] | None = None,
     capability_context: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    source, request = _complete_composition_input(payload, scheduler_execution_context, capability_context)
+    result = _turn_envelope_result("compose_complete", payload=source, source_edits=True,
+        **request, **(legacy_output or {}))
+    view = result.pop("legacy_envelope", None) if legacy_output is not None else None
+    return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
+
+
+def _complete_composition_input(
+    payload: Mapping[str, Any],
+    scheduler_execution_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    capability_context: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
     source = dict(payload)
@@ -324,12 +336,19 @@ def _compose_turn_source(
         if "turn_context_contributions" in source:
             raise ValueError("New capability context cannot replace recorded contributions")
         source["turn_context_contributions"] = list(capability_context)
-    result = _turn_envelope_result("compose_complete", payload=source,
-        scheduler_execution_args=args, source_edits=True,
-        **({"embed_in_complete_source": True} if capability_context else {}),
-        **(legacy_output or {}))
-    view = result.pop("legacy_envelope", None) if legacy_output is not None else None
-    return _apply_context_projection_changes(source, result), view if isinstance(view, dict) else None
+    return source, {"scheduler_execution_args": args,
+                    **({"embed_in_complete_source": True} if capability_context else {})}
+
+
+def compose_host_todo_settlement_guard(
+    payload: Mapping[str, Any], *,
+    scheduler_execution_context: Mapping[str, object] | SchedulerExecutionContextResolution | None,
+    capability_context: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compose the current decision and return its compact MCP observation."""
+    source, request = _complete_composition_input(payload, scheduler_execution_context, capability_context)
+    return _turn_envelope_result("compose_complete", payload=source, host_todo_settlement=True, **request)
+
 
 def is_legacy_saved_quota_decision(payload: Mapping[str, Any]) -> bool:
     """Recognize saved raw/v0 carriers that predate complete-source checking."""

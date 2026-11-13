@@ -828,6 +828,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     if getattr(args, "complete_turn", False) and (args.quota_command != "should-run" or args.format != "json"):
         print_payload({"ok": False, "reason": "--complete-turn requires JSON quota should-run"}, args.format, str)
         return 1
+    if getattr(args, "host_todo_settlement", False):
+        from .quota_request import validate_host_todo_settlement_request
+
+        try:
+            validate_host_todo_settlement_request(args)
+        except QuotaCommandValidationError as exc:
+            print_payload({"ok": False, "reason": str(exc)}, args.format, str)
+            return 1
+        # Keep this machine observation independent of environment and profile
+        # presentation settings. The guard still evaluates and records normally.
+        args.context_delivery = "off"
+        return None
     if getattr(args, "scheduler_observation", False):
         from .quota_request import validate_scheduler_observation_request
 

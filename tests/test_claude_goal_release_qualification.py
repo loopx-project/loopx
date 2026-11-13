@@ -171,9 +171,15 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 argv = shlex.split(action)
                 assert argv[argv.index("quota"):][:2] == ["quota", "should-run"]
                 assert argv[argv.index("--turn-instance-id") + 1] == "<unique-work-iteration-id-reuse-on-retry>"
-                assert "schema_version" not in payload and "contract_binding" not in payload
-                assert len(guard.content) == 1
-                host = contract["mcp_channel"]
+                from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+                assert payload["schema_version"] == "loopx_turn_envelope_v1"
+                assert_complete_turn_decision(payload)
+                assert len(guard.content) == 2
+                assert "mcp_channel" not in contract
+                host = json.loads(guard.content[1].text)
+                assert guard.structuredContent["mcp_channel"] == host
+                assert guard.structuredContent["result"] == guard.content[0].text
                 assert host["delivery_executor"] == "complete_task"
                 assert host["delivery_todo_id"] is None
                 assert host["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420

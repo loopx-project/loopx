@@ -54,9 +54,6 @@ class HostTodoSettlementRequest:
     agent_id: str
     todo_id: str
     runtime_profile: str
-    legacy_host_surface: str
-    scheduler_owner: str
-    execution_mode: str
     completion_args: tuple[str, ...]
     no_follow_up: bool = False
     vision_path: str | None = None
@@ -66,19 +63,13 @@ class HostTodoSettlementRequest:
 
 
 class HostCliRunner(Protocol):
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        legacy_args: list[str] | None = None,
-    ) -> str: ...
+    def __call__(self, args: list[str]) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _ProviderStep:
     step_kind: str
     args: tuple[str, ...]
-    legacy_args: tuple[str, ...] | None
     continue_when: Mapping[str, Any] | None
 
 
@@ -95,9 +86,6 @@ def _request_payload(
         "agent_id": request.agent_id,
         "todo_id": request.todo_id,
         "runtime_profile": request.runtime_profile,
-        "legacy_host_surface": request.legacy_host_surface,
-        "scheduler_owner": request.scheduler_owner,
-        "execution_mode": request.execution_mode,
         "completion_args": list(request.completion_args),
         "no_follow_up": request.no_follow_up,
     }
@@ -296,9 +284,6 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:
             raise RuntimeError("TypeScript host provider step order mismatch")
-        legacy_value = raw.get("legacy_args")
-        if legacy_value is not None and not isinstance(legacy_value, list):
-            raise RuntimeError("TypeScript host provider legacy_args shape mismatch")
         condition = raw.get("continue_when")
         condition_required = index < len(raw_steps) - 1
         if condition_required != isinstance(condition, Mapping):
@@ -307,11 +292,6 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
             _ProviderStep(
                 step_kind=expected[index],
                 args=_string_tuple(raw.get("args"), label="args"),
-                legacy_args=(
-                    _string_tuple(legacy_value, label="legacy_args")
-                    if legacy_value is not None
-                    else None
-                ),
                 continue_when=dict(condition) if condition is not None else None,
             )
         )
@@ -357,17 +337,6 @@ def _condition_matches(
         return value is _MISSING or value is None
     if kind == "object":
         return isinstance(value, Mapping)
-    if kind == "not_object":
-        return not isinstance(value, Mapping)
-    if kind == "normalized_string_equals":
-        normalization = condition.get("normalization")
-        if normalization not in {"trim", "trim_lowercase"}:
-            raise RuntimeError("TypeScript host provider normalization is unsupported")
-        candidate = str(value or "").strip()
-        if normalization == "trim_lowercase":
-            candidate = candidate.lower()
-        expected = condition.get("value")
-        return isinstance(expected, str) and candidate == expected
     raise RuntimeError("TypeScript host provider condition kind is unsupported")
 
 
@@ -386,10 +355,7 @@ def _run_provider_plan(
 ) -> list[dict[str, str]]:
     outcomes: list[dict[str, str]] = []
     for step in steps:
-        output = run_cli(
-            list(step.args),
-            legacy_args=(list(step.legacy_args) if step.legacy_args else None),
-        )
+        output = run_cli(list(step.args))
         outcomes.append({"step_kind": step.step_kind, "output": output})
         if step.continue_when is not None and not _provider_condition_matches(
             output, step.continue_when

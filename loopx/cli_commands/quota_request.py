@@ -211,6 +211,7 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
         "decision_handoff_socket", "codex_context_dir", "codex_context_root",
         "context_delivery", "delta_delivery", "turn_envelope", "complete_turn", "include_details",
         "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
+        "host_todo_settlement",
         "defer_context_presentation",
         "capture_file", "decision_file", "outcome_ref", "source_hash",
         "initial_read", "select", "list_fields", "list_depth", "reference_file",
@@ -224,6 +225,31 @@ def validate_scheduler_observation_request(args: argparse.Namespace) -> None:
             raise QuotaCommandValidationError(
                 f"--scheduler-observation cannot be combined with --{option}"
             )
+
+
+def validate_host_todo_settlement_request(args: argparse.Namespace) -> None:
+    """The MCP adapter requests a bound machine observation, never a capture."""
+    if (args.quota_command != "should-run" or args.format != "json"
+            or not all(getattr(args, name, None) for name in
+                       ("goal_id", "agent_id", "todo_id", "turn_instance_id", "runtime_profile"))):
+        raise QuotaCommandValidationError(
+            "--host-todo-settlement requires JSON quota should-run with a Goal, Agent, Todo, Turn and runtime profile"
+        )
+    for name in (
+        "begin_turn", "execute", "dry_run", "record_host_poll", "scheduler_observation",
+        "decision_output_dir", "decision_output_root", "decision_handoff_socket",
+        "codex_context_dir", "codex_context_root", "include_details",
+        "include_scheduler_detail", "max_page_output_bytes", "prepared_capture_reference",
+        "defer_context_presentation", "capture_file", "decision_file", "reference_file",
+        "capture_sha256", "selection_sha256", "source_hash", "outcome_ref", "offset",
+        "page_bytes", "initial_read", "select", "list_fields", "list_depth",
+    ):
+        if getattr(args, name, None):
+            raise QuotaCommandValidationError(
+                f"--host-todo-settlement cannot be combined with --{name.replace('_', '-')}"
+            )
+    if any(getattr(args, name, None) not in (None, "off") for name in ("context_delivery", "delta_delivery")):
+        raise QuotaCommandValidationError("--host-todo-settlement requires context and delta delivery off")
 
 
 def quota_detail_sections_from_args(args: argparse.Namespace) -> frozenset[str]:

@@ -11,6 +11,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { normalizeVisionUnchangedReason } from "../goals/vision_checkpoint.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
+import { HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION } from "./host_todo_settlement_guard.ts";
 import {
   requireBoolean,
   requireJsonObject,
@@ -48,9 +49,6 @@ interface HostTodoCompletionRequest {
   agent_id: string;
   todo_id: string;
   runtime_profile: string;
-  legacy_host_surface: string;
-  scheduler_owner: string;
-  execution_mode: string;
   completion_args: readonly string[];
   no_follow_up: boolean;
   vision_path: string | null;
@@ -68,7 +66,6 @@ interface ProviderOutcome {
 interface ProviderStep extends JsonObject {
   step_kind: HostTodoCompletionStepKind;
   args: readonly string[];
-  legacy_args: readonly string[] | null;
   continue_when: JsonObject | null;
 }
 
@@ -174,18 +171,6 @@ function decodeRequest(
       value.runtime_profile,
       "runtime_profile",
     ),
-    legacy_host_surface: requireNonEmptyString(
-      value.legacy_host_surface,
-      "legacy_host_surface",
-    ),
-    scheduler_owner: requireNonEmptyString(
-      value.scheduler_owner,
-      "scheduler_owner",
-    ),
-    execution_mode: requireNonEmptyString(
-      value.execution_mode,
-      "execution_mode",
-    ),
     completion_args: requireStringArray(
       value.completion_args,
       "completion_args",
@@ -247,23 +232,6 @@ function objectAt(path: readonly string[]): JsonObject {
   return { kind: "object", path: [...path] };
 }
 
-function notObjectAt(path: readonly string[]): JsonObject {
-  return { kind: "not_object", path: [...path] };
-}
-
-function normalizedStringEquals(
-  path: readonly string[],
-  value: string,
-  normalization: "trim" | "trim_lowercase",
-): JsonObject {
-  return {
-    kind: "normalized_string_equals",
-    path: [...path],
-    value,
-    normalization,
-  };
-}
-
 function all(...conditions: readonly JsonObject[]): JsonObject {
   return { kind: "all", conditions: [...conditions] };
 }
@@ -287,43 +255,11 @@ function exactIdentityConditions(
 }
 
 function guardContinueWhen(identity: JsonObject): JsonObject {
-  const path = ["heartbeat_receipt", "settlement_identity"];
   return all(
     equals(["ok"], true),
-    any(
-      all(
-        objectAt(path),
-        normalizedStringEquals(
-          [...path, "goal_id"],
-          String(identity.goal_id),
-          "trim",
-        ),
-        normalizedStringEquals(
-          [...path, "agent_id"],
-          String(identity.agent_id),
-          "trim",
-        ),
-        normalizedStringEquals(
-          [...path, "todo_id"],
-          String(identity.todo_id),
-          "trim_lowercase",
-        ),
-        normalizedStringEquals(
-          [...path, "turn_instance_id"],
-          String(identity.turn_instance_id),
-          "trim",
-        ),
-        equals([...path, "effect_id"], identity.effect_id),
-      ),
-      all(
-        notObjectAt(path),
-        normalizedStringEquals(
-          ["selected_todo", "todo_id"],
-          String(identity.todo_id),
-          "trim_lowercase",
-        ),
-      ),
-    ),
+    equals(["schema_version"], HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION),
+    equals(["settlement_identity", "schema_version"], identity.schema_version),
+    ...exactIdentityConditions(["settlement_identity"], identity),
   );
 }
 
@@ -410,28 +346,17 @@ function providerSteps(
   const steps: ProviderStep[] = [
     {
       step_kind: "guard",
-      args: [...guardCommon, "--runtime-profile", request.runtime_profile],
-      legacy_args: [
-        ...guardCommon,
-        "--host-surface",
-        request.legacy_host_surface,
-        "--scheduler-owner",
-        request.scheduler_owner,
-        "--execution-mode",
-        request.execution_mode,
-      ],
+      args: [...guardCommon, "--runtime-profile", request.runtime_profile, "--host-todo-settlement"],
       continue_when: guardContinueWhen(identity),
     },
     {
       step_kind: "lifecycle_completion",
       args: [...lifecycleArgs, "--turn-instance-id", turnId],
-      legacy_args: null,
       continue_when: completionContinueWhen(identity),
     },
     {
       step_kind: "durable_writeback",
       args: writebackArgs(request, identity),
-      legacy_args: null,
       continue_when: writebackContinueWhen(identity),
     },
     {
@@ -456,7 +381,6 @@ function providerSteps(
           ? ["--goal-instance-id", request.goal_instance_id]
           : []),
       ],
-      legacy_args: null,
       continue_when: request.no_follow_up
         ? spendContinueWhen(identity)
         : null,
@@ -473,7 +397,6 @@ function providerSteps(
           ? ["--goal-instance-id", request.goal_instance_id]
           : []),
       ],
-      legacy_args: null,
       continue_when: null,
     });
   }
@@ -487,7 +410,6 @@ function providerEffect(steps: readonly ProviderStep[]): JsonObject {
     steps: steps.map((step) => ({
       ...step,
       args: [...step.args],
-      legacy_args: step.legacy_args ? [...step.legacy_args] : null,
     })),
   };
 }
@@ -663,17 +585,6 @@ function guardSelection(value: string): GuardSelection {
   };
 }
 
-function guardIdentityMatches(
-  selection: GuardSelection,
-  identity: JsonObject,
-): boolean {
-  const candidate = selection.settlement_identity;
-  if (!candidate) return true;
-  return ["goal_id", "agent_id", "todo_id", "turn_instance_id", "effect_id"].every(
-    (field) => candidate[field] === identity[field],
-  );
-}
-
 function blockedResult(
   request: HostTodoCompletionRequest,
   stage: string,
@@ -752,49 +663,18 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
     );
   }
 
-  const guard = guardSelection(outcomes[0].output);
-  if (guard.state !== "selected") {
-    return reduction(
-      "finalize",
-      "blocked",
-      identity,
-      null,
-      blockedResult(
-        request,
-        "guard",
-        guard.reason || "quota guard has no selected Todo",
-        { guard_state: guard.state },
-      ),
-    );
-  }
-  if (guard.todo_id !== request.todo_id) {
-    return reduction(
-      "finalize",
-      "blocked",
-      identity,
-      null,
-      blockedResult(
-        request,
-        "guard",
-        "quota guard selected a different Todo: expected " +
-          `${request.todo_id}, selected ${guard.todo_id}`,
-        { guard_state: guard.state },
-      ),
-    );
-  }
-  if (!guardIdentityMatches(guard, identity)) {
-    return reduction(
-      "finalize",
-      "blocked",
-      identity,
-      null,
-      blockedResult(
-        request,
-        "guard",
-        "quota guard settlement identity does not match the request",
-        { guard_state: "invalid" },
-      ),
-    );
+  const guard = parseObject(outcomes[0].output);
+  if (guard?.ok !== true || guard.schema_version !== HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION ||
+      !identityMatches(guard, identity) ||
+      (guard.settlement_identity as JsonObject).schema_version !== identity.schema_version) {
+    const terminal = guard?.schema_version === HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION &&
+      guard.ok === false && guard.guard_state === "terminal_no_selection";
+    return reduction("finalize", "blocked", identity, null, blockedResult(
+      request, "guard", guard === null ? "quota guard returned malformed JSON"
+        : guard.ok !== true ? reasonFrom(guard) || "quota guard did not admit Todo settlement"
+        : "quota guard settlement identity does not match the request or is not a current Host observation",
+      {guard_state: terminal ? "terminal_no_selection" : "invalid"},
+    ));
   }
 
   if (outcomes.length < 2) {
@@ -970,7 +850,7 @@ function finalize(request: HostTodoCompletionRequest): JsonObject {
 
   const settlement: JsonObject = {
     ok: true,
-    guard_state: guard.state,
+    guard_state: "selected",
     durable_writeback: writeback,
     lifecycle_completion: completion,
     quota_spend: spend,
