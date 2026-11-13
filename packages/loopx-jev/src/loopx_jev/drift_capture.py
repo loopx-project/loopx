@@ -55,6 +55,10 @@ def validate_paths(repo: Path, paths: list[str]) -> list[str]:
             or path.is_absolute()
             or ".." in path.parts
             or ".git" in parts
+            or (
+                os.name == "nt"
+                and any(":" in part or part.endswith((" ", ".")) for part in path.parts)
+            )
             or name != path.as_posix()
             or any(ord(char) < 32 for char in name)
         ):
@@ -163,13 +167,23 @@ def _windows_capture(repo: Path, target: Path) -> tuple[bytes, int] | None:
             try:
                 expected = _windows_identity(os.lstat(current), directory=True)[:2]
             except FileNotFoundError:
+                if not part:
+                    raise ValueError("capture_path_unavailable") from None
                 return None
             descriptor = _windows_descriptor(current, directory=True)
             parents.callback(os.close, descriptor)
             if _windows_identity(os.fstat(descriptor), directory=True)[:2] != expected:
                 raise ValueError("workspace_changed_during_capture")
+            canonical = _windows_final_path(descriptor)
             if not part:
-                canonical_repo = _windows_final_path(descriptor)
+                canonical_repo = canonical
+            # Validate the known ancestor plus the full suffix before accepting absence.
+            canonical = canonical / target.relative_to(current)
+            if not canonical.is_relative_to(canonical_repo):
+                raise ValueError("scope_escapes_workspace")
+            validate_paths(
+                canonical_repo, [canonical.relative_to(canonical_repo).as_posix()]
+            )
         try:
             observed = os.lstat(target)
         except FileNotFoundError:

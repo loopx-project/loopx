@@ -61,8 +61,12 @@ Reading a test report does not run the test or independently certify its claim.
 
 Git metadata (`.git` at any path component) is excluded. On Windows this rule
 also applies to the normalized, workspace-relative path obtained from the opened
-file handle, so case variants and 8.3 aliases cannot bypass it. Capture fails
-closed if the canonical handle path cannot be obtained.
+file handle, so case variants and 8.3 aliases cannot bypass it. Before accepting
+a missing file or parent directory, capture applies the same rules to the
+deepest existing, identity-checked ancestor's canonical path plus the remaining
+components. Windows scope paths reject trailing dots/spaces, drive-relative
+names and alternate-stream syntax, whose absent components cannot be normalized
+by a handle. Capture fails closed if the canonical handle path cannot be obtained.
 
 For example, selecting only a function's file may omit the helper it calls and
 the test that exercises it. A judgment from that packet cannot certify the full
