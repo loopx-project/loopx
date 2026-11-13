@@ -391,7 +391,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
                                  navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None,
-                                 selection_paths: list[list[str | int]] | None = None) -> Path:
+                                 selection_paths: list[list[str | int]] | None = None,
+                                 reference_directory: Path | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
 
     A short filename locates the document; only its complete stored digests are
@@ -413,7 +414,8 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
             payload = with_paths
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
-    reference = path.with_name(path.stem + suffix + ".reader.json")
+    directory = path.parent if reference_directory is None else reference_directory
+    reference = directory / (path.stem + suffix + ".reader.json")
     try:
         write_decision_capture(reference, payload)
     except FileExistsError:
@@ -781,7 +783,8 @@ def initial_context_selection_bytes(payload: dict[str, Any], selections: list[di
 
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
-                                        observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
+                                        observed_read: dict[str, Any] | None = None,
+                                        reference_directory: Path | None = None) -> tuple[Path, bytes]:
     """Pin the shared rendered selection and return its exact rendered bytes."""
     text_append = observed_read.get("text_append") if observed_read else None
     raw, presented = initial_context_selection_bytes(payload, selections, text_append=text_append)
@@ -789,7 +792,7 @@ def write_initial_context_read_reference(path: Path, digest: str, payload: dict[
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
         selection_paths=[item["path"] for item in selections],
-        observed_read=observed_read)
+        observed_read=observed_read, reference_directory=reference_directory)
     return reference, raw
 
 

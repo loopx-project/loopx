@@ -4,8 +4,11 @@ from copy import deepcopy
 import hashlib
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -25,7 +28,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 @pytest.mark.parametrize("fault,bounded_route", [
     ("action", None), ("interaction", None), ("runtime", None),
     ("interaction", "complete"), ("read_order", "explicit"), ("read_order", "prepared"),
-    ("runtime", "long-paths"),
+    ("runtime", "long-paths"), ("runtime", "deep-paths"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
         tmp_path, monkeypatch, provider, fault, bounded_route):
@@ -52,9 +55,16 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     original_journal = (native / "session.json").read_bytes()
     capture = tmp_path / "capture"
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
-    if bounded_route == "long-paths":
-        capture = tmp_path / ("capture-" + "x" * (250 - len(str(tmp_path)) - len("/capture-")))
+    if bounded_route in {"long-paths", "deep-paths"}:
+        parent = tmp_path
+        if bounded_route == "deep-paths":
+            parent /= "checkout-" + "x" * 130
+            parent.mkdir()
+        capture_length = 480 if bounded_route == "deep-paths" else 250
+        capture = parent / ("capture-" + "x" * (capture_length - len(str(parent)) - len("/capture-")))
         launcher = tmp_path / ("launcher-" + "x" * (204 - len(str(tmp_path)) - len("/launcher-")))
+        launcher.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, "-m", "loopx.entrypoint"]) + ' "$@"\n')
+        launcher.chmod(0o700)
         prefix[:0] = ["--cli-bin", str(launcher)]
     identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
 
@@ -112,7 +122,10 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         assert failed["heartbeat_receipt"] == original["heartbeat_receipt"]
     saved = capture / "decision.json"
     captured = failed["captured_decision"]
-    assert captured["path"] == str(saved)
+    if "path" in captured:
+        assert captured["path"] == str(saved)
+    else:
+        assert bounded_route == "deep-paths" and "--reference-file" in failed["command"]
     digest = captured["sha256"]
     if limit is None:
         markdown = render_quota_should_run_markdown(failed)
@@ -136,23 +149,47 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert (native / "session.json").read_bytes() == original_journal
     assert not (native / "claim-source.json").exists()
 
-    reference = ["--capture-file", captured["path"], "--capture-sha256", digest]
+    reference = ["--capture-file", str(saved), "--capture-sha256", digest]
     if limit is not None:
         command = failed.get("command") or captured["command"]
         tokens = shlex.split(command)
         if "--reference-file" in tokens:
             reader_ref = Path(tokens[tokens.index("--reference-file") + 1])
             reader = json.loads(reader_ref.read_bytes())
+            assert reader_ref.stat().st_mode & 0o077 == 0
+            if bounded_route == "deep-paths":
+                assert reader_ref.parent == (runtime / "context-delivery").resolve()
             assert reader["path"] == str(saved) and reader["sha256"] == digest
             assert "/heartbeat_receipt" in reader["selection"]["select"]
             assert "/composition_error" in reader["selection"]["select"]
         else:
             assert tokens[tokens.index("--capture-sha256") + 1] == digest
         assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(limit)
-        reader = tokens[tokens.index("context-read") + 1:]
-        rc, first_page = cli("context-read", *reader)
-        assert rc == 0 and first_page["ok"], first_page
-        assert first_page["offset"] == 0 and output_bytes <= limit
+        if bounded_route in {"long-paths", "deep-paths"}:
+            assert tokens[:3] == [str(launcher), "--cli-bin", str(launcher)]
+            selected = bytearray()
+            while True:
+                result = subprocess.run(tokens, cwd=project, capture_output=True, check=False,
+                    env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=30)
+                assert result.returncode == 0, result.stdout
+                assert len(result.stdout) <= limit
+                page = json.loads(result.stdout)
+                assert page["ok"] and page["offset"] == len(selected)
+                selected.extend(page["content"].encode())
+                if page["eof"]:
+                    assert len(selected) == page["total_bytes"]
+                    break
+                assert len(selected) == page["next_offset"] and page["content"]
+                tokens = shlex.split(page["next_command"])
+            details = {item["pointer"]: item["value"] for item in json.loads(selected)["selections"]}
+            assert details["/heartbeat_receipt"] == original["heartbeat_receipt"]
+            assert details["/composition_error"] == diagnostic["composition_error"]
+            assert details["/diagnostic_code"] == diagnostic["diagnostic_code"]
+        else:
+            reader = tokens[tokens.index("context-read") + 1:]
+            rc, first_page = cli("context-read", *reader)
+            assert rc == 0 and first_page["ok"], first_page
+            assert first_page["offset"] == 0 and output_bytes <= limit
     for setting in ("off", "on"):
         rc, refused = cli("context-project", *identity, *reference, "--context-delivery", setting,
             "--codex-app", "--codex-context-dir", str(native))
@@ -214,3 +251,28 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         assert "captured_decision" not in refused and "saved" not in refused["recommended_action"]
         assert not (missing_capture / "decision.json").exists()
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
+
+
+def test_unusable_output_limit_still_identifies_the_original_diagnostic(tmp_path):
+    from loopx.cli_commands.quota_failure_report import captured_quota_failure_view
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+
+    source = {
+        "ok": False,
+        "error_code": "quota_decision_transport_failed",
+        "diagnostic_code": "runtime_unavailable",
+        "composition_error": {"message": "synthetic composition unavailable"},
+        "heartbeat_receipt": {"turn_instance_id": TURN_ID},
+    }
+    capture = tmp_path / "decision.json"
+    digest = write_decision_capture(capture, source)
+    original = capture.read_bytes()
+    refused = captured_quota_failure_view(source, capture_directory=tmp_path,
+        max_page_output_bytes=128, capture_sha256=digest)
+    assert refused["ok"] is False and refused["diagnostic_code"] == "runtime_unavailable"
+    assert "too small" in refused["instruction"]
+    assert refused["captured_decision"]["sha256"] == digest
+    command = shlex.split(refused["command"])
+    reference = Path(command[command.index("--reference-file") + 1])
+    assert json.loads(reference.read_bytes())["sha256"] == digest
+    assert capture.read_bytes() == original

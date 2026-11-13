@@ -216,6 +216,21 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
+def pinned_context_read_fits(reference_file: Path, *, content_bytes: int, page_bytes: int,
+                             output_limit: int, reader_argv: list[str] | None) -> bool:
+    """Leave space for the largest cursor and one JSON-escaped character."""
+    offset = max(0, content_bytes - 1)
+    # A pinned selection never emits the capture path or digest in page metadata.
+    sample = bytes(offset + 2)
+    try:
+        _capture_page(reference_file, sample, "", offset=offset, size=1,
+            output_limit=output_limit, instruction=False, next_page_bytes=page_bytes,
+            select=[], reference_file=reference_file, reader_argv=reader_argv)
+    except ValueError:
+        return False
+    return True
+
+
 
 
 

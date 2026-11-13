@@ -276,6 +276,7 @@ def captured_quota_failure_view(
     capture_sha256: str | None = None,
     reader_argv: list[str] | None = None,
     captured_payload: Mapping[str, object] | None = None,
+    runtime_root: Path | None = None,
 ) -> dict[str, object]:
     """Bound an opted-in refusal without entering native delivery continuity.
 
@@ -292,6 +293,7 @@ def captured_quota_failure_view(
         limit = min(limit, max_page_output_bytes)
     saved = capture_directory / "decision.json"
     digest = capture_sha256 or hashlib.sha256(saved.read_bytes()).hexdigest()
+    page_size = max(256, min(page_bytes, limit))
     fields = ("ok", "goal_id", "decision", "should_run", "error_code", "diagnostic_code", "error", "reason",
               "recommended_action", "heartbeat_receipt", "rollout_event", "host_poll_receipt", "action_selection_conflict")
     result = {key: payload[key] for key in fields if key in payload}
@@ -302,7 +304,7 @@ def captured_quota_failure_view(
     reference = {"path": str(saved), "sha256": digest}
     result["captured_decision"] = {**reference,
         "command": context_capture_read_command(saved, digest,
-            page_bytes=min(page_bytes, limit), max_page_output_bytes=limit, reader_argv=reader_argv)}
+            page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
     result["instruction"] = (
         "The guard refused this request. Follow its recovery using the original Turn identity. "
         "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
@@ -319,21 +321,74 @@ def captured_quota_failure_view(
         paths = [[key] for key in (*fields, "composition_error") if key in source]
         if isinstance(cli, Mapping) and "next_cli_actions" in cli:
             paths.append(["interaction_contract", "cli_channel", "next_cli_actions"])
-        selections = [{"path": path, "pointer": "/" + "/".join(path)} for path in paths]
+        pointers = ["/" + "/".join(path) for path in paths]
+        selections = [{"path": path, "pointer": pointer} for path, pointer in zip(paths, pointers, strict=True)]
         try:
-            reader, _ = write_initial_context_read_reference(saved, digest, dict(source), selections)
+            reader, selected = write_initial_context_read_reference(saved, digest, dict(source), selections)
         except (OSError, ValueError):
             # Existing captures can remain readable when publishing reader metadata fails.
-            reader = None
+            reader, selected = None, None
         result = {"ok": False, "captured_decision": reference,
             **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
             "instruction": "Read the original failure and Turn receipt before recovery. Do not rerun admission.",
             "command": context_capture_read_command(saved, digest, reference_file=reader,
-                select=[item["pointer"] for item in selections] if reader is None else None,
-                page_bytes=min(page_bytes, limit), max_page_output_bytes=limit, reader_argv=reader_argv)}
+                select=pointers if reader is None else None,
+                page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
+        if reader is not None and selected is not None:
+            from .quota_context_reader import pinned_context_read_fits
+
+            readable = pinned_context_read_fits(reader, content_bytes=len(selected),
+                page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+            if (not fits(result) or not readable) and runtime_root is not None:
+                from .context_machine import _private_transport_root
+
+                try:
+                    transport = Path(_private_transport_root(runtime_root))
+                    if len(str(transport)) < len(str(reader.parent)):
+                        reader, _ = write_initial_context_read_reference(saved, digest, dict(source), selections,
+                            reference_directory=transport)
+                        result["command"] = context_capture_read_command(saved, digest,
+                            reference_file=reader, page_bytes=page_size, max_page_output_bytes=limit,
+                            reader_argv=reader_argv)
+                        readable = pinned_context_read_fits(reader, content_bytes=len(selected),
+                            page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+                except (OSError, ValueError):
+                    pass  # Keep the original capture and its existing reference.
+            if not fits(result):
+                # The pinned descriptor already carries the full capture path.
+                result["captured_decision"] = {"sha256": digest}
+            if not readable:
+                result["instruction"] = "Raise the reader output limit and read this Turn. Do not rerun admission."
         if not fits(result):
-            raise QuotaDecisionTransportError("Failure recovery metadata exceeds the output limit; read the saved original decision.")
+            # Even an impossibly small envelope must keep the original failure
+            # and locator. Report why the requested output size cannot be met.
+            result["instruction"] = "Output limit is too small for recovery metadata. Read this Turn. Do not rerun admission."
     return result
+
+
+def quota_composition_failure_view(
+    args: argparse.Namespace, committed: Mapping[str, object],
+    error: EffectRuntimeRemoteError | EffectRuntimeStartupError, *,
+    capture_directory: Path | None, present_capture_failure: bool,
+    reader_argv: list[str], runtime_root: Path | None,
+) -> dict[str, object]:
+    """Publish diagnostics after admission, independently of execution source."""
+    failure = quota_decision_transport_failure_payload(args, committed, error, capture_directory=None)
+    if capture_directory is None:
+        return failure
+    from .quota_capture import capture_decision
+
+    diagnostic = {**failure, "source_diagnostic": committed,
+        "composition_error": {"type": type(error).__name__, "message": str(error),
+            "diagnostic_code": error.diagnostic_code}}
+    digest = capture_decision(capture_directory, diagnostic)
+    failure = quota_decision_transport_failure_payload(args, committed, error,
+        capture_directory=capture_directory, capture_sha256=digest)
+    if not present_capture_failure:
+        return failure
+    return captured_quota_failure_view(failure, capture_directory=capture_directory,
+        capture_sha256=digest, max_page_output_bytes=getattr(args, "max_page_output_bytes", None),
+        reader_argv=reader_argv, captured_payload=diagnostic, runtime_root=runtime_root)
 
 
 def quota_decision_transport_failure_payload(

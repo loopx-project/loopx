@@ -103,6 +103,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
         "loopx.cli_commands.quota_failure_report": (
             "QUOTA_EVENT_KINDS",
             "captured_quota_failure_view",
+            "quota_composition_failure_view",
             "quota_decision_transport_failure_payload",
             "quota_failure_payload",
             "quota_validation_failure_payload",
@@ -417,6 +418,7 @@ def _emit_quota_result(
         "complete_turn", "turn_envelope", "decision_handoff_socket",
     ))
     activation = None
+    runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
         payload, activation, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
@@ -445,7 +447,6 @@ def _emit_quota_result(
     )
     raw_envelope, legacy_view = False, None
     delivery_request = None
-    decision_identity = ("", "")
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
         if args.quota_command == "should-run" and complete_source:
@@ -468,23 +469,9 @@ def _emit_quota_result(
                     capture_directory=capture_directory, capability_context=capability_context,
                 )
             except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-                # An uncomposed input has no current contract binding. Saving
-                # it as a successful root would let recovery misidentify it as
-                # a historical decision and publish an implicit claim source.
-                report = _export("quota_decision_transport_failure_payload")
-                failure = report(args, payload, exc, capture_directory=None)
-                if capture_directory is not None:
-                    diagnostic = {**failure, "source_diagnostic": payload,
-                        "composition_error": {"type": type(exc).__name__, "message": str(exc),
-                            "diagnostic_code": exc.diagnostic_code}}
-                    digest = capture_decision(capture_directory, diagnostic)
-                    failure = report(args, payload, exc, capture_directory=capture_directory,
-                        capture_sha256=digest)
-                    if present_capture_failure:
-                        failure = _export("captured_quota_failure_view")(failure,
-                            capture_directory=capture_directory, capture_sha256=digest,
-                            max_page_output_bytes=output_limit, reader_argv=reader_argv,
-                            captured_payload=diagnostic)
+                failure = _export("quota_composition_failure_view")(args, payload, exc,
+                    capture_directory=capture_directory, present_capture_failure=present_capture_failure,
+                    reader_argv=reader_argv, runtime_root=runtime_root)
                 print_payload(failure, args.format, _quota_renderer(args))
                 return 1
             # Validate before capture or handoff; the complete source is unchanged.
@@ -503,7 +490,8 @@ def _emit_quota_result(
             return 0
         if payload.get("ok") is False and capture_directory and present_capture_failure:
             print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
-                max_page_output_bytes=output_limit, reader_argv=reader_argv),
+                max_page_output_bytes=output_limit, reader_argv=reader_argv,
+                runtime_root=runtime_root),
                 args.format, _quota_renderer(args))
             return 1
         if payload.get("ok") is True:
@@ -520,11 +508,6 @@ def _emit_quota_result(
         )
         print_payload(failure, args.format, _quota_renderer(args))
         return 1
-    if (delivery_request is not None or getattr(args, "codex_context_dir", None)
-            or getattr(args, "codex_context_root", None)):
-        agent = payload.get("agent_identity")
-        decision_identity = (str(payload.get("goal_id") or ""),
-            str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     captured_payload = payload
     # The native planner and its fallback must use the same original bytes.
     # Compaction here would stage a second view before native first-read paths
@@ -537,7 +520,31 @@ def _emit_quota_result(
         payload = _project_quota_cli_payload(payload, args, detail_sections,
             ordinary_source=not complete_source,
             capture_directory=capture_directory)
+    return _emit_quota_presentation(payload, args, capture_directory=capture_directory,
+        captured_payload=captured_payload, captured_digest=captured_digest,
+        delivery_request=delivery_request,
+        context_delivery_enabled=context_delivery_enabled,
+        native_context=native_context, progressive_enabled=activation["progressive_enabled"],
+        complete_source=complete_source, runtime_root=runtime_root,
+        reader_argv=reader_argv, print_payload=print_payload)
+
+
+def _emit_quota_presentation(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    capture_directory: Path | None, captured_payload: dict[str, object], captured_digest: str | None,
+    delivery_request: tuple[dict[str, Any], str] | None,
+    context_delivery_enabled: bool, native_context: bool,
+    progressive_enabled: bool, complete_source: bool, runtime_root: Path | None,
+    reader_argv: list[str], print_payload: PrintPayload,
+) -> int:
+    """Render the admitted capture and retain its receipt if presentation fails."""
+    deferred_context = getattr(args, "defer_context_presentation", False)
     succeeded = bool(payload.get("ok"))
+    decision_identity = ("", "")
+    if delivery_request is not None or native_context:
+        agent = captured_payload.get("agent_identity")
+        decision_identity = (str(captured_payload.get("goal_id") or ""),
+            str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
@@ -549,10 +556,10 @@ def _emit_quota_result(
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface=quota_context_surface(captured_payload, args))
     if (not deferred_context and (args.format == "json" or complete_source) and succeeded
-            and args.quota_command == "should-run" and activation["progressive_enabled"]
+            and args.quota_command == "should-run" and progressive_enabled
             and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,
-            runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
+            runtime_root=runtime_root if runtime_root is not None else Path(args._progressive_context_runtime),
             directory=capture_directory, reader_argv=reader_argv,
             captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None,
             captured_digest=captured_digest if complete_source else None)
@@ -566,7 +573,7 @@ def _emit_quota_result(
             assert captured_digest is not None  # Native publication requires the captured original.
             payload = native_quota_result(payload, args, capture_directory=capture_directory,
                 decision_identity=decision_identity, captured_payload=captured_payload, reader_argv=reader_argv,
-                capture_id=captured_digest, progressive_enabled=activation["progressive_enabled"])
+                capture_id=captured_digest, progressive_enabled=progressive_enabled)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(
