@@ -334,6 +334,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./work_items/action_portfolio.ts"), ({reconcileRetainedActionSelection}) => reconcileRetainedActionSelection),
     ],
     ["todo.context.page", lazyHandler(() => import("./todos/context_projection.ts"), ({projectTodoContextPage}) => projectTodoContextPage)],
+    ["manager.discovery.project", lazyHandler(() => import("../capabilities/manager_context/discovery_projection.ts"), ({projectAgentDiscovery}) => projectAgentDiscovery)],
     ["work_item.task_graph.status", lazyHandler(() => import("./work_items/task_graph.ts"), ({projectStatusTaskGraph}) => projectStatusTaskGraph)],
     ["work_item.task_graph.goal_topology", lazyHandler(() => import("./work_items/task_graph.ts"), ({projectGoalTaskMap}) => projectGoalTaskMap)],
     ["work_item.refresh_recommendation.resolve", lazyHandler(() => import("./work_items/refresh_recommendation.ts"), ({resolveRefreshRecommendation}) => resolveRefreshRecommendation)],

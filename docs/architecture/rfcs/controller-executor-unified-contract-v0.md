@@ -2,12 +2,12 @@
 
 <a id="rfc-controller--executor-sessions-and-one-governed-work-contract-v0"></a>
 
-- **RFC status:** Accepted, existing contract. Router and binding-unit extensions are proposed.
+- **RFC status:** Accepted, existing contract. Router, binding-unit and session-discovery/shared-environment extensions are proposed.
 - **Supersedes / closes:** none
 - **Delivery maturity:** The single-worker EdgeBench entry is merged. #8484 qualifies a generic dual-role Turn on C1. Cross-admission continuity, multi-case benefit and conversation adoption remain open.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-11-10
+- **Last normative revision:** 2026-11-13
 - **Source revisions:** main `9508f4de93`, C1 `9d283862e3`. Section 11 distinguishes implementation-PR evidence, original controls and open qualification.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
@@ -42,14 +42,17 @@ flowchart TB
   R <-->|Typed route / request operations| K[Existing Core owners and selected AuthorityStore]
   C1 <-->|Work admission / original settlement| K
   C2 <--> K
-  W1 --> H1[Scoped Host tools]
-  W2 --> H2[Scoped Host tools]
+  C1 --> H1[Unit workspace / scoped ordinary tools]
+  W1 --> H1
+  C2 --> H2[Unit workspace / scoped ordinary tools]
+  W2 --> H2
 ```
 
 | Reader question | Entry |
 | --- | --- |
 | Why split these roles, and what is missing? | Sections 1–4 and the [current source audit](#current-delivery-audit) |
 | How do the three layers and one Agent identity fit? | [System diagram](#system-topology), [binding unit](#agent-binding-unit) |
+| How does the controller inspect workers and read/write their environment? | [Session discovery and evidence](#worker-session-discovery), [shared workspace and tools](#shared-workspace-and-tools) |
 | What keeps work advancing without another user message? | [Primary execution loop](#controller-worker-main-loop) |
 | How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
 | What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
@@ -76,11 +79,15 @@ no runtime, changes no default and starts no experiment.
    It reads the contract, reasons about work,
    talks to the executor and submits explicit typed Core operations. Core owns
    legal transitions and receipts; the controller is not a second authority.
+   It can also read/write project files and use ordinary host tools in the same
+   working environment as the worker, within current authorization.
 3. The executor receives a natural-language task conversation, original source
    material and ordinary host tools. It returns findings, artifacts, evidence
    and questions. It neither consumes a second Core packet view nor authors
    quota, Vision, lease or settlement fields. A small machine carrier records
-   routing and causality outside the task prose.
+   routing and causality outside the task prose. The controller can discover
+   and inspect its unit's worker sessions and work evidence on demand. Current
+   activity comes from host observations; historical indexes add history only.
 4. Save complete context, then compose two independent delivery layers:
    **Progressive by default across hosts**, and **Delta automatically only on
    qualified hosts**. Keep unread material discoverable from the current capture.
@@ -217,7 +224,7 @@ management tree.
 | Role / owner | Decisions and behavior it owns | Responsibilities it does not own |
 | --- | --- | --- |
 | Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, pass revisions, synthesize results and cross-task tradeoffs | Micromanage worker tools, claim/accept for receivers, copy Goal task stores or budgets |
-| Controller / within a unit | Select work from Goal, planning horizon and evidence; maintain continuity, interact with user/router, assess correction and acceptance, call Core | Become another authority or replace durable work with chat notes; approve every local tool step |
+| Controller / within a unit | Select work from Goal, planning horizon and evidence; maintain continuity, discover/inspect worker sessions, read/write and validate in the shared environment, interact with user/router, assess correction and acceptance, call Core | Become another authority or replace durable work with chat notes; approve every local tool step |
 | Worker / within a unit | Autonomously use tools, experiment, produce artifacts and report evidence/questions within admitted scope | Consume Core packets, author settlement or directly hold Core write access |
 | Core + managed execution + Host adapter | Existing typed rules, persistence, identity, dispatch, observation, stop and recovery | Infer authority/completion from prose or choose domain solutions for the model |
 
@@ -257,6 +264,83 @@ the same attempt. A governed Turn is not a native model turn: three controller
 messages do not debit three business Turns, but all three model calls count in
 costs. Do not copy the team's resource allowance to every unit; the router adds
 no budget ledger.
+
+<a id="worker-session-discovery"></a>
+
+### Controller discovery of worker sessions and evidence
+
+The controller should have discovery comparable to [Obelisk session-evidence
+retrieval](obelisk-session-evidence-provider-v0.md): identify its unit's worker
+sessions, locate the session bound to current work, and inspect the authorized
+work history on demand. Waiting only for a worker's summary is insufficient for
+investigating failures, locating artifacts or recovering the original attempt.
+This is a delivery requirement, not a claim of complete support in current hosts.
+
+- **Locate before reading.** Reuse existing session/binding, request/attempt and
+  host-observation owners. Discover the role, native session, generation, original
+  request revision/Turn/attempt, actual provider/model and workspace under the
+  exact Goal lifetime/Agent, plus running/stopped/failed facts the host actually
+  observed. Expose provenance, observation time, coverage and continuation reads.
+  Multiple bindings, missing and unreadable records remain explicit uncertainty;
+  registration, names or recent timestamps cannot identify the current executor
+  or certify execution readiness.
+- **Inspect scoped work.** Locate authorized messages, tool calls/results,
+  failures, artifacts and original-source references by work, session and event;
+  read necessary context and subsequent pages. Preserve authorship, order and
+  versions. A summary is not the full source, and zero hits do not mean no work.
+  Raw internal reasoning, unrelated sessions and another audience's private
+  content remain inaccessible. Discovery grants no resume, steer, interrupt,
+  write or takeover authority.
+- **Separate current facts from historical recall.** Active attempts and fresh
+  state come from current host/Core owners. Optional providers such as Obelisk
+  add indexed historical evidence only within their independently authorized
+  scope. Retain default-off, same-Agent/project and source-access rules; a role
+  binding does not inherit archive access. Missing providers, stale indexes,
+  revoked sources, timeouts and zero hits expose coverage gaps. Basic session
+  discovery and authorized work must not wait for historical indexing. This
+  document neither installs/starts indexing nor creates a parallel session store.
+
+Use bounded indexes, on-demand bodies and existing event continuation. Account
+for scans, index maintenance, rereads, model input and latency; do not scan all
+history every Turn or inject duplicate transcripts into both sessions. Retrieval
+does not establish cost savings by itself.
+
+<a id="shared-workspace-and-tools"></a>
+
+### Ordinary read/write tools in one working environment
+
+Controller and worker should access **the same authorized working environment**:
+project/workspace, verifiable source revision, toolchain/dependencies, task
+resources and artifact namespace. The controller also has scoped filesystem
+read/write, search, test and ordinary process tools. It can inspect original
+artifacts, validate a problem and perform bounded local work directly. Sharing
+an environment does not merge native contexts, queues or continuity baselines.
+
+The host binds the actual cwd/worktree, versions, tools and read/write scope to
+the unit. Authorized controller writes must be readable by the worker; worker
+artifacts must be readable by the controller at their original version. Path
+aliases, containers and remote hosts must prove equivalent authorized resource
+and dependency mappings. Report unsupported arrangements explicitly, without
+silently choosing another checkout, copying stale artifacts or treating a remote
+environment as local.
+
+Ordinary tool sharing retains role permissions: the controller calls existing
+typed Core owners, while Core credentials and write entrypoints remain isolated
+from the worker. Each uses its authorized tools/credential broker, without
+copying all environment variables or credentials, changing authentication,
+providers or connection mode, or bypassing protected-operation confirmation.
+The host enforces read-only grants, revocation, path and audience boundaries at
+the actual call; sharing an environment does not expand authority.
+
+Read/write tools do not create another uncoordinated writer. The controller can
+inspect an active worker and perform non-conflicting operations permitted by
+authority and work ownership. Overlapping file, process or effect changes use
+existing claim/lease, request-revision and safe-boundary coordination. Before
+taking over the same business execution, observe and reconcile the original
+attempt, complete any required yielding/stopping and ownership handoff, then
+write. A message ACK is not process termination. Never overwrite uncommitted
+worker changes, launch duplicate work or create another settlement. Account for
+all ordinary tools and recovery in the combined cost.
 
 <a id="controller-worker-main-loop"></a>
 
@@ -781,9 +865,11 @@ roles. Do not create a second Goal/Todo/quota identity merely to split cognition
 Extend the existing session binding owner with role and generation, separate
 ordered queues and separate context baselines; do not write two native IDs into
 the current single Agent-scoped slot. One controller owns control dialogue;
-at most one executor attempt owns the selected work. The controller role is not
-another simultaneous business executor. Peer or parallel execution still needs
-its existing independent claim/lease/handoff contract.
+at most one executor attempt owns the selected work. The controller's ordinary
+read/write tools follow the ownership and conflict rules of the
+[shared working environment](#shared-workspace-and-tools), without an
+uncoordinated second business executor. Peer or parallel execution
+still needs its existing independent claim/lease/handoff contract.
 
 1. The existing entrypoint obtains fresh admission or resumes an owed receipt.
    It supplies the captured unified contract to the controller.
@@ -880,6 +966,8 @@ The complete field, consumer and qualification detail is in [the contract and co
 | One complete contract | Field/clause inventory; same captured normal, replan, wait, recovery and capability-off workloads through all active entrypoints; identical reconstructed semantic instance | One serializer unit test is insufficient; malformed/unsupported versions fail explicitly |
 | Lossless context delivery | Full/delta/recovery equivalence, missing/late/truncated pages, role/session mismatch and real native compaction/resume | Include all read/recovery costs; no second admission or spend |
 | Role isolation and recovery | Controller/executor crash windows, duplicate dispatch, late result, revision change, lease expiry and stop under actual host tools | No executor Core access; no stale result adoption or hidden business executor |
+| Discoverable worker sessions and inspectable evidence | Locate the real binding from the controller and read original messages, tool results and artifacts on demand; cover multiple bindings, restart/old generation, pagination, incomplete indexes, no provider and lost sources | No current-state inference from historical hits; reject foreign Agent/project/audience, unauthorized archives and internal reasoning; discovery never executes or takes over a session |
+| Shared environment with read/write on both sides | On the native host, verify controller write→worker read, worker artifact→controller versioned read, and actual toolchain/dependency parity | Reject read-only/revoked writes, out-of-scope paths, environment mismatch, Core-credential exposure and conflicting writes while the worker is busy; legitimate handoff still executes/settles once |
 | Semantic adoption | Original requirements → controller decision → actual executor work → independent verification → accepted result and original-audience return | Read receipt, valid JSON or successful replan alone cannot pass |
 | Intelligent mediation | Coherent delegation, changed/contrary evidence and result interpretation across ordinary continuation, shared-constraint change, controller loss and a small-task counterexample | Explain the actual decision consequence and retained obligations; fewer queries or a shorter handoff cannot pass |
 | Human interaction during execution | C6/C8 journey below through the real supported host and packaged conversation | Controller responsiveness, proactive delivery and feedback adoption require separate evidence; no inference from routing ACKs or previews |
@@ -1202,7 +1290,7 @@ are stable design references, not claims that a canonical Todo is complete.
 | --- | --- | --- |
 | **C1 — Unified contract; new-profile cutover dependency** | Interaction/work-context + quota/Turn owners: inventory fields/instruction clauses, capture/view/read-evidence mappings and versioned two-layer configuration; capture one schema and migrate ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus §9's quota-baseline effectiveness/full-cost comparison; preserve explicit off and version-pinned readers until cutover qualifies |
 | **C2 — One context-delivery pipeline; C1** | Context owner + host observers: compose cross-host Progressive, independent qualified Delta, same-capture detail/recovery and conservative unread discovery; replace staged candidate delivery and duplicate packet branches | Unchanged unread constraints reach actual next-Turn work; qualify no-hook readers, exact evidence/continuity and all four layer combinations at complete cost; full fallback without a new admission; rollback encoding/configuration through the existing owner |
-| **C3 — Session binding and native lifecycle; C1 for cutover** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
+| **C3 — Session binding and native lifecycle; C1 for cutover** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues; expose sourced worker discovery and shared-environment/ordinary-tool access | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; discovery and bidirectional read/write pass the permission/environment negative cases in §9; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1 for cutover** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1 for cutover** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
 | **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, ordinary result → assessment → feedback → further work without human prompting, actual feedback adoption through ordered revisions, original settlement/fresh continuation and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |

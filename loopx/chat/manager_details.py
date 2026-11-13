@@ -32,7 +32,7 @@ def _safe_context(value: Any) -> Any:
 def read_manager_goal_details(
     registry_path: Path, runtime_root: Path, goal_id: str, *, owner_scope: bool,
     limit: int = 48, completed_todo_ids: set[str] | None = None, offset: int = 0,
-    todo_id: str | None = None,
+    todo_id: str | None = None, query: str = "",
 ) -> dict[str, Any]:
     """Use Core's canonical-first read; never parse a private project document."""
     observed_at = datetime.now(timezone.utc).isoformat()
@@ -43,14 +43,15 @@ def read_manager_goal_details(
             # The Manager service root is a default carrier, not a caller's
             # explicit diagnostic override of a declared source registry.
             runtime_root_arg=None if route["routed_to_source_registry"] else str(runtime_root),
-            goal_id=goal_id, todo_id=todo_id,
+            goal_id=goal_id, todo_id=todo_id, full_text=bool(query),
         )
         if result.get("ok") is not True:
             raise ValueError("Todo authority unavailable or conflicting")
         records = ([result["todo"]] if result.get("todo") else []) if todo_id else result.get("todos", [])
         page = effect_runtime_result("todo.context.page", {
-            "records": records, "owner_scope": owner_scope, "offset": offset,
+            "records": _safe_context(records) if query else records, "owner_scope": owner_scope, "offset": offset,
             "limit": limit, "todo_id": todo_id,
+            **({"query": query} if query else {}),
         }, large_local_snapshot=True)
         rows = _safe_context(page["todos"])
         completed = [r for r in records if r.get("status") == "done"
