@@ -566,6 +566,76 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery", ["on", "off", "delta-only", "saved-loader"])
+def test_codex_app_thin_guard_uses_complete_source_for_native_captures(tmp_path, monkeypatch, provider, delivery):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    options = ("--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--context-delivery", "off" if delivery in {"off", "delta-only"} else "auto",
+        "--decision-output-root", str(captures))
+    if delivery != "off":
+        options += ("--codex-context-root", str(captures))
+    if delivery == "delta-only":
+        options += ("--delta-delivery", "auto")
+    if delivery == "off":
+        # Without a native directory, an App loader needs its known Turn ID
+        # to choose a capture destination before it can render a guard.
+        options += ("--turn-instance-id", TURN_ID)
+    if delivery == "saved-loader":
+        # A stored bootstrap written before C1 has no complete-source flag.
+        rc, bootstrap = _run_cli(registry, runtime, "heartbeat-prompt", *options, "--bootstrap", cwd=project)
+        assert rc == 0, bootstrap
+        command = bootstrap["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+        rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
+    else:
+        rc, prompt = _run_cli(registry, runtime, "heartbeat-prompt", *options, cwd=project)
+    assert rc == 0, json.dumps(prompt)
+    guard = shlex.split(next(line for line in prompt["task_body"].splitlines()
+        if " quota should-run " in line))
+    assert not {"--complete-turn", "--turn-envelope"}.intersection(guard)
+    guard[guard.index("--turn-instance-id") + 1] = TURN_ID
+    rc, view = _run_cli(registry, runtime, *guard[guard.index("quota"):],
+        "--todo-id", TODO_ID, cwd=project, raw_guard=False)
+    assert rc == 0, view
+    (saved,) = captures.glob("decision-*/decision.json")
+    original = saved.read_bytes()
+    source = json.loads(original)
+    if delivery == "off":
+        assert "contract_binding" not in source
+        assert "context_delivery" not in view
+        assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
+    else:
+        assert_complete_turn_decision(source)
+        recovery = shlex.split(view["recovery"]["command"])
+        recovery.extend(("--select", "/heartbeat_receipt"))
+        read = subprocess.run(recovery, cwd=project, capture_output=True, text=True, timeout=30)
+        assert read.returncode == 0, read.stdout + read.stderr
+        page = json.loads(read.stdout)
+        assert page["ok"] and page["eof"], page
+        assert json.loads(page["content"])["selections"] == [
+            {"pointer": "/heartbeat_receipt", "value": source["heartbeat_receipt"]},
+        ]
+        if delivery == "delta-only":
+            # Explicitly disabling Progressive still permits an independently
+            # qualified Delta route. No required-body navigation is added.
+            assert "first_read_command" not in view
+    assert read_original_capture(saved, registry=registry, runtime=runtime) == original
+    receipt = source["heartbeat_receipt"]
+    plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert receipt["settlement_identity"] == plan["identity"]
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", ["on", "off", "saved-loader"])
 def test_ssh_goal_generated_command_uses_complete_source(tmp_path, monkeypatch, provider, delivery):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime

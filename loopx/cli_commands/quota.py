@@ -329,16 +329,9 @@ def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,
     heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
-    complete_source: bool,
-) -> tuple[dict[str, object], dict[str, Any], list[dict[str, Any]]]:
+    complete_source: bool, activation: Mapping[str, Any],
+) -> tuple[dict[str, object], list[dict[str, Any]]]:
     """Stage optional context after the capture and settlement route is decided."""
-    try:
-        activation = native_context_activation(args)
-    except QuotaCommandValidationError:
-        if payload.get("ok") is True:
-            raise
-        # Preserve the original validation error when activation itself failed.
-        activation = {"progressive_enabled": False, "enabled": False}
     if args.quota_command == "should-run":
         if getattr(args, "complete_turn", False) or getattr(args, "host_todo_settlement", False):
             payload = _project_native_cli_settlement(payload, explicit_complete=True)
@@ -370,7 +363,7 @@ def _prepare_quota_result_context(
             registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
             complete_source=complete_source,
         )
-    return payload, activation, capability_context
+    return payload, capability_context
 
 
 def _emit_scheduler_observation_result(
@@ -425,19 +418,33 @@ def _emit_quota_result(
     if budgeted_spend:
         attach_quota_settlement_guidance(payload, registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None)
-    # The ordinary quota caller retains its existing source and view until
-    # the complete contract is qualified for default adoption.
-    host_todo_settlement = getattr(args, "host_todo_settlement", False)
-    complete_source = host_todo_settlement or any(getattr(args, name, None) for name in (
-        "complete_turn", "turn_envelope", "decision_handoff_socket",
-    ))
     activation = None
+    native_context = False
+    host_todo_settlement = getattr(args, "host_todo_settlement", False)
+    complete_source = False
     runtime_root = context.runtime_root if context is not None else None
     if not budgeted_spend:
-        payload, activation, capability_context = _prepare_quota_result_context(
+        try:
+            activation = native_context_activation(args)
+        except QuotaCommandValidationError:
+            if payload.get("ok") is True:
+                raise
+            # Preserve the original validation error when activation itself failed.
+            activation = {"progressive_enabled": False, "enabled": False}
+        native_context = activation["enabled"] and bool(
+            getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None)
+        )
+        # The App reader accepts old saved sources for recovery. Its new native
+        # captures go through the shared composition without a display flag.
+        complete_source = (host_todo_settlement
+            or (native_context and activation.get("scenario") == "codex_app_heartbeat")
+            or any(getattr(args, name, None) for name in (
+                "complete_turn", "turn_envelope", "decision_handoff_socket",
+            )))
+        payload, capability_context = _prepare_quota_result_context(
             payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
             capture_directory=capture_directory, reader_argv=reader_argv,
-            complete_source=complete_source,
+            complete_source=complete_source, activation=activation,
         )
     if context is not None:
         observe_quota_result(
@@ -461,7 +468,6 @@ def _emit_quota_result(
     )
     raw_envelope, legacy_view = False, None
     delivery_request = None
-    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     captured_digest = None
     try:
         if args.quota_command == "should-run" and complete_source:

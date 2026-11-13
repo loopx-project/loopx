@@ -399,7 +399,12 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
         todos=[original], context_delivery="on",
         goal_suffix="\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100)
     assert before["execution_preparation"]["state"] == "claim_required"
-    assert before.get("schema_version") == ("loopx_turn_envelope_v1" if complete else None)
+    current_source = complete or scenario == "codex_app_heartbeat"
+    assert before.get("schema_version") == ("loopx_turn_envelope_v1" if current_source else None)
+    if current_source:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(before)
     goal_text = (tmp_path / "state.md").read_text()
     digest = _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
@@ -433,7 +438,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     [published] = native.glob("prepared-*/ready/decision.json")
     published_source = json.loads(published.read_bytes())
     assert published_source.get("schema_version") == before.get("schema_version")
-    assert ("contract_binding" in published_source) is complete
+    assert ("contract_binding" in published_source) is current_source
+    if current_source:
+        assert_complete_turn_decision(published_source)
     if location == "root":
         assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
@@ -558,9 +565,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     original = tmp_path / "preparation"
     _run(tmp_path, monkeypatch, provider, [], "--codex-app",
         "--turn-instance-id", "prepared-turn", "--todo-id", TODO, "--codex-context-dir", str(native),
-        "--decision-output-dir", str(original),
-        *(("--complete-turn",) if replace_stage in {"version", "downgrade"} else ()),
-        context_delivery="on")
+        "--decision-output-dir", str(original), context_delivery="on")
     from loopx.control_plane.turn_driver import codex_execution_preparation
     record = codex_context.record_native_execution_preparation
     run = codex_execution_preparation._default_runner
@@ -574,7 +579,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
         if prepared:
-            assert ("--complete-turn" in command) is (replace_stage in {"version", "downgrade"})
+            assert "--complete-turn" in command
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)

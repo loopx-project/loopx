@@ -1038,6 +1038,11 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                         if request.get("readback_only") is True:
                             additional = codex_execution_preparation_readback_context(request)
                         else:
+                            # A resumed old pre-claim capture can still lead
+                            # to a newly composed App ready decision. Pin the
+                            # expected format of that new capture separately.
+                            if activation["scenario"] == "codex_app_heartbeat":
+                                request["complete_turn"] = True
                             capture = Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                             receipt = execute_codex_execution_preparation(
                                 request,
@@ -1051,6 +1056,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 event,
                                 source_sha256=request["source_sha256"],
                                 receipt=receipt,
+                                complete_turn=request.get("complete_turn") is True,
                             )
                             # Publish the decision that the Host just verified;
                             # a model must not need a second guard to obtain its

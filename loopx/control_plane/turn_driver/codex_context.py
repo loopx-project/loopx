@@ -466,6 +466,8 @@ def _preparation_readback(action: dict[str, Any], previous: dict[str, Any], *,
     if event_name != "SessionStart" and previous.get("ready_read_observed") is True:
         return None
     readback = {**action, "readback_only": True}
+    if previous.get("complete_turn") is True:
+        readback["complete_turn"] = True
     if isinstance(previous.get("claim_operation_id"), str) and previous["claim_operation_id"]:
         readback["claim_operation_id"] = previous["claim_operation_id"]
     if isinstance(previous.get("ready_capture"), dict):
@@ -564,6 +566,7 @@ def record_native_execution_preparation(
     *,
     source_sha256: str,
     receipt: Mapping[str, Any],
+    complete_turn: bool = False,
 ) -> None:
     """Record a ready receipt only while its source/session is still current."""
 
@@ -600,6 +603,7 @@ def record_native_execution_preparation(
                 else {}
             ),
             "state": "ready",
+            **({"complete_turn": True} if complete_turn else {}),
             "todo_id": receipt.get("todo_id"),
             **(
                 {"turn_instance_id": receipt["turn_instance_id"]}
