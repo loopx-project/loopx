@@ -119,13 +119,27 @@ function belongsToWork(row: JsonObject, binding: JsonObject): boolean {
 }
 
 export function currentWorkYardstickFinding(findings: JsonObject[], binding: JsonObject): JsonObject | undefined {
-  return findings.filter(row => row.work_yardstick !== undefined && belongsToWork(row, binding)).sort((a, b) => {
-    // Late delivery reuses the original committed time, not append order.
+  const ordered = findings.filter(row => row.work_yardstick !== undefined && belongsToWork(row, binding)).sort((a, b) => {
+    // Across independent histories, late delivery keeps its original commit time.
     const left = parseTodoTimestampMicros(String(a.last_updated_at ?? ""));
     const right = parseTodoTimestampMicros(String(b.last_updated_at ?? ""));
     if (left !== null && right !== null && left !== right) return left > right ? -1 : 1;
     return Number(b.recorded_order ?? 0) - Number(a.recorded_order ?? 0);
-  })[0];
+  });
+  const successors = new Map<unknown, JsonObject>();
+  for (const row of ordered) {
+    const prior = (row.work_yardstick as WorkYardstickCapture).decision?.prior_finding_id;
+    if (typeof prior === "string" && !successors.has(prior)) successors.set(prior, row);
+  }
+  // The recorded predecessor establishes the order even across clock rollback.
+  const visited = new Set<JsonObject>();
+  let current: JsonObject | undefined = ordered[0];
+  while (current && successors.has(current.finding_id)) {
+    if (visited.has(current)) throw new EffectRuntimeRequestError("cyclic work yardstick predecessors");
+    visited.add(current);
+    current = successors.get(current.finding_id);
+  }
+  return current;
 }
 
 function measuredPair(row: ExploreMeasurementFeedback | undefined) {

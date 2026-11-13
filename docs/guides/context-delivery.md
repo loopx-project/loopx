@@ -169,9 +169,11 @@ response's `recovery` identifies its complete current required view;
 Do not substitute one file's hash for another's.
 
 - Use known JSON Pointers directly; repeat `--select` for related fields.
-- For an unknown pointer, list the nearest known parent with `--list`; use
-  `--list-depth 2` when it avoids another discovery round. To list the root,
-  omit `--select` rather than using `/`, which denotes an empty-name property.
+- For an unknown pointer, list the nearest known parent with
+  `--list /interaction_contract --list-depth 2`. This is equivalent to
+  `--list --select /interaction_contract --list-depth 2`; repeated `--list POINTER`
+  and `--select POINTER` combine into the same index. To list the root, use bare
+  `--list` without selectors or `--list ''`; `/` denotes an empty-name property.
 - Follow the returned byte cursor for an unfinished selected range. EOF applies
   to that selection, not to unread fields elsewhere in the capture.
 - Size both reader pages and the host tool's combined output budget. Valid JSON,

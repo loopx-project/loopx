@@ -310,7 +310,6 @@ def _quota_turn_context_projector(args, *, registry_path: Path, runtime_root: Pa
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
 
 
-
 def _prepare_quota_result_context(
     payload: dict[str, object], args: argparse.Namespace, *,
     context: QuotaCommandContext | None, registry_path: Path,

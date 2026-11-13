@@ -32,7 +32,10 @@ import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES, verifiedSelectedTodoSource } from "../work_items/interaction_contract.ts";
+import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads,
+  capturedTodoTextSha256, decodeInteractionContract, hasUnboundActionSelection, projectInteractionRequiredReads,
+  selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES,
+  verifiedSelectedTodoSource } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -2415,8 +2418,7 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
     obligation?.kind === EffectiveAction.AGENT_WORKSPACE_REPAIR && obligation.contract === "agent_workspace_guard" &&
     obligation.must_attempt_work === true && obligation.delivery_allowed === false;
   if (!repair && payload.effective_action !== EffectiveAction.NORMAL_RUN) return [];
-  const selecting = cli.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
-    jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1";
+  const selecting = hasUnboundActionSelection(cli);
   const claiming = cli.selection_required !== true && payload.normal_delivery_allowed === false &&
     preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
     preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true;

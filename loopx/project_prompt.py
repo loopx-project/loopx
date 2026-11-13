@@ -51,7 +51,7 @@ def shell_arg_for_host(value: str) -> str:
     """Quote one argument for the shell that will run the generated command."""
 
     if _is_windows_host() and not _SHELL_SAFE_ARGUMENT.fullmatch(value):
-        return "'" + value.replace("'", "''") + "'"
+        return install_contract.powershell_literal(value)
     return shell_arg(value)
 
 

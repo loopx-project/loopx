@@ -3,7 +3,7 @@ name: loopx-manager
 description: Inspect authorized LoopX Goals, Todos and deliveries to explain progress, identify owner decisions and delegate intent to the right worker.
 ---
 
-<!-- loopx-managed-manager-skill:v5 -->
+<!-- loopx-managed-manager-skill:v6 -->
 
 # LoopX manager
 
@@ -49,6 +49,11 @@ that work. A matching Todo or historical owner is not required: use the authoriz
 directory's responsibilities and context to choose a qualified recipient, and
 describe that as a new selection rather than proven historical ownership.
 Resolve shorthand against the requested subject, project, purpose and destination.
+Local and authorized remote sources are peers: use source-neutral discovery
+when the subject is unresolved, without waiting for the owner to mention SSH.
+A matching date, PR number or local topic is not proof of the intended requirement.
+Agent search covers registrations, not task text; a zero match calls for browsing
+responsibilities and reading relevant source-qualified Todos, not guessing.
 A role alias or matching Agent id is a discovery lead, not a selected recipient.
 Compare plausible recipients using the permitted directory and relevant current
 work; when the user means recent research, inspect relevant recent deliveries
@@ -103,11 +108,31 @@ do not reduce a substantive result to an inventory of IDs. Keep model output
 to ordinary Markdown text; never offer executable HTML as answer content.
 
 Choose reads according to the user's question. The initial Goal directory is
-an index, not a completed investigation. In Chat, use `loopx_manager_read`:
+an index, not a completed investigation. For prioritization, planning or a
+cross-project tradeoff, actively read the relevant Goals' current work and
+accepted requirements, plus recent deliveries when they could change the
+decision. Do not wait for the owner to request these reads explicitly. A fresh
+read of old recorded progress is still historical evidence; distinguish its
+date from the read time. Unrelated factual questions need no full portfolio scan.
+In Chat, use `loopx_manager_read`; omit optional pagination parameters unless
+needed, respect the tool's declared limits and follow returned `next_offset`.
+Recover an indicated exact Todo or delivery when its excerpt is insufficient.
+
+For prioritizing several PRs/MRs against a requirement or deciding how to unblock
+their checks, use `loopx-pr-program`. Resolve the requirement from relevant
+authorized Goal/work and owner-source evidence before ranking candidates.
+Separate product priority, dependency order and current review/check readiness;
+green checks alone establish none of the first two. Return a useful ordered
+decision with evidence, next action and missing work, rather than only PR rows.
+An assessment is not permission to create issues, start workers, rerun checks
+or merge. Use the existing authorization for separately requested follow-through.
+
+Available views:
 
 - `sources`: discover configured and audience-authorized evidence sources.
-  For a remote/SSH question, select the matching `source_id` (for example
-  `ssh:research-host`) for portfolio, Todo and delivery reads. Never substitute
+  `agents` without `source_id` discovers across these sources by default;
+  follow its `next_reads` for omitted pages or sources. Preserve the selected
+  row's `source_id` for portfolio, Todo and delivery reads. Never substitute
   local tasks mentioning SSH for a report from the remote registry. An empty
   declared `host_id` is not a reason to skip an available SSH source: the read
   supplies `source_host` and source-qualified Goal identity. Report each source's
@@ -119,7 +144,9 @@ an index, not a completed investigation. In Chat, use `loopx_manager_read`:
   Goals are excluded by default. Use `include_stopped: true` only for an
   explicit historical/stopped-Goal question; a specific Goal ID can then be read.
 - `todos` with a Goal ID: read current task titles, declared priorities,
-  dependencies and owner decisions. Follow `next_offset` where relevant.
+  dependencies and owner decisions. `query` searches permitted full task text
+  before paging; exact-read matching records when excerpts are insufficient.
+  If a source lacks search support, browse its scoped pages. Follow `next_offset`.
 - `deliveries` with a Goal ID: inspect recorded findings, evidence references
   and validation for the recent reporting window. Join the supplied titles;
   distinguish recorded claims from independently verified artifacts.

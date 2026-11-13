@@ -137,6 +137,38 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
     assert len(starts) == 2
 
 
+def test_legacy_bound_steward_adopts_explicit_machine_model_once(conversation):
+    root, store, runtime, session, starts = conversation
+    sid = session["session_id"]
+    import json
+    legacy = {**store.load_session(sid), "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
+    legacy.pop("manager_executor_allocation", None)
+    store._session_path(sid).write_text(json.dumps(legacy))  # retained pre-allocation disk format
+    store.append_message(sid, role="user", text="Preserve the source of the requirement.")
+    configure(root, model="gpt-6.1-sol", effort="high")
+    runtime._ensure_adapter(legacy, work_dir=root, objective="manager")
+    current = store.load_session(sid)
+    assert starts[-1][0]["executor_model"] == {"model": "gpt-6.1-sol", "reasoning_effort": "high"}
+    assert starts[-1][0]["history"] == [{"role": "user", "content": "Preserve the source of the requirement."}]
+    assert current["channel_id"] == session["channel_id"]
+    assert current["manager_executor_allocation"]["configured_model"] == "gpt-6.1-sol"
+    count = len(starts)
+    runtime._ensure_adapter(current, work_dir=root, objective="manager")
+    assert len(starts) == count
+
+
+def test_legacy_model_adoption_preserves_unset_fields_and_endpoint(conversation):
+    from loopx.chat_manager import manager_session_model_allocation
+    root, store, runtime, session, _ = conversation
+    legacy = {**session, "manager_executor_allocation": None,
+              "agent_model_id": "gpt-6-sol", "agent_reasoning_effort": "xhigh"}
+    configure(root, model=None, effort="high")
+    allocation = manager_session_model_allocation(runtime, legacy)
+    assert allocation["model"] == "gpt-6-sol" and allocation["reasoning_effort"] == "high"
+    configure(root, model="gemini-4-argon-high", effort="high", endpoint="antigravity")
+    assert manager_session_model_allocation(runtime, legacy) is None
+
+
 def test_readback_observation_does_not_cache_later_allocation(conversation, monkeypatch):
     _, store, runtime, session, _ = conversation
     before = store.load_session(session["session_id"])

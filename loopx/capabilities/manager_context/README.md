@@ -241,6 +241,14 @@ awaiting explicit requester consumption. The same read model is returned by
 private agenda contains current-purpose excerpts and explicit links, not source
 transcripts, result bodies or receiver rationale.
 
+The agenda also carries a bounded `return_attention` projection for sent peer
+requests whose returned result has not been consumed. It contains only the
+request/revision identity, result keys and delivery/consumption state. Native
+context delivery places this projection in the next Turn's opening before long
+work-context sources, while the full result text remains behind the existing
+`manager-inbox read` command. This preserves asynchronous pull semantics and
+does not interrupt an active Turn or treat visibility as consumption.
+
 Outgoing requests to an original project conversation use the same typed address
 reader as explicit peer returns. The agenda retains that conversation recipient
 and its current revision without inventing a Goal/Agent receiver. A changed

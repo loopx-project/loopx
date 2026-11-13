@@ -72,20 +72,14 @@ def project_scheduler_observation(payload: Mapping[str, object]) -> dict[str, ob
 
 def budgeted_spend_result(payload, args, *, runtime_root, reader_argv):
     """Present an already evaluated spend, retaining failed-delivery controls."""
-    from .quota_capture import budgeted_settlement_result
+    from .quota_capture import budgeted_settlement_result, settlement_capture_failure_view
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
 
     try:
         return budgeted_settlement_result(payload, runtime_root=runtime_root,
             output_bytes=args.max_page_output_bytes, reader_argv=reader_argv), 0 if payload.get("ok") is True else 1
     except QuotaDecisionTransportError as exc:
-        view = {key: value for key, value in payload.items() if key not in ("before", "after")}
-        view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
-            "recommended_action": "Preserve the original result controls and Turn identity. "
-                "Repair capture privacy or remove --max-page-output-bytes and read back the "
-                "same operation; do not repeat admission or assume it did not commit.",
-            "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
-        return view, 1
+        return settlement_capture_failure_view(payload, output_bytes=args.max_page_output_bytes, error=exc), 1
 
 
 def native_quota_result(payload, args, *, capture_directory: Path,

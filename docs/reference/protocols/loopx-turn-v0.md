@@ -676,6 +676,12 @@ check. Retryable Host failures also carry a content-free
 Host invocation, and the TypeScript recovery decision rejects another
 invocation after the declared bounded budget. Backoff is an outer-scheduler
 hint; `run-once` never sleeps in-process or silently changes the selected model.
+The default `run-once` Markdown readback shows every recorded Host failure's
+kind, retryability and attempt, plus the retry ceiling and backoff when present.
+These are the existing journal facts, not permission to launch another attempt:
+even a retryable class may have exhausted its budget. Replaying the original
+Turn exposes the same diagnostics without re-running the Host. JSON and the
+admission policy are unchanged; raw provider messages are not added to readback.
 A dangling prepared effect remains owned by the existing provider
 readback protocol; the recovery decision only records that the readback is the
 next required check and does not claim general exactly-once execution.
