@@ -148,6 +148,11 @@ def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[st
     atomic_write_state_text(target, text)
 
 
+def _directory_entry(path: Path) -> Path:
+    """The directory entry ``path`` names: resolved parent plus the final name."""
+    return path.parent.resolve() / path.name
+
+
 def _plan_active_state_copies(
     resolved_pairs: list[tuple[dict[str, Any], dict[str, Any], Path | None, Path | None]],
     *,
@@ -171,9 +176,14 @@ def _plan_active_state_copies(
         if not source_path or not target_path:
             dispositions.append("missing_state_file")
             continue
-        source_key = source_path.resolve()
-        target_key = target_path.resolve()
-        raw = planned.get(source_key)
+        # The writer replaces the target's directory entry, so a write is keyed by
+        # that entry (resolved parent + final name), never by where a symlink
+        # leads. A source is read through a final-component link.
+        source_entry = _directory_entry(source_path)
+        target_entry = _directory_entry(target_path)
+        raw = planned.get(source_entry)
+        if raw is None:
+            raw = planned.get(source_path.resolve())
         if raw is None:
             if not source_path.exists():
                 dispositions.append("source_state_missing")
@@ -181,8 +191,16 @@ def _plan_active_state_copies(
             raw = source_path.read_bytes()
         text = _published_state_text(raw, goal_id_map=goal_id_map, path_map=path_map)
         new_bytes = raw if text is None else text.encode("utf-8")
-        if source_key != target_key:
-            earlier = planned.get(target_key)
+        in_place = target_entry in (source_entry, source_path.resolve())
+        if not in_place:
+            if target_path.is_symlink():
+                # Replacing the link would leave what it points at unchanged, and
+                # a later pair could then be planned against the wrong bytes.
+                raise ValueError(
+                    f"active state target is a symbolic link: {target_path}; "
+                    "refusing to publish over it"
+                )
+            earlier = planned.get(target_entry)
             if earlier is not None and earlier != new_bytes:
                 raise ValueError(
                     f"selected Goals map to the same active state file with different content: {target_path}"
@@ -192,7 +210,7 @@ def _plan_active_state_copies(
                     f"migrated active state already exists with different content: {target_path}; "
                     "refusing to overwrite it with the legacy copy"
                 )
-        planned[target_key] = new_bytes
+        planned[target_entry] = new_bytes
         dispositions.append("copy")
     return dispositions
 

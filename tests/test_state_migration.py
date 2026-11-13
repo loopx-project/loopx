@@ -329,3 +329,52 @@ def test_genuinely_missing_source_is_still_skipped_in_preview_and_execute(
         assert rows[0]["copied"] is execute
         assert rows[1]["skipped_reason"] == "source_state_missing"
         assert rows[1]["copied"] is False
+
+
+def test_symlinked_target_is_refused_before_any_write(tmp_path: Path) -> None:
+    source_repo = tmp_path / "src"
+    source_repo.mkdir()
+    source = source_repo / "S.md"
+    source.write_text("- [ ] see /old/file\n", encoding="utf-8")
+    link = tmp_path / "link" / "S.md"
+    link.parent.mkdir()
+    link.symlink_to(source)
+    completed_repo = tmp_path / "done"
+    completed_repo.mkdir()
+    completed = "- [x] finished\n"
+    (completed_repo / "S.md").write_text(completed, encoding="utf-8")
+    first = ({"repo": str(source_repo), "state_file": "S.md"}, {"repo": str(link.parent), "state_file": "S.md"})
+    second = ({"repo": str(source_repo), "state_file": "S.md"}, {"repo": str(completed_repo), "state_file": "S.md"})
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="symbolic link"):
+            copy_active_state_files(
+                [first, second], goal_id_map={}, path_map={"/old": "/old/new"}, execute=execute
+            )
+
+    assert link.is_symlink()
+    assert source.read_text(encoding="utf-8") == "- [ ] see /old/file\n"
+    assert (completed_repo / "S.md").read_text(encoding="utf-8") == completed
+
+
+def test_source_symlinked_to_its_own_target_is_still_rewritten_in_place(
+    tmp_path: Path,
+) -> None:
+    real_repo = tmp_path / "real"
+    real_repo.mkdir()
+    real = real_repo / "S.md"
+    real.write_text("- [ ] see /old/file\n", encoding="utf-8")
+    link_repo = tmp_path / "linked"
+    link_repo.mkdir()
+    (link_repo / "S.md").symlink_to(real)
+    pair = (
+        {"repo": str(link_repo), "state_file": "S.md"},
+        {"repo": str(real_repo), "state_file": "S.md"},
+    )
+
+    rows = copy_active_state_files(
+        [pair], goal_id_map={}, path_map={"/old": "/old/new"}, execute=True
+    )
+
+    assert rows[0]["copied"] is True
+    assert real.read_text(encoding="utf-8") == "- [ ] see /old/new/file\n"
