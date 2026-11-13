@@ -2,103 +2,6 @@
 
 状态：受支持的 optional capability；harness 执行契约默认关闭。
 
-普通结果写回可附带可选 `execution_observation`（`explore_execution_observation_v0`）：
-候选 SHA-256、输入版本、计划/实际方法标识、改向原因、实测耗时/上限、搜索次数、
-结束原因与证据引用。未测量项显式为 null；版本和引用必须与所属 finding 一致。
-已释放结果的 `result_ref` 必须有匹配的 `result_candidate_sha256`。该记录是来源证据，
-不认证执行真实性或收益；finding、replan 和既有研究历程详情保留相同信息，缺省仍兼容
-旧事件。参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)。
-
-## 量化结论
-
-普通结果附件可附带 `measurements`，保存到既有节点所属的 finding。关系图和
-研究历程详情保留分数；`explore turn-context` 将有界的 `measurement_feedback`
-交给下一轮。手动记录使用 `explore finding --node <id> --evidence-ref result:a
---measurements-json measurements.json`，文件包含一至八项：
-
-```json
-[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
-  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
-  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
-```
-
-结果引用必须属于 finding 的 `evidence_refs`；普通附件还要求相同 `input_revision`。
-每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
-零分和负分仍为有效测量。
-
-开启 Yardstick 后，普通 `refresh-state` 的量化或决策附件会在关系图与 Todo
-关联提交后，通过 `explore_result_delivery` 返回与普通 finding 相同的反馈。
-成功重放只读原始已提交前缀，后来的结果不会改变首次回执。部分失败仍沿原 owner
-重试；反馈不产生 claim、spend 或评测。关闭 Yardstick 或不带量化信息的旧 refresh
-附件保持原有回执形状。
-
-尚未选择 outcome/proxy 决策时，量化回执还可返回当前 Todo 已提交证据的有界
-`work_measurements`，复用普通任务上下文的事实视图。不重复回传本次反馈，只补充至多
-两组其他比较，优先同一问题与近期证据；省略数量明确标注，原 registry/runtime 路由的
-`details_command` 可达其余组。系统不替 Agent 指定指标角色，
-也不要求增加一次声明或 probe。方法有实质变化时，原有可选决策字段仍可放在同一次
-普通结果附件中；记录比较事实不代表验收、执行许可或效果收益。
-
-若要复用已核实的比较条件，将三个字段一次保存到 `conditions.json`：
-
-```json
-{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
- "evaluation_ref":"evaluator:v1"}
-```
-
-同时传入 `--measurement-context-json conditions.json` 与
-`--measurements-json observations.json`。此时每项观测省略这三个字段，例如：
-
-```json
-[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
-  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
-```
-
-普通附件及 path-delta 附件也支持在 `measurements` 旁提供可选
-`measurement_context` 对象。写入前会展开成原有完整记录，不保存可变上下文引用。
-观测重复填写比较字段（即使值相同）、上下文字段缺失或多余都会在记录前拒绝。
-原有完整条目格式继续可用。复用声明不认证可比性；任务、数据、评测器、模型或预算
-改变时另选上下文，条件未知时保持分开。此便捷输入不授予评测、纠正或执行权限。
-
-比较条件与候选、单次结果分别记录：
-
-| 字段 | 连续 finding 中的含义 |
-| --- | --- |
-| `input_revision` | 实际受评测的任务或数据版本；确认输入未变时保持一致。 |
-| `evaluation_ref` | 评测器或计分协议版本；确认协议未变时保持一致。 |
-| `candidate_ref` | 实际受评测的代码或工件版本；候选改变时更新。 |
-| `evidence_ref` | 单次评测结果或回执；在 finding 的 `evidence_refs` 中保留准确来源。 |
-
-例如，在同一问题上将候选 A 的 8 分、候选 B 的 9 分记录为**两个 finding**。
-其他比较字段不变时，两者均使用 `input_revision=dataset-v1`、
-`evaluation_ref=evaluator:v1`，候选与结果引用分别为 `candidate:a`/`result:a`、
-`candidate:b`/`result:b`。反馈包含两条实测记录，改善幅度为 +1。
-若把各候选哈希填进 `input_revision`，或把各次提交编号填进 `evaluation_ref`，
-则会被拆成只有一条记录的组，改善幅度为 null；它不表示零收益。
-确认来源后才通过既有纠正路径修正误填的 finding，原始记录保留在历史中。
-条件已变或可比性未知时必须分开，不得为得到差值而编造共同版本。
-本地样本库扩充不改变实际受评测的固定子集版本；受评测样本改变才更新该版本。
-
-只有节点、指标、单位、方向、比较范围、输入版本和评测器全部一致时才比较。
-任务、模型或资源预算、评测条件改变时，生产者必须更换比较范围；原生评测与本地
-代理指标分别记录。Explore 校验声明的比较键，不认证声明真实性。它在上下文裁剪前
-计算最近记录的测量、历史最佳候选及来源、相对先前最佳的方向归一化改善幅度。
-最近记录按源日志追加顺序确定；时间相同或事后回填不改变此顺序，序号仅从日志
-派生，不另行持久化。
-纠正结论会在比较中替换旧版本，原始版本仍可在历史中读取；计数表示记录数，
-不表示独立试验次数。反馈分页复用 `--result-limit`（1..20，默认 3）、
-`--result-offset`、`--result-revision` 和可选的 `--result-node` 过滤。
-沿 `measurement_feedback_page.next_command` 读取其余组，同一节点的多个指标或条件
-也可完整翻页。共同 revision 绑定全部比较来源，包含手动 finding；来源变化须从头读取。
-下一轮指导使用这些反馈排查退步、回看更好候选，再决定是否
-重复尝试。best 不代表当前保留版本、因果收益、验收通过或执行授权；是否实际采用
-并产生收益，仍需后续工作和证据确认。自动分支排序保持原有行为。
-
-手动登记的量化 finding 同样进入既有结果分页；关联可执行工作时，也进入其精确来源
-比较卡片，无需补写 `writeback-result` 来源标签。先读取结果页，再按需绑定
-`selected_candidate`，仍核对来源修订、Todo 关联和后续实际工作。未带测量的手动笔记
-保持既有摘要/审计路径。读取或选择某条成绩不认证实际采用或执行。
-
 ## 概览
 
 LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘、领域调研）的受支持、默认关闭的可选能力。它把“到处看看”变成有界、可观测、有门控的流程，包含三根支柱：
@@ -114,11 +17,11 @@ LoopX Explore 是面向长程探索目标（软件研究、安全攻击面测绘
 
 ## 快速开始
 
-开启门控、记录证据、投影与规划：
+选择模式、记录证据、投影与规划：
 
 ```bash
-loopx configure-goal --goal-id <id> --explore-graph-enabled \
-  --explore-harness-enabled --explore-harness-profile adaptive-resilient --execute
+loopx configure-goal --goal-id <id> --explore-mode planning \
+  --explore-harness-profile adaptive-resilient --execute
 
 loopx explore node --goal-id <id> --title "攻击面 A" --status exploring
 loopx explore edge --goal-id <id> --from A --to B --type leads_to
@@ -129,7 +32,7 @@ loopx explore graph --goal-id <id> --graph-format mermaid --out explore.mmd
 loopx explore worker-branch-plan --goal-id <id> --harness-profile adaptive-resilient --worker-width 3
 ```
 
-两个门控相互独立且默认关闭（见下文“每 goal 独立 Opt-In 门控”）。以下是详细契约。
+Explore 默认关闭（见下文 Explore 模式配置）。以下是详细契约。
 当已闭环、有证据的多个面之间存在显式理由需要组合验证时，下一次 `quota should-run` / turn packet 会投影 composition gap，并可衍生 joint experiment 后继 todo（见下文“Composition Frontier”）。
 
 长程探索目标（例如通过 LoopX 研究某个外部软件领域的 Codex loop）产生的结果，operator 希望读成**拓扑**，而不是 agent 动作日志：探索过什么、循环卡在哪里以及为什么、发现了什么。
@@ -279,6 +182,64 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 仍引用原有全局 basis。写回从同一可信来源重放任务关联与精确页面，不替换已准入的
 复盘上下文。关联变化、任务缺失/关闭或改由他人认领时，旧页面失效，应重新读取。
 未指定任务的全局读取和引用保持原行为；来源正确不证明模型已采用或效果提升。
+
+## 量化结论、执行观测与五阶段方法论算子
+
+### 执行观测（`explore_execution_observation_v0`）
+
+普通结果附件与手动 finding 可附带可选 `execution_observation`：精确 `candidate_sha256`、`input_revision`、`planned_method_id` 与 `executed_method_id`（不一致时必须提供 `change_reason`）、实测耗时/上限、搜索次数、`stop_reason` 与 `1..8` 条不透明证据引用。未测量项显式记为 `null`（绝不静默转零）；`input_revision` 与引用必须归属所属 finding，已释放结果的 `result_ref` 必须匹配 `result_candidate_sha256`（参见[本地探针生产路径](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md)）。缺省保持对旧事件的兼容，仅记录来源证据而不认证执行或收益。
+
+### 量化测量与七键比较域隔离
+
+Finding 与写回附件可附带 `1..8` 条 `measurements`（亦可附带 `measurement_context` 一次性声明共享的 `comparison_scope`、`input_revision` 与 `evaluation_ref`，在落盘前展开为完整记录，冲突或残缺字段直接拒绝）：
+
+```sh
+# 轮内直接记录并获取量化反馈（不结算当前 Todo）：
+loopx --format json explore finding --goal-id GOAL --agent-id AGENT \
+  --todo-id TODO --turn-instance-id TURN --result-json result.json
+
+# 手动记录并复用已核实的比较上下文：
+loopx explore finding --goal-id GOAL --node <id> --evidence-ref result:b \
+  --measurement-context-json conditions.json --measurements-json observations.json
+```
+
+比较条件与受评测候选、单次结果严格分离：
+
+| 字段 | 连续 finding 中的含义 |
+| --- | --- |
+| `input_revision` | 实际受评测的任务或数据版本；确认输入未变时保持一致。 |
+| `evaluation_ref` | 评测器或计分协议版本；确认协议未变时保持一致。 |
+| `candidate_ref` | 实际受评测的代码或工件版本；候选改变时更新。 |
+| `evidence_ref` | 单次评测结果或回执；在 finding 的 `evidence_refs` 中保留准确来源（若声明 `execution_observation.result_ref` 则须一致）。 |
+
+核心不变量（由 `explore_measurements.ts` 单一 owner 维护）：
+
+- **精确七键比较域：** 仅当 `(node_id, metric, unit, higher_is_better, comparison_scope, input_revision, evaluation_ref)` 完全一致时才聚合比较；把候选哈希填入 `input_revision` 或把提交编号填入 `evaluation_ref` 会产生单元素组（改善幅度为 `null`，表示未知而非零收益）。条件变化或未知时保持分开，严禁编造共享版本。
+- **空值语义与成对记录：** 未测量显式记为 `null`，`0` 与负数仍为有效分数。单条 finding 可在相同比较条件下记录两个不同候选的成对比较；同一候选的重复评测须写入新 finding，仅在修正误填 finding 时复用同一 finding ID（修正替换比较中的旧版本，原始记录仍保留在追加历史中）。
+- **追加顺序反馈与重放前缀冻结：** `explore turn-context`、`explore finding` 及开启 Yardstick 后的 `refresh-state`（`explore_result_delivery`）按源日志追加顺序计算最新值、历史最佳与方向归一化改善幅度，并通过 `--result-limit`（`1..20`，默认 `3`）、`--result-offset`、`--result-revision` 与 `--result-node` 翻页。成功结算重放冻结并仅读取首次提交前缀；尚未声明 outcome/proxy 决策时，回执补充当前 Todo 关联问题下至多两组 `work_measurements`。手动量化 finding 无需 `writeback-result` 标签即可进入结果分页与比较卡片；任何分数或 `best` 标记均不代表采纳、因果收益、验收通过或执行授权。
+
+### 五阶段方法论算子与量化研究规划
+
+LoopX 的六类长程决策与量化研究方法论（`work_yardstick`、`stride_review`、`scoped_yardstick_fidelity`、`budgeted_continuation`、`counterfactual_continuation` 与 `evolutionary_population`）统一构建在 [`stage_methodology_operator_catalog_v0`](../../../docs/reference/protocols/stage-methodology-operator-contract-v0.md) 单内核之上：严格布尔门控与静默轮零提示词税、canonical 重放前缀与延迟重放防污染、精确比较域元组隔离、未知值 `null` 不转零、热路径有界裁剪（附 `omitted_count` 与 `details_command`），以及运行时强制校验 `advisory_only: true` 与 `grants_execution_authority: false`：
+
+```sh
+# 查看已注册的五阶段方法论算子及反熵不变量
+loopx --format json explore methodology-operators [--stage feedback_evolve]
+
+# 多点 Proxy vs. Outcome 秩相关（Kendall tau-b / Spearman rho）、线性校准与前沿 Goodhart 悬崖检测
+loopx --format json explore yardstick-fidelity --goal-id GOAL [--node-id NODE] [--frontier-k 3]
+
+# 基于剩余预算倒排权威评测确认窗口与保留当前最佳工件下的盈亏平衡成功率 p*
+loopx --format json explore budgeted-plan --document budgeted_plan.json
+
+# 同检查点成对反事实延续评估（方向归一化 tau_B、精确符号翻转 p 值、工作区与时钟防泄漏）
+loopx --format json explore counterfactual-eval --document counterfactual_pairs.json
+
+# 机制岛屿精英保留、正交机制交叉配对与 Goodhart 代理指标隔离（防超参微调塌缩）
+loopx --format json explore evolutionary-plan --goal-id GOAL [--node-id NODE] [--elite-limit 4]
+```
+
+当已开启的 `work_yardstick` 在声明的权威指标与代理指标上积累 $\ge 3$ 个成对候选时，`explore turn-context` 与 Personal Workspace 的研究结论/历程界面会自动展示 `yardstick_fidelity` 校准状态（`aligned_in_tested_scope`、`frontier_bias_cliff`、`order_reversed`、`noisy_indistinguishable` 或 `mixed_or_flat`）及待权威确认的代理优胜候选。
 
 ## 可选 Todo 分支规划
 
@@ -618,6 +579,11 @@ loopx explore presentation --goal-id <id>
 loopx explore graph --goal-id <id> [--graph-format mermaid|json] [--out <file>]
 loopx explore todo-branch-plan --goal-id <id> [--agent-id <agent>] [--width 3]
 loopx explore worker-branch-plan --goal-id <id> [--agent-id <agent>] [--harness-profile generic|adaptive-resilient|moe-router] [--worker-width 3] [--max-todos-per-branch 3] [--router-state <file>] [--load-profile <file>]
+loopx explore methodology-operators [--stage admission|compile_context|execute_verify|writeback_settle|feedback_evolve]
+loopx explore yardstick-fidelity --goal-id <id> [--node-id <node>] [--frontier-k 3]
+loopx explore budgeted-plan --document <budgeted_plan.json>
+loopx explore counterfactual-eval --document <counterfactual_pairs.json>
+loopx explore evolutionary-plan --goal-id <id> [--node-id <node>] [--elite-limit 4] [--crossover-limit 3] [--mutation-limit 3]
 loopx explore feishu-setup [--base-url ...] [--execute]
 loopx explore feishu-visual-configure [--whiteboard-token <token>] --docx-token <token> [--stage-whiteboard-token <token> ...] [--stage-capacity 10..20] [--board-style auto_flow|semantic_lane_columns] [--view-role canonical|executive] [--projection-mode canonical_filtered|issue_fix_two_lane|canonical_full|executive_auto] [--tag <tag>] [--status <status>] [--execute]
 loopx explore feishu-sync --goal-id <id> [--sink-visibility owner-only|shared] [--execute]

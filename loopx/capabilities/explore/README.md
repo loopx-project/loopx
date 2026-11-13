@@ -2,215 +2,6 @@
 
 Status: supported optional capability; default-off harness execution contract.
 
-Ordinary result writeback can include an optional `execution_observation`
-(`explore_execution_observation_v0`): exact candidate SHA-256 and input revision,
-planned/executed method ids and change reason, measured elapsed/limit seconds,
-search iterations, stop reason and opaque evidence refs. Unknown measurements
-are explicit nulls. Its refs and input revision must belong to the enclosing
-finding. Released `result_ref` requires a matching `result_candidate_sha256`.
-This records producer evidence, not verified execution or utility. Findings,
-replan context and the existing research-history detail retain it; omission
-preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
-
-When the observed execution used the finding's tested input revision, result
-attachments can bind it once and select the evidence to reuse. Readback and
-standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
-
-## Quantitative findings
-
-An ordinary result attachment can include `measurements`, saved on its existing
-node-linked finding. The graph and research-history detail retain the values;
-`explore turn-context` supplies bounded `measurement_feedback` to the next turn.
-To use a new result during the current Turn, save the same ordinary attachment
-as `result.json` and record it with the open claimed Todo:
-
-```sh
-loopx --format json explore finding --goal-id GOAL --agent-id AGENT \
-  --todo-id TODO --turn-instance-id TURN --result-json result.json
-```
-
-Supply the question and applicability for a new scoped question. For one
-existing linked question, omit both; when there are several, name its
-`node_id`. The same attachment works with `refresh-state --explore-result-json`.
-The receipt returns `measurement_feedback` for confirmed measurements in this
-write, including the earlier best, latest value and improvement under the
-same profile. For an enabled Yardstick with declared outcome and proxy
-profiles, it also returns `search_comparison` when this write contributes a
-qualified comparison. A reversal requires two distinct candidates measured on
-both profiles with different preferences. This uses the current Todo's
-recorded evidence and doesn't settle the Turn. Exact retries within the same
-Turn return the comparison at the original write.
-
-With Yardstick enabled, a quantitative or decision attachment on ordinary
-`refresh-state` returns the same feedback in `explore_result_delivery` after
-the graph and Todo association commit. A successful replay reads the original
-committed prefix, including after later results arrive. Partial delivery still
-retries through the existing owner; feedback creates no claim, spend or evaluation.
-Disabled Yardstick and unmeasured refresh attachments retain their earlier wire.
-
-When no outcome/proxy decision has been selected, a quantitative receipt can
-also return bounded `work_measurements` from this Todo's committed evidence.
-These are the same scoped facts available in ordinary task context. The receipt
-does not duplicate its current feedback: it supplements it with at most two
-other groups, prioritizing this question and recent evidence, with a source-bound
-`details_command` and an explicit omitted count for the remaining groups.
-No metric is assigned an outcome or proxy role. The Agent can use the facts
-without another declaration or probe; if its method changes, the existing
-optional decision field fits the same normal result attachment.
-
-Manual capture uses `explore finding --node <id> --evidence-ref result:a
---measurements-json measurements.json`. The file contains one to eight items:
-
-```json
-[{"metric":"quality","value":8,"unit":"points","higher_is_better":true,
-  "comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
-  "evaluation_ref":"evaluator:v1","candidate_ref":"candidate:a","evidence_ref":"result:a"}]
-```
-
-Each result reference must belong to the finding's `evidence_refs`; ordinary
-attachments also require the same `input_revision`. Use a new finding id per
-evaluation or paired comparison, and reuse an id only to correct that finding.
-Missing values are explicit `null`; zero and negative values remain valid measurements.
-
-When an `execution_observation` declares a `result_ref`, each measurement must
-cite that same result. This applies to manual findings and writeback attachments,
-including shared comparison contexts. Listing both receipts in `evidence_refs`
-does not bind a different result to the executed candidate. No result is inferred
-when execution has not declared one. These consistency checks do not independently
-verify a producer's calculator or turn `confirmed` into an evaluator attestation.
-
-To reuse verified comparison conditions, save these three fields once in
-`conditions.json`:
-
-```json
-{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
- "evaluation_ref":"evaluator:v1"}
-```
-
-Pass `--measurement-context-json conditions.json` alongside
-`--measurements-json observations.json`. Each observation then omits those
-three fields, for example:
-
-```json
-[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
-  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
-```
-
-Ordinary and path-delta attachments support the same optional
-`measurement_context` object alongside `measurements`. The writer expands it
-into the existing complete records; it stores no mutable context reference.
-Observation overrides, even equal ones, and incomplete or extra context fields
-reject before recording. The original complete-item format remains supported.
-Reusing a declaration does not verify comparability: select a different context
-when task, data, evaluator, model or budget changes. Keep unknown conditions
-separate. This convenience grants no evaluation, correction or execution authority.
-
-Keep comparison conditions separate from the candidate and its result:
-
-| Field | Meaning across observations |
-| --- | --- |
-| `input_revision` | Evaluated task/data revision; retain it when the evaluated inputs are verified unchanged. |
-| `evaluation_ref` | Evaluator/scoring protocol version; retain it when the evaluation protocol is verified unchanged. |
-| `candidate_ref` | Code/artifact version actually evaluated; change it when the candidate changes. |
-| `evidence_ref` | Individual evaluation result/receipt; retain its exact provenance in the finding's `evidence_refs`. |
-
-For example, record candidate A's score 8 and candidate B's score 9 as **two
-findings** on the same question. With the other comparison fields unchanged,
-both use `input_revision=dataset-v1` and `evaluation_ref=evaluator:v1`, while
-their candidate/result refs are `candidate:a`/`result:a` and
-`candidate:b`/`result:b`. Feedback has two measured records and improvement +1.
-Putting each candidate hash in `input_revision` or each submission id in
-`evaluation_ref` instead creates singleton groups with null improvement.
-That null is not zero gain. Check provenance before correcting a mistaken
-finding through the existing correction path; historical records remain intact.
-Changed or unknown evaluation conditions must stay separate. Do not invent a
-shared revision merely to obtain a comparison. A growing local corpus does not
-change the input revision for an unchanged evaluated subset; changed samples do.
-
-File-based producers may use `candidate_content.candidate_snapshot` and
-`candidate_manifest_sha256` from this capability's host I/O neighborhood to
-capture selected relative paths and byte digests. This preserves one content
-encoding for execution probes and artifact adapters. It does not cover modes,
-packaging, transitive inputs or execution conditions, certify an execution, or
-require every measurement subject to use a content hash. Keep each producer's
-actual subject, workload and evaluator; extra content evidence does not rewrite
-earlier records or count as another evaluation.
-
-A paired comparison may instead record both candidates in **one finding** under
-the same verified comparison conditions. Keep both `candidate_ref` and
-`evidence_ref` values, and list both results in the finding's `evidence_refs`.
-Distinct candidates do not require invented metrics or scopes. A repeated
-candidate under the same metric, unit, direction and conditions is still a
-duplicate, even with another result reference; record a repeat evaluation in a
-new finding. Every measurement still requires a candidate reference. A paired
-finding cannot claim two separate receipts as one execution observation's result.
-
-Comparisons require the same node, metric, unit, direction, comparison scope,
-input revision and evaluator. Producers must change the scope when task,
-model/resource budget or evaluation conditions change, and keep distinct workloads
-or evaluation conditions in their own profiles.
-A producer's location does not decide whether its measurement is an outcome or a
-proxy; that role remains an explicit decision declaration. Explore validates the
-declared comparison keys,
-not their truth. It computes the latest recorded measurement, historical best
-candidate/source and direction-adjusted improvement against the prior best,
-before applying the context's display limit. Latest follows source-log append
-order, including tied or backfilled timestamps. Within a finding, observations
-follow their declared array order: latest is the last matching observation and
-prior best includes earlier observations in that batch. This order does not
-assert execution chronology or identify the retained candidate. The source ordinal
-is derived, not another persisted fact. Corrected findings replace earlier
-versions in comparisons; original versions remain in history. Counts are records,
-not independent trials. Feedback pages reuse `--result-limit` (1..20, default 3),
-`--result-offset`, `--result-revision` and the optional `--result-node` filter.
-Follow `measurement_feedback_page.next_command` for additional groups, including
-multiple metrics or conditions on one node. The shared revision binds all compared
-sources, including manual findings; a changed source requires restarting the read.
-The next-turn guidance uses this feedback to investigate
-regressions or revisit better candidates before repeating work. Best does not
-identify the current retained candidate, establish causality, satisfy acceptance
-or authorize execution. Actual adoption and outcome benefit require subsequent
-work and evidence; automatic branch rankings remain unchanged.
-
-When an enabled work Yardstick has two different measured candidates on its
-declared goal profile, from findings on the same node and Goal/Agent/Todo
-binding, Explore context names the observed better-scoring candidate as an
-available comparison base and links the scoped evidence. A
-tied goal outcome calls for checking headroom. The detail read shows a proxy
-ordering only when its exact profile compares the same two candidates, with
-separate result references and metric directions for each profile. Weigh
-continuation, a distinct mechanism or a compatible combination by expected
-end-to-end gain and full implementation and validation cost. Use a bounded
-check that can change the choice while honoring the accepted constraints and
-budget. The compact cue keeps the recorded next-action reason and adds a
-separate comparison cue. The detail read retains the complete work decision.
-The comparison uses findings from the current work, target, and acceptance
-reference. A different target or acceptance reference needs its own eligible
-pair, even when the measured metric, evaluator and inputs stay the same.
-Uncited ordinary observations enter the current work window only when their
-original server commit is provably later than that decision and their canonical
-log position follows its original prefix. A delayed old delivery, tied time or
-unknown time does not become new work evidence. Original results and explicitly
-cited, verified prefix history remain available.
-The comparison is advisory and carries no retention or execution obligation.
-On an admitted work turn, the progressive starting read includes the enabled
-Yardstick's decision guidance and any compact cue for the selected Todo. Use
-the Explore context reader for the attachment template and scoped evidence.
-Before a first decision is recorded, the same opt-in entry shows up to three
-exact-profile measurement groups from questions canonically linked to that
-Todo, with omitted counts and the existing task reader. Distinct questions get
-a place before additional metrics from one question. These are declared
-comparisons, including shared findings; they do not establish which Todo ran a
-measurement or select an outcome/proxy profile. Default-off input and the
-benchmark's optional exact-field first read retain their existing behavior.
-
-Manually captured measured findings also appear in the existing result pages
-and, when linked to eligible work, its exact-source comparison cards. They need
-no `writeback-result` origin tag. Read the page before optionally binding a
-`selected_candidate`; normal source-revision, Todo-link and followthrough checks
-still apply. Unmeasured manual notes retain their existing summary/audit path.
-Reading or selecting a measured result does not certify adoption or execution.
-
 ## At a Glance
 
 Explore Harness is a supported, default-off optional capability for
@@ -538,6 +329,88 @@ graph projections are covered; a packaged frontend attachment authoring/retry
 journey is not delivered by this slice. Existing capability configuration remains
 the mode owner, and Lark publication remains separately authorized. Full research
 adoption and score benefit require a subsequent matched worker experiment.
+
+## Quantitative Findings, Execution Observations & Stage Methodology Operators
+
+### Execution Observations (`explore_execution_observation_v0`)
+
+Ordinary result attachments and manual findings can attach an optional
+`execution_observation`: exact `candidate_sha256` and `input_revision`,
+`planned_method_id` vs. `executed_method_id` (requiring non-null `change_reason`
+when they diverge), measured `elapsed_seconds` / `limit_seconds`,
+`search_iterations`, `stop_reason`, and `1..8` opaque `evidence_refs`. Unknown
+measurements are explicit `null` (never `0`). Its `input_revision` and
+`evidence_refs` must belong to the enclosing finding, and any released
+`result_ref` requires a matching `result_candidate_sha256` (see
+[local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md) and
+[execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)).
+This records producer attribution, not verified execution or utility; omitting
+it preserves legacy events.
+
+### Quantitative Measurements & Scope-Tuple Comparability
+
+Findings and writeback attachments can attach `1..8` `measurements` (optionally
+sharing a dry `measurement_context` supplying `comparison_scope`,
+`input_revision`, and `evaluation_ref` that expands into complete records before
+persistence, rejecting conflicting or partial overrides):
+
+```sh
+# In-turn capture without settling the claimed Todo:
+loopx --format json explore finding --goal-id GOAL --agent-id AGENT \
+  --todo-id TODO --turn-instance-id TURN --result-json result.json
+
+# Manual capture with shared comparison context:
+loopx explore finding --goal-id GOAL --node <id> --evidence-ref result:b \
+  --measurement-context-json conditions.json --measurements-json observations.json
+```
+
+Keep comparison conditions strictly separate from candidate and receipt identity:
+
+| Field | Meaning across observations |
+| --- | --- |
+| `input_revision` | Evaluated task/data revision; retain only when evaluated inputs are verified unchanged. |
+| `evaluation_ref` | Evaluator/scoring protocol version; retain only when scoring protocol is verified unchanged. |
+| `candidate_ref` | Code/artifact version actually evaluated (`candidate_content.candidate_snapshot` / `candidate_manifest_sha256` optional); update when candidate changes. |
+| `evidence_ref` | Individual evaluation receipt in the finding's `evidence_refs` (must match `execution_observation.result_ref` when declared). |
+
+Key measurement invariants (canonicalized in `explore_measurements.ts`):
+
+- **Exact 7-key scope tuple:** Comparisons group strictly by `(node_id, metric, unit, higher_is_better, comparison_scope, input_revision, evaluation_ref)`. Putting candidate hashes in `input_revision` or submission IDs in `evaluation_ref` creates singleton groups with `null` improvement (`null` is unknown, never zero gain). Never invent a shared revision when conditions changed or are unknown.
+- **Null vs. zero & paired findings:** Unmeasured values are explicit `null`; `0` and negative numbers are valid scores. A single finding may record paired distinct candidates under identical scope, while repeated evaluations of the same candidate belong in a new finding. Use a new finding ID per evaluation and reuse an ID only to correct a mistaken finding (corrections replace prior versions in active comparisons while preserving append-order history).
+- **Append-order feedback & replay prefix isolation:** `explore turn-context`, `explore finding`, and Yardstick-enabled `refresh-state` (`explore_result_delivery`) compute latest, historical best, and direction-adjusted delta along canonical log append order (and array order within a batch), paginated via `--result-limit` (`1..20`, default `3`), `--result-offset`, `--result-revision`, and `--result-node`. Successful settlement replays freeze and read only the original committed event prefix. When no Yardstick decision is active, receipts supplement current feedback with at most two other `work_measurements` groups from the Todo's linked questions. Manually captured measured findings participate in result pages and exact-source comparison cards without needing a `writeback-result` tag. Scores and `best` markers never certify adoption, causality, acceptance, or execution authority.
+
+### Stage Methodology Operators & Quantitative Planning
+
+All six long-horizon decision and quantitative research methodologies —
+`work_yardstick`, `stride_review`, `scoped_yardstick_fidelity`,
+`budgeted_continuation`, `counterfactual_continuation`, and
+`evolutionary_population` — share the single TypeScript control-plane kernel in
+[`stage_methodology_operator_catalog_v0`](../../../docs/reference/protocols/stage-methodology-operator-contract-v0.md).
+Every operator enforces strict boolean/invocation gating (zero cold-path prompt
+tax when off or untriggered), canonical replay-prefix isolation (blocking late
+replays and tied/unparseable clocks), exact scope-tuple isolation, explicit
+`null` preservation, bounded hot-path cues with `omitted_count` +
+`details_command`, and runtime-verified `advisory_only: true` /
+`grants_execution_authority: false`:
+
+```sh
+# Inspect registered 5-stage methodology operators & anti-entropy invariants
+loopx --format json explore methodology-operators [--stage feedback_evolve]
+
+# Multi-point proxy vs. outcome rank concordance (Kendall tau-b / Spearman rho), OLS calibration & Goodhart cliff check
+loopx --format json explore yardstick-fidelity --goal-id GOAL [--node-id NODE] [--frontier-k 3]
+
+# Back-schedule authoritative confirmation reserve and break-even p* under retained-incumbent floor
+loopx --format json explore budgeted-plan --document budgeted_plan.json
+
+# Same-checkpoint paired counterfactual evaluation (tau_B, exact sign-flip p-value, workspace & clock isolation)
+loopx --format json explore counterfactual-eval --document counterfactual_pairs.json
+
+# Mechanism-diverse elites, candidate combinations to test, and proxy-cliff quarantine
+loopx --format json explore evolutionary-plan --goal-id GOAL [--node-id NODE] [--elite-limit 4]
+```
+
+When an enabled `work_yardstick` binds outcome and proxy profiles on a Todo/target/acceptance scope, `explore turn-context` surfaces 2-candidate reversals (`search_comparison`) and, once $\ge 3$ paired candidates exist, multi-point `yardstick_fidelity` (`aligned_in_tested_scope`, `frontier_bias_cliff`, `order_reversed`, `noisy_indistinguishable`, or `mixed_or_flat`) plus unconfirmed proxy winners — rendered directly in Personal Workspace Saved Findings and Research History.
 
 ## Projection And Topology
 
@@ -1429,6 +1302,11 @@ loopx explore presentation --goal-id <id>
 loopx explore graph --goal-id <id> [--graph-format mermaid|json] [--out <file>]
 loopx explore todo-branch-plan --goal-id <id> [--agent-id <agent>] [--width 3]
 loopx explore worker-branch-plan --goal-id <id> [--agent-id <agent>] [--harness-profile generic|adaptive-resilient|moe-router] [--worker-width 3] [--max-todos-per-branch 3] [--router-state <file>] [--load-profile <file>]
+loopx explore methodology-operators [--stage admission|compile_context|execute_verify|writeback_settle|feedback_evolve]
+loopx explore yardstick-fidelity --goal-id <id> [--node-id <node>] [--frontier-k 3]
+loopx explore budgeted-plan --document <budgeted_plan.json>
+loopx explore counterfactual-eval --document <counterfactual_pairs.json>
+loopx explore evolutionary-plan --goal-id <id> [--node-id <node>] [--elite-limit 4] [--crossover-limit 3] [--mutation-limit 3]
 loopx explore feishu-setup [--base-url ...] [--execute]
 loopx explore feishu-visual-configure [--whiteboard-token <token>] --docx-token <token> [--stage-whiteboard-token <token> ...] [--stage-capacity 10..20] [--board-style auto_flow|semantic_lane_columns] [--view-role canonical|executive] [--projection-mode canonical_filtered|issue_fix_two_lane|canonical_full|executive_auto] [--tag <tag>] [--status <status>] [--execute]
 loopx explore feishu-sync --goal-id <id> [--sink-visibility owner-only|shared] [--execute]

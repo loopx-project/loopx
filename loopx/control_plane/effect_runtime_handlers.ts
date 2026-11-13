@@ -841,6 +841,12 @@ export function createEffectRuntimeHandlers(
     ["explore.research.composition_successor", lazyHandler(() => import("./capabilities/explore_research_execution.ts"), ({validateResearchCompositionSuccessor}) => validateResearchCompositionSuccessor)],
     ["explore.research.completion", lazyHandler(() => import("./capabilities/explore_research_execution.ts"), ({qualifyResearchCompletion}) => qualifyResearchCompletion)],
     ["explore.research.frontier", lazyHandler(() => import("./capabilities/explore_research.ts"), ({projectResearchFrontier}) => projectResearchFrontier)],
+    ["explore.yardstick_fidelity.evaluate", lazyHandler(() => import("./capabilities/yardstick_fidelity.ts"), ({evaluateScopedYardstickFidelity}) => evaluateScopedYardstickFidelity)],
+    ["explore.budgeted_continuation.evaluate", lazyHandler(() => import("./capabilities/budgeted_continuation.ts"), ({evaluateBudgetedContinuationPlan}) => evaluateBudgetedContinuationPlan)],
+    ["explore.counterfactual_continuation.evaluate", lazyHandler(() => import("./capabilities/counterfactual_continuation.ts"), ({evaluateCounterfactualContinuations}) => evaluateCounterfactualContinuations)],
+    ["explore.evolutionary_population.evaluate", lazyHandler(() => import("./capabilities/evolutionary_search.ts"), ({evaluateEvolutionaryPopulation}) => evaluateEvolutionaryPopulation)],
+    ["methodology.operators.catalog", lazyHandler(() => import("./capabilities/stage_methodology_operator.ts"), ({listStageMethodologyOperators}) => listStageMethodologyOperators)],
+    ["methodology.operator.verify_output", lazyHandler(() => import("./capabilities/stage_methodology_operator.ts"), ({verifyMethodologyOperatorOutputHandler}) => verifyMethodologyOperatorOutputHandler)],
   ["work_item.replan_history.project", lazyHandler(() => import("./work_items/replan_history_settlement.ts"), ({projectSettledReplanHistory}) => projectSettledReplanHistory)],
   ["work_item.replan_history.project_snapshot", lazyHandler(() => import("./work_items/replan_history_snapshot.ts"), ({projectReplanHistorySnapshot}) => projectReplanHistorySnapshot)],
 

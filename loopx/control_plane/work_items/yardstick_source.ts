@@ -1,9 +1,12 @@
 /** Server-owned canonical event-prefix capture and recovery. Browser readers
  * share the pure decision/capture normalizers without importing Node hashing. */
 import {createHash} from "node:crypto";
+import {
+  evaluateMethodologyActivation,
+  isHistoricalReplayPrecedingCurrent,
+} from "../capabilities/stage_methodology_operator.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
-import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {currentWorkYardstickFinding, normalizeWorkYardstickCapture,
   normalizeWorkYardstickDecision, normalizeWorkYardstickSourceSnapshot,
   workYardstickTodos} from "./yardstick_decision.ts";
@@ -43,17 +46,19 @@ export function projectWorkYardstickSourceRequests(params: JsonObject): JsonObje
   })};
 }
 export function validateWorkYardstickContinuation(params: JsonObject): JsonObject {
-  if (params.enabled !== true) throw new EffectRuntimeRequestError("work yardstick capture requires explicit yardstick_enabled configuration");
+  if (!evaluateMethodologyActivation({enabled: params.enabled}).active) {
+    throw new EffectRuntimeRequestError("work yardstick capture requires explicit yardstick_enabled configuration");
+  }
   const binding = requireJsonObject(params.binding, "work binding");
   const decision = normalizeWorkYardstickDecision(params.decision, params.evidence_refs);
   const current = currentWorkYardstickFinding((params.findings ?? []) as JsonObject[], binding);
   // Only the settlement adapter supplies the original timestamp of an exact
   // committed replay. Preserve a strictly older missing capture as history;
   // it cannot displace the current choice or admit a newer stale predecessor.
-  const replayTime = typeof params.replay_committed_at === "string"
-    ? parseTodoTimestampMicros(params.replay_committed_at) : null;
-  const currentTime = current ? parseTodoTimestampMicros(String(current.last_updated_at ?? "")) : null;
-  const historicalReplay = replayTime !== null && currentTime !== null && replayTime < currentTime;
+  const historicalReplay = isHistoricalReplayPrecedingCurrent(
+    params.replay_committed_at,
+    current?.last_updated_at,
+  );
   if (decision.prior_finding_id !== (current?.finding_id ?? null) && !historicalReplay) {
     throw new EffectRuntimeRequestError("yardstick basis changed; read the current same-Todo decision before revising it");
   }

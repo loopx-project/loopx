@@ -2,8 +2,8 @@
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
-import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
+import {isValidContentSha256} from "./stage_methodology_operator.ts";
 
 export const EXPLORE_RESULT_PAGE_MAX = 20;
 
@@ -18,7 +18,7 @@ export function normalizeExploreResultPages(value: unknown): JsonObject[] {
       throw new EffectRuntimeRequestError("Explore result page todo_id requires the task identity returned by that read");
     }
     if (Object.keys(row).some(key => !["revision", "offset", "limit", "todo_id"].includes(key)) ||
-        typeof row.revision !== "string" || !BARE_SHA256_PATTERN.test(row.revision) ||
+        !isValidContentSha256(row.revision) ||
         !Number.isSafeInteger(row.offset) || Number(row.offset) < 0 ||
         !Number.isSafeInteger(row.limit) || Number(row.limit) < 1 || Number(row.limit) > EXPLORE_RESULT_PAGE_MAX) {
       throw new EffectRuntimeRequestError("Explore result page requires revision, nonnegative offset and limit 1..20; node-filtered pages are unsupported");

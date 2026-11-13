@@ -30,6 +30,7 @@ until their documented migration is qualified.
 - [`quota_cli_hot_path_compaction_v0`](quota-cli-hot-path-compaction-v0.md): Quota CLI hot-path compaction v0
 - [`quota_planning_horizon_v0`](quota-planning-horizon-v0.md): Bounded agent planning horizon v0
 - [`rollback_packet_v0`](rollback-packet-v0.md): Rollback packet v0
+- [`stage_methodology_operator_catalog_v0`](stage-methodology-operator-contract-v0.md): Five-stage composable methodology operator contract, anti-entropy invariants, and advisory quantitative/search schemas (`scoped_yardstick_fidelity_v0`, `budgeted_continuation_plan_v0`, `counterfactual_continuation_eval_v0`, `evolutionary_population_plan_v0`)
 - [`task_graph_projection_v0`](task-graph-projection-v0.md): Task graph projection v0
 - [`typed_date_resume_trigger_v0`](typed-date-resume-trigger-v0.md): timezone-aware one-shot Todo resume and stable due receipt v0
 - [`typed_date_resume_trigger_v0`](typed-date-resume-trigger-v0.zh-CN.md): timezone-aware one-shot Todo resume and stable due receipt v0 (中文)

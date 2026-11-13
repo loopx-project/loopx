@@ -61,7 +61,16 @@ from .explore_feishu_commands import (
     handle_explore_feishu_command,
     register_explore_feishu_commands,
 )
-from .explore_planning_commands import register_explore_planning_commands
+from ..capabilities.explore.quantitative_planning import (
+    build_goal_evolutionary_population,
+    build_goal_yardstick_fidelity,
+    render_quantitative_planning_markdown,
+)
+from .explore_planning_commands import (
+    STATELESS_EXPLORE_PLANNING_COMMANDS,
+    handle_stateless_explore_planning_command,
+    register_explore_planning_commands,
+)
 
 
 PrintPayload = Callable[
@@ -347,6 +356,10 @@ def _tree_lines(tree: object, *, indent: int = 0) -> list[str]:
 
 
 def render_explore_markdown(payload: dict[str, object]) -> str:
+    if payload.get("ok"):
+        rendered = render_quantitative_planning_markdown(payload)
+        if rendered is not None:
+            return rendered
     if "graph_enabled" in payload and "harness_enabled" in payload:
         return "# Explore Harness turn context\n\n```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```\n"
     lines = ["# LoopX Explore", ""]
@@ -529,6 +542,10 @@ def handle_explore_command(
     fmt = output_format(args)
     activation: dict[str, object] | None = None
     try:
+        if args.explore_command in STATELESS_EXPLORE_PLANNING_COMMANDS:
+            payload = handle_stateless_explore_planning_command(args)
+            print_payload(payload, fmt, render_explore_markdown)
+            return 0 if payload.get("ok") else 1
         registry = load_registry(registry_path)
         runtime_root = resolve_runtime_root(registry, runtime_root_arg)
         if args.explore_command in (
@@ -822,6 +839,38 @@ def handle_explore_command(
                     "state_file": todo_payload.get("state_file"),
                     "todo_count": todo_payload.get("todo_count"),
                 }
+        elif args.explore_command == "yardstick-fidelity":
+            profiles_override = (
+                json.loads(Path(args.profiles_json).expanduser().read_text(encoding="utf-8-sig"))
+                if getattr(args, "profiles_json", None)
+                else None
+            )
+            payload = build_goal_yardstick_fidelity(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                todo_id=args.todo_id,
+                agent_id=args.agent_id,
+                frontier_k=args.frontier_k,
+                profiles_override=profiles_override,
+            )
+        elif args.explore_command == "evolutionary-plan":
+            profiles_override = (
+                json.loads(Path(args.profiles_json).expanduser().read_text(encoding="utf-8-sig"))
+                if getattr(args, "profiles_json", None)
+                else None
+            )
+            payload = build_goal_evolutionary_population(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                todo_id=args.todo_id,
+                agent_id=args.agent_id,
+                elite_limit=args.elite_limit,
+                crossover_limit=args.crossover_limit,
+                mutation_limit=args.mutation_limit,
+                profiles_override=profiles_override,
+            )
         elif args.explore_command in FEISHU_SINK_EXPLORE_COMMANDS:
             payload = handle_explore_feishu_command(
                 args,

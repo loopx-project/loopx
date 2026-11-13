@@ -4,7 +4,8 @@
  */
 import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
 import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
-import {normalizeWorkYardstickCapture, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
+import type {ScopedYardstickFidelity} from "../capabilities/yardstick_fidelity.ts";
+import {normalizeWorkYardstickCapture, projectWorkYardstickPresentations, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
 import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
@@ -89,7 +90,9 @@ export function mergeExploreHistoryEvents(unique: Map<string, ExploreHistoryEven
   }
 }
 
-export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
+export function projectExploreHistory(
+  events: readonly ExploreHistoryEvent[], goalId: string, includeCurrentFidelity = false,
+) {
   const unique = new Map<string, ExploreHistoryEvent>();
   mergeExploreHistoryEvents(unique, events, goalId);
   const nodes = new Map<string, ExploreHistoryNode>();
@@ -113,11 +116,31 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
   const times = [...unique.values()].map(event => Date.parse(event.recorded_at)).filter(Number.isFinite);
   const links = [...edges.values()];
   const recordedOrder = new Map([...unique.keys()].map((id, index) => [id, index]));
-  const measurementFeedback = projectExploreMeasurementFeedback([...findings.values()].map(event => ({
+  const currentFindings = [...findings.values()].map(event => ({
     ...event, finding_id: event.result_id, recorded_order: recordedOrder.get(event.event_id),
-  })));
+  }));
+  const measurementFeedback = projectExploreMeasurementFeedback(currentFindings);
+  const yardstickFidelityByEvent = new Map<string, ScopedYardstickFidelity>();
+  if (includeCurrentFidelity) {
+    const currentDecisions = currentFindings.filter(row => row.work_yardstick && row.status === "confirmed");
+    if (currentDecisions.length) {
+      const projected = projectWorkYardstickPresentations({
+        captures: currentDecisions.map(row => ({
+          capture: row.work_yardstick, goal_id: goalId, agent_id: row.agent_id,
+          evidence_refs: row.evidence_refs, node_id: row.node_id,
+        })),
+        findings: currentFindings,
+      });
+      const fidelity = projected.yardstick_fidelities as Array<ScopedYardstickFidelity | null>;
+      currentDecisions.forEach((row, index) => {
+        const entry = fidelity[index];
+        if (entry) yardstickFidelityByEvent.set(row.event_id, entry);
+      });
+    }
+  }
   return {
     events: [...unique.values()], nodes: [...nodes.values()], edges: links, findings: [...findings.values()],
+    yardstickFidelityByEvent,
     ...(measurementFeedback.length ? {measurementFeedback} : {}),
     startAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
     endAt: times.length ? new Date(Math.max(...times)).toISOString() : null,

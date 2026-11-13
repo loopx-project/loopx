@@ -984,12 +984,14 @@ def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path
     refs = ["result:preview-a", "result:preview-b"]
     plain = attachment()
     chosen = plain.pop("work_yardstick_decision")
-    plain["evidence_refs"] = refs
+    plain["evidence_refs"] = [*refs, "result:preview-uncited"]
     plain["measurements"] = [
         {**chosen["proxy"], "candidate_ref": f"candidate:{candidate}",
          "evidence_ref": ref, "value": value}
         for candidate, ref, value in zip(("a", "b"), refs, (8, 6))
     ]
+    plain["measurements"].append({**chosen["proxy"], "candidate_ref": "candidate:c",
+        "evidence_ref": "result:preview-uncited", "value": 100})
 
     def retain(turn_id, payload):
         evidence = tmp_path / f"{turn_id}.json"
@@ -1003,16 +1005,20 @@ def test_later_plain_measurement_cannot_replace_cited_decision_evidence(tmp_path
 
     first = retain("previous-proxy", plain)
     selected = attachment()
-    selected.update(node_id=first["node_id"], evidence_refs=[*refs, "result:outcome-a", "result:outcome-b"])
+    selected.update(node_id=first["node_id"], evidence_refs=[
+        *refs, "result:outcome-c", "result:outcome-a", "result:outcome-b",
+    ])
     selected["work_yardstick_decision"]["counterevidence_refs"] = refs
     selected["measurements"] = [
         {**chosen["authoritative"], "candidate_ref": f"candidate:{candidate}",
          "evidence_ref": f"result:outcome-{candidate}", "value": value}
-        for candidate, value in (("a", 20), ("b", 14))
+        for candidate, value in (("c", 1), ("a", 20), ("b", 14))
     ]
     result = retain("current-decision", selected)
     before = context(runtime, path)["graph"]["work_yardsticks"][0]
     assert before["search_comparison"]["proxy_order_reversed"] is False
+    assert "yardstick_fidelity" not in before, "An uncited sibling cannot turn two authorized pairs into three"
+    assert "fidelity_guidance" not in before
 
     late = {**plain, "node_id": first["node_id"], "evidence_refs": refs[1:],
             "measurements": [{**plain["measurements"][1], "value": 99}]}
