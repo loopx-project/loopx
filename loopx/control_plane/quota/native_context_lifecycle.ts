@@ -68,6 +68,8 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (same && event.source === "resume" && fileEpochCurrent) {
       // Selected outputs can establish their own literal sections on a
       // qualified replay. They never establish a whole-input candidate.
+      const readScope = jsonObject(state.read_scope);
+      const readScopeCurrent = readScope?.session_id === session && readScope.context_epoch === state.context_epoch;
       const previous = jsonObject(state.consumed_pointers);
       const replayed = jsonObject(request.resume_sections);
       const retained = Object.fromEntries(Object.entries(replayed ?? {}).filter(([address, digest]) =>
@@ -83,7 +85,10 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
         delete state.active_call;
         delete state.section_reads;
       }
-      if (Object.keys(retained).length > 0) {
+      if (readScopeCurrent && Object.keys(retained).length > 0) {
+        // Only the replay-verified sections move to the new epoch. The next
+        // projection still matches the rest of the scope and each field's digest.
+        state.read_scope = {...readScope, context_epoch: state.context_epoch};
         state.consumed_pointers = retained;
         state.confirmed_read_sections = Object.keys(retained);
       } else {
