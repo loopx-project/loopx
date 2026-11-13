@@ -2079,7 +2079,8 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
   return boundedTurnEnvelope(request, payload, request.scheduler_execution_args);
 }
 
-function boundedTurnEnvelope(request: JsonObject, payload: JsonObject, schedulerExecutionArgs: string): JsonObject {
+function boundedTurnEnvelope(request: JsonObject, payload: JsonObject, schedulerExecutionArgs: string,
+    captureSource = payload): JsonObject {
   const capturedDecisionPath = request.captured_decision_path;
   if (capturedDecisionPath !== undefined && (
     typeof capturedDecisionPath !== "string" || !capturedDecisionPath.trim() || capturedDecisionPath.includes("\0")
@@ -2102,7 +2103,7 @@ function boundedTurnEnvelope(request: JsonObject, payload: JsonObject, scheduler
     action_required: Boolean(payload.action_required),
     open_count: Number(payload.open_count || 0),
     ...actionProjectionValue,
-    detail_ref: coldPath(payload, agentId, schedulerExecutionArgs, capturedDecisionPath),
+    detail_ref: coldPath(captureSource, agentId, schedulerExecutionArgs, capturedDecisionPath),
   };
   const sourceSignature = turnEnvelopeActionSignatureDocument(actionProjectionValue);
   const envelopeSignature = turnEnvelopeActionSignatureDocument(envelope);
@@ -2112,7 +2113,7 @@ function boundedTurnEnvelope(request: JsonObject, payload: JsonObject, scheduler
     source_hash: canonicalHash(sourceSignature),
     envelope_hash: canonicalHash(envelopeSignature),
     matches: JSON.stringify(sourceSignature) === JSON.stringify(envelopeSignature),
-    source_decision_hash: decisionSourceHash(payload),
+    source_decision_hash: decisionSourceHash(captureSource),
   };
   measureTurnEnvelope(envelope, payload);
   return envelope;
@@ -2565,12 +2566,16 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     }
     const result = composeCompleteTurnDecision(request);
     if (request.source_edits !== true) return result;
-    const changes = contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result);
+    const input = requireJsonObject(request.payload, "complete Turn source");
+    const changes = contextProjectionChanges(input, result);
     if (!legacy) return changes;
-    // Compose already verified and bound this source. Return its display-only
-    // compatibility view alongside edits, without a second transport or guard.
+    // Without a capture, preserve the historical bounded action on the same
+    // decided facts. Complete-only authoring belongs to the original reader.
+    // With a capture, the view and replan commands both bind its complete hash.
     try {
-      return {...changes, legacy_envelope: boundedTurnEnvelope(request, result, request.scheduler_execution_args as string)};
+      const displaySource = request.captured_decision_path === undefined ? input : result;
+      return {...changes, legacy_envelope: boundedTurnEnvelope(
+        request, displaySource, request.scheduler_execution_args as string, result)};
     } catch (error) {
       if (!(error instanceof EffectRuntimeRequestError)) throw error;
       // The caller still needs to save the original decision and report its
