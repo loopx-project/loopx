@@ -21,6 +21,13 @@ def identity_ref(*values: str) -> str:
     return hashlib.sha256("\0".join(values).encode("utf-8")).hexdigest()[:24]
 
 
+class LarkOwnerIdentityUnavailable(ValueError):
+    """A verified App lacks the separately verified private-chat owner."""
+
+    def __init__(self) -> None:
+        super().__init__("The Lark App is verified, but its owner login is unavailable. Sign in to the same App with the original owner, then retry.")
+
+
 def observe_lark_conversation_identity(*, profile: str, runner: CommandRunner,
                                        cli_bin: str, audience: str = "owner") -> dict[str, Any]:
     if audience not in {"owner", "group"}:
@@ -45,10 +52,10 @@ def observe_lark_conversation_identity(*, profile: str, runner: CommandRunner,
     if audience == "group":
         operator_ref = identity_ref(provider_ref, "group")
     elif not isinstance(owner, Mapping):
-        raise ValueError("verify this App and its owner independently before binding private Chat")
+        raise LarkOwnerIdentityUnavailable()
     else:
         if not (owner.get("available") is True and owner.get("verified") is True):
-            raise ValueError("verify this App and its owner independently before binding private Chat")
+            raise LarkOwnerIdentityUnavailable()
         owner_id = str(owner.get("openId") or "")
         if not OPEN_ID_PATTERN.fullmatch(owner_id):
             raise ValueError("the selected App has no verified owner identity")

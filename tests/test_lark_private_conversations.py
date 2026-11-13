@@ -4608,7 +4608,8 @@ def test_group_identity_requires_verified_bot_and_private_identity_requires_veri
     provider.owner_ready = False
     group = observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli", audience="group")
     assert group["operator_ref"] != identity_ref(group["provider_ref"], "ou_notes_app")
-    with pytest.raises(ValueError, match="owner independently"):
+    from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+    with pytest.raises(LarkOwnerIdentityUnavailable):
         observe_lark_conversation_identity(profile="notes-app", runner=provider, cli_bin="lark-cli")
     provider.bot_ready = False
     with pytest.raises(ValueError, match="App identity"):

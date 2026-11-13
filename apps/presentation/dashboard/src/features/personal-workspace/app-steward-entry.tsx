@@ -1,15 +1,22 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 import {Button} from "../../components/ui/button";
-import {fetchAppStewardTarget, type BoundConversationTarget} from "../../data/chat";
+import {ChatApiError, fetchAppStewardTarget, type BoundConversationTarget} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
+
+export function appStewardUnavailableMessage(ownerLoginUnavailable: boolean, zh: boolean) {
+  return ownerLoginUnavailable
+    ? (zh ? "已连接飞书管家，但本人登录不可用。请用原账号为同一飞书应用重新登录，再重试；原会话仍保留。"
+      : "The Lark steward is connected, but its owner login is unavailable. Sign in to the same App with the original account, then retry. Your original conversation is retained.")
+    : (zh ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry.");
+}
 
 /** One read-only resolver for both App entrypoints. Pending/failed discovery
  * never exposes the ordinary manager queue. Explicit bound routes bypass it.
  */
 export function useAppStewardTarget(enabled: boolean) {
   const [read, setRead] = useState<{enabled: boolean; revision: number; ready: boolean;
-    target: BoundConversationTarget | null; unavailable: boolean}>(
-    {enabled, revision: 0, ready: false, target: null, unavailable: false});
+    target: BoundConversationTarget | null; unavailable: boolean; ownerLoginUnavailable: boolean}>(
+    {enabled, revision: 0, ready: false, target: null, unavailable: false, ownerLoginUnavailable: false});
   // Invalidate in the render that changes scope, before a composer can submit
   // using a previous ordinary result. React retries this component immediately.
   if (read.enabled !== enabled) setRead({...read, enabled, ready: false, target: null, unavailable: false});
@@ -24,17 +31,18 @@ export function useAppStewardTarget(enabled: boolean) {
     let active = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    const settle = (target: BoundConversationTarget | null, unavailable: boolean) => {
+    const settle = (target: BoundConversationTarget | null, unavailable: boolean, ownerLoginUnavailable = false) => {
       if (active) setRead(value => value.enabled === enabled && value.revision === revision
-        ? {...value, ready: true, target, unavailable} : value);
+        ? {...value, ready: true, target, unavailable, ownerLoginUnavailable} : value);
     };
     void fetchAppStewardTarget(controller.signal).then(target => settle(target, false))
-      .catch(() => settle(null, true)).finally(() => clearTimeout(timeout));
+      .catch(error => settle(null, true, error instanceof ChatApiError
+        && error.payload.error_code === "lark_owner_identity_unavailable")).finally(() => clearTimeout(timeout));
     return () => {active = false; controller.abort(); clearTimeout(timeout);};
   }, [enabled, revision]);
   const ready = enabled && read.enabled === enabled && read.ready;
   return {target: ready ? read.target : null, loading: enabled && !ready,
-    unavailable: ready && read.unavailable, retry};
+    unavailable: ready && read.unavailable, ownerLoginUnavailable: ready && read.ownerLoginUnavailable, retry};
 }
 
 export function AppStewardEntry({children, enabled, intercept, onOpen}: {
@@ -61,7 +69,7 @@ export function AppStewardEntry({children, enabled, intercept, onOpen}: {
     {blocked ? <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-5 p-6 text-slate-900 dark:text-zinc-100">
       <h1 className="text-xl font-semibold">{zh ? "LoopX 管家" : "LoopX steward"}</h1>
       {!entry.unavailable ? <p role="status">{zh ? "正在打开管家对话…" : "Opening the steward conversation…"}</p> : <>
-        <p role="alert">{zh ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry."}</p>
+        <p role="alert">{appStewardUnavailableMessage(entry.ownerLoginUnavailable, zh)}</p>
         <div className="flex flex-wrap gap-3">
           <Button onClick={entry.retry}>{zh ? "重试" : "Retry"}</Button>
           <a className="inline-flex min-h-9 items-center underline underline-offset-4" href={settings.href}>{zh ? "打开会话设置" : "Open conversation settings"}</a>

@@ -30,6 +30,7 @@ class SyntheticPrivateSource:
 
     def __init__(self, root, *, steward=False, peer=False):
         self.root, self.verified = root, True
+        self.owner_login_missing = False
         self.steward, self.peer = steward, peer
         self.peer_provider = None
         default_compact_reply = "0" if os.environ.get("LOOPX_REPLY_BEFORE") == "1" else "1"
@@ -38,6 +39,9 @@ class SyntheticPrivateSource:
             self.transport_ref = "synthetic-peer"
 
     def observe(self):
+        if self.owner_login_missing:
+            from loopx.extensions.lark.conversation_identity import LarkOwnerIdentityUnavailable
+            raise LarkOwnerIdentityUnavailable()
         provider = ("e" if self.peer else "c") * 24
         operator = ("f" if self.peer else "d") * 24
         if "--reply-context" in sys.argv and not self.peer:
@@ -186,7 +190,11 @@ class SyntheticPrivateSource:
                 command = line.strip()
                 if command in {"deny", "recover"}:
                     self.verified = command == "recover"
+                    self.owner_login_missing = False
                     result = {"source_verified": self.verified}
+                elif command == "owner-login-missing":
+                    self.owner_login_missing = True
+                    result = {"owner_login_missing": True}
                 elif command == "source":
                     accepted, _ = runtime.enqueue_turn(session_id=sid, message="A new synthetic message from the original private source.",
                         client_turn_id="synthetic-source-update", origin="lark", work_dir=self.root / "project", objective="")

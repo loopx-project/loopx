@@ -90,8 +90,12 @@ class PrivateConversationRequestMixin:
                 for row in bindings.stop_recoveries(current)]})
 
     def _app_steward(self) -> None:
+        from .conversation_identity import LarkOwnerIdentityUnavailable
         try:
             target = self.server.runtime_controller.project_contexts.conversation_bindings.app_steward_target()
+        except LarkOwnerIdentityUnavailable as exc:
+            self._send_error(str(exc), status=409, error_code="lark_owner_identity_unavailable")
+            return
         except (ValueError, KeyError, OSError, RuntimeError):
             self._send_error("The selected original steward is unavailable. Check its connection in Settings and retry.", status=409)
             return
