@@ -2961,7 +2961,21 @@ Host, modifying the journal or spending quota. Retry uses the original Turn.
 
 Source and isolated-wheel File/SQLite cases cover enabled delivery, explicit
 Off, regeneration from the old bootstrap, same-capture reading and settlement
-replay. The native Turn test also covers a lost spend response. Next, qualify
-the remaining ordinary quota and MCP callers and installed host integrations
-before retiring their live legacy writers. Original-quota single-session
-outcomes and full costs remain a separate qualification.
+replay. The native Turn test also covers a lost spend response.
+
+### Benchmark and MCP live reads
+
+New benchmark heartbeat workers request the complete decision with either
+context-delivery setting. Fresh checkpoint selection requires its signed source.
+Historical checkpoint recovery uses its original capture reader and Turn
+identity. The explicit v0 benchmark display still needs caller retirement.
+
+The shared MCP live read requests the complete decision and returns its original
+JSON plus the MCP guidance block. A missing or altered source binding is rejected
+before delivery. The live unversioned MCP projection is removed. The existing
+`complete_task` transaction continues to own claim validation and settlement.
+The real stdio boundary, replay and historical recovery tests run on isolated
+authority. Installed MCP clients still need end-to-end readback.
+
+Ordinary quota, installed App adoption, the remaining settlement callers,
+and single-session outcomes and full costs remain open.

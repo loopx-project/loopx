@@ -2202,6 +2202,17 @@ Turn journal 仍沿原版本读取。在实时入口注入签名有效的 v0 pre
 Host、改写 journal 或扣额前拒绝。重试继续使用原 Turn。
 
 源码和隔离安装包的 File/SQLite 用例覆盖启用、显式关闭、旧 bootstrap 重生、
-同一 capture 读取和结算重放。原生 Turn 测试还覆盖丢失扣额响应。下一步验收
-剩余普通 quota 和 MCP 调用方及安装态宿主，再退出其活跃旧 writer。原 quota
-单会话成果与完整成本仍需单独验收。
+同一 capture 读取和结算重放。原生 Turn 测试还覆盖丢失扣额响应。
+
+### Benchmark 和 MCP 实时读取
+
+新 benchmark heartbeat 在两种 context-delivery 设置下都请求完整决定。
+新 checkpoint 选择要求带签名的来源。历史 checkpoint 接续沿用原捕获 reader 和
+Turn 身份。Benchmark 的显式 v0 展示入口仍待退役。
+
+共用 MCP 实时读取请求完整决定，返回原始 JSON 和 MCP 指引块。来源绑定缺失或
+被改动时拒绝交付，实时无版本投影已移除。现有 `complete_task` 事务继续负责
+认领校验及结算。真实 stdio、重放与历史恢复测试在隔离 authority 运行。
+MCP 客户端的安装态验收仍待完成。
+
+普通 quota、App 安装态采用、剩余结算调用方及单会话成果与完整成本仍待验证。

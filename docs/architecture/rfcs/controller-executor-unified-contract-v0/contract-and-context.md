@@ -1075,21 +1075,21 @@ maintenance qualification and independent review remain open before dual runs.
 
 #### MCP final-consumer boundary
 
-Complete-v1 MCP delivery validates the original source with the existing complete
+Live MCP reads request the complete v1 source from the CLI. MCP delivery
+validates the original source with the existing complete
 contract owner and numeric transport tokens. It sends the exact CLI JSON as the
 first native text block, with the existing `host_mcp_interaction_v0` channel in a
 separate block. The string structured result still carries that same original
 source. The shared Claude/Kiro/Kunlun MCP adapter owns this transport; it does not
 add a decision schema, change admission or re-sign a host-modified source.
 
-For this consumer, the complete-v1 branch that inserted `mcp_channel` and removed
-CLI settlement fields after binding is retired. The full original settlement
-recipe and identity remain source facts. The host channel specifies that
-`complete_task` executes that recipe instead of a second manual refresh/spend;
-independent replan still follows the live original CLI actions. Unversioned and
-recorded v0 inputs retain their compatibility projection. An invalid declared new
-version, binding or numeric representation fails before successful MCP delivery,
-without falling back to that historical branch or requesting fresh admission.
+The complete decision retains the original settlement recipe and identity.
+The host channel designates `complete_task` as the Todo settlement executor.
+Independent replan follows the live original CLI actions. Live reads refuse
+unversioned decisions, v0, unsupported versions and invalid bindings or numeric
+representations. A collection error with no decision retains its diagnostic.
+Use the original version's recovery reader for previously saved v0 or
+unversioned captures.
 
 Real stdio checks cover both `should_run` and `list_todos`, File/SQLite authority,
 unbound and bound Turns, exact source text, original settlement identity, and
