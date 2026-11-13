@@ -75,7 +75,7 @@ def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
             goal_id=goal_id,
             runtime_root_arg=str(runtime_root) if runtime_root else None,
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, LocalCoordinationAuthorityUnavailable):
         # An unreadable Todo source leaves the rest of the review usable.
         return None
     todos = [row for row in listed.get("todos") or [] if isinstance(row, dict)]
