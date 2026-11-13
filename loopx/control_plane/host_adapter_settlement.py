@@ -31,11 +31,6 @@ HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
     "quota_spend",
     "terminal_closeout",
 )
-MCP_TODO_TURN_BINDING_GUIDANCE = (
-    "When mcp_channel supplies todo_turn_binding, use its turn_instance_id in the "
-    "projected guard and pass its todo_id as --todo-id. Reuse the same binding "
-    "on retry. It identifies the Turn complete_task will settle."
-)
 _MISSING = object()
 
 
@@ -155,8 +150,7 @@ class McpGuardContent:
 
 
 def project_host_interaction(
-    output: str, *, goal_id: str | None = None, agent_id: str | None = None,
-    goal_ref: Mapping[str, str] | None = None,
+    output: str, *, controller_owns_settlement: bool = False,
 ) -> str | McpGuardContent:
     """Keep admission facts; let the typed host lens choose the transport instructions."""
     try:
@@ -165,18 +159,11 @@ def project_host_interaction(
         raise ValueError("MCP quota guard did not return valid JSON") from exc
     if not isinstance(packet, dict):
         raise ValueError("MCP quota guard did not return a JSON object")
-    route: dict[str, object] = {}
-    if goal_id and agent_id:
-        route.update(goal_id=goal_id, agent_id=agent_id)
-    if goal_ref is not None:
-        if not route:
-            raise ValueError("an exact MCP GoalRef requires the bound Goal and Agent")
-        route["goal_ref"] = dict(goal_ref)
     projection = _runtime_reduction({
         "schema_version": "loopx_host_todo_completion_transaction_v1",
         "phase": "project_guard", "packet": packet,
         "source_number_tokens": source_number_tokens(packet),
-        **route,
+        "controller_owns_settlement": controller_owns_settlement,
     }, phase="project_guard")
     if not isinstance(projection.get("packet"), dict):
         raise RuntimeError("TypeScript host interaction projection shape mismatch")

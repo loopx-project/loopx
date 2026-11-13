@@ -126,7 +126,8 @@ def test_mcp_oracle_requires_successful_transactions_not_only_invocations(failed
         runner.verify_mcp_completions(events, expected_todos)
 
 
-def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
+@pytest.mark.parametrize("choose_alternative", [False, True], ids=["sole", "alternative"])
+def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch, choose_alternative):
     pytest.importorskip("mcp.server.fastmcp")
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -137,7 +138,17 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
     from tests.managed_effect_runtime_fixture import stop_disposable_effect_runtimes
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, launcher = runner.shared.setup(tmp_path)
+    active_state = runner.shared._default_active_state()
+    todo_id = "todo_reducer"
+    if choose_alternative:
+        todo_id = "todo_other_route"
+        active_state += (
+            "- [ ] [P2] Deliver and verify the reducer through the alternative route.\n"
+            "  <!-- loopx:todo todo_id=todo_other_route status=open task_class=advancement_task "
+            "action_kind=implement claimed_by=worker-a task_repository=git:example.com/ledger "
+            "required_capabilities=filesystem_write -->\n"
+        )
+    project, runtime, launcher = runner.shared.setup(tmp_path, active_state_text=active_state)
     write_loop_md(project, runner.shared.GOAL, runner.shared.AGENT)
     state = project / "ACTIVE_GOAL_STATE.md"
     before = state.read_bytes()
@@ -157,9 +168,11 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
                 assert current["ok"] and current["goal_id"] == runner.shared.GOAL
                 assert current["agent_id"] == runner.shared.AGENT
                 assert "complete_task" in current["task_body"]
-                assert "todo_turn_binding" in current["task_body"]
                 assert "call the bound LoopX `host_prompt`" not in current["task_body"]
                 complete = next(t for t in tools.tools if t.name == "complete_task")
+                should_run = next(t for t in tools.tools if t.name == "should_run")
+                assert "todo_id" in should_run.inputSchema["properties"]
+                assert not should_run.inputSchema.get("required")
                 assert "successor_todo_ids" in complete.inputSchema["properties"]
                 assert "agent_vision" in complete.inputSchema["properties"]
                 assert "review_task_vision" in {t.name for t in tools.tools}
@@ -171,12 +184,8 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
                 assert payload["ok"] is True and payload["selected_todo"]["todo_id"] == "todo_reducer"
                 contract = payload["interaction_contract"]
                 channel = contract["cli_channel"]
-                assert channel["turn_binding_required"] is True
-                assert payload["normal_delivery_allowed"] is False
-                action, = channel["next_cli_actions"]
-                argv = shlex.split(action)
-                assert argv[argv.index("quota"):][:2] == ["quota", "should-run"]
-                assert argv[argv.index("--turn-instance-id") + 1] == "<unique-work-iteration-id-reuse-on-retry>"
+                assert channel["selection_required" if choose_alternative else "turn_binding_required"] is True
+                assert contract["agent_channel"]["delivery_allowed"] is False
                 from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
                 assert payload["schema_version"] == "loopx_turn_envelope_v1"
@@ -188,24 +197,31 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
                 assert guard.structuredContent["result"] == guard.content[0].text
                 assert host["delivery_executor"] == "complete_task"
                 assert host["delivery_todo_id"] is None
+                assert "pass its todo_id to should_run" in host["rule"]
                 assert host["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420
                 rejected = await session.call_tool("claim_task", {"todo_id": "todo_reducer", "agent_id": "other-agent"})
                 assert json.loads(rejected.content[0].text)["ok"] is False
                 assert state.read_bytes() == before
 
-                binding = host["todo_turn_binding"]
-                assert binding["todo_id"] == "todo_reducer"
-                bound = _run_projected_action(
-                    action + " --todo-id " + shlex.quote(binding["todo_id"]),
-                    launcher=launcher, project=project,
-                    replacements={"<unique-work-iteration-id-reuse-on-retry>": binding["turn_instance_id"]},
-                )
-                assert bound["normal_delivery_allowed"] is True
+                denied = await session.call_tool("should_run", {"todo_id": "todo_cli"})
+                assert not json.loads(denied.content[0].text)["ok"]
+                assert state.read_bytes() == before
+                admitted = await session.call_tool("should_run", {"todo_id": todo_id})
+                assert not admitted.isError
+                bound = json.loads(admitted.content[0].text)
+                assert_complete_turn_decision(bound)
+                assert bound["selected_todo"]["todo_id"] == todo_id
+                assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+                assert admitted.structuredContent["mcp_channel"]["delivery_todo_id"] == todo_id
                 identity = bound["heartbeat_receipt"]["settlement_identity"]
-                assert identity["turn_instance_id"] == binding["turn_instance_id"]
+                assert identity["todo_id"] == todo_id
+                assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+                again = await session.call_tool("should_run", {"todo_id": todo_id})
+                assert json.loads(again.content[0].text)["heartbeat_receipt"]["settlement_identity"] == identity
                 (project / "delivery.txt").write_text("synthetic verified delivery\n")
-                args = {"todo_id": binding["todo_id"], "agent_id": runner.shared.AGENT,
-                        "evidence": "Verified the synthetic delivery.", "successor_todo_ids": ["todo_cli"]}
+                successor = "todo_reducer" if choose_alternative else "todo_cli"
+                args = {"todo_id": todo_id, "agent_id": runner.shared.AGENT,
+                        "evidence": "Verified the synthetic delivery.", "successor_todo_ids": [successor]}
                 first = json.loads((await session.call_tool("complete_task", args)).content[0].text)
                 retry = json.loads((await session.call_tool("complete_task", args)).content[0].text)
                 assert first["ok"] and first["completed"]
@@ -213,14 +229,48 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
                 assert first["settlement"]["quota_spend"]["appended"] is True
                 assert retry["settlement"]["quota_spend"]["idempotent_replay"] is True
                 later = json.loads((await session.call_tool("should_run", {})).content[0].text)
-                assert later["selected_todo"]["todo_id"] == "todo_cli"
+                assert later["selected_todo"]["todo_id"] == successor
                 events = load_rollout_events(rollout_event_log_path(runtime, runner.shared.GOAL))
                 assert [event["run_id"] for event in events
-                        if event["event_kind"] == "quota_should_run" and event.get("run_id")] == [binding["turn_instance_id"]]
+                        if event["event_kind"] == "quota_should_run" and event.get("run_id")] == [identity["turn_instance_id"]]
                 assert [event["run_id"] for event in events
-                        if event["event_kind"] == "quota_spend"] == [binding["turn_instance_id"]]
+                        if event["event_kind"] == "quota_spend"] == [identity["turn_instance_id"]]
     try:
         asyncio.run(exercise())
+    finally:
+        stop_disposable_effect_runtimes(tmp_path)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_mcp_admission_keeps_replan_off_the_todo_turn(tmp_path, monkeypatch, provider):
+    from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID,
+        _configure_selected_todo_replan_fixture, _initialize_fixture_authority, _write_fixture,
+    )
+    from tests.managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig("synthetic-mcp", "claude_code", "claude_code"),
+        lambda: {"goal_id": GOAL_ID, "agent_id": AGENT_ID, "registry": str(registry)},
+    )
+    try:
+        initial = json.loads(control.should_run())
+        assert initial["effective_action"] == "autonomous_replan_required"
+        assert initial.get("heartbeat_receipt") is None
+        for _ in range(2):
+            chosen = json.loads(control.should_run(SELECTED_REPLAN_TODO_ID))
+            assert chosen["ok"] and not chosen["normal_delivery_allowed"]
+            assert chosen["replan_action_packet"]["obligation_id"] == initial["replan_action_packet"]["obligation_id"]
+            assert chosen.get("heartbeat_receipt") is None
+            cli = chosen["interaction_contract"]["cli_channel"]
+            assert cli["turn_binding_required"] is True
+            assert "settlement_plan" not in cli
     finally:
         stop_disposable_effect_runtimes(tmp_path)
 

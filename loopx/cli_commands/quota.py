@@ -24,6 +24,7 @@ from .quota_capture import (
 from ..control_plane.turn_driver.decision_capture import project_captured_context
 from ..usage_goal import observe_quota_result
 
+from ..control_plane.agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
@@ -761,6 +762,25 @@ def handle_quota_command(
                 context_navigation=progressive,
                 goal_ref=goal_ref,
             )
+            if (getattr(args, "host_todo_admission", False)
+                    and (args.todo_id or retained_action_selection_todo_id)
+                    and not heartbeat_receipt_existing
+                    and payload.get("effective_action") in {
+                        EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value,
+                        AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value,
+                    }):
+                # Independent replans must not consume the Todo's stable MCP
+                # completion identity. Return the existing unbound CLI route.
+                replan_args = argparse.Namespace(**vars(args))
+                replan_args.host_todo_admission = False
+                replan_args.todo_id = None
+                replan_args.turn_instance_id = None
+                return handle_quota_command(
+                    replan_args,
+                    registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                    print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
+                    capture_directory=capture_directory,
+                )
             action_selection_preflight = (
                 _export("reconcile_requested_quota_action_selection")(
                     payload,

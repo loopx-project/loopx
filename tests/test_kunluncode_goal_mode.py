@@ -1271,6 +1271,10 @@ def test_native_controller_blocks_model_visible_mcp_mutations(
 
     guard_native_controller_writeback(control)
 
+    rejected_admission = asyncio.run(server.call_tool("should_run", {"todo_id": "todo-fixture"}))
+    assert json.loads(rejected_admission.content[0].text)["ok"] is False
+    assert "outer controller" in json.loads(rejected_admission.content[0].text)["reason"]
+
     claim_content, _ = asyncio.run(
         server.call_tool(
             "claim_task",

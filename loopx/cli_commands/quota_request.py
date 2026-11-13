@@ -125,6 +125,16 @@ def register_quota_monitor_poll_request_arguments(
 
 def validate_quota_command_request(args: argparse.Namespace) -> None:
     command = args.quota_command
+    if getattr(args, "host_todo_admission", False) and (
+        command != "should-run" or args.format != "json"
+        or not getattr(args, "complete_turn", False)
+        or not all(getattr(args, name, None) for name in (
+            "goal_id", "agent_id", "turn_instance_id", "runtime_profile",
+        ))
+    ):
+        raise QuotaCommandValidationError(
+            "--host-todo-admission requires a complete JSON guard for a Goal, Agent, Todo, Turn and runtime profile"
+        )
     if getattr(args, "material_change_scope", None) and (
         command != "monitor-poll" or not args.material_change
     ):

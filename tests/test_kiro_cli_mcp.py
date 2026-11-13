@@ -203,6 +203,10 @@ def test_completion_through_the_kiro_server_settles_once_under_its_profile(
     assert gate["agent_identity"]["agent_id"] == AGENT_ID
     assert gate["should_run"] is True
     assert gate["scheduler_hint"]["execution_context"]["host_surface"] == "kiro_cli"
+    admitted = json.loads(control.should_run(todo_id))
+    assert admitted["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == todo_id
 
     # The server refuses to act for an agent the session is not bound to.
     foreign = json.loads(control.claim_task(todo_id, OTHER_AGENT_ID))
@@ -218,6 +222,7 @@ def test_completion_through_the_kiro_server_settles_once_under_its_profile(
         )
     )
     assert result["ok"] is True, json.dumps(result, indent=2, sort_keys=True)
+    assert result["settlement_identity"] == identity
     settlement = result["settlement"]
     assert settlement["durable_writeback"]["ok"] is True
     assert settlement["quota_spend"]["appended"] is True

@@ -13,7 +13,6 @@ import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { projectMcpInteraction } from "./host_interaction.ts";
 import { HOST_TODO_SETTLEMENT_GUARD_SCHEMA_VERSION } from "./host_todo_settlement_guard.ts";
 import {
-  jsonObject,
   requireBoolean,
   requireJsonObject,
   requireNonEmptyString,
@@ -188,8 +187,7 @@ function hostGoalInstance(goalRef: unknown, goalId: string): string | null {
   return parsed.value.goalInstanceId.value;
 }
 
-function turnInstanceId(request: Pick<HostTodoCompletionRequest,
-  "goal_id" | "agent_id" | "todo_id" | "goal_instance_id">): string {
+function turnInstanceId(request: HostTodoCompletionRequest): string {
   const identityParts = request.goal_instance_id === null
     ? [request.goal_id, request.agent_id, request.todo_id]
     : [
@@ -204,34 +202,6 @@ function turnInstanceId(request: Pick<HostTodoCompletionRequest,
     .digest("hex")
     .slice(0, 32);
   return `mcp-${digest}`;
-}
-
-function projectHostGuard(value: JsonObject): JsonObject {
-  const source = requireJsonObject(value.packet, "packet");
-  const channel = projectMcpInteraction(source, value.source_number_tokens);
-  if (value.goal_id === undefined || channel.schema_version !== "host_mcp_interaction_v0") return channel;
-  const cli = jsonObject(jsonObject(source.interaction_contract)?.cli_channel);
-  if (source.ok !== true || source.should_run !== true || source.effective_action !== EffectiveAction.NORMAL_RUN ||
-      cli?.turn_binding_required !== true || cli.selection_required === true) return channel;
-  const selected = jsonObject(source.selected_todo);
-  if (typeof selected?.todo_id !== "string" || selected.task_class !== "advancement_task") return channel;
-  const goalId = requireNonEmptyString(value.goal_id, "goal_id");
-  const agentId = requireNonEmptyString(value.agent_id, "agent_id");
-  const sourceAgent = jsonObject(source.agent_identity)?.agent_id;
-  if (goalId !== source.goal_id || agentId !== sourceAgent) {
-    throw new EffectRuntimeRequestError("MCP Todo Turn binding does not match the current host");
-  }
-  const todoId = typedTodoId(selected.todo_id, "todo_id");
-  const goalInstanceId = hostGoalInstance(value.goal_ref, goalId);
-  return {
-    ...channel,
-    todo_turn_binding: {
-      todo_id: todoId,
-      turn_instance_id: turnInstanceId({
-        goal_id: goalId, agent_id: agentId, todo_id: todoId, goal_instance_id: goalInstanceId,
-      }),
-    },
-  };
 }
 
 function expectedIdentity(request: HostTodoCompletionRequest): {
@@ -912,7 +882,8 @@ export function evaluateHostTodoCompletion(value: JsonObject): JsonObject {
       throw new EffectRuntimeRequestError("host interaction projection requires v1");
     }
     return {schema_version: HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION, phase,
-      packet: projectHostGuard(value)};
+      packet: projectMcpInteraction(requireJsonObject(value.packet, "packet"),
+        value.source_number_tokens, value.controller_owns_settlement === true)};
   }
   if (phase === "classify_guard") {
     if (typeof value.guard_output !== "string") {

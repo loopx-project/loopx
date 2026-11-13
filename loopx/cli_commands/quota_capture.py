@@ -578,6 +578,11 @@ def project_saved_context_capture(
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "host_todo_admission", False) and (
+        directory is not None or getattr(args, "decision_output_dir", None)
+        or getattr(args, "decision_output_root", None) or getattr(args, "decision_handoff_socket", None)
+    ):
+        raise QuotaCommandValidationError("--host-todo-admission uses an inline decision")
     if getattr(args, "scheduler_observation", False):
         from .quota_request import validate_scheduler_observation_request
 

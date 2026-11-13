@@ -14,6 +14,7 @@ from typing import Annotated, Any
 from .control_plane.host_adapter_settlement import (
     McpGuardContent,
     HostTodoSettlementRequest,
+    host_adapter_turn_instance_id,
     host_vision_request,
     project_host_interaction,
     refresh_host_todo_vision,
@@ -147,19 +148,32 @@ class GoalModeMCPControlPlane:
             args += ["--agent-id", agent_id]
         return args
 
-    def _read_guard(self) -> str | McpGuardContent:
-        """Read the CLI source once and derive the separate MCP channel."""
+    def _read_guard(self, todo_id: str | None = None) -> str | McpGuardContent:
+        """Read the decision, optionally admitting a chosen Todo under the host Turn."""
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
         agent_id = self.bound_agent_id()
-        source = self.run_cli(self.should_run_args(goal_id, agent_id))
-        if self.controller_owns_settlement:
-            return project_host_interaction(source)
-        return project_host_interaction(source, goal_id=goal_id, agent_id=agent_id, goal_ref=self.goal_ref())
+        args = self.should_run_args(goal_id, agent_id)
+        if todo_id is not None:
+            if self.controller_owns_settlement:
+                return json.dumps({"ok": False, "reason": "The outer controller owns Todo admission."})
+            if not agent_id:
+                return json.dumps({"ok": False, "reason": "A bound Agent is required to admit a Todo."})
+            goal_ref = self.goal_ref()
+            turn_id = host_adapter_turn_instance_id(HostTodoSettlementRequest(
+                goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+                runtime_profile=self.config.runtime_profile, completion_args=(), goal_ref=goal_ref,
+            ))
+            args += ["--todo-id", todo_id, "--turn-instance-id", turn_id, "--host-todo-admission"]
+            if goal_ref:
+                args += ["--goal-instance-id", goal_ref["goal_instance_id"]]
+        return project_host_interaction(
+            self.run_cli(args), controller_owns_settlement=self.controller_owns_settlement,
+        )
 
-    def should_run(self) -> str:
-        result = self._read_guard()
+    def should_run(self, todo_id: str | None = None) -> str:
+        result = self._read_guard(todo_id)
         return result.source if isinstance(result, McpGuardContent) else result
 
     def list_todos(self) -> str:
@@ -339,9 +353,13 @@ def create_fastmcp_server(
             """Read current Claude Goal execution rules for this server's bound identity."""
             return control.host_prompt()
 
-    def should_run() -> Any:
-        """Read the complete bound decision and its separate MCP guidance."""
-        return guard_content(control._read_guard())
+    def should_run(todo_id: str | None = None) -> Any:
+        """Read the current decision. Pass the chosen ordinary todo_id to admit work.
+        The bound Agent and Turn match complete_task. Read the returned admission
+        before work and reuse the same todo_id on retry. Independent replans use
+        the CLI actions in the original decision.
+        """
+        return guard_content(control._read_guard(todo_id))
 
     def list_todos() -> Any:
         """Read the complete Todo decision and its separate MCP guidance."""
