@@ -7,9 +7,75 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import time
 
 from test_core_distribution import AGENT, GOAL, _command, _environment
 from test_core_distribution import core_python as core_python
+from test_core_distribution import task as task
+from test_core_distribution import _run, _spends
+
+
+def test_installed_lifecycle_review_recovers_a_late_dependent_successor(core_python, task):
+    workspace, runtime, registry, arguments = task
+    initial = json.loads(_run(core_python, arguments, workspace).stdout)
+    assert initial["status"] == "committed"
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def command(*args):
+        return json.loads(_run(core_python, [*prefix, *args], workspace).stdout)
+
+    original = command("todo", "list", "--goal-id", GOAL,
+        "--todo-id", initial["receipt"]["lineage"]["todo_id"])["todo"]
+    turn = "installed-lifecycle-review"
+    admission = ["quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--host-surface", "generic_cli", "--scheduler-owner", "outer_controller",
+        "--execution-mode", "isolated_headless", "--context-delivery", "off",
+        "--turn-instance-id", turn]
+    guard = command(*admission)
+    obligation = guard["autonomous_replan_obligation"]["obligation_id"]
+    # Canonical updates have whole-second timestamps. Use the real clock to
+    # ensure this dependency is authored strictly after the admitted review.
+    time.sleep(1.05)
+    successor = command("todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--text", "Independently recheck the retained squares report.",
+        "--task-class", "advancement_task", "--action-kind", "validate",
+        "--target-key", "retained-squares-check", "--resume-when", f"todo_done:{original['todo_id']}",
+        "--replan-obligation-id", obligation, "--operation-id", "installed-dependent-successor")
+    recovered = command(*admission)
+    packet = recovered["autonomous_replan_obligation"]["settlement_action_packet"]
+    assert packet["settlement_only"] is True
+    assert packet["successor_todo_id"] == successor["todo_id"]
+    assert recovered["heartbeat_receipt"]["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    vision = workspace / "recovery-vision.json"
+    vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "active",
+        "vision_patch": {"acceptance_summary": "Check the retained squares through the real dependent successor."},
+        "todo_delta": [f"retain:{successor['todo_id']}"], "path_delta": {
+            "schema_version": "goal_path_delta_v0", "outcome": "continue",
+            "prior_assumption": "The completed report still needed a dependent recheck.",
+            "observed_reality": "The checked report is retained and a real runnable successor is bound to this review.",
+            "retained": ["Original squares, scope and settled work identity."],
+            "evidence_refs": ["artifact:squares.json"],
+        }}))
+    writeback = command("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--classification", "installed_successor_recovery", "--turn-instance-id", turn,
+        "--replan-obligation-id", obligation,
+        "--agent-vision-json", str(vision), "--delivery-batch-scale", "multi_surface",
+        "--delivery-outcome", "outcome_progress")
+    assert writeback["ok"] is True
+    spent = command("quota", "spend-slot", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--replan-obligation-id", obligation, "--turn-instance-id", turn,
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    assert spent["settlement_progress"]["state"] == "settled"
+    assert _spends(runtime) == 2
+    retained = command("todo", "list", "--goal-id", GOAL, "--todo-id", original["todo_id"])["todo"]
+    assert retained["completion_turn_key"] == original["completion_turn_key"]
+    assert retained.get("no_followup") == original.get("no_followup")
+    command("todo", "claim", "--goal-id", GOAL, "--todo-id", successor["todo_id"],
+        "--agent-id", AGENT, "--claimed-by", AGENT, "--claim-operation-id", "installed-successor-work")
+    followup = json.loads(_run(core_python, [*arguments, "--todo-id", successor["todo_id"],
+        "--turn-instance-id", "installed-successor-work"], workspace).stdout)
+    assert followup["status"] == "committed" and _spends(runtime) == 3
+    assert (workspace / "host-invocations").read_text().splitlines() == ["called", "called"]
 
 
 def test_installed_empty_operation_inbox_keeps_the_workspace_provider_unloaded(core_python, tmp_path):
