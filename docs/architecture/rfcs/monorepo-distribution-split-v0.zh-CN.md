@@ -2836,3 +2836,33 @@ named-import 子进程对照通过；早期不完整观察器与本次核验后�
 不选择 D2/D5 或最小 preset。真实 Host 的 initial/revised/compacted/lost-ACK
 采用、完整 V1–V5/V10、R1/M3、Standard/workspace 发布及原始目标回归继续开放。
 保留早期失败、冻结预算和未变的治理 owner。
+
+### 2026-11-13 — 托管 Codex 准备遵守启动准入
+
+现有内置 Codex CLI 路径可对符合条件的 hard-lease Todo 执行 typed 决策公布的
+精确普通领取，随后重读同一 Todo，确认 ready 才启动 Host。这消除了调用方单独
+手工领取的步骤，没有选择新的 Host，也没有授予额外权限。此前提案
+`d4348db14d51952a74247e3003768a2f969c7216` 在拒绝无效 validator 输入或调度
+等待之前仍会写入 lease 和 Turn 回执。修复路径先校验现有 Host 参数，通过同一
+TypeScript cadence owner 取得启动准入，再原子保留精确 Turn 绑定并执行普通领取。
+启动准入回调位于既有跨 runtime Turn 绑定锁内；竞争请求不能先占用另一 Todo 的
+启动预约，再让不同绑定获胜。
+
+准备与执行使用 settlement effect identity 复用同一启动预约。因此，普通领取的
+ACK 在 journal 建立前丢失时，可恢复已确认的 lease 和原有未启动预约。历史 Codex
+journal 使用的 transaction-key 预约保留精确恢复兼容分支；已启动请求不能借该
+分支重复执行。领取结果不确定时，状态副作用报告为 unknown，不能宣称没有写入；领取成功但
+后续 Host 步骤失败时，结果保留已确认的领取写入。
+已结算的原 Turn 即使 lease 后来被释放，也通过现有 spend precheck
+拒绝再次领取，并引导原 journal 回读。没有新增持久化 schema 或治理 owner。
+
+隔离 File 和 SQLite 的真实源码 CLI 检查表明，无效 validator JSON/argv 和调度
+等待均保持 lease、Turn 回执、journal 与 Host 调用不变；同一独立 oracle 在此前
+提案上失败。普通领取后中断可恢复为一次 Host 执行、一次结算，原 journal key
+重放没有副作用。独立 core 安装验证复用现有 package lane 与合成 Codex transport，
+使用独立产物 validator 和结果回读。
+
+这仅交付 V2/V3/V4 的可执行启动前置，不等于完整 R1 验收。Host 为合成 transport，
+实际模型采用、完整 V1–V5/V10、默认闭包、配对完整成本、渐进产品控制、R1/M3 与
+原始 Goal 回归仍未验收。保留原九项要求、此前失败尝试和冻结预算失败；本次没有
+推广 minimal preset、provider 默认、包发布或付费操作。

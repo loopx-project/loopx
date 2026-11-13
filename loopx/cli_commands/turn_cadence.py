@@ -29,6 +29,7 @@ def managed_cadence_start(
     automation_id: str | None,
     manual_reason: str | None,
     on_admitted: Callable[[], None] | None = None,
+    request_id: str | None = None,
 ) -> ManagedCadenceStart:
     """Bind one managed Turn start to the TypeScript owner-cadence store."""
 
@@ -36,24 +37,36 @@ def managed_cadence_start(
 
     def admit(identity: Mapping[str, Any]) -> dict[str, Any]:
         now_ms = time.time_ns() // 1_000_000
-        request_id = f"{identity['turn_key']}:{identity['attempt']}"
-        admission = effect_runtime_result(
-            "quota.automation_cadence.admit",
-            {
-                "runtime_root": str(runtime_root),
-                "goal_id": goal_id,
-                "agent_id": agent_id,
-                "automation_id": automation_id,
-                "request_id": request_id,
-                "trigger_at_ms": now_ms,
-                "now_ms": now_ms,
-                "manual_reason": manual_reason,
-            },
-            retry_safe=False,
-        )
+        start_request_id = f"{request_id or identity['turn_key']}:{identity['attempt']}"
+        def reserve(start_id: str) -> dict[str, Any]:
+            return effect_runtime_result(
+                "quota.automation_cadence.admit",
+                {
+                    "runtime_root": str(runtime_root),
+                    "goal_id": goal_id,
+                    "agent_id": agent_id,
+                    "automation_id": automation_id,
+                    "request_id": start_id,
+                    "trigger_at_ms": now_ms,
+                    "now_ms": now_ms,
+                    "manual_reason": manual_reason,
+                },
+                retry_safe=False,
+            )
+        admission = reserve(start_request_id)
+        legacy_request_id = f"{identity['turn_key']}:{identity['attempt']}" if "turn_key" in identity else None
+        if (request_id is not None and legacy_request_id is not None
+                and start_request_id != legacy_request_id
+                and admission.get("admitted") is not True
+                and admission.get("reason") == "minimum_interval_wait"):
+            # Historical Codex journals reserved by transaction key. Retry only
+            # this exact identity, after a no-write wait, so their unstarted
+            # reservations remain recoverable; never bypass a started request.
+            admission = reserve(legacy_request_id)
+            start_request_id = legacy_request_id
         admitted_request.clear()
         if admission.get("admitted") is True:
-            admitted_request["request_id"] = request_id
+            admitted_request["request_id"] = start_request_id
             admitted_request["reserved"] = admission.get("reserved") is True
             if on_admitted is not None:
                 on_admitted()
