@@ -177,8 +177,8 @@ def _plan_active_state_copies(
             dispositions.append("missing_state_file")
             continue
         # The writer replaces the target's directory entry, so a write is keyed by
-        # that entry (resolved parent + final name), never by where a symlink
-        # leads. A source is read through a final-component link.
+        # that entry (resolved parent + final name). A target is never a symlink
+        # (checked below); a source may be one and is read through it.
         source_entry = _directory_entry(source_path)
         target_entry = _directory_entry(target_path)
         raw = planned.get(source_entry)
@@ -191,15 +191,16 @@ def _plan_active_state_copies(
             raw = source_path.read_bytes()
         text = _published_state_text(raw, goal_id_map=goal_id_map, path_map=path_map)
         new_bytes = raw if text is None else text.encode("utf-8")
+        if target_path.is_symlink():
+            # The writer replaces the target's directory entry, which swaps a link
+            # for a regular file. That changes what every later read through the
+            # link chain sees, so no plan can stay faithful: refuse, in place or not.
+            raise ValueError(
+                f"active state target is a symbolic link: {target_path}; "
+                "refusing to publish over it"
+            )
         in_place = target_entry in (source_entry, source_path.resolve())
         if not in_place:
-            if target_path.is_symlink():
-                # Replacing the link would leave what it points at unchanged, and
-                # a later pair could then be planned against the wrong bytes.
-                raise ValueError(
-                    f"active state target is a symbolic link: {target_path}; "
-                    "refusing to publish over it"
-                )
             earlier = planned.get(target_entry)
             if earlier is not None and earlier != new_bytes:
                 raise ValueError(

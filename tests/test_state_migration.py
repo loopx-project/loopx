@@ -378,3 +378,42 @@ def test_source_symlinked_to_its_own_target_is_still_rewritten_in_place(
 
     assert rows[0]["copied"] is True
     assert real.read_text(encoding="utf-8") == "- [ ] see /old/new/file\n"
+
+
+def test_two_level_symlink_chain_cannot_bypass_the_completed_target_guard(
+    tmp_path: Path,
+) -> None:
+    real_repo = tmp_path / "real"
+    real_repo.mkdir()
+    real = real_repo / "S.md"
+    original = "- [ ] see /old/file\n"
+    real.write_text(original, encoding="utf-8")
+    chain_a = tmp_path / "chain-a"
+    chain_a.mkdir()
+    (chain_a / "S.md").symlink_to(real)
+    chain_b = tmp_path / "chain-b"
+    chain_b.mkdir()
+    (chain_b / "S.md").symlink_to(chain_a / "S.md")
+    done_repo = tmp_path / "done"
+    done_repo.mkdir()
+    completed = "- [x] see /old/new/file\n"
+    (done_repo / "S.md").write_text(completed, encoding="utf-8")
+    # A's source and target are the same link; B reads through A's link.
+    first = (
+        {"repo": str(chain_a), "state_file": "S.md"},
+        {"repo": str(chain_a), "state_file": "S.md"},
+    )
+    second = (
+        {"repo": str(chain_b), "state_file": "S.md"},
+        {"repo": str(done_repo), "state_file": "S.md"},
+    )
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="symbolic link"):
+            copy_active_state_files(
+                [first, second], goal_id_map={}, path_map={"/old": "/old/new"}, execute=execute
+            )
+
+    assert (chain_a / "S.md").is_symlink()
+    assert real.read_text(encoding="utf-8") == original
+    assert (done_repo / "S.md").read_text(encoding="utf-8") == completed
