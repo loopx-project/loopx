@@ -795,38 +795,54 @@ def test_real_mcp_defaults_to_complete_source_at_stdio_boundary(tmp_path, monkey
     write_loop_md(project, GOAL_ID, AGENT_ID)
     before = state.read_bytes()
     package = Path(loopx.__file__).resolve().parent
-    launcher = tmp_path / "bin/loopx"
-    launcher.parent.mkdir()
     source_file = tmp_path / "original.json"
     calls = tmp_path / "guard-calls.txt"
     extras = ["--available-capability", "shell", "--available-capability", "filesystem_read"]
     if bound_turn:
         extras += ["--turn-instance-id", "mcp-original-turn"]
-    launcher.write_text(f"#!{sys.executable}\n" +
-        "import json, pathlib, subprocess, sys\n" +
-        f"command = [sys.executable, '-m', 'loopx.entrypoint', '--runtime-root', {str(runtime)!r}, *sys.argv[1:], *{extras!r}]\n" +
-        "result = subprocess.run(command, capture_output=True)\n" +
-        f"pathlib.Path({str(source_file)!r}).write_bytes(result.stdout)\n" +
-        f"with pathlib.Path({str(calls)!r}).open('a') as log: log.write('guard\\n')\n" +
-        f"fault = {source_fault!r}\n" +
-        "if fault:\n"
-        "    packet = json.loads(result.stdout)\n"
-        "    if fault == 'binding': packet['interaction_contract']['cli_channel']['next_cli_actions'].append('changed procedure')\n"
-        "    elif fault == 'version': packet['schema_version'] = 'loopx_turn_envelope_v99'\n"
-        "    else:\n"
-        "        del packet['schema_version']\n"
-        "        del packet['contract_binding']\n"
-        "    sys.stdout.write(json.dumps(packet))\n"
-        "else: sys.stdout.buffer.write(result.stdout)\n"
-        "sys.stderr.buffer.write(result.stderr)\nsys.exit(result.returncode)\n")
-    launcher.chmod(0o700)
+    # Exercise the real entrypoint and its same-package CLI. Record the CLI
+    # source, and inject faults at the boundary before MCP projects it.
+    launcher = r"""
+import json
+import sys
+from pathlib import Path
+
+from loopx.claude_goal_mode.mcp.loopx_mcp import control, mcp
+
+source_path, call_log, extra_args, fault_name = sys.argv[1:]
+extras = json.loads(extra_args)
+fault = json.loads(fault_name)
+run_cli = control.run_cli
+
+def guard_source(args):
+    assert args[:2] == ["quota", "should-run"]
+    source = run_cli([*args, *extras])
+    Path(source_path).write_text(source, encoding="utf-8")
+    with Path(call_log).open("a", encoding="utf-8") as log:
+        log.write("guard\n")
+    if fault is None:
+        return source
+    packet = json.loads(source)
+    if fault == "binding":
+        packet["interaction_contract"]["cli_channel"]["next_cli_actions"].append("changed procedure")
+    elif fault == "version":
+        packet["schema_version"] = "loopx_turn_envelope_v99"
+    else:
+        del packet["schema_version"]
+        del packet["contract_binding"]
+    return json.dumps(packet)
+
+control.run_cli = guard_source
+mcp.run()
+"""
     home = tmp_path / "home"
     home.mkdir()
-    env = {"PATH": str(launcher.parent) + os.pathsep + os.environ.get("PATH", os.defpath),
+    env = {"PATH": os.environ.get("PATH", os.defpath),
         "HOME": str(home), "PYTHONPATH": str(package.parent), "TMPDIR": str(tmp_path),
         "NODE_OPTIONS": "--experimental-sqlite", "LOOPX_USAGE_PING": "0"}
     params = StdioServerParameters(command=sys.executable,
-        args=[str(package / "claude_goal_mode/mcp/loopx_mcp.py")], cwd=str(project), env=env)
+        args=["-c", launcher, str(source_file), str(calls), json.dumps(extras), json.dumps(source_fault)],
+        cwd=str(project), env=env)
 
     async def exercise():
         async with stdio_client(params) as (read, write):
