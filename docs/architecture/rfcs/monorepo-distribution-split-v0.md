@@ -3897,3 +3897,46 @@ minimal default closure, progressive product control, comparable complete costs,
 V1–V5/V10, R1/M3, Standard/workspace publication and original-Goal regression
 remain open. All nine original requirements and frozen failures remain intact;
 no installed host or model service was upgraded.
+
+### 2026-11-14 — Standalone successor recovery preserves original settlement
+
+A genuine dependent successor can be recorded after replan admission. Its new
+dependency must not erase the original lifecycle source and strand that Turn's
+settlement. Reconstruction now retains the source only for the exact bound
+review, matching owner/actor and an unambiguous later update; the existing
+trigger/digest checks still apply. The existing runnable-successor ACK can then
+settle that original Turn without rewriting completed Todos. Missing or invalid
+ACKs retain lifecycle recovery; successor execution still needs fresh admission.
+An empty operation inbox also defers its optional workspace action-store import.
+A present action store without its provider continues to fail visibly.
+
+The current native model used an independently built Python 3.11 core on SQLite
+and stdio in an existing isolated task. Normal successor creation, Vision
+writeback and original replan settlement recovered the blocked route. Initial
+and unchanged complete task reads produced a reusable inventory close/check tool
+and checked JSON/Markdown: 14 movements, six exclusions and value 185.25. An
+incorrect 185.26 candidate was refused without overwriting prior results. A
+controller-generated revision, sealed from the model until fresh task/source
+delivery, added six rows. Independent validation checked all 20 movements,
+nine exclusions, quantities 31/7/7, value 250.20 and the 64.95 difference, while
+preserving the original cutoff, decimal rules and preceding artifacts.
+
+The model rejected the older task for revised work and read the complete current
+requirements and inputs. This demonstrates the model's source-selection decision,
+not an automatic stale-input enforcement gate. After withholding the revised
+caller's JSON reply, exact committed-journal recovery performed no new Host,
+writeback or spend; the historical spend count remained one. The initial raw
+adapter reply failed result binding before effects; the supported same-Turn retry
+used the existing result builder. Two initial Host calls performed one artifact
+implementation, with one eventual writeback/spend; retain that repair cost.
+The generic bridge has no persisted provider session id. These checks qualify
+complete task recovery and committed-result replay, leaving automatic provider
+thread retention and a separately controlled real compaction case untested.
+
+Source recovery regression and a fresh standalone-install regression cover the
+touched lifecycle and optional-import paths, including invalid ownership,
+timestamps, bindings, ACK fallback and a present-but-unavailable provider.
+The earlier failed tests and original acceptance remain negative/open evidence.
+Full V1–V5/V10, R1/M3, default closure, progressive product control, comparable
+complete costs, Standard/workspace delivery and original-Goal regression remain
+open. No installed host, model service, authority history or frozen budget changed.

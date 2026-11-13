@@ -8,6 +8,9 @@ import pytest
 
 from loopx.control_plane import effect_runtime
 from loopx.control_plane.work_items.replan_semantics_codec import project_replan_semantics
+from loopx.control_plane.work_items.lifecycle_recovery import receipt_bound_lifecycle_candidate
+from loopx.control_plane.goals.goal_frontier import derive_goal_frontier_replan_obligation_from_summaries
+from loopx.control_plane.todos.resume_condition import evaluate_todo_resume_conditions
 
 
 @pytest.fixture
@@ -54,3 +57,39 @@ def test_rejected_large_projection_removes_private_files(isolated_runtime: Path)
     assert list(isolated_runtime.glob("loopx-effect-*/params.json")) == []
     assert list(isolated_runtime.glob("loopx-effect-*/response.json")) == []
     assert effect_runtime.effect_runtime_result("runtime.ping", {})["ready"] is True
+
+
+def test_lifecycle_dependency_reuses_the_canonical_successor_receipt(isolated_runtime: Path):
+    original = {"todo_id": "todo_completed", "status": "done", "done": True,
+        "task_class": "advancement_task", "claimed_by": "fixture-agent",
+        "last_actor_agent_id": "fixture-agent", "completed_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-01T00:00:00Z", "completion_turn_key": "original-completion"}
+
+    def derive(summary):
+        return derive_goal_frontier_replan_obligation_from_summaries(
+            user_todo_summary=None, agent_todo_summary=summary, work_lane_contract=None,
+            agent_id="fixture-agent", existing_replan_obligation=None)
+
+    admitted = derive({"completed_without_successor_items": [original],
+                      "completed_without_successor_count": 1})
+    successor = {"todo_id": "todo_successor", "status": "open", "done": False,
+        "task_class": "advancement_task", "claimed_by": "fixture-agent",
+        "last_actor_agent_id": "fixture-agent", "updated_at": "2026-08-01T00:00:02Z",
+        "replan_obligation_id": admitted["obligation_id"], "action_kind": "validate",
+        "target_key": "snapshot-continuity", "resume_when": "todo_done:todo_completed"}
+    condition = evaluate_todo_resume_conditions([successor], source_items=[original, successor])[
+        successor["todo_id"]]
+    successor = {**successor, "resume_condition": condition, "resume_ready": condition["satisfied"]}
+    assert successor["resume_ready"] is True
+    candidate = receipt_bound_lifecycle_candidate(selected_obligation_id=admitted["obligation_id"],
+        guard_recorded_at="2026-08-01T00:00:01.500Z", agent_id="fixture-agent",
+        items=[original, successor], derive=derive)
+    assert candidate["ack"]["semantic_delta"]["successor_todo_id"] == successor["todo_id"]
+    recovered = project_replan_semantics({"operation": "receipt_bound_obligation",
+        "guard_scoped": True, "replay_phase": "open", "selected_obligation_id": admitted["obligation_id"],
+        "agent_id": "fixture-agent", "current_obligation": None, "transition_candidates": [candidate]})
+    packet = recovered["obligation"]["settlement_action_packet"]
+    assert packet["settlement_only"] is True
+    assert packet["successor_todo_id"] == successor["todo_id"]
+    assert original["completion_turn_key"] == "original-completion"
+    assert "no_followup" not in original

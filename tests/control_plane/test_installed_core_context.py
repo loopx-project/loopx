@@ -12,6 +12,34 @@ from test_core_distribution import AGENT, GOAL, _command, _environment
 from test_core_distribution import core_python as core_python
 
 
+def test_installed_empty_operation_inbox_keeps_the_workspace_provider_unloaded(core_python, tmp_path):
+    """No action store means no operation handoff; a present store needs its provider."""
+    script = '''
+import importlib.util, json, sys
+from pathlib import Path
+assert importlib.util.find_spec("loopx.chat_action_store") is None
+from loopx.control_plane.collaboration.operation_handoff import pending_operation_handoffs
+root = Path(sys.argv[1])
+empty = pending_operation_handoffs(root, "synthetic-goal", "synthetic-agent", cursor_scope="synthetic-scope")
+assert empty == {"items": [], "pending_count": 0, "overflow": None, "next_cursor": None}
+assert "loopx.chat_action_store" not in sys.modules
+store = root / "chat/actions/actions.json"
+store.parent.mkdir(parents=True)
+store.write_text("{}")
+try:
+    pending_operation_handoffs(root, "synthetic-goal", "synthetic-agent", cursor_scope="synthetic-scope")
+except ModuleNotFoundError as error:
+    assert error.name == "loopx.chat_action_store"
+else:
+    raise AssertionError("a present operation store cannot silently disappear without its provider")
+print(json.dumps({"empty": empty, "present_store_requires_provider": True}))
+'''
+    result = subprocess.run([str(core_python), "-I", "-c", script, str(tmp_path / "runtime")],
+        env=_environment(core_python), cwd=tmp_path, capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert json.loads(result.stdout)["present_store_requires_provider"] is True
+
+
 def test_installed_context_recovers_partial_delivery_revisions_and_compaction(core_python, tmp_path):
     directory = tmp_path / "native"
     directory.mkdir(mode=0o700)
