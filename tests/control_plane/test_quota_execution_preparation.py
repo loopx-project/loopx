@@ -575,7 +575,9 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
         prepared = "--prepared-capture-reference" in command
         if prepared:
             assert ("--complete-turn" in command) is (replace_stage in {"version", "downgrade"})
-        result = run(command, **kwargs)
+        # Reach the injected capture replacement even under suite contention.
+        # This test exercises identity refusal, not the hook's wall-clock budget.
+        result = run(command, **{**kwargs, "timeout": 30})
         if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
@@ -730,9 +732,9 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
             guards.append(command[command.index("--turn-instance-id") + 1])
             if not after_ready and len(guards) == 1:
                 raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-        # Reach the deliberate post-ready fault rather than accidentally
-        # injecting the separate pre-commit timeout under test contention.
-        result = run(command, **{**kwargs, "timeout": 30} if after_ready else kwargs)
+        # Complete prerequisites before the explicit guard/ready fault above;
+        # accidental claim timeouts would test a different recovery boundary.
+        result = run(command, **{**kwargs, "timeout": 30})
         if "claim" in command:
             claims.append(json.loads(result.stdout))
         return result
