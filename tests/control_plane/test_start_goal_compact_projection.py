@@ -1199,14 +1199,18 @@ def test_cli_codex_app_reuses_ambient_thread_binding(
     assert payload["guided_transaction"].get("blocked_by") is None
 
 
-def test_cli_trae_app_reuses_ambient_thread_binding(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    ("host_surface", "prompt_flag"),
+    (("trae_app", "--trae_app"), ("traex-cli", "--runtime-profile generic_cli")),
+)
+def test_cli_trae_hosts_reuse_ambient_thread_binding(
+    tmp_path: Path, monkeypatch, host_surface: str, prompt_flag: str
 ) -> None:
     project = _write_connected_project(tmp_path)
     registry_path = project / ".loopx" / "registry.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["thread_agent_bindings"] = [
-        {"thread_id": "trae-thread", "host_surface": "trae_app", "agent_id": AGENT_ID}
+        {"thread_id": "trae-thread", "host_surface": host_surface, "agent_id": AGENT_ID}
     ]
     registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
     monkeypatch.setenv("TRAECLI_THREAD_ID", "trae-thread")
@@ -1224,7 +1228,7 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
                 "--goal-id",
                 GOAL_ID,
                 "--host-surface",
-                "trae_app",
+                host_surface,
                 "--goal-text",
                 GOAL_TEXT,
             ]
@@ -1235,9 +1239,77 @@ def test_cli_trae_app_reuses_ambient_thread_binding(
     assert payload["thread_id"] == "trae-thread"
     assert payload["agent_id"] == AGENT_ID
     assert payload["thread_agent_binding"]["status"] == "bound"
-    assert "--trae_app" in payload["command_pack"]["commands"][
+    assert payload["goal_text"] == GOAL_TEXT
+    assert prompt_flag in payload["command_pack"]["commands"][
         "heartbeat_prompt"
     ]
+
+
+@pytest.mark.parametrize(
+    ("ambient", "bound_host", "explicit", "conflict", "expected_gate"),
+    (
+        ("bound-thread", "traex-cli", None, False, None),
+        ("other-thread", "traex-cli", "bound-thread", False, None),
+        ("new-thread", "traex-cli", None, False, "fresh_agent_registration_required"),
+        (None, "traex-cli", None, False, "thread_binding_selection_required"),
+        ("bound-thread", "trae_app", None, False, "fresh_agent_registration_required"),
+        ("bound-thread", "traex-cli", None, True, "thread_binding_conflict"),
+    ),
+)
+def test_cli_traex_thread_continuity_preserves_identity_fences(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambient: str | None,
+    bound_host: str,
+    explicit: str | None,
+    conflict: bool,
+    expected_gate: str | None,
+) -> None:
+    project = _write_connected_project(tmp_path)
+    registry_path = project / ".loopx" / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    coordination = registry["goals"][0]["coordination"]
+    bindings = [
+        {"thread_id": "bound-thread", "host_surface": bound_host, "agent_id": AGENT_ID}
+    ]
+    if conflict:
+        coordination["registered_agents"].append("conflicting-agent")
+        bindings.append(
+            {"thread_id": "bound-thread", "host_surface": bound_host,
+             "agent_id": "conflicting-agent"}
+        )
+    coordination["thread_agent_bindings"] = bindings
+    registry_path.write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8")
+    before = registry_path.read_bytes()
+    # Another host's ambient id cannot fill a missing TraeX id.
+    monkeypatch.setenv("CODEX_THREAD_ID", "bound-thread")
+    if ambient is None:
+        monkeypatch.delenv("TRAECLI_THREAD_ID", raising=False)
+    else:
+        monkeypatch.setenv("TRAECLI_THREAD_ID", ambient)
+    argv = [
+        "--format", "json", "start-goal", "--guided", "--project", str(project),
+        "--goal-id", GOAL_ID, "--host-surface", "traex-cli", "--goal-text", GOAL_TEXT,
+    ]
+    if explicit is not None:
+        argv += ["--thread-id", explicit]
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = cli_main(argv)
+    assert exit_code == 0
+    payload = json.loads(output.getvalue())
+    assert payload["goal_text"] == GOAL_TEXT
+    assert payload.get("thread_id") == (explicit or ambient)
+    assert registry_path.read_bytes() == before
+    gate = payload["guided_transaction"].get("identity_selection_gate")
+    if expected_gate is None:
+        assert gate is None
+        assert payload["agent_id"] == AGENT_ID
+        assert payload["thread_agent_binding"]["status"] == "bound"
+    else:
+        assert gate["state"] == expected_gate
+        assert payload["agent_id"] is None
+        assert payload["guided_transaction"]["blocked_by"] == "agent_identity_selection"
 
 
 def test_start_goal_binds_selected_lane_before_todo_writeback(

@@ -3737,3 +3737,30 @@ model-token, service-cost and human-attention accounting. The Host remains
 synthetic. Full V1–V5/V10, real model adoption/recovery, progressive product
 control, R1/M3, independent Standard packages and original-goal regression remain
 open. Preserve all nine original requirements and earlier frozen failures.
+
+### 2026-11-13 — TraeX continuation consumes its runtime thread
+
+The public `start-goal` entry now reads TraeX's `TRAECLI_THREAD_ID` through the
+existing host-thread adapter. A verified `traex-cli` binding reuses its Agent
+without another `--thread-id` or `--agent-id`; an explicit thread still takes
+precedence. Missing, new, foreign-host and conflicting contexts retain the
+existing identity fences. Trae App keeps its separate binding scope.
+
+Matched isolated File/SQLite CLI checks cover source, the standalone core built
+from `09886ba7a`, and the candidate core: 36 calls retain exact objective text,
+registry/state bytes and canonical provider revision across ordinary entry,
+explicit control/override, unknown context and replay. The base still loses the
+ambient thread; both repaired entrypoints reuse the bound Agent. Source
+regression passes 215 cases, including foreign-host and conflict refusal;
+the installed core/recovery/context suite passes 23 on Python 3.11.15, with
+source on Python 3.13.5 and Node 26.0.0. All 1,887 packaged runtime files match
+the reviewed source bytes. Initial fixture setup failures remain failed attempts.
+
+TraeX activation guidance reads native Goal tools or current host context first,
+preserves an active original objective on continuation, and retains user stops.
+Only an authorized fresh start with no existing native Goal may create one;
+the visible `/goal` fallback remains for unavailable tools/context. This is an
+entry and instruction repair, not proof that a model adopted the guidance.
+No new lifecycle owner, model execution, preset or installed-host release is
+introduced. Full R1/V1–V5/V10, progressive control, complete cost evidence and
+the original-goal regression remain open; all original failures are retained.

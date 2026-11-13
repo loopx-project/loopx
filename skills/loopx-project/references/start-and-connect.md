@@ -42,7 +42,9 @@ explicit route switch.
 
 Include `--goal-id <STABLE_GOAL_ID>` when known. Codex App automatically reads
 the stable ambient `CODEX_THREAD_ID`, while Trae App reads
-`TRAECLI_THREAD_ID`; other hosts that expose a stable opaque thread id should
+`TRAECLI_THREAD_ID`. TraeX CLI also reads `TRAECLI_THREAD_ID`, with its own
+`traex-cli` binding scope; it never reuses a `trae_app` binding merely because
+the opaque thread id matches. Other hosts that expose a stable opaque thread id should
 pass it as `--thread-id <HOST_THREAD_ID>` on every `/loopx`
 invocation. If that thread is already bound, reuse the returned
 `--agent-id <REGISTERED_AGENT_ID>` on start, heartbeat, quota, refresh-state,
