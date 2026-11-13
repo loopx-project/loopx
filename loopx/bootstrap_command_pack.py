@@ -1299,8 +1299,8 @@ def _build_multi_goal_start_selection_packet(
             fine_grained=fine_grained,
         ),
         "commands": {
-            "doctor": f"{shell_arg_for_host(cli_bin)} doctor",
-            "status": _project_command(resolved_project, f"{shell_arg_for_host(cli_bin)} status"),
+            "doctor": f"{render_cli_command_prefix(cli_bin=cli_bin)} doctor",
+            "status": _project_command(resolved_project, f"{render_cli_command_prefix(cli_bin=cli_bin)} status"),
             "goal_selection_choices": choices,
         },
         "safety_contract": {

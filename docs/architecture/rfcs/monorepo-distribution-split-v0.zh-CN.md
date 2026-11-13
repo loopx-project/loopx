@@ -2949,3 +2949,24 @@ Python 3.11 wheel 现已通过真实 LoopX reader 和合成 Desktop peer，验�
 成功响应断流恢复、拒绝响应断流不重试及完整 Unicode 回读。这只资格化可选记录
 读取，不证明模型上下文保留、受管理 V4／R1、拆包 M3、已安装 App 采用或完整成本。
 原目标回归、未完成验收、权限边界与冻结失败全部保持。
+
+### 2026-11-13 — 独立 core 续接保留原安装
+
+此前即使调用者选择隔离的 core interpreter，独立启动仍返回环境中的 `loopx`
+命令；执行完整命令可能通过 PATH/PYTHONPATH 导入其他安装。旧安装测试丢弃
+executable 后重放参数，掩盖了失败。Core 生成的命令现在通过既有 invocation
+owner 保留同一环境的 Python，并使用 `-I -m loopx.entrypoint`。显式全局
+`--cli-bin` 与普通发行默认行为保持；非法参数保留完整 parser 诊断。
+多 Goal 选择也复用同一命令 renderer。
+
+Core module 诊断核验实际导入的 distribution、记录中的 module，以及真实存在
+且有记录的 console 入口。Version/catalog/help probe 使用同一隔离 module
+调用，foreign PYTHONPATH 无法静默改变被检查的 artifact。缺失或重定向的 module
+记录、缺失 console 记录／文件、未记录 launcher 与缺失 runtime 文件仍拒绝。
+安装资格测试执行完整的返回激活与诊断命令，使用 foreign-package sentinel 和
+显式 route 对照，并覆盖既有 SQLite/File 恢复与 context 检查。本轮修复命令来源，
+不新增生命周期、权限、配置或 protocol owner。
+
+完整 R1/V1–V5/V10、真实模型恢复／采用、渐进产品控制、最小依赖闭包、
+M3/Standard/workspace/meta 拆包与完整成本验收仍开放。本轮不升级已安装 Host、
+启动模型服务或从协议夹具推断效果。原九项要求、原 Goal 回归及此前失败全部保留。
