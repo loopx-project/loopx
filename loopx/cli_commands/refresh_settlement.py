@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.effect_program import (
     SETTLEMENT_RECEIPT_SCHEMA_VERSION, SettlementStepKind, decode_settlement_receipt_payload,
 )
@@ -139,6 +140,10 @@ def settle_refreshed_turn(
                     raise ValueError("owed quota command does not match its argument vector")
             else:
                 command = shlex.split(owed["command"])
+            route = loopx_cli_argv()
+            if command[:len(route)] != route:
+                raise ValueError("owed quota command does not match the current CLI route")
+            command_args = command[len(route):]
             # Validate the owner-rendered argv through the actual CLI parser too:
             # a projector bug must not debit a different valid Turn before readback.
             from ..cli_runtime import build_cli_parser
@@ -146,7 +151,7 @@ def settle_refreshed_turn(
 
             parser, subparsers = build_cli_parser()
             register_quota_command(subparsers)
-            args = parser.parse_args(["--format", "json", *command[1:]])
+            args = parser.parse_args(["--format", "json", *command_args])
             if (args.command != "quota" or args.quota_command != "spend-slot"
                     or not args.execute or args.slots != 1
                     or Path(args.registry).expanduser().resolve() != registry_path.resolve()
@@ -168,7 +173,7 @@ def settle_refreshed_turn(
             )
             result = subprocess.run(
                 [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),
-                 "--format", "json", *command[1:]],
+                 "--format", "json", *command_args],
                 cwd=workspace,
                 capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
             )
