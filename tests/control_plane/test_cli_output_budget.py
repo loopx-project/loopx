@@ -1428,8 +1428,11 @@ def test_bound_complete_quota_reuses_backlog_rows_when_source_navigation_is_alre
     import hashlib
 
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from loopx.control_plane.turn_driver.decision_capture import private_capture_supported
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 
+    if not private_capture_supported():
+        pytest.skip("private progressive capture requires the POSIX owner checks")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     with _stable_budget_fixture_root(tmp_path) as root:
         project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
