@@ -1136,8 +1136,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
         payload = read_context_capture(args, reader_argv=current_loopx_cli_argv())
-        print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
-        return 0 if payload["ok"] else 1
+        limit = getattr(args, "max_page_output_bytes", None)
+        if payload or limit is None or limit >= 2 + len(os.linesep):
+            print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        return 0 if payload.get("ok") is True else 1
     if args.quota_command == "replan-view":
         return handle_replan_view(args, print_payload)
     return None
