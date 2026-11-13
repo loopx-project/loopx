@@ -616,10 +616,11 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("complete", [False, True], ids=["ordinary", "complete"])
+@pytest.mark.parametrize("complete", [False, True], ids=["default", "explicit"])
 def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider, complete):
     from hashlib import sha256
 
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     project, runtime, registry = _write_fixture(tmp_path)
@@ -644,7 +645,7 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     original_path = capture / "decision.json"
     original_bytes = original_path.read_bytes()
     original = json.loads(original_bytes)
-    assert original.get("schema_version") == ("loopx_turn_envelope_v1" if complete else None)
+    assert_complete_turn_decision(original)
     assert original["ok"] and original["effective_action"] == "autonomous_replan_required"
     assert original["heartbeat_receipt"]["status"] == "committed"
     assert original["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
