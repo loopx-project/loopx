@@ -786,6 +786,15 @@ test(`${recovery} restores only its exact admitted review and still owes Vision`
   assert.equal(Object.hasOwn(writeback.vision_authoring as JsonObject, "continuation_review"), false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result, agent_vision: vision}).accepted, true);
+  // The same lifecycle evidence still exists after writeback. Reentry follows
+  // the verified settlement phase while leaving the next frontier unselected.
+  const pending = projectReplanSemantics({...request, replay_phase: "settlement_pending",
+    current_obligation: {obligation_id: "replan-2222222222222222"}}).obligation as JsonObject;
+  assert.equal(pending.obligation_id, id);
+  assert.deepEqual(pending.todo_actions, []);
+  const remaining = pending.settlement_action_packet as JsonObject;
+  assert.equal(remaining.decision, "settlement_pending");
+  assert.equal(remaining.required_outcome, "quota_spend_receipt");
   const historical = {...row, todo_id: "todo_historical", completion_turn_key: "historical-completion",
     completed_at: "2026-07-31T23:59:00Z", updated_at: "2026-07-31T23:59:01Z"};
   for (const items of [[historical, row], [row, historical]]) {

@@ -272,6 +272,7 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       ![null, "open", "settlement_pending"].includes(request.replay_phase as string | null)) {
     throw new EffectRuntimeRequestError("receipt-bound replan facts are malformed");
   }
+  const writebackCommitted = request.replay_phase === "settlement_pending";
   let original: JsonObject | null = null;
   let openVisionReview: JsonObject | null = null;
   let recoveredLifecycle: JsonObject | null = null;
@@ -280,7 +281,8 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   for (const value of request.transition_candidates) {
     const candidate = object(value);
     const obligation = object(candidate.obligation);
-    if (request.guard_scoped && object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
+    if (!writebackCommitted && request.guard_scoped &&
+        object(candidate.source_obligation).resolution_mode === "todo_lifecycle_settlement") {
       const recovered = lifecycleObligation({...candidate, obligation: candidate.source_obligation,
         selected_obligation_id: selected, agent_id: request.agent_id});
       if (recovered) recoveredLifecycle = recovered;
@@ -315,7 +317,6 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
       break;
     }
   }
-  const writebackCommitted = request.replay_phase === "settlement_pending";
   if (delta !== null || writebackCommitted) {
     const reason = writebackCommitted
       ? "The original Turn writeback is verified. Settle its existing quota receipt once; do not repeat work or select its successor."

@@ -343,9 +343,17 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     assert refreshed["settlement_progress"]["state"] == "spend_required"
     pending = call(*guard)
     assert pending["heartbeat_receipt"]["settlement_identity"] == identity
-    assert pending["settlement_progress"]["state"] == "spend_required"
-    assert call(*spend)["appended"] is True
-    assert call(*spend)["appended"] is False
+    assert pending["settlement_progress"] == refreshed["settlement_progress"]
+    assert pending["replan_action_packet"]["required_outcome"] == "quota_spend_receipt"
+    assert pending["normal_delivery_allowed"] is False
+    assert pending.get("selected_todo") is None
+    owed = pending["settlement_owed"]
+    assert owed["effect_id"] == identity["effect_id"]
+    assert owed["kind"] == "quota_spend"
+    assert cli._spend_run_count(runtime) == 1
+    projected_spend = cli._projected_cli_args(owed["command"], turn_instance_id=turn)
+    assert call(*projected_spend)["appended"] is True
+    assert call(*projected_spend)["appended"] is False
     assert call(*guard)["effective_action"] == "heartbeat_settled_skip"
     after = call("todo", "list", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID)["todo"]
     for field in ("completed_at", "completion_turn_key", "completion_validation_sha256"):
