@@ -302,6 +302,9 @@ history replacement resets the visible window instead of mixing conversations.
 An interrupted detail read retries once at the same record and offset. A rejected
 or stale read stays stopped; previously loaded text stays readable after a
 transient failure, and the reader can request the same page again.
+Closing the record or its work-activity group cancels the pending detail read.
+Reopening retains the loaded text and position; continuing requires an explicit
+read, and a cancelled response cannot append content or clear a newer read.
 An interrupted or timed-out history read keeps the records already displayed
 and explains that updates resume automatically when the connection recovers.
 Replies remain disabled until a fresh observation permits them. Changing the

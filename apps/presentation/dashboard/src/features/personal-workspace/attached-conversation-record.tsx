@@ -11,13 +11,10 @@ export type ConversationRecord = {
 };
 export type ContentPage = {text: string; next_offset: number; has_more: boolean};
 type LoadContent = (record: ConversationRecord, offset: number, signal: AbortSignal) => Promise<ContentPage>;
+type ConversationPresentation = {agent: string; zh: boolean; load: LoadContent; live?: boolean; active?: boolean};
 
 /** Keep source order, but give dialogue priority over consecutive tool events. */
-export function AttachedConversationTimeline({records, ...props}: {
-  records: ConversationRecord[]; agent: string; zh: boolean;
-  load: LoadContent;
-  live?: boolean; active?: boolean;
-}) {
+export function AttachedConversationTimeline({records, ...props}: ConversationPresentation & {records: ConversationRecord[]}) {
   const groupKeys = useRef(new Map<string, string>());
   const nextKeys = new Map<string, string>();
   useLayoutEffect(() => {groupKeys.current = nextKeys;});
@@ -37,20 +34,27 @@ export function AttachedConversationTimeline({records, ...props}: {
     const tokens = item.map(record => JSON.stringify([record.id, record.content_ref]));
     const key = tokens.map(token => groupKeys.current.get(token)).find(Boolean) ?? tokens[0];
     for (const token of tokens) nextKeys.set(token, key);
-    const interrupted = item.some(record => record.kind === "error" || record.kind === "turn_aborted");
-    const gap = item.some(record => record.unavailable);
-    const nonzeroResults = item.filter(record => record.tool_exit_codes?.some(code => code !== 0)).length;
-    return <details className="attached-record-group" key={key}>
-      <summary data-record-anchor={item.map(record => record.id).join(",")}>
-        {props.live && item.some(record => record.role === "tool") ? <ActivityMark active={Boolean(props.active)} zh={props.zh}/> : null}
-        <span>{props.zh ? "工作过程" : "Work activity"} <span className="attached-record-count">· {item.length} {props.zh ? "条记录" : "records"}</span></span>
+    return <ActivityGroup key={key} records={item} {...props}/>;
+  });
+}
+
+function ActivityGroup({records, ...props}: ConversationPresentation & {records: ConversationRecord[]}) {
+  const [visible, setVisible] = useState(false);
+  const interrupted = records.some(record => record.kind === "error" || record.kind === "turn_aborted");
+  const gap = records.some(record => record.unavailable);
+  const nonzeroResults = records.filter(record => record.tool_exit_codes?.some(code => code !== 0)).length;
+  return <details className="attached-record-group" onToggle={event => {
+    if (event.target === event.currentTarget) setVisible(event.currentTarget.open);
+  }}>
+      <summary data-record-anchor={records.map(record => record.id).join(",")}>
+        {props.live && records.some(record => record.role === "tool") ? <ActivityMark active={Boolean(props.active)} zh={props.zh}/> : null}
+        <span>{props.zh ? "工作过程" : "Work activity"} <span className="attached-record-count">· {records.length} {props.zh ? "条记录" : "records"}</span></span>
         {interrupted ? <span className="attached-record-warning">{props.zh ? "含中断或报错" : "Includes an interruption or error"}</span> : null}
         {nonzeroResults ? <span className="attached-record-warning">{props.zh ? `${nonzeroResults} 条结果含非零退出码` : `${nonzeroResults} results with nonzero exit codes`}</span> : null}
         {gap ? <span className="attached-record-warning">{props.zh ? "部分记录不可读" : "Some records unavailable"}</span> : null}
       </summary>
-      <div className="attached-record-group-body">{item.map(record => <AttachedConversationRecord key={`${record.id}:${record.content_ref ?? ""}`} record={record} {...props}/>)}</div>
+      <div className="attached-record-group-body">{records.map(record => <AttachedConversationRecord key={`${record.id}:${record.content_ref ?? ""}`} record={record} visible={visible} {...props}/>)}</div>
     </details>;
-  });
 }
 
 function ActivityMark({active, zh}: {active: boolean; zh: boolean}) {
@@ -79,11 +83,8 @@ function ToolContent({text, complete, zh}: {text: string; complete: boolean; zh:
   return <pre>{text}</pre>;
 }
 
-export function AttachedConversationRecord({record, agent, zh, load, live = false, active = false}: {
-  record: ConversationRecord; agent: string; zh: boolean;
-  load: LoadContent;
-  live?: boolean;
-  active?: boolean;
+export function AttachedConversationRecord({record, agent, zh, load, live = false, active = false, visible = true}: ConversationPresentation & {
+  record: ConversationRecord; visible?: boolean;
 }) {
   const [storedText, setText] = useState(record.text);
   const text = live ? record.text : storedText;
@@ -93,6 +94,14 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
   const [offset, setOffset] = useState(Array.from(record.text).length);
   const contentRead = useRef<AbortController | null>(null);
   useLayoutEffect(() => () => contentRead.current?.abort(), []);
+  useLayoutEffect(() => {if (!visible) cancelRead();}, [visible]);
+  function cancelRead() {
+    const controller = contentRead.current;
+    if (!controller) return;
+    contentRead.current = null;
+    controller.abort();
+    setLoading(false);
+  }
   const labels: Record<string, string> = zh ? {
     task_started: "开始执行", task_complete: "本轮结束", turn_aborted: "执行中断", error: "执行报错",
     function_call: "工具调用", custom_tool_call: "工具调用",
@@ -107,7 +116,7 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     `${labels[record.kind] ?? (zh ? "记录暂不可读" : "Record unavailable")}${record.label && record.label !== record.kind ? ` · ${record.label}` : ""}`;
   const nonzeroCodes = [...new Set(record.tool_exit_codes?.filter(code => code !== 0))];
   async function continueReading() {
-    if (contentRead.current) return;
+    if (!visible || contentRead.current) return;
     const controller = new AbortController();
     contentRead.current = controller;
     setLoading(true); setError("");
@@ -118,8 +127,10 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
     } catch (failure) {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      contentRead.current = null;
-      if (!controller.signal.aborted) setLoading(false);
+      if (contentRead.current === controller) {
+        contentRead.current = null;
+        if (!controller.signal.aborted) setLoading(false);
+      }
     }
   }
   const content = <>
@@ -131,6 +142,8 @@ export function AttachedConversationRecord({record, agent, zh, load, live = fals
   return <article data-role={record.role} data-record-id={record.id} data-record-anchor={record.id}>
     {record.role !== "tool" ? <header>{heading}</header> : null}
     {record.unavailable ? <p>{zh ? "源记录无法安全读取；此处保留缺口，未将其当作完成。" : "This source record could not be read safely. The gap is retained, not treated as completion."}</p> :
-      record.role === "tool" ? <details><summary>{heading}{more ? <span>{zh ? " · 可继续加载" : " · more available"}</span> : null}</summary>{content}</details> : content}
+      record.role === "tool" ? <details onToggle={event => {
+        if (event.target === event.currentTarget && !event.currentTarget.open) cancelRead();
+      }}><summary>{heading}{more ? <span>{zh ? " · 可继续加载" : " · more available"}</span> : null}</summary>{content}</details> : content}
   </article>;
 }
