@@ -106,7 +106,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
             "QUOTA_EVENT_KINDS",
             "captured_quota_failure_view",
             "quota_decision_transport_failure_payload",
-            "quota_unexpected_presentation_failure_view",
             "quota_failure_payload",
             "quota_validation_failure_payload",
             "should_log_quota",
@@ -389,9 +388,11 @@ def _emit_quota_result(
 ) -> int:
     """Capture the full decision before projecting and printing the CLI view."""
     capture_sha256: str | None = None
+    saved_decision = payload
 
-    def record_capture(digest: str | None) -> None:
-        nonlocal capture_sha256
+    def record_capture(decision: dict[str, object], digest: str) -> None:
+        nonlocal saved_decision, capture_sha256
+        saved_decision = decision
         capture_sha256 = digest
 
     try:
@@ -403,14 +404,14 @@ def _emit_quota_result(
         )
     except Exception as exc:  # noqa: BLE001 - publication cannot revoke a durable guard.
         receipt = payload.get("heartbeat_receipt")
-        if (
+        if not isinstance(exc, QuotaDecisionTransportError) and (
             args.quota_command != "should-run"
             or not isinstance(receipt, Mapping)
             or not receipt.get("event_id")
         ):
             raise
-        failure = _export("quota_unexpected_presentation_failure_view")(
-            args, payload, exc, capture_directory=capture_directory, capture_sha256=capture_sha256,
+        failure = _export("quota_decision_transport_failure_payload")(
+            args, saved_decision, exc, capture_directory=capture_directory, capture_sha256=capture_sha256,
         )
         print_payload(failure, args.format, _quota_renderer(args, failure=True))
         return 1
@@ -427,7 +428,7 @@ def _publish_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
-    record_capture: Callable[[str | None], None],
+    record_capture: Callable[[dict[str, object], str], None],
 ) -> int:
     from ..command_invocation import current_loopx_cli_argv
 
@@ -481,35 +482,26 @@ def _publish_quota_result(
         )
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     scheduler_context = context.scheduler_context if context is not None else None
-    try:
-        payload = _compose_explicit_turn_context(payload, args,
-            scheduler_context=scheduler_context,
-            capture_directory=capture_directory, native_context=native_context)
-        captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
-        record_capture(captured_digest)
-        if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
-            assert captured_digest is not None  # Preflight requires an explicit capture directory.
-            from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
+    payload = _compose_explicit_turn_context(payload, args,
+        scheduler_context=scheduler_context,
+        capture_directory=capture_directory, native_context=native_context, record_capture=record_capture)
+    captured_digest = capture_decision(
+        capture_directory, payload, args=args, native_context=native_context, record_capture=record_capture,
+    )
+    if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
+        assert captured_digest is not None  # Preflight requires an explicit capture directory.
+        from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
 
-            print_payload(prepared_capture_reference(payload, captured_digest), args.format, _quota_renderer(args))
-            return 0
-        if (payload.get("ok") is False and context_delivery_enabled and capture_directory
-                and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
-            print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
-                max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
-                args.format, _quota_renderer(args, failure=True))
-            return 1
-        if payload.get("ok") is True:
-            delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
-    except QuotaDecisionTransportError as exc:
-        # The guard already ran. Report that typed fact with the durable receipt
-        # and saved decision, never a new collection failure that could replace
-        # the original capture.
-        failure = _export("quota_decision_transport_failure_payload")(
-            args, payload, exc, capture_directory=capture_directory,
-        )
-        print_payload(failure, args.format, _quota_renderer(args, failure=True))
+        print_payload(prepared_capture_reference(payload, captured_digest), args.format, _quota_renderer(args))
+        return 0
+    if (payload.get("ok") is False and context_delivery_enabled and capture_directory
+            and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
+        print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
+            max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
+            args.format, _quota_renderer(args, failure=True))
         return 1
+    if payload.get("ok") is True:
+        delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
     captured_payload = payload
     decision_identity = ("", "")
     if (delivery_request is not None or getattr(args, "codex_context_dir", None)
@@ -546,24 +538,15 @@ def _publish_quota_result(
             directory=capture_directory, reader_argv=reader_argv)
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
+        assert captured_digest is not None  # Native publication requires the captured original.
         try:
-            assert captured_digest is not None  # Native publication requires the captured original.
-            payload = project_native_quota_context(payload, args, capture_directory=capture_directory, capture_id=captured_digest,
-                decision_identity=decision_identity, progressive_enabled=activation["progressive_enabled"],
-                reader_argv=reader_argv)
-        except (QuotaDecisionTransportError, OSError, ValueError) as exc:
-            if not isinstance(exc, QuotaDecisionTransportError):
-                exc = QuotaDecisionTransportError(
-                    "Current context recovery could not be prepared. Read the saved "
-                    "original decision and receipt; do not rerun admission."
-                )
-            # The original receipt survives even when the selected presentation
-            # is a Turn envelope without the quota packet's receipt fields.
-            failure = _export("quota_decision_transport_failure_payload")(
-                args, captured_payload, exc, capture_directory=capture_directory,
-            )
-            print_payload(failure, args.format, _quota_renderer(args, failure=True))
-            return 1
+            payload = project_native_quota_context(payload, args, capture_directory=capture_directory,
+                capture_id=captured_digest, decision_identity=decision_identity,
+                progressive_enabled=activation["progressive_enabled"], reader_argv=reader_argv)
+        except (OSError, ValueError) as exc:
+            raise QuotaDecisionTransportError(
+                "Current context recovery could not be prepared. Read the saved original decision and receipt."
+            ) from exc
     print_payload(payload, args.format, _quota_renderer(args, failure=not succeeded))
     return 0 if succeeded else 1
 

@@ -325,61 +325,43 @@ def captured_quota_failure_view(
 def quota_decision_transport_failure_payload(
     args: argparse.Namespace,
     committed: Mapping[str, object],
-    error: QuotaDecisionTransportError,
+    error: Exception,
     *,
     capture_directory: Path | None,
+    capture_sha256: str | None = None,
 ) -> dict[str, object]:
-    """Report a post-guard capture/handoff failure without a second guard.
+    """Report a post-guard failure with the original receipt and capture.
 
-    The committed receipt and saved decision remain the evidence; the caller is
-    told to read them, not to rerun the guard or treat this as missing admission.
+    The saved digest, when available, comes from publication rather than
+    reopening the path to establish a new identity.
     """
-    saved = capture_directory / "decision.json" if capture_directory is not None else None
-    payload: dict[str, object] = {
+    typed_transport = isinstance(error, QuotaDecisionTransportError)
+    reason = (
+        " ".join(str(error).split())[:500] if typed_transport
+        else "The guard committed, but its result could not be presented."
+    )
+    failure: dict[str, object] = {
         "ok": False,
         "mode": args.quota_command,
         "goal_id": args.goal_id,
         "decision": "skip",
         "should_run": False,
-        "error_code": error.error_code,
-        "reason": " ".join(str(error).split())[:500],
+        "error_code": QuotaDecisionTransportError.error_code,
+        "reason": reason,
         "state": "blocked_health",
         "waiting_on": "codex",
         "status": "decision_transport_failed",
         "source": "quota",
         "recommended_action": (
-            "The guard already ran. Read the saved decision and this Turn's receipt "
-            "instead of rerunning the guard. If the handoff endpoint belongs to an "
-            "ended Host wake, use the transport named by the current wake, or none."
+            "Inspect this Turn's receipt before recovering the result. Do not rerun admission."
         ),
     }
-    if saved is not None and saved.is_file():
-        payload["captured_decision"] = {"path": str(saved)}
     for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in committed:
-            payload[key] = committed[key]
-    return payload
-
-
-def quota_unexpected_presentation_failure_view(
-    args: argparse.Namespace,
-    committed: Mapping[str, object],
-    error: Exception,
-    *,
-    capture_directory: Path | None,
-    capture_sha256: str | None,
-) -> dict[str, object]:
-    """Report an unexpected exception after a durable guard, without writing a capture."""
-    failure = quota_decision_transport_failure_payload(
-        args, committed,
-        QuotaDecisionTransportError("The guard committed, but its result could not be presented."),
-        capture_directory=None,
-    )
-    failure["error_class"] = type(error).__name__
-    failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
-    failure["recommended_action"] = (
-        "Inspect this Turn's receipt before recovering the result. Do not rerun admission."
-    )
+            failure[key] = committed[key]
+    if not typed_transport:
+        failure["error_class"] = type(error).__name__
+        failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
     if capture_directory is not None and capture_sha256 is not None:
         from ..control_plane.turn_driver.decision_capture import context_capture_read_command
 

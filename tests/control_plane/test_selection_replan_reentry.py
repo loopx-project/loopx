@@ -493,8 +493,9 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(("failure_stage", "limit"), [
-    ("collection", 4096), ("capture", 4096), ("publication", 4096), ("publication", 900),
-], ids=["collection", "capture", "publication", "tight-opening"])
+    ("collection", 4096), ("capture", 4096), ("registration", 4096),
+    ("publication", 4096), ("publication", 900),
+], ids=["collection", "capture", "registration", "publication", "tight-opening"])
 def test_inline_replan_failure_reports_the_actual_receipt(
     tmp_path, monkeypatch, capsys, provider, failure_stage, limit,
 ):
@@ -520,15 +521,23 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     })
     observed: list[bytes] = []
 
-    def fail_publication(_payload, **kwargs):
-        original = (kwargs["capture_directory"] / "decision.json").read_bytes()
+    def observe_capture():
+        original = (capture / "decision.json").read_bytes()
         receipt = json.loads(original)["heartbeat_receipt"]
         assert receipt["status"] == "committed"
         assert receipt["settlement_identity"]["binding_kind"] == "autonomous_replan"
         assert receipt["pending_action_selection"]["todo_id"] == retained
         assert _heartbeat_receipt_count(runtime, turn) == 1
         observed.append(original)
+
+    def fail_publication(_payload, **_kwargs):
+        observe_capture()
         raise RuntimeError("fixture private publication detail")
+
+    def fail_registration(_payload, digest, **_kwargs):
+        observe_capture()
+        assert sha256(observed[0]).hexdigest() == digest
+        raise OSError("fixture private registration detail")
 
     def fail_collection(*_args, **_kwargs):
         raise RuntimeError("fixture private collection detail")
@@ -541,6 +550,8 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     with monkeypatch.context() as patch:
         if failure_stage == "publication":
             patch.setattr(codex_context, "prepare_codex_context", fail_publication)
+        elif failure_stage == "registration":
+            patch.setattr(codex_context, "record_native_claim_source", fail_registration)
         elif failure_stage == "capture":
             patch.setattr(quota, "_prepare_quota_result_context", fail_capture)
         else:

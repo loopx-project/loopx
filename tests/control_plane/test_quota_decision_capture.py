@@ -1,5 +1,6 @@
 """Capture is a transport readback, never a second guard or fresh admission."""
 import argparse
+from hashlib import sha256
 import json
 import os
 import shlex
@@ -698,7 +699,9 @@ def test_refused_selection_handoff_is_typed_and_keeps_the_committed_capture(tmp_
     assert selected['status'] == 'decision_transport_failed'
     assert 'Do not blindly rerun the guard' in selected['reason']
     assert selected['heartbeat_receipt']['turn_instance_id'] == TURN_ID
-    assert len(saved) == 1 and selected['captured_decision'] == {'path': str(saved[0])}
+    assert len(saved) == 1
+    assert selected['captured_decision']['path'] == str(saved[0])
+    assert selected['captured_decision']['sha256'] == sha256(saved[0].read_bytes()).hexdigest()
     assert json.loads(saved[0].read_text()) == observed['decision']
     assert observed['decision']['ok'] is True
     assert _heartbeat_receipt_count(runtime, TURN_ID) >= 1
@@ -757,7 +760,8 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
     assert original['ok'] is True
     assert failure['heartbeat_receipt'] == original['heartbeat_receipt']
     assert failure['rollout_event'] == original['rollout_event']
-    assert failure['captured_decision'] == {'path': str(saved[0])}
+    assert failure['captured_decision']['path'] == str(saved[0])
+    assert failure['captured_decision']['sha256'] == sha256(attempts[0]).hexdigest()
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     assert _spend_run_count(runtime) == 0
     assert state.read_bytes() == original_state

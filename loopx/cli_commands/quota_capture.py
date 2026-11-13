@@ -628,25 +628,34 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
 
 
 def capture_decision(directory: Path | None, payload: dict[str, object], *,
-                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
+                     args: argparse.Namespace | None = None, native_context: bool = False,
+                     record_capture: Callable[[dict[str, object], str], None] | None = None) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
-        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
-            from ..control_plane.turn_driver.codex_context import record_native_claim_source
-
-            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
-                context_root=getattr(args, "codex_context_root", None))
-        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
             "already exist. Do not treat this as missing admission or blindly rerun "
             f"the guard. Inspect the existing Turn receipt. Capture directory: {directory}"
         ) from exc
+    if record_capture is not None:
+        record_capture(payload, digest)
+    if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+        from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+        try:
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        except (OSError, ValueError) as exc:
+            raise QuotaDecisionTransportError(
+                "The decision was saved, but the native Host could not register it. "
+                "Read the original decision and receipt before recovering this Turn."
+            ) from exc
+    return digest
 
 
 def settlement_capture_failure_view(
