@@ -244,3 +244,88 @@ def test_batch_source_rewritten_in_place_is_judged_by_its_published_bytes(
 
     assert source.read_text(encoding="utf-8") == original
     assert target.read_text(encoding="utf-8") == "- [ ] see /old/new/file\n"
+
+
+def test_crlf_state_retry_is_idempotent_and_equivalent_newlines_share_a_target(
+    tmp_path: Path,
+) -> None:
+    paths, kwargs = _two_goal_active_state_fixture(
+        tmp_path, ("- [ ] shared todo\r\n", "- [ ] shared todo\n")
+    )
+    paths["target_registry"].write_bytes(b'{"schema_version":"0.1","goals":[]}\n')
+
+    # The writer normalizes CRLF to LF, so the two sources publish the same
+    # document and an identical retry must not conflict with its own output.
+    for _ in range(2):
+        assert migrate_legacy_state(**kwargs, execute=True)["ok"] is True
+    assert paths["target_state"].read_bytes() == b"- [ ] shared todo\n"
+
+
+def test_batch_generated_source_cannot_bypass_the_diverged_target_guard(
+    tmp_path: Path,
+) -> None:
+    legacy_repo_a = tmp_path / "a-repo"
+    target_a = tmp_path / "a-target"
+    target_b = tmp_path / "b-target"
+    legacy_repo_a.mkdir()
+    (legacy_repo_a / "ACTIVE_GOAL_STATE.md").write_text("- [ ] a todo\n", encoding="utf-8")
+    # Goal B has no legacy file; Goal A's target is where B's legacy source would be.
+    target_b.mkdir()
+    progressed = "- [x] b finished\n"
+    (target_b / "ACTIVE_GOAL_STATE.md").write_text(progressed, encoding="utf-8")
+    legacy_registry = tmp_path / "legacy-registry.json"
+    legacy_registry.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {"id": "goal-a", "status": "active", "repo": str(legacy_repo_a),
+                     "state_file": "ACTIVE_GOAL_STATE.md"},
+                    {"id": "goal-b", "status": "active", "repo": str(target_a),
+                     "state_file": "ACTIVE_GOAL_STATE.md"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    target_registry = tmp_path / "target-registry.json"
+    target_registry.write_bytes(b'{"schema_version":"0.1","goals":[]}\n')
+    registry_before = target_registry.read_bytes()
+    kwargs = {
+        "legacy_registry_path": legacy_registry,
+        "target_registry_path": target_registry,
+        "legacy_runtime_root": tmp_path / "legacy-runtime",
+        "target_runtime_root": tmp_path / "target-runtime",
+        "goal_ids": ["goal-a", "goal-b"],
+        "goal_id_map": {},
+        "path_map": {str(legacy_repo_a): str(target_a), str(target_a): str(target_b)},
+        "copy_active_state": True,
+        "copy_runtime": False,
+    }
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="already exists with different content"):
+            migrate_legacy_state(**kwargs, execute=execute)
+
+    assert (target_b / "ACTIVE_GOAL_STATE.md").read_text(encoding="utf-8") == progressed
+    assert not (target_a / "ACTIVE_GOAL_STATE.md").exists()
+    assert target_registry.read_bytes() == registry_before
+
+
+def test_genuinely_missing_source_is_still_skipped_in_preview_and_execute(
+    tmp_path: Path,
+) -> None:
+    present = {"repo": str(tmp_path / "present"), "state_file": "S.md"}
+    missing = {"repo": str(tmp_path / "missing"), "state_file": "S.md"}
+    (tmp_path / "present").mkdir()
+    (tmp_path / "present" / "S.md").write_text("- [ ] t\n", encoding="utf-8")
+    target = {"repo": str(tmp_path / "out"), "state_file": "S.md"}
+    other = {"repo": str(tmp_path / "out2"), "state_file": "S.md"}
+    pairs = [(present, target), (missing, other)]
+
+    for execute in (False, True):
+        rows = copy_active_state_files(pairs, goal_id_map={}, path_map={}, execute=execute)
+        assert rows[0].get("skipped_reason") is None
+        assert rows[0]["copied"] is execute
+        assert rows[1]["skipped_reason"] == "source_state_missing"
+        assert rows[1]["copied"] is False

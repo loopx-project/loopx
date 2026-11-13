@@ -125,51 +125,62 @@ def resolve_goal_state(repo: str | None, state_file: str | None) -> Path | None:
     return state_path if state_path.is_absolute() else Path(repo).expanduser() / state_path
 
 
-def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        text = source.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        shutil.copy2(source, target)
-        return
-    atomic_write_state_text(target, rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map))
+def _published_state_text(raw: bytes, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> str | None:
+    """The text ``copy_rewritten_text_file`` publishes for ``raw``; ``None`` if it is not UTF-8.
 
-
-def _rewritten_state_bytes(raw: bytes, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> bytes:
-    """The exact bytes ``copy_rewritten_text_file`` publishes for ``raw``."""
+    Newlines are normalized the way ``Path.read_text`` does, so the preflight and
+    the writer see one and the same document.
+    """
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return raw
-    return rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map).encode("utf-8")
+        return None
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map)
 
 
-def _require_no_active_state_clobber(
+def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    text = _published_state_text(source.read_bytes(), goal_id_map=goal_id_map, path_map=path_map)
+    if text is None:
+        shutil.copy2(source, target)
+        return
+    atomic_write_state_text(target, text)
+
+
+def _plan_active_state_copies(
     resolved_pairs: list[tuple[dict[str, Any], dict[str, Any], Path | None, Path | None]],
     *,
     goal_id_map: dict[str, str],
     path_map: dict[str, str],
-) -> None:
-    """Refuse to replace a different live target state with the legacy copy.
+) -> list[str]:
+    """Simulate the batch in write order and return each pair's disposition.
 
-    A repeated migration (for example ``--all-goals`` after more legacy Goals
+    Refuses to replace a different live target state with the legacy copy: a
+    repeated migration (for example ``--all-goals`` after more legacy Goals
     appear) must not roll back Todos completed or added at the target since the
     first copy. Identical content and in-place rewrites remain idempotent.
 
-    The batch is simulated in write order: a target already planned by an earlier
-    pair, or a source an earlier pair rewrites in place, is judged by the bytes
-    that pair will publish, so preview and execute reach the same verdict.
+    A target planned by an earlier pair, or a source an earlier pair writes or
+    rewrites in place, is judged by the bytes that pair will publish, so preview
+    and execute reach the same verdict and the same source-presence answer.
     """
     planned: dict[Path, bytes] = {}
+    dispositions: list[str] = []
     for _source_goal, _target_goal, source_path, target_path in resolved_pairs:
-        if not (source_path and target_path and source_path.exists()):
+        if not source_path or not target_path:
+            dispositions.append("missing_state_file")
             continue
         source_key = source_path.resolve()
         target_key = target_path.resolve()
-        source_bytes = planned.get(source_key)
-        if source_bytes is None:
-            source_bytes = source_path.read_bytes()
-        new_bytes = _rewritten_state_bytes(source_bytes, goal_id_map=goal_id_map, path_map=path_map)
+        raw = planned.get(source_key)
+        if raw is None:
+            if not source_path.exists():
+                dispositions.append("source_state_missing")
+                continue
+            raw = source_path.read_bytes()
+        text = _published_state_text(raw, goal_id_map=goal_id_map, path_map=path_map)
+        new_bytes = raw if text is None else text.encode("utf-8")
         if source_key != target_key:
             earlier = planned.get(target_key)
             if earlier is not None and earlier != new_bytes:
@@ -182,6 +193,8 @@ def _require_no_active_state_clobber(
                     "refusing to overwrite it with the legacy copy"
                 )
         planned[target_key] = new_bytes
+        dispositions.append("copy")
+    return dispositions
 
 
 def copy_active_state_files(
@@ -200,21 +213,19 @@ def copy_active_state_files(
         )
         for source_goal, target_goal in pairs
     ]
-    # Check the whole batch before the first copy so a conflict leaves no partial write.
-    _require_no_active_state_clobber(resolved_pairs, goal_id_map=goal_id_map, path_map=path_map)
+    # Plan the whole batch before the first copy so a conflict leaves no partial write.
+    dispositions = _plan_active_state_copies(resolved_pairs, goal_id_map=goal_id_map, path_map=path_map)
     results: list[dict[str, Any]] = []
-    for _source_goal, target_goal, source_path, target_path in resolved_pairs:
+    for (_source_goal, target_goal, source_path, target_path), disposition in zip(resolved_pairs, dispositions):
         row: dict[str, Any] = {
             "goal_id": target_goal.get("id"),
             "source": str(source_path) if source_path else None,
             "target": str(target_path) if target_path else None,
             "copied": False,
         }
-        if not source_path or not target_path:
-            row["skipped_reason"] = "missing_state_file"
-        elif not source_path.exists():
-            row["skipped_reason"] = "source_state_missing"
-        elif execute:
+        if disposition != "copy":
+            row["skipped_reason"] = disposition
+        elif execute and source_path and target_path:
             copy_rewritten_text_file(
                 source_path,
                 target_path,
