@@ -7,8 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from ..context_providers import build_context_provider
 from ..context_providers.base import ContextProvider
+from ..context_providers.factory import build_context_provider
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from .extension_provider import (
     EXTENSION_CONTEXT_PROVIDER_ID,

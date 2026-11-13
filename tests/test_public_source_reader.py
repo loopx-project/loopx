@@ -678,7 +678,8 @@ def test_source_only_host_worker_needs_no_site_installed_loopx(tmp_path, monkeyp
     import sys
     import venv
     host = tmp_path / "source-only-host"
-    venv.EnvBuilder(with_pip=False).create(host)
+    # Standalone POSIX Python keeps its shared library beside the real executable.
+    venv.EnvBuilder(with_pip=False, symlinks=sys.platform != "win32").create(host)
     interpreter = host / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     absent = subprocess.run([str(interpreter), "-I", "-c",
         "import importlib.util; assert importlib.util.find_spec('loopx') is None"],
