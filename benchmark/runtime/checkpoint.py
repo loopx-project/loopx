@@ -230,9 +230,11 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write"]
     display = explicit_turn_display(env)
+    native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
     if display.complete_turn:
         command.append("--complete-turn")
-    native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
+    elif display.turn_envelope:
+        command.append("--turn-envelope")
     legacy_display = display.turn_envelope and env.get("LOOPX_CONTEXT_DELIVERY", "off") == "off"
     if native_context:
         # The native reader selects full/delta after SessionStart. Ask the
@@ -246,7 +248,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         if legacy_display:
             # Forward the explicit raw display to the same CLI that renders
             # ordinary wakes. The checkpoint selector still reads the source.
-            command += ["--turn-envelope", "--context-delivery", "off"]
+            command += ["--context-delivery", "off"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
@@ -262,10 +264,12 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         raise ValueError("checkpoint requires a successful original quota guard")
     if native_context and projected.get("capture_sha256") != guard_digest:
         raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
-    # This is the current live producer. Refuse an invalid source before any
-    # preflight instruction or saved guard can give it to the model.
+    # This process owns the guard invocation and knows which source it asked
+    # for. Never infer legacy compatibility from the capture's version fields.
+    # Explicit complete and legacy-envelope displays both capture signed C1.
     intent = select_checkpoint_replan(guard, goal_id=env["LOOPX_GOAL_ID"],
-        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"])
+        agent_id=env["LOOPX_AGENT_ID"], turn_instance_id=receipt["turn_id"],
+        allow_legacy_source=not (display.complete_turn or display.turn_envelope))
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.

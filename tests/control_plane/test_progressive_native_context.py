@@ -496,7 +496,6 @@ def test_public_quota_cli_delivers_required_view_and_signed_original_evidence(ac
     recovery = context._state(lifecycle)["recovery"]
     assert Path(recovery["path"]).name == "required-context.json"
     required = json.loads(Path(recovery["path"]).read_bytes())
-    assert required["schema_version"] == "loopx_turn_envelope_v1"
     assert "read_scope" not in required
     # Presentation keeps an address to the immutable checked complete source;
     # the derived view never becomes another authoritative decision.
@@ -506,7 +505,12 @@ def test_public_quota_cli_delivers_required_view_and_signed_original_evidence(ac
     assert context._state(lifecycle)["source_recovery"]["path"] == str(original_path)
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 
-    assert_complete_turn_decision(decision)
+    if complete:
+        assert required["schema_version"] == "loopx_turn_envelope_v1"
+        assert_complete_turn_decision(decision)
+    else:
+        assert "schema_version" not in decision and "contract_binding" not in decision
+        assert "schema_version" not in required and "contract_binding" not in required
     details = required["context_details"]
     assert details["path"] == str(original_path)
     assert json.loads(Path(details["path"]).read_bytes()) == decision
@@ -566,7 +570,9 @@ def test_native_quota_reuses_only_its_published_source(acceptance_goal, tmp_path
     raw = original.read_bytes()
     view = reference_metadata_oracle(packet)
     if initialized:
-        assert view["recovery"]["path"] == str(original)
+        recovery = Path(view["recovery"]["path"])
+        assert recovery.parent == original.parent
+        assert json.loads(recovery.read_bytes())["heartbeat_receipt"] == json.loads(raw)["heartbeat_receipt"]
         assert context._state(lifecycle)["source_recovery"] == {
             "path": str(original), "sha256": hashlib.sha256(raw).hexdigest()}
         assert not original.with_name("projection.json").exists()

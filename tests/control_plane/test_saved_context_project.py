@@ -552,12 +552,17 @@ def test_preflight_instruction_pins_projection_and_diagnostic_receipt(tmp_path):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("enabled,compacted,placement", [
-    (False, False, "physical"), (True, False, "physical"), (True, True, "physical"),
-    (True, False, "alias-before-session"), (True, False, "explicit-before-session"),
-    (True, False, "explicit-root"),
-], ids=["off", "on", "on-after-compaction", "alias-before-session", "explicit-before-session", "explicit-root"])
-def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monkeypatch, provider, enabled, compacted, placement):
+@pytest.mark.parametrize("enabled,compacted,placement,display", [
+    (False, False, "physical", "ordinary"), (True, False, "physical", "ordinary"),
+    (True, True, "physical", "ordinary"), (True, False, "alias-before-session", "ordinary"),
+    (True, False, "explicit-before-session", "ordinary"), (True, False, "explicit-root", "ordinary"),
+    (False, False, "physical", "complete"), (True, False, "physical", "complete"),
+    (True, False, "physical", "envelope"),
+], ids=["off", "on", "on-after-compaction", "alias-before-session", "explicit-before-session", "explicit-root",
+        "complete-off", "complete-on", "envelope-on"])
+def test_checkpoint_preflight_selection_inherits_native_transport(
+    tmp_path, monkeypatch, provider, enabled, compacted, placement, display,
+):
     """Execute same-Turn selection from the saved guard with and without SessionStart."""
     from benchmark.runtime.checkpoint import capture_before_replan
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
@@ -596,6 +601,8 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
         "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
         "LOOPX_WAKE_LOG_DIR": str(wake.parent), "LOOPX_CHECKPOINT_REQUEST": str(request),
+        "LOOPX_COMPLETE_TURN": str(int(display == "complete")),
+        "LOOPX_TURN_ENVELOPE": str(int(display == "envelope")),
         "LOOPX_CONTEXT_DELIVERY": "on" if enabled else "off", "LOOPX_CODEX_CONTEXT_DIR": str(native)}
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
@@ -620,6 +627,13 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     else:
         body = capture_before_replan(env, receipt, "Current work.")
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
+    captured_source = json.loads(original_guard)
+    if display == "ordinary":
+        assert "schema_version" not in captured_source and "contract_binding" not in captured_source
+    else:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(captured_source)
     if enabled:
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         source = Path(command[command.index("--capture-file") + 1])
@@ -729,6 +743,52 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
     assert source.read_bytes() == raw and (wake / "checkpoint-start-guard.json").read_bytes() == original_guard
     assert state.read_bytes() == original_state
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_preflight_requires_its_explicit_complete_source(tmp_path, monkeypatch, provider):
+    import subprocess
+
+    from benchmark.runtime.checkpoint import capture_before_replan
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, _heartbeat_receipt_count, _initialize_fixture_authority, _spend_run_count, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path / "authority")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "preflight-source-downgrade"
+    wake = tmp_path / "wakes" / turn
+    wake.mkdir(parents=True)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(tmp_path / "checkpoints"),
+        "components": [{"id": "task", "source_path": str(project)}], "point_metadata": {}}))
+    cli = tmp_path / "loopx-cli"
+    cli.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.entrypoint "$@"\n')
+    cli.chmod(0o700)
+    env = {**os.environ, "LOOPX_CLI": str(cli), "LOOPX_PROJECT": str(project),
+        "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID, "LOOPX_COMPLETE_TURN": "1",
+        "LOOPX_TURN_ENVELOPE": "0", "LOOPX_CONTEXT_DELIVERY": "off",
+        "LOOPX_WAKE_LOG_DIR": str(wake.parent), "LOOPX_CHECKPOINT_REQUEST": str(request)}
+    run = subprocess.run
+
+    def substituted_capture(argv, **kwargs):
+        result = run(argv, **kwargs)
+        if "--complete-turn" in argv:
+            root = Path(argv[argv.index("--decision-output-root") + 1])
+            [source] = root.glob("decision-*/decision.json")
+            original = json.loads(source.read_bytes())
+            assert original.pop("schema_version") == "loopx_turn_envelope_v1"
+            assert original.pop("contract_binding")
+            source.write_text(json.dumps(original))
+        return result
+
+    monkeypatch.setattr("benchmark.runtime.checkpoint.subprocess.run", substituted_capture)
+    with pytest.raises(EffectRuntimeRejected, match="unsupported complete Turn decision version"):
+        capture_before_replan(env, {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}, "Current work.")
+    assert not (wake / "checkpoint-start-guard.json").exists()
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")

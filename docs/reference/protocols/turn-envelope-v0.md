@@ -193,6 +193,14 @@ presentation failures after verification can still refer to the verified capture
 An explicit complete-source native preparation does not fall back to the
 ordinary reader if the ready capture loses its version and binding.
 
+When a bound replan qualifies for successor creation, navigation can offer
+`replan_review_command` alongside the ordinary staged first read. The optional
+reader pins the review evidence and original Turn identity to the saved
+decision. The staged reader still leads to the full authoring and settlement
+contract for other outcomes. Benchmark checkpoint preflight uses the source
+requested by its own invocation and verifies the complete source when that
+invocation requests C1.
+
 For eligible original Todo plans, the same typed settlement owner projects one
 `refresh-state ... --settle-turn --settlement-receipt` command. It retains the
 original effect identity, validation and terminal conditions. A non-ready
@@ -220,6 +228,9 @@ model context. Actual live adoption and efficiency still require separate proof.
 渐进/差分交付独立控制；关闭上下文交付时仍内联返回显式选择的完整 v1 文档。
 返回的选题命令和原生 lease 准备在同一 Turn 再次进入时保留已选的来源格式。
 显式选用完整来源的原生准备如果发现 ready capture 丢失版本和绑定，不会改用普通 reader。
+具备创建后继任务资格的重规划可在普通分阶段首读之外提供 `replan_review_command`。
+该读取将评审证据与原 Turn 身份绑定到原捕获，其他结果仍经分阶段读取取得完整的编写与结算合同。
+Benchmark checkpoint 预检按自身调用确定预期来源，显式选择 C1 时核验完整来源。
 读取按原摘要绑定的分页，不为补读重新准入。原验收、Stop、权限、必要读取与用户
 任务时间要求保留；不会把调用方私有当前倒计时或常驻 runtime 指导新增到模型输入。
 可执行的原 Todo 结算计划复用同一 typed owner，合并为一条写回并保留原 effect id，

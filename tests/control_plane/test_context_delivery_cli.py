@@ -255,7 +255,7 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
     before = state.read_bytes()
     code, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
-        "--context-delivery", "off",
+        "--context-delivery", "off", "--complete-turn",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
@@ -686,6 +686,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0"},
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
     monkeypatch.setattr(quota, "handoff_decision", lambda *args: ({"scope": "host-request"}, "digest"))
     monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)

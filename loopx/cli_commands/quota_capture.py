@@ -74,7 +74,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 first_read_page_bytes: int | None = None,
                                 page_attached: bool = False,
                                 reader_argv: list[str] | None = None,
-                                initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any]:
+                                initial_read_plan: dict[str, Any] | None = None,
+                                source_replan_review: Path | None = None) -> dict[str, Any]:
     """Publish the cheaper readable native transport for an already-decided view.
 
     TS owns valid deltas and their bindings. This IO adapter can only fall back
@@ -244,17 +245,20 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result = budgeted_ready_opening(result, initial_read_plan, current_document, initial_read_content,
             page_bytes=first_page_bytes, output_bytes=first_output_bytes, reader_argv=reader_argv,
             context_directory=context_directory, observation=opening_observation)
-    if replan_review and not page_attached and "first_read_command" in result:
+    if (progressive_enabled and (source_replan_review or replan_review) and "first_read_command" in result
+            and (not page_attached or source_replan_review is not None)):
         try:
             path, digest = Path(current["path"]), current["sha256"]
-            selections = []
-            for item in replan_review["selections"]:
-                if type(item) is int:
-                    if not 0 <= item < len(ordinary_selections):
-                        raise ValueError("Replan review address is outside the current read plan")
-                    item = ordinary_selections[item]
-                selections.append(item)
-            reader, _ = write_initial_context_read_reference(path, digest, current_document, selections)
+            reader = source_replan_review
+            if reader is None:
+                selections = []
+                for item in replan_review["selections"]:
+                    if type(item) is int:
+                        if not 0 <= item < len(ordinary_selections):
+                            raise ValueError("Replan review address is outside the current read plan")
+                        item = ordinary_selections[item]
+                    selections.append(item)
+                reader, _ = write_initial_context_read_reference(path, digest, current_document, selections)
             candidate = {**result, "replan_review_command": context_capture_read_command(path, digest,
                 reference_file=reader, page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes,
                 reader_argv=reader_argv),
@@ -273,12 +277,18 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 def progressive_context_or_current(payload: dict[str, Any], args: argparse.Namespace, *,
                                    runtime_root: Path, directory: Path | None,
                                    reader_argv: list[str] | None,
-                                   captured_decision_path: str | None = None) -> dict[str, Any]:
+                                   captured_decision_path: str | None = None,
+                                   captured_digest: str | None = None) -> dict[str, Any]:
     """Optional stateless IO falls back to this complete decided input/receipt."""
     try:
+        source = None
+        if captured_decision_path is not None and captured_digest is not None:
+            path = Path(captured_decision_path)
+            source = {"path": str(path), "sha256": captured_digest,
+                "command": context_capture_read_command(path, captured_digest, reader_argv=reader_argv)}
         return progressive_context_capture_view(payload, args, runtime_root=runtime_root,
-            directory=directory,
-            reader_argv=reader_argv, captured_decision_path=captured_decision_path)
+            directory=directory, reader_argv=reader_argv,
+            captured_decision_path=captured_decision_path, captured_recovery=source)
     except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         return payload
 
@@ -287,6 +297,8 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
                                      runtime_root: Path, directory: Path | None,
                                      reader_argv: list[str] | None = None,
                                      captured_decision_path: str | None = None,
+                                     captured_recovery: dict[str, Any] | None = None,
+                                     replan_review_source: dict[str, Any] | None = None,
                                      page_attached: bool = False) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
@@ -300,9 +312,12 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=quota_context_surface(payload, args),
-        selection_command_args_template=transport, captured_decision_path=captured_decision_path)
+    required, reference, review = capture_progressive_context(
+        payload, directory=directory, surface=quota_context_surface(payload, args),
+        selection_command_args_template=transport, captured_decision_path=captured_decision_path,
+        captured_recovery=captured_recovery, replan_review_source=replan_review_source)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
+        source_replan_review=review,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=page_attached, reader_argv=reader_argv)
@@ -428,7 +443,8 @@ def project_saved_context_capture(
         try:
             navigation = progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
-                directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
+                directory=None, reader_argv=reader_argv, captured_decision_path=str(path),
+                replan_review_source=full_reference if complete else None, page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
                     initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
@@ -490,6 +506,7 @@ def project_saved_context_capture(
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            replan_review_source=full_reference if complete else None,
             captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
             hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
@@ -511,6 +528,7 @@ def project_saved_context_capture(
         native_view = native_context_capture_view(projected, cache,
             context_directory=directory if prepared.stateless_recovery is None else None, hook_session=hook_session,
             captured_recovery=prepared.stateless_recovery,
+            source_replan_review=prepared.source_replan_review,
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
@@ -564,8 +582,9 @@ def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> P
     if getattr(args, "prepared_capture_reference", False) and (
         args.quota_command != "should-run" or args.format != "json"
         or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
-        or getattr(args, "decision_handoff_socket", None) or getattr(args, "turn_envelope", False)
-        or (native_context_activation(args)["enabled"] and not getattr(args, "defer_context_presentation", False))
+        or getattr(args, "decision_handoff_socket", None)
+        or (not getattr(args, "defer_context_presentation", False) and
+            (getattr(args, "turn_envelope", False) or native_context_activation(args)["enabled"]))
     ):
         raise QuotaCommandValidationError("prepared capture reference requires an explicit Turn and raw JSON capture")
     if getattr(args, "defer_context_presentation", False) and (

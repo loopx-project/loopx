@@ -37,7 +37,12 @@ def test_context_delivery_preserves_the_canonical_settlement_contract(tmp_path, 
         assert rc == 0, result
         path = capture / "decision.json"
         source = json.loads(path.read_bytes())
-        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        if alias:
+            from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+            assert_complete_turn_decision(source)
+        else:
+            assert "schema_version" not in source and "contract_binding" not in source
         plan = source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert plan["schema_version"] == "quota_settlement_plan_v1"
         assert plan["identity"] == source["heartbeat_receipt"]["settlement_identity"]
@@ -69,7 +74,7 @@ def test_explicit_combined_writeback_returns_the_original_turn_receipts(tmp_path
     assert "command_template" in manual["ordered_steps"][2]
     capture = tmp_path / "capture"
     rc, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--context-delivery", "on", "--decision-output-dir", str(capture), cwd=project)
+        "--context-delivery", "on", "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, view
     full = json.loads((capture / "decision.json").read_text())
     cli = full["interaction_contract"]["cli_channel"]
@@ -197,7 +202,7 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     capture = tmp_path / "capture"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--context-delivery", "on", "--decision-output-dir", str(capture), cwd=project)
+        "--context-delivery", "on", "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, guard
     full = json.loads((capture / "decision.json").read_text())
     assert full["schema_version"] == "loopx_turn_envelope_v1"
@@ -516,12 +521,13 @@ def test_explicit_complete_soft_claim_reuses_the_original_turn_receipt(tmp_path,
     command = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     rc, legacy = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc == 0 and legacy["schema_version"] == "loopx_turn_envelope_v1"
-    assert_complete_turn_decision(legacy)
+    assert rc == 0, legacy
+    assert "schema_version" not in legacy and "contract_binding" not in legacy
     original_cli = legacy["interaction_contract"]["cli_channel"]
     assert original_cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v1"
     rc, complete = _run_cli(registry, runtime, *command, "--complete-turn", cwd=project)
-    assert rc == 0 and complete["schema_version"] == "loopx_turn_envelope_v1", complete
+    assert rc == 0, complete
+    assert_complete_turn_decision(complete)
     cli = complete["interaction_contract"]["cli_channel"]
     assert "execution_preparation" not in cli  # A soft claim never becomes a fabricated ready lease.
     assert cli["settlement_plan"]["schema_version"] == "quota_settlement_plan_v2"

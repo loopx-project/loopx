@@ -738,6 +738,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context, exactBody),
+    ...(initial && plan?.source_replan_review ? {source_replan_review: plan.source_replan_review} : {}),
     ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
 }
 
@@ -747,7 +748,8 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   const values: ProjectionSourceValues = new WeakMap();
   const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
-  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
+  return contextProjectionChanges(source, {context: required.context, projected: required.projected,
+    ...(plan?.source_replan_review ? {source_replan_review: plan.source_replan_review} : {})}, values, undefined, true);
 }
 
 function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof initialContextReadGroups>,

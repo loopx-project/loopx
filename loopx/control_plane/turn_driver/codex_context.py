@@ -20,7 +20,7 @@ from .decision_capture import (
     write_decision_capture, capture_context_projection, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     CONTEXT_CAPTURE_SELECTION_GUIDANCE, CONTEXT_CAPTURE_CODE_MODE_GUIDANCE,
-    context_capture_read_command,
+    context_capture_read_command, pin_source_replan_review,
 )
 from .native_context_profile import (
     NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
@@ -776,6 +776,7 @@ class NativeContextPreparation:
     delivery: dict[str, Any]
     initial_read_plan: dict[str, Any] | None = None
     stateless_recovery: dict[str, Any] | None = None
+    source_replan_review: Path | None = None
 
 
 def _complete_turn_read_scope(state: Mapping[str, Any]) -> bool:
@@ -921,6 +922,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
                           captured_recovery: dict[str, Any] | None = None,
+                          replan_review_source: dict[str, Any] | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None,
                           saved_capture: bool = False) -> NativeContextPreparation:
@@ -942,17 +944,18 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
         from .decision_capture import capture_progressive_context
 
         try:
-            view, recovery = capture_progressive_context(
+            view, recovery, review = capture_progressive_context(
                 payload, directory=capture_directory, surface=surface,
                 selection_command_args_template=selection_command_args_template,
-                captured_decision_path=captured_decision_path)
+                captured_decision_path=captured_decision_path,
+                captured_recovery=captured_recovery, replan_review_source=replan_review_source)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError, OSError, ValueError, KeyError, TypeError, RecursionError):
             if saved_capture or captured_recovery is None:
                 raise
             # The live guard already published its source. A stateless
             # presentation failure cannot retire another session's recovery.
             return NativeContextPreparation(payload, stateless_recovery=captured_recovery)
-        return NativeContextPreparation(view, stateless_recovery=recovery)
+        return NativeContextPreparation(view, stateless_recovery=recovery, source_replan_review=review)
 
     if directory is None:
         if not progressive_enabled:
@@ -1058,7 +1061,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 result["recovery"] = recovery
                 read_plan = _record_native_delivery(root, state, result, transaction, request,
                     directory=directory, progressive=progressive)
-                return NativeContextPreparation(result, read_plan)
+                review = pin_source_replan_review(payload, replan_review_source or source_recovery, transaction)
+                return NativeContextPreparation(result, read_plan, source_replan_review=review)
             except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
                 if check_saved_source:
                     raise QuotaDecisionTransportError(

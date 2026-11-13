@@ -81,7 +81,7 @@ def test_real_current_entrypoints_check_and_preserve_the_complete_source(
     if entrypoint == "quota":
         argv = [*prefix, "quota", "should-run", "--goal-id", lineage["goal_id"],
             "--agent-id", lineage["agent_id"], "--todo-id", lineage["todo_id"],
-            "--turn-instance-id", turn_id, "--context-delivery", "off"]
+            "--turn-instance-id", turn_id, "--context-delivery", "off", "--complete-turn"]
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main(argv)
@@ -107,6 +107,7 @@ def test_real_current_entrypoints_check_and_preserve_the_complete_source(
             if source_fault == "missing_read_command":
                 markdown_argv = list(argv)
                 markdown_argv[markdown_argv.index("--format") + 1] = "markdown"
+                markdown_argv[markdown_argv.index("--complete-turn")] = "--turn-envelope"
                 markdown = io.StringIO()
                 with contextlib.redirect_stdout(markdown):
                     assert cli_main(markdown_argv) == 1

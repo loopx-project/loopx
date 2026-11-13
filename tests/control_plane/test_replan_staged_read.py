@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+from tests.control_plane.test_complete_turn_decision import _canonical_digest
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
@@ -111,7 +112,8 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
     capture = tmp_path / "capture"
     try:
         entry = call("quota", "should-run", "--codex-app", "--goal-id", goal,
-            "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
+            "--agent-id", agent, "--turn-instance-id", turn, "--context-delivery", "off",
+            "--complete-turn", "--decision-output-dir", str(capture))
         entry = read_cli_policy_payload(json.dumps(entry), returncode=0)
         source = json.loads((capture / "decision.json").read_bytes())
         raw_context = call("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)
@@ -291,9 +293,13 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert view["action_signature"]["source_decision_hash"] == source["contract_binding"]["content_hash"]
             assert shlex.split(view["detail_ref"]["full_decision"]) == ["cat", "--", str(captured)]
             assert "follow its action, required reads and settlement instructions" in body
-        else:
+        elif context_delivery:
             assert view_path.read_bytes() == raw
-        assert ("--turn-envelope" in commands[0]) is legacy_view
+        else:
+            assert view["heartbeat_receipt"] == source["heartbeat_receipt"]
+            assert view["effective_action"] == source["effective_action"]
+            assert view["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]
+        assert ("--turn-envelope" in commands[0]) is turn_envelope
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
@@ -346,16 +352,34 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 assert presentation_path.is_relative_to(native.resolve())
                 staged = json.loads(presentation_bytes)
                 staged_packet = staged["replan_action_packet"]
+                expected_hash = (source["contract_binding"]["content_hash"]
+                                 if turn_envelope else _canonical_digest(source))
                 for stage in ("review", "writeback"):
                     argv = shlex.split(staged_packet[stage])
                     assert argv[argv.index("--decision-file") + 1] == str(view_path)
-                    assert argv[argv.index("--source-hash") + 1] == source["contract_binding"]["content_hash"]
-                detail = shlex.split(staged["context_details"]["command_template"])
-                assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
-                assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+                    assert argv[argv.index("--source-hash") + 1] == expected_hash
                 added = {"/replan_action_packet/review": staged_packet["review"],
-                         "/replan_action_packet/guidance": staged_packet["guidance"],
-                         "/context_details": staged["context_details"]}
+                         "/replan_action_packet/guidance": staged_packet["guidance"]}
+                if turn_envelope:
+                    detail = shlex.split(staged["context_details"]["command_template"])
+                    assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
+                    assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+                    added["/context_details"] = staged["context_details"]
+                    # Transport may reorder equivalent CLI flags. Check the
+                    # executable selection and every other control exactly.
+                    from loopx.cli import build_parser
+
+                    cli = source["interaction_contract"]["cli_channel"]
+                    selection_command = cli["selection_command"]
+                    selection_args = shlex.split(selection_command["command_args_template"])
+                    shown_template = staged["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+                    shown_args = shlex.split(shown_template)
+                    parser = build_parser()
+                    assert parser.parse_args(shown_args) == parser.parse_args(selection_args)
+                    assert sorted(shown_args) == sorted(selection_args)
+                    displayed_cli = {**cli, "selection_command": {**selection_command,
+                        "command_args_template": shown_template}}
+                    assert staged["interaction_contract"]["cli_channel"] == displayed_cli
             else:
                 assert presentation_path == view_path and presentation_bytes == raw
             chunks, offset = [], 0
@@ -385,15 +409,19 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 if row["pointer"] in added:
                     assert row["value"] == added[row["pointer"]]
                     continue
+                if replan and turn_envelope and row["pointer"] == "/interaction_contract/cli_channel":
+                    assert row["value"] == displayed_cli
+                    continue
                 expected = source
                 for token in row["pointer"].split("/")[1:]:
                     token = token.replace("~1", "/").replace("~0", "~")
                     expected = expected[int(token)] if isinstance(expected, list) else expected[token]
                 assert row["value"] == expected
         assert source_path.read_bytes() == captured.read_bytes() == raw
-        assert source["schema_version"] == "loopx_turn_envelope_v1"
-        if not legacy_view:
-            assert view == source
+        if turn_envelope:
+            assert source["schema_version"] == "loopx_turn_envelope_v1"
+        else:
+            assert "schema_version" not in source and "contract_binding" not in source
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
         selection = source["interaction_contract"]["cli_channel"].get("selection_command")
@@ -405,7 +433,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert followup[followup.index("--context-delivery") + 1] == "on"
             assert followup[followup.index("--codex-context-dir") + 1] == str(native)
             assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
-        selector = checkpoint.select_checkpoint_replan(source, goal_id=GOAL, agent_id=AGENT, turn_instance_id=TURN)
+        selector = checkpoint.select_checkpoint_replan(source, goal_id=GOAL, agent_id=AGENT,
+            turn_instance_id=TURN, allow_legacy_source=not turn_envelope)
         assert selector["capture"] is replan
         if not replan:
             assert "result_writeback_read" not in explore_source(source)["content"]["graph"]
@@ -445,7 +474,6 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         # Correct outer bytes cannot rescue unsupported inner version semantics.
         malformed = copy.deepcopy(source)
         malformed["schema_version"] = "unsupported-future-version"
-        from tests.control_plane.test_complete_turn_decision import _canonical_digest
         bad_path = tmp_path / "unsupported.json"
         bad_path.write_text(json.dumps(malformed))
         # Use the independent historical JS-number oracle so the outer hash
@@ -497,6 +525,7 @@ def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatc
     try:
         entry = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run",
             "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--complete-turn",
             "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
             "--decision-output-root", str(captures),
             "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
@@ -577,7 +606,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             "--todo-id", TODO, "--decision-output-dir", str(capture),
             # Exercise complete output and the explicit bounded legacy view.
             "--context-delivery", "off",
-            *(["--turn-envelope"] if envelope else []))
+            ("--turn-envelope" if envelope else "--complete-turn"))
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
         assert source["schema_version"] == "loopx_turn_envelope_v1"

@@ -444,18 +444,19 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery, con
         rc, first = _run_cli(registry, runtime, *guard)
         first = read_cli_policy_payload(json.dumps(first), returncode=rc)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
-    compatibility_view = ("--turn-envelope",) if context_delivery == "off" else ()
+    requested_view = "--turn-envelope" if context_delivery == "off" else "--complete-turn"
+    capture = tmp_path / "original-bound-capture"
     rc, envelope = _run_cli(registry, runtime, *guard,
-                            "--todo-id", SELECTED_REPLAN_TODO_ID, *compatibility_view)
+                            "--todo-id", SELECTED_REPLAN_TODO_ID, requested_view,
+                            "--decision-output-dir", str(capture))
     assert rc == 0, envelope
     from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
     if context_delivery == "on":
-        envelope = read_cli_policy_payload(json.dumps(envelope), returncode=rc)
-        assert envelope["schema_version"] == "loopx_turn_envelope_v1"
-        assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
-        # Progressive delivery keeps the complete source. Its historical
-        # executor adapter still derives the same original first-call action.
-        envelope = build_turn_envelope(envelope)
+        shown = read_cli_policy_payload(json.dumps(envelope), returncode=rc)
+        original = json.loads((capture / "decision.json").read_bytes())
+        assert shown["heartbeat_receipt"] == original["heartbeat_receipt"]
+        assert _turn_envelope_result("complete_consumer", payload=original)["ok"]
+        envelope = build_turn_envelope(original)
     else:
         # Explicit off retains the requested bounded compatibility view.
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"

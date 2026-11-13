@@ -1941,7 +1941,14 @@ function checkedContextPresentationSource(request: JsonObject): JsonObject {
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   const context = checkedContextPresentationSource(request);
   const staged = nativeReplanPresentation(request);
-  if (staged) return staged;
+  if (staged) {
+    // Eligibility depends on the original obligation and settlement plan.
+    // Ordinary first-read planning still uses the staged view.
+    const review = request.surface === "complete_turn"
+      ? successorReplanReadSelection(context, initialContextReadPointers(context, INITIAL_CONTEXT_DECISION_FIELDS))
+      : undefined;
+    return review ? {...staged, source_replan_review: review} : staged;
+  }
   if (request.surface !== "complete_turn")
     return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScopes(context));
   const source = {...context};

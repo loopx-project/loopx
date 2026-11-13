@@ -994,6 +994,14 @@ change. Explicit `--complete-turn` and managed handoff keep the checked source
 through selection and native lease preparation. Progressive and Delta remain
 independent of source selection.
 
+For a replan that qualifies for successor creation, plan the optional review
+from the same verified source before staging the ordinary read. The review
+reader pins the original capture and settlement identity. The staged first
+read leads to full authoring when choosing another outcome. The benchmark
+checkpoint preflight uses its own invocation to choose ordinary or
+complete-source validation and verifies the expected format independently of
+the capture's format fields.
+
 | Reader boundary | Current behavior and retirement condition |
 | --- | --- |
 | Ordinary quota and thin heartbeat | Keep the existing compact decision and settlement. Saved ordinary captures retain their original source and pinned recovery. |

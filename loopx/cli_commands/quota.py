@@ -21,9 +21,7 @@ from .quota_capture import (
     handle_native_context_command, prepare_quota_capture,
     native_context_activation, progressive_context_or_current, quota_context_surface,
 )
-from ..control_plane.turn_driver.decision_capture import (
-    project_captured_context,
-)
+from ..control_plane.turn_driver.decision_capture import project_captured_context
 from ..usage_goal import observe_quota_result
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
@@ -480,7 +478,7 @@ def _emit_quota_result(
             # Validate before capture or handoff; the complete source is unchanged.
             payload = _project_quota_cli_payload(payload, args, detail_sections)
         elif args.quota_command == "should-run":
-            if "schema_version" in payload or "contract_binding" in payload:
+            if payload.get("ok") is True and ("schema_version" in payload or "contract_binding" in payload):
                 raise QuotaDecisionTransportError("Ordinary quota received an unexpected decision source.")
             if payload.get("ok") is True and not isinstance(payload.get("interaction_contract"), Mapping):
                 raise QuotaDecisionTransportError("Ordinary quota decision is missing its interaction contract.")
@@ -544,7 +542,8 @@ def _emit_quota_result(
         payload = progressive_context_or_current(payload, args,
             runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
             directory=capture_directory, reader_argv=reader_argv,
-            captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None)
+            captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None,
+            captured_digest=captured_digest if complete_source else None)
         if args.format == "markdown":
             from ..presentation.renderers.turn_envelope_markdown import render_turn_context_markdown
 

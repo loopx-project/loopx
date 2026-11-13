@@ -717,6 +717,10 @@ composition owner，只捕获一次结果。Markdown renderer 在一个 JSON 块
 后再切换默认。显式 `--complete-turn` 和托管 handoff 在选题与原生 lease 准备中
 保留经校验的来源。渐进与差分仍独立于来源格式。
 
+重规划具备创建后继任务资格时，先从同一份已核验来源生成可选评审，再生成普通分阶段视图。
+评审读取固定原捕获与结算身份。其他结果仍通过分阶段首读取得完整编写合同。
+Benchmark checkpoint 预检按自身调用选择普通或完整来源校验，独立核对预期格式。
+
 | Reader 边界 | 当前行为与退役条件 |
 | --- | --- |
 | 普通 quota 和 thin heartbeat | 保留现有紧凑决定与结算；已保存的普通 capture 沿原来源和固定引用恢复。 |

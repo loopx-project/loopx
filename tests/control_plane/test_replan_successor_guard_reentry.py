@@ -1,6 +1,7 @@
 """A canonical successor changes the frontier, never the original Turn binding."""
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import subprocess
@@ -108,11 +109,15 @@ def _add(call, obligation_id: str):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("native_session", [False, True])
+@pytest.mark.parametrize("native_session,saved_projection,native_context", [
+    (False, False, False), (False, False, True), (True, False, True),
+    (False, True, True), (True, True, True),
+], ids=["stateless-guard", "cold-native-guard", "active-native-guard", "cold-saved", "active-saved"])
 def test_bound_successor_review_reads_current_evidence_and_uses_creation_receipt(
-    tmp_path, monkeypatch, provider, native_session,
+    tmp_path, monkeypatch, provider, native_session, saved_projection, native_context,
 ):
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     native, captures = tmp_path / "native", tmp_path / "captures"
     for directory in (native, captures):
         directory.mkdir(mode=0o700)
@@ -135,25 +140,54 @@ def test_bound_successor_review_reads_current_evidence_and_uses_creation_receipt
         monkeypatch.setenv("CODEX_THREAD_ID", session)
         epoch = hook("SessionStart", source="startup")
     flags = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
-             "--turn-instance-id", TURN, "--context-delivery", "on", "--complete-turn",
-             "--codex-context-dir", str(native), "--decision-output-root", str(captures))
-    navigation = call(*flags)
+             "--turn-instance-id", TURN, "--complete-turn", "--decision-output-root", str(captures),
+             *(("--context-delivery", "on", "--codex-context-dir", str(native)) if native_context
+               else ("--context-delivery", "auto")))
+    guard = call(*flags)
+    source = next(captures.rglob("decision.json")).resolve()
+    original = source.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    if saved_projection:
+        first = call("quota", "context-project", "--codex-app", "--context-delivery", "on",
+            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--capture-file", str(source), "--capture-sha256", digest,
+            "--codex-context-dir", str(native), "--initial-read")
+        navigation = first["navigation"]
+    else:
+        navigation = guard
     assert navigation["schema_version"] == "context_capture_navigation_v1"
 
-    def read(command):
+    def read(command=None, first_page=None):
         content, offset = [], 0
-        while command:
-            words = shlex.split(command)
-            page = call(*words[words.index("quota"):])
+        page = first_page
+        while command or page is not None:
+            if page is None:
+                words = shlex.split(command)
+                page = call(*words[words.index("quota"):])
             assert page["offset"] == offset
             content.append(page["content"])
             offset += len(content[-1].encode())
+            if page["eof"]:
+                assert offset == page["total_bytes"]
+                break
             command = page.get("next_command")
-        assert page["eof"] and offset == page["total_bytes"]
+            assert command
+            page = None
         return selected_context_values("".join(content))
 
-    review = read(navigation["replan_review_command"])
-    decision = read(navigation["first_read_command"])
+    review_command = navigation["replan_review_command"]
+    review_words = shlex.split(review_command)
+    review_reference = json.loads(Path(review_words[review_words.index("--reference-file") + 1]).read_bytes())
+    assert Path(review_reference["path"]).resolve() == source
+    assert review_reference["sha256"] == digest
+    review = read(review_command)
+    if not saved_projection:
+        first_words = shlex.split(navigation["first_read_command"])
+        first = call(*first_words[first_words.index("quota"):])
+    assert first["offset"] == 0
+    if not saved_projection:
+        assert first["eof"]
+    decision = read(first_page=first)
     assert review["/effective_action"] == "autonomous_replan_required"
     identity = review["/heartbeat_receipt"]["settlement_identity"]
     assert identity == decision["/heartbeat_receipt"]["settlement_identity"]
@@ -166,15 +200,29 @@ def test_bound_successor_review_reads_current_evidence_and_uses_creation_receipt
     assert obligation["obligation_id"] == identity["replan_obligation_id"]
     if native_session:
         assert hook("PostCompact") != epoch
-        assert read(navigation["replan_review_command"]) == review
+        assert read(review_command) == review
     authoring = "/replan_action_packet/writeback_contract"
     cli = "/interaction_contract/cli_channel"
     assert cli + "/next_cli_actions" not in review
-    assert cli + "/settlement_plan" in decision
-    direct = read(navigation["recovery"]["command"] + " --select " + authoring)
-    assert direct[authoring]["vision_authoring"]["fields"]
+    assert cli + "/settlement_plan" not in decision
+    ordinary_review = shlex.split(decision["/replan_action_packet/review"])
+    staged = call(*ordinary_review[ordinary_review.index("quota"):])
+    assert staged["stage"] == "review" and staged["obligation_id"] == identity["replan_obligation_id"]
+    assert staged["core_goal"] == obligation["replan_context"]["core_goal"]
+    writeback_words = shlex.split(staged["next"]["writeback"])
+    writeback = call(*writeback_words[writeback_words.index("quota"):])
+    assert writeback["stage"] == "writeback" and writeback["obligation_id"] == identity["replan_obligation_id"]
+    assert writeback["writeback_contract"]["vision_authoring"]["fields"]
+    assert writeback["writeback"]["settlement_plan"]["identity"] == identity
     binding = shlex.split(review[authoring + "/successor_binding_args"])
-    assert binding == shlex.split(direct[authoring]["successor_binding_args"])
+    assert binding == shlex.split(writeback["writeback_contract"]["successor_binding_args"])
+    # The original file remains the sole source even when its staged view exists.
+    try:
+        source.write_bytes(original + b" ")
+        rejected = call(*review_words[review_words.index("quota"):], expected_code=1)
+        assert "digest mismatch" in rejected["reason"]
+    finally:
+        source.write_bytes(original)
     added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
@@ -249,7 +297,7 @@ def test_machine_default_stride_due_allows_evidence_linked_terminal_review(
     captures = tmp_path / "stride-captures"
     captures.mkdir(mode=0o700)
     navigation = call("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
-        "--turn-instance-id", turn, "--context-delivery", "on", "--decision-output-root", str(captures))
+        "--turn-instance-id", turn, "--context-delivery", "on", "--complete-turn", "--decision-output-root", str(captures))
     assert navigation["schema_version"] == "context_capture_navigation_v1"
     assert "replan_review_command" not in navigation
     common = ("refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,

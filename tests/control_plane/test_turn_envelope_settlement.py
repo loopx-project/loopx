@@ -54,17 +54,22 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
     assert result.returncode == 0, result.stderr or result.stdout
     record_property("markdown_chars", len(result.stdout))
     record_property("markdown_utf8_bytes", len(result.stdout.encode("utf-8")))
-    assert result.stdout.startswith("# LoopX Turn Envelope\n")
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
-    assert source["schema_version"] == "loopx_turn_envelope_v1"
-    if delivery == "off" and envelope:
+    if not envelope:
+        assert result.stdout.startswith("# LoopX Quota Should Run\n")
+        assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
+        assert "normal_run" in result.stdout
+        assert "schema_version" not in source and "contract_binding" not in source
+    elif delivery == "off":
+        assert result.stdout.startswith("# LoopX Turn Envelope\n")
         assert GOAL_ID in result.stdout and AGENT_ID in result.stdout
         assert "- should_run: `True`" in result.stdout
         assert "- effective_action: `normal_run`" in result.stdout
         assert not result.stdout.startswith("# LoopX Turn Envelope\n\n```json\n")
         assert len(result.stdout) <= 4800
     else:
+        assert result.stdout.startswith("# LoopX Turn Envelope\n")
         # Follow the same pinned recovery as JSON; no second admission is
         # needed to recover every field of this complete synthetic decision.
         body, cost = read_cli_context_for_oracle(result.stdout, output_format="markdown")
@@ -73,6 +78,8 @@ def test_markdown_reads_complete_source_except_explicit_off_compatibility(
         assert shown["should_run"] is True
         assert shown["effective_action"] == "normal_run"
         assert json.dumps(shown, ensure_ascii=False) == json.dumps(source, ensure_ascii=False)
+    if envelope:
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
     # Both readers recover the identical admitted source without a second guard.
     assert source["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
     assert source["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == TURN_ID
@@ -247,8 +254,10 @@ def test_generated_commands_settle_original_turn_once(tmp_path, monkeypatch, pro
         full = json.loads(body)
         plan = full["interaction_contract"]["cli_channel"]["settlement_plan"]
     else:
-        rc, full = _run_cli(registry, runtime, *args)
-        assert rc == 0, full
+        rc, response = _run_cli(registry, runtime, *args, "--context-delivery", "auto", "--turn-envelope")
+        assert rc == 0, response
+        body, _ = read_cli_context_for_oracle(json.dumps(response), output_format="json")
+        full = json.loads(body)
         rc, envelope = _run_cli(registry, runtime, *args, "--context-delivery", "off", "--turn-envelope")
         assert rc == 0, envelope
         assert envelope["schema_version"] == "loopx_turn_envelope_v0"

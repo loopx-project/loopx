@@ -443,8 +443,11 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, out
     import_fixture_authority(registry, probe.GOAL_ID)
     command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
         state_file=state, output_format=output_format, context_delivery="auto")["quota_should_run"]
+    # Request the full source explicitly. The historical envelope flag with
+    # progressive delivery also emits the full carrier for Markdown.
+    source_flag = "--complete-turn" if output_format == "json" else "--turn-envelope"
     code, navigation = probe._invoke_cli([
-        *command, "--todo-id", "todo_fixture_000", "--turn-instance-id", "fixture-signed-rows",
+        *command, source_flag, "--todo-id", "todo_fixture_000", "--turn-instance-id", "fixture-signed-rows",
     ])
     assert code == 0, navigation
     events = rollout_event_log_path(runtime, probe.GOAL_ID)
@@ -453,16 +456,18 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, out
         output_format=output_format, measure=probe.measure_cli_output)
     required = measurement["resolved_payload"]
     view = json.dumps(required, ensure_ascii=False)
-    spec = probe.CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"]
+    from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
     from loopx.control_plane.testing.cli_output_budget import assert_cli_output_semantics
+    semantic_keys = ("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo")
+    heading = "# LoopX Turn Envelope"
     assert_cli_output_semantics("quota_should_run", output_format=output_format,
-        text=navigation, measurement=measurement, semantic_json_keys=spec.semantic_json_keys,
-        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version)
+        text=navigation, measurement=measurement, semantic_json_keys=semantic_keys,
+        markdown_anchor=heading, output_contract_version=COMPLETE_TURN_DECISION_VERSION)
     row = runpy.run_path(str(RUNNER))["_receipt_row"](semantics=cli_output_semantics,
         row_id=f"surface/quota_should_run/multi_agent/{output_format}",
         surface_id="quota_should_run", scenario="multi_agent", output_format=output_format,
-        qualification_policy=spec.qualification_policy, semantic_json_keys=spec.semantic_json_keys,
-        markdown_anchor=spec.markdown_anchor, output_contract_version=spec.output_contract_version,
+        qualification_policy="explicit_opt_in_cold_path", semantic_json_keys=semantic_keys,
+        markdown_anchor=heading, output_contract_version=COMPLETE_TURN_DECISION_VERSION,
         measurement=measurement, text=navigation)
     assert len(row["quota_controls"]["field_sha256"]) == 19
     assert "context_reference_instruction" in required

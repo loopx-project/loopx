@@ -317,7 +317,8 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     # changed work, remove a wait or silently rebind the owner's checks.
     refusal_capture = tmp_path / "current-decision"
     code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery",
-        "--decision-output-dir", str(refusal_capture), "--context-delivery", "on", "--delta-delivery", "auto")
+        "--decision-output-dir", str(refusal_capture), "--turn-envelope", "--context-delivery", "on",
+        "--delta-delivery", "auto")
     assert code == (0 if change == "checks_removed" else 1), current
     if code != 0:
         assert current["error_code"] == "quota_action_selection_rejected"
