@@ -106,7 +106,7 @@ HOST_LOOP_SAFETY_RULE = (
 )
 HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake replace `<current_time_iso>` once; reuse on retries. "
-    "Assign, then run the guard in one shell, not a command-prefix assignment."
+    "Assign and guard in one shell, not a command-prefix assignment."
 )
 HEARTBEAT_KNOWN_CHOICE_RULE = (
     "Known new-Turn choice: add `--todo-id <id>` to first guard; else "

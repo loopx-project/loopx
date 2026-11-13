@@ -455,7 +455,6 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, out
     measurement = cli_output_fixture.measure_cli_context_for_oracle(navigation,
         output_format=output_format, measure=probe.measure_cli_output)
     required = measurement["resolved_payload"]
-    view = json.dumps(required, ensure_ascii=False)
     from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
     from loopx.control_plane.testing.cli_output_budget import assert_cli_output_semantics
     semantic_keys = ("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo")
@@ -475,7 +474,9 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path, out
     assert route[-2] == "--select"
     source, _, _ = cli_output_fixture.read_pinned_cli_body(shlex.join(route[:-2]))
     original = json.loads(source)
-    assert len(view.encode()) < len(source.encode())
+    # Compare the delivered compact body to its original compact capture.
+    # Navigation and paginated wire costs are measured separately by the oracle.
+    assert measurement["context_delivery"]["body_utf8_bytes"] < len(source.encode("utf-8"))
     assert original["contract_binding"] == required["contract_binding"]
     assert_complete_turn_decision(original)
     assert events.read_bytes() == before
