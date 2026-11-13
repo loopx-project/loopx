@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -24,11 +25,25 @@ def test_installed_core_ssh_complete_turn_settles_once(core_python, tmp_path, mo
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    environment = _environment(core_python)
+
+    def run_returned(command, *, replacements=None, extra=()):
+        argv = shlex.split(command)
+        if os.name == "nt" and argv[0] == "&":
+            argv = argv[1:]
+        assert Path(argv[0]).samefile(core_python)
+        assert argv[1:4] == ["-I", "-m", "loopx.entrypoint"]
+        if replacements:
+            argv = [replacements.get(word, word) for word in argv]
+        result = subprocess.run([*argv, *extra], cwd=project, env=environment,
+            capture_output=True, text=True, timeout=45)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+
     output = _run(core_python, [*prefix, "heartbeat-prompt", "--thin",
         "--runtime-profile", "codex_app_ssh_goal", "--context-delivery", "off", *scope], project)
     prompt = json.loads(output.stdout)
-    guard = shlex.split(prompt["quota_guard_command"])[1:]
-    current = json.loads(_run(core_python, [*guard, "--todo-id", TODO_ID], project).stdout)
+    current = run_returned(prompt["quota_guard_command"], extra=("--todo-id", TODO_ID))
     assert current["schema_version"] == "loopx_turn_envelope_v1"
     identity = current["heartbeat_receipt"]["settlement_identity"]
     plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
@@ -38,11 +53,10 @@ def test_installed_core_ssh_complete_turn_settles_once(core_python, tmp_path, mo
                     if step["kind"] == "durable_writeback")
     replacements = {"<validated_progress>": "verified_installed_source", "<scale>": "implementation",
                     "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
-    settle = [replacements.get(word, word) for word in shlex.split(template)[1:]]
-    settle += ["--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
-    first = json.loads(_run(core_python, settle, project).stdout)
+    settle_flags = ("--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+    first = run_returned(template, replacements=replacements, extra=settle_flags)
     assert first["settlement_progress"]["state"] == "settled"
-    replay = json.loads(_run(core_python, settle, project).stdout)
+    replay = run_returned(template, replacements=replacements, extra=settle_flags)
     assert replay["idempotent_replay"] and replay["settlement_identity"] == first["settlement_identity"] == identity
     assert _spend_run_count(runtime) == 1
 
