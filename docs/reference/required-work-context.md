@@ -887,16 +887,19 @@ epoch, and a matching digest of the current visible field. A revised field
 appears in full. Losing the observation restores the ordinary initial read.
 A saved delta on its own provides no evidence of model retention.
 
-A ready native Turn can use the same observation for an unchanged
-`vision_authoring` body already delivered in this task and epoch. The initial
-read marks its exact current address and still delivers this Turn's
-precondition, command and settlement identity. If the full instructions are
-unavailable, select the current complete body before composing the Vision.
-Explicit selection and stateless readers keep the literal body.
+A ready native Turn can use the same observation for unchanged
+`vision_authoring` and writeback preconditions already delivered for this task
+and epoch. The initial read names their current addresses and carries this
+Turn's commands and settlement identity. A soft claim uses the same rule when
+its original receipt binds the current plan. When that plan already carries
+the exact `next_cli_actions` commands in order, the initial read shows them
+once. Use the current capture to retrieve any instruction that is unavailable.
+An explicit field read still returns the original value.
 
-中文：同一任务、同一原生上下文周期内，首读可以标记已完整交付且未变化的
-`vision_authoring`。本轮前提、命令和结算身份仍读取当前值。如果无法使用完整
-说明，在编写 Vision 前从本次捕获取回该字段。显式选择和无会话读取保留原文。
+中文：同一任务、同一原生上下文周期内，已完整交付且未变化的 `vision_authoring`
+与写回前提可以按本轮地址复用。首读仍给出本轮命令与结算身份。软认领由原回执绑定
+本轮计划时使用同一规则。如果计划已经按顺序给出与 `next_cli_actions` 完全相同的
+命令，首读只展示一次。缺少说明时，从本次捕获取回。显式选读仍返回原值。
 
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current
