@@ -858,13 +858,20 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 <a id="heartbeat-turn-convergence"></a>
 
-### 提议细化：heartbeat、quota 与 Turn 共用一条执行链路
+### 提议细化：一个运行入口与执行内核
 
-**决定。** 围绕既有 quota、Turn 和 Host owner，收敛执行语义与实现。Heartbeat 保留
-继续工作的触发职责，quota 提供调度与准入事实，Turn 负责一次已准入执行及其回执。
-公开入口继续可组合。Single-worker 与 controller-worker 是这条链路上的执行选择，
-不再各自形成 benchmark controller。这是待验收的切换提案，不代表当前入口已共用
-完整生命周期。
+**决定。** 执行入口与内部实现一并融合。目标是一个通用运行操作，在既有 Turn 产品面
+暴露为 `loopx turn run`，产品通过同一个类型化服务调用。该命令仍是提案，不是当前
+实现 checkpoint 已交付的功能。Benchmark、Managed Host、Chat、Steward 都调用它。
+执行一次准入迭代，或按策略持续到截止/停止，是运行设置；single-worker 与
+controller-worker 也是运行设置。Heartbeat 成为内部唤醒与续跑机制，quota 继续拥有
+共同策略、准入和观察；两者均不再保留独立的正常执行链路。采用 Turn 名称不意味着
+保留现有 Turn 实现：吸收 heartbeat 的有效行为，重塑内部接口并退役被替代的 owner。
+
+这里统一的是逻辑服务入口，不要求所有调用方启动 CLI。App/Chat 提供已有原生会话
+绑定与 Host effects，CLI 是另一适配层。Benchmark 只提供任务、预算、评测，不拥有
+专用编排模式。旧 heartbeat 与 run-once 命令可在明确的兼容窗口内转调，再按真实
+消费者弃用或移除。Quota 查询继续只是同一策略/状态的非执行视图，不因只读查询启动工作。
 
 当前候选已有部分收敛：两种 benchmark 入口使用相同的外部调度器和阶段时钟。但
 heartbeat 在原生会话中开启 context delivery，由模型通过类型化 CLI 操作写回；
@@ -874,12 +881,14 @@ heartbeat 在原生会话中开启 context delivery，由模型通过类型化 C
 
 ```mermaid
 flowchart LR
-  H[Heartbeat 或 managed wake] --> O[Quota 观察与节奏]
-  O --> A[共用 Turn 准入与准备]
-  D[直接 Turn 请求] --> A
-  A --> X[既有 Host 适配：单 Worker 或双角色]
-  X --> V[验证、写回并结算原 Turn]
-  V --> O
+  B[Benchmark] --> R[统一运行服务 / loopx turn run]
+  P[Managed Host / Chat / Steward] --> R
+  R --> Q[Quota 策略与观察]
+  Q --> A[准入并准备原 Turn]
+  A --> X[Host：单 Worker 或双角色]
+  X --> V[验证并提交一份结果]
+  V --> W[继续 / 等待 / 停止]
+  W -->|授权唤醒| Q
 ```
 
 调度观察可以决定是否唤醒，但不成为另一笔工作准入。执行 owner 捕获一次权威决策，
@@ -887,15 +896,18 @@ flowchart LR
 模型调用或 Spend。结果返回后，继续工作重新按当前 quota 策略准入；回执恢复保留
 原身份。
 
-**共同部分。**
+**共同部分。** 状态迁移、上下文决策、结果命令、预算与恢复规则各有一个 owner，
+在类型化控制面内保持职责内聚的模块。复用或扩展既有 TypeScript owner，Python/
+原生适配器提供传输与 effects。给两套决策实现包一个 facade 不满足本决定。
 
 - **来源与上下文交付——C1/C2。** 同一 owner 解析 canonical source、capture/view、
-  Progressive/Delta 选择与恢复。显式选择并记录支持的上下文 profile，不再因入口叫
-  heartbeat 还是 Turn 而静默改变 on/off。首次一致性比较先使用单个原生 Worker，
+  Progressive/Delta 选择与恢复。显式选择并记录支持的上下文 profile，不再因调用方
+  或旧命令名称而静默改变 on/off。首次一致性比较先使用单个原生 Worker，
   对齐这一因素后再引入第二个角色。普通 quota 与显式 C1 的证据仍分别保留。
 - **执行与回执——C4/C5。** 复用准备、Host 启动/观察、独立验证、类型化写回和一次结算。
-  模型可通过支持的类型化 CLI 操作或结构化 Host result 提交判断，但都必须到达同一
-  原 Turn/result owner。逐项盘点并退休重复的正常 writer；不从自由文本推断权限，也
+  模型可通过支持的类型化 CLI 操作或结构化 Host result 提交判断，但两者只是进入同一
+  typed result command 和原 Turn/result owner 的传输适配。逐项盘点并退休重复的
+  正常 writer；不从自由文本推断权限，也
   不同时执行两条结算路径。身份与执行事实等机械信息由 Host 补齐，不让 Worker 重复
   制造记账信息。
 - **工作与拓扑——C3/C6。** 交付原始目标、验收条件和任务材料，提供普通工具并保留方法
@@ -914,19 +926,36 @@ interrupt 回调。已运行的 App 或 Chat 会话应将经过验证的原生�
 会话库复制。拓扑 provider 属于 LoopX；benchmark 提供任务与评测设置，Managed Host、
 Chat、Steward 提供既有调用方及结果返回路径。
 
-**切换与验收。** 保留当前 heartbeat 作为真实对照，在显式的新准入上验证共用路径。
+**切换与验收。** 迁移期间冻结当前 heartbeat 作为对照，不把它永久保留为另一个产品
+runner。在显式的新准入上验证统一操作，再把 benchmark 与各产品迁入。允许在同步迁移
+调用方时进行内部 breaking change；版本化公开契约、持久化 attempt 和回退仍需明确处理。
 先盘点并对齐来源/上下文、模型/工具、任务入口、会话策略、结果作者、validator 与预算，
 再比较单 Worker 前后成果和完整成本；双角色作为另一个 treatment 引入。一题或更少的
 原生 token 不能证明无回退，更不能直接推广默认行为。
 
 相同公开入口测试须覆盖：plan/观察不领取工作、不派发 Host、不扣额，常规领取与
-同 Todo 回读，外部/
-过期 lease，输入变化，验证失败，回复丢失与只结算一次，Stop 后实际原生工具退出且
+同 Todo 回读，外部/过期 lease，输入变化，验证失败，回复丢失与只结算一次，Stop 后实际原生工具退出且
 无延迟写入，以及截止/重启不另开会话。真实验证继续追踪证据如何进入后续工作和独立
 验收成果，包含负面结果与有依据的继续。C8 采用须在相关产品流程中展示相同的授权
 操作、忙碌/错误/恢复状态和结果回读。C9 在替代路径通过后逐项退休旧正常 producer/
-caller，并保留版本化历史 reader。回退只为新准入选择已验收旧路径；待处理 attempt
-仍通过其原 Host 和回执对账。
+caller，并保留版本化历史 reader。回退只为新准入选择已验收版本；待处理 attempt
+仍通过其原 Host 和回执对账。完成时需以调用方检索和真实入口证据证明：benchmark 与
+受支持产品已采用同一个操作，旧正常执行/结算 producer 已删除，修改共同规则只需修改
+一个 owner。不支持的 Host 明确保留为不支持，不静默转到第二个 runner。沿用仓库的
+[结构融合范式](../../development/README.md#structural-convergence--结构融合)：固定任务、
+权限与结果边界，吸收实验所得，在替代路径通过后移除冗余结构。
+
+运行观察、续跑与取消复用已有 managed-operation、Turn、session 和 receipt 身份，
+不再新增并行的 run 账本。首批迁移对象具体如下：
+
+| 当前边界 | 最终 owner / 调用方迁移 | 退役证据 |
+| --- | --- | --- |
+| `benchmark/runtime/worker.py` 选择 heartbeat/Turn，分别启动与恢复 | 任务/评测适配器调用统一运行服务 | 不再保留 benchmark 专用的正常 LoopX 启动、上下文和回执分支；native/plain 对照仍保留独立研究协议 |
+| `benchmark/runtime/scheduler.py` 提供唤醒和阶段预算 | 实验外部时钟提供预算，通用 runtime 拥有授权续跑 | 调度一次 LoopX run 不复制策略、不再启动第二个循环 |
+| `turn_run_once.py` / `turn_driver/executor.py` 与 heartbeat 启动/结算调用方 | 一个准入后生命周期与 typed result owner，Host effects 按传输适配 | 采用已有原生续跑/上下文行为，删除被替代的正常 writer 和重复失败分类 |
+| Managed Host / Chat / Steward 调用方 | 同一操作接入已有绑定、request revision 与原受众返回 | 真实打包操作、Stop、失败恢复和结果读回，无第二个 CLI Worker 或调用方专用决策 owner |
+
+这些是迁移任务，不代表当前 PR 已完成相应退役。验收继续归 C1–C9，不再另开一套架构计划。
 
 ### 从现状到可用产品：依赖图与交付切片
 

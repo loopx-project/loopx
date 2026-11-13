@@ -73,12 +73,15 @@ not need these documents to start LoopX.
 
 ## Change Loop / 变更闭环
 
-Keep one shipped behavior as the source of truth. Characterize it first, make a
-small change in its owning module, then choose validation by risk. Do not create
-a second product path solely for a test.
+Keep the accepted outcome and its observable boundary as the source of truth.
+Characterize the current behavior, deliver a complete outcome slice in its owning
+boundary, then choose validation by risk. The slice can reshape internal modules;
+its size follows the outcome, not a preference for small diffs. Do not create a
+second product path solely for a test.
 
-始终只保留一套真实交付行为作为 source of truth：先刻画现状，在行为所属模块中做
-小变更，再按风险选择验证层。不要为了测试而维护第二套产品路径。
+以已接受的目标和可观察边界为准：先刻画现状，在行为所属边界交付一个完整成果切片，
+再按风险选择验证层。切片可以重塑内部模块，范围由成果决定，不以小 diff 为目标。
+不要为了测试而维护第二套产品路径。
 
 The usual loop is:
 
@@ -102,6 +105,62 @@ apply the scope-fit review below. During development and again before approval
 or merge, apply the bounded refactoring pass. These are engineering decisions
 within the accepted task, not additional user-approval gates.
 
+### Structural Convergence / 结构融合
+
+Hold the task's input and accepted outcome stable while improving the structure
+between them. The boundary includes authority, side effects, failure/recovery,
+latency and complete cost, not only matching input/output JSON. Corrected user
+requirements can change that boundary explicitly; an implementation's current
+shape is not the specification.
+
+固定当前任务的输入与验收结果，持续改进中间结构。边界包含权限、副作用、失败恢复、
+时延和完整成本，不只是输入输出 JSON 相同。用户修正需求时显式更新边界，不能把现有
+实现形状当成规范。
+
+Start with the smallest extensible capability that serves a real caller. New
+structures are useful experiments when they expose a demonstrated gap. After
+learning from them, absorb their valid behavior into the owning structure and
+retire redundant entrypoints, writers, state and branches. Keep failed approaches
+as bounded evidence or independent regression oracles, not permanently active
+fallback implementations. Convergence is complete when the next change to a
+shared rule has one owner and affected callers use it; a wrapper, moved files,
+fewer lines or more modules does not establish that outcome. Independently
+evolving rules remain separate modules rather than one universal orchestrator.
+Keep exploratory interfaces internal or explicitly experimental until repeated
+real caller use justifies a stable public contract; do not promise compatibility
+for every intermediate abstraction merely because it appeared in a prototype.
+
+从能服务真实调用方的最小可扩展能力出发。新增结构可以用于暴露和解决已证明的缺口；
+获得证据后，把有效行为吸收到所属结构，退役重复入口、writer、状态和分支。失败方案
+保留为有界证据或独立回归判据，不永久保留成运行中的 fallback。下一次修改共同规则时
+只有一个 owner，相关调用方也实际采用它，才算完成融合；包一层、移文件、减行数或
+拆模块均不能单独证明。不同原因驱动的规则仍分模块演进，不汇成万能编排器。
+探索中的接口留在内部或明确标为实验，经过真实调用方反复使用后再稳定公开；不能因为
+某个中间抽象曾出现在原型里，就永久承担兼容成本。
+
+For an authorized convergence change, reuse the delivery brief and existing
+`repository_reuse.rule_ownership`, `observable_semantics` and validation evidence:
+
+- State the fixed start/end behavior and the gap that justifies restructuring.
+- Map each affected entry, rule, writer and recovery path to its final owner;
+  name what disappears and any real compatibility consumer that remains.
+- Change internal APIs decisively when needed, migrate active callers together,
+  and validate success, failure, cancellation and pending-state recovery through
+  the real entry. Public contracts and durable state need an explicit migration;
+  internal breaking changes do not authorize silently breaking deployed users.
+- Compare outcomes and complete costs at the same boundary. Preserve negative
+  results; improve the design rather than weakening acceptance to fit it.
+- Close the slice by removing superseded normal producers. If a staged cutover
+  is needed, retain one existing checkpoint with the caller, exit condition and
+  next integration step; temporary coexistence is not the target architecture.
+
+在已授权的融合任务中，复用交付简报和现有 review 证据：明确固定的起终点与缺口；
+逐项映射入口、规则、writer、恢复路径及退役项；允许必要的内部 breaking change，
+同步迁移调用方并实测成功、失败、取消和在途恢复；同边界比较成果与完整成本；完成后
+删除被替代的正常 producer。对外契约和持久状态另有明确迁移，不能无声破坏已部署用户。
+需要分阶段时，在既有 checkpoint 写清调用方、退出条件和下一接入步骤，不把长期并存
+作为终态。无需新增表单、状态词汇或逐 PR 的仪式性重构指标。
+
 ### Bounded Future-Facing Refactoring
 
 During development and again before approving or merging each PR, explicitly
@@ -119,7 +178,10 @@ reason, remains locally reviewable and reversible, and is covered by
 characterization or parity validation; it need not be strictly required for
 the immediate fix. Do not use this principle to justify broad migration or
 unrelated cleanup. When the valuable related refactor is larger than a bounded
-companion change, record a focused follow-up instead. PR review and merge notes
+companion change, record a focused follow-up instead. When restructuring itself
+is the accepted task, apply the structural convergence rule above and deliver a
+complete owner/caller migration; this companion-refactor limit is not a reason
+to stop at an adapter or repeatedly defer the requested integration. PR review and merge notes
 should state whether this future-facing pass was applied, deferred, or found
 unnecessary, with the concrete boundary considered.
 

@@ -1231,6 +1231,16 @@ declared fields; `validation_matrix.items[].case_id` proves coverage of the
 packet's typed required cases. The checker validates this completeness only,
 never the truth of their contents.
 
+For LoopX convergence work, apply the repository's
+[structural convergence procedure](../../../docs/development/README.md#structural-convergence--结构融合)
+through these existing rows. Verify the fixed input/outcome and authority/recovery
+boundary, caller migration into one rule owner, actual retirement of superseded
+normal producers, and comparable outcome/cost evidence. One facade over two
+normal implementations is an incomplete migration. An authorized internal API
+break with migrated callers is not itself a defect; deployed contracts and pending
+state still require migration and recovery. This adds no generic review fields,
+new ledger, line-count target or obligation to refactor unrelated work.
+
 Behavioral qualification lives in `tests/capabilities/test_pr_review_behavior.py`:
 paired synthetic cases include valid designs as well as counterexamples. The optional
 live no-tools test uses the existing Doubao transport with a runtime-injected key:
