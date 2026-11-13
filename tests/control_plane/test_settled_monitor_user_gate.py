@@ -105,17 +105,24 @@ def test_scoped_gate_cannot_reopen_an_exact_settled_monitor(tmp_path, monkeypatc
     assert not any(row["classification"] in {"state_refreshed", "quota_slot_spent"} for row in rows)
 
 
-def _primary_monitor_fixture(tmp_path, monkeypatch, provider, route="source"):
+def _primary_monitor_fixture(
+    tmp_path, monkeypatch, provider, route="source", *,
+    resume_when=None, handoff_mode="soft_claim",
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    source, runtime, _state = _write_fixture(tmp_path, provider=provider)
+    source, runtime, _state = _write_fixture(
+        tmp_path, provider=provider, handoff_mode=handoff_mode)
     gated = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
         text="Await a scoped owner decision", task_class="advancement_task",
         status="blocked", claimed_by=AGENT_ID, agent_id=AGENT_ID)
     gate = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="user",
         text="Decide the dependent work", task_class="user_gate", bound_agent=AGENT_ID,
         blocks_agent=AGENT_ID, unblocks_todo_id=gated["todo_id"], agent_id=AGENT_ID)
-    monitor = _add_monitor(source, text="Observe a synthetic public target",
-        target_key="primary-target", next_due_at="2000-01-01T00:00:00Z")
+    monitor = add_goal_todo(registry_path=source, goal_id=GOAL_ID, role="agent",
+        text="Observe a synthetic public target", task_class="continuous_monitor",
+        claimed_by=AGENT_ID, resume_when=resume_when,
+        monitor_metadata={"target_key": "primary-target", "cadence": "1h",
+            "next_due_at": "2000-01-01T00:00:00Z", "watch_only": "true"})
     registry = source
     if route == "global":
         registry = runtime / "registry.global.json"
@@ -132,6 +139,76 @@ def _primary_monitor_args(command, turn, monitor):
         "--available-capability", "network", "--available-capability", "external_evidence_poll",
         *(["--todo-id", monitor["todo_id"], "--target-key", "primary-target",
            "--result-hash", "primary-observation", "--execute"] if command == "monitor-poll" else [])]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("route", ["source", "global"])
+@pytest.mark.parametrize("condition", [
+    "resume_at:1999-01-01T00:00:00Z",
+    "resume_at:2099-01-01T00:00:00Z",
+    "todo_done:todo_missing",
+], ids=["elapsed", "pending", "unresolved"])
+def test_primary_monitor_poll_uses_canonical_resume_readiness(
+    tmp_path, monkeypatch, provider, route, condition,
+):
+    elapsed = "resume_at:1999-01-01T00:00:00Z"
+    source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
+        tmp_path, monkeypatch, provider, route, resume_when=elapsed, handoff_mode="hard_lease")
+    turn = "primary-monitor-resume-readiness"
+
+    def call(*args):
+        return run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+
+    rc, admitted = call(*_primary_monitor_args("should-run", turn, monitor))
+    binding = admitted["heartbeat_receipt"]["settlement_identity"]
+    assert rc == 0 and binding["todo_id"] == monitor["todo_id"]
+    assert admitted["safe_bypass_kind"] == "scoped_user_gate_fallback"
+    rc, acquired = call("task-lease", "acquire", "--goal-id", GOAL_ID,
+        "--todo-id", monitor["todo_id"], "--owner", AGENT_ID, "--idempotency-key", "monitor-resume-lease")
+    assert rc == 0 and acquired["acquired"], acquired
+    lease = acquired["lease"]
+    before = list_goal_todos(registry_path=source, goal_id=GOAL_ID, todo_id=monitor["todo_id"])["todo"]
+    assert before["resume_ready"] is True
+    if condition != before["resume_when"]:
+        update_goal_todo(registry_path=source, goal_id=GOAL_ID, todo_id=monitor["todo_id"],
+            agent_id=AGENT_ID, resume_when=condition,
+            task_lease_idempotency_key=lease["idempotency_key"], task_lease_expected_version=lease["version"])
+    before = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    row = next(item for item in before["todos"] if item["todo_id"] == monitor["todo_id"])
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    args = _primary_monitor_args("monitor-poll", turn, monitor)
+    # Cover the exact-id source route and target-key-only global route.
+    if route == "global":
+        pos = args.index("--todo-id")
+        del args[pos:pos + 2]
+    if condition == elapsed:
+        rc, denied = call(*args)
+        assert rc != 0 and "lease proof" in denied["reason"], denied
+        assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), before)
+        assert not index.exists()
+    args += ["--task-lease-idempotency-key", lease["idempotency_key"],
+        "--task-lease-expected-version", str(lease["version"])]
+    rc, result = call(*args)
+    if condition != elapsed:
+        assert row["resume_ready"] is False
+        assert rc != 0 and result["appended"] is False, result
+        assert_todo_read_unchanged(list_goal_todos(registry_path=source, goal_id=GOAL_ID), before)
+        assert not index.exists()
+        return
+
+    assert rc == 0 and result["appended"], result
+    assert result["settlement_todo_id"] == binding["todo_id"]
+    assert result["turn_continuation"]["current_turn_settled"] is True
+    committed = list_goal_todos(registry_path=source, goal_id=GOAL_ID)
+    after = {item["todo_id"]: item for item in committed["todos"]}
+    assert after[monitor["todo_id"]]["result_hash"] == "primary-observation"
+    assert after[monitor["todo_id"]]["resume_when"] == condition
+    assert after[gate["todo_id"]]["status"] == "open"
+    ledger = index.read_bytes()
+    rc, replay = call(*args)
+    assert rc == 0 and replay["replayed"] and not replay["appended"], replay
+    assert index.read_bytes() == ledger
+    assert [json.loads(line)["classification"] for line in ledger.splitlines()] == ["quota_monitor_poll"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -205,7 +282,7 @@ def test_primary_monitor_gate_change_after_preflight_prevents_business_write(
 ):
     from loopx.control_plane.quota import monitor_poll
     source, registry, runtime, _gated, gate, monitor = _primary_monitor_fixture(
-        tmp_path, monkeypatch, provider)
+        tmp_path, monkeypatch, provider, resume_when="resume_at:1999-01-01T00:00:00Z")
     invoke = _primary_record_invocation(registry, runtime, monitor, "primary-gate-race")
     original = monitor_poll._provider_writeback
     def interleaved(plan, **kwargs):

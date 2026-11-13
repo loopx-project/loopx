@@ -21,6 +21,7 @@ from ..todos.contract import (
     TODO_TASK_CLASS_MONITOR,
     normalize_todo_claimed_by,
     normalize_todo_id,
+    normalize_todo_resume_when,
 )
 from ..todos.external_wait_contract import (
     build_monitor_advancement_authoring_contract,
@@ -131,6 +132,31 @@ def resolve_due_monitor_candidate(
         )
     except ValueError:
         return {}
+    resume_when = normalize_todo_resume_when(item.get("resume_when"))
+    if resume_when and item.get("resume_ready") is None:
+        from ..todos.list_readback import list_goal_todos
+
+        # Target selection returns the stored Todo, where readiness may not be
+        # materialized. Read the canonical evaluation for that same target.
+        selected_id = normalize_todo_id(item.get("todo_id"))
+        if selected_id is None:
+            return {}
+        evaluated = list_goal_todos(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            role="agent",
+            todo_id=selected_id,
+            runtime_root_arg=str(runtime_root) if runtime_root else None,
+        ).get("todo")
+        if (
+            not evaluated
+            or evaluated.get("todo_id") != selected_id
+            or evaluated.get("target_key") != item.get("target_key")
+            or evaluated.get("archive_state") == "archive"
+            or normalize_todo_resume_when(evaluated.get("resume_when")) != resume_when
+        ):
+            return {}
+        item = evaluated
     if not monitor_todo_is_due(item):
         return {}
     return {
