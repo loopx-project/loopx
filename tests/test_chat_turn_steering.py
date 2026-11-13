@@ -440,6 +440,27 @@ def test_http_steering_deduplicates_and_never_retargets(conversation):
     runtime.interrupt_turn(session_id=session_id, turn_id=second)
 
 
+def test_http_steering_never_resends_after_its_receipt_becomes_unreadable(conversation, monkeypatch):
+    store, runtime, session_id, start, post = conversation
+    writes = []
+    original_write = CodexChatAgentSession._write
+
+    def record_write(self, payload):
+        writes.append(json.loads(json.dumps(payload)))
+        return original_write(self, payload)
+
+    monkeypatch.setattr(CodexChatAgentSession, "_write", record_write)
+    turn_id = start("unreadable-receipt")
+    assert post(turn_id)[0] == 200
+    receipt_path = store._ingress_path(session_id, "adjust-one")
+    receipt_path.write_text('{"schema_version": ', encoding="utf-8")
+    status, body = post(turn_id)
+    assert status == 409 and body["delivery_state"] == "unresolved"
+    assert receipt_path.read_text(encoding="utf-8") == '{"schema_version": ', "damaged evidence is preserved"
+    assert len([row for row in writes if row.get("method") == "turn/steer"]) == 1
+    runtime.interrupt_turn(session_id=session_id, turn_id=turn_id)
+
+
 @pytest.mark.parametrize("text,extra", [("", {}), (123, {}), ("x" * 12001, {}), ("hello", {"unexpected": True})])
 def test_http_steering_rejects_invalid_input_before_delivery(conversation, text, extra):
     store, _, session_id, start, post = conversation
