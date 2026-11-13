@@ -38,8 +38,10 @@ available content; it does not prove that content was read. Avoid selecting both
 a parent and its children, which repeats the same evidence.
 
 For captured LoopX context, repeat `--select` on the original capture/hash.
-Use `--list` only for unknown pointers and `--list-depth 2` for useful nested
-discovery. A missing pointer rejects the entire selection: inspect its parent in
+Use `--list --select /parent --list-depth 2` for unknown nested pointers;
+current readers also accept `--list /parent --list-depth 2`. For the root, omit
+the pointer or pass `''`; `/` selects an empty-name property. A missing pointer
+rejects the entire selection: inspect its parent in
 that same capture before retrying, rather than guessing another batch or rerunning
 admission. For large arrays, prefer the known record selector or a focused item
 over recursively listing every record.
