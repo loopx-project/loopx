@@ -1483,9 +1483,9 @@ class CodexChatAgentSession:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
 
-    def compact_history(self, *, check: Callable[[], None] | None = None) -> None:
+    def compact_history(self, *, check: Callable[[], None] | None = None) -> int | None:
         from .capabilities.native_chat.codex_adapter import compact_native_history
-        compact_native_history(self, check=check)
+        return compact_native_history(self, check=check)
 
     def steer(self, user_message: str, *, expected_turn_id: str,
               client_message_id: str | None = None) -> str:
