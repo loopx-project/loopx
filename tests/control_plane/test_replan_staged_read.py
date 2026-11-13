@@ -354,32 +354,28 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                 staged_packet = staged["replan_action_packet"]
                 added = {"/replan_action_packet/review": staged_packet["review"],
                          "/replan_action_packet/guidance": staged_packet["guidance"]}
-                selection_source = source
-                if turn_envelope:
-                    detail = shlex.split(staged["context_details"]["command_template"])
-                    assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
-                    assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
-                    added["/context_details"] = staged["context_details"]
-                    added["/context_details"] = staged["context_details"]
-                    # Transport may reorder equivalent CLI flags. Check the
-                    # executable selection and every other control exactly.
-                    from loopx.cli import build_parser
+                detail = shlex.split(staged["context_details"]["command_template"])
+                assert Path(detail[detail.index("--capture-file") + 1]).read_bytes() == raw
+                assert detail[detail.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+                added["/context_details"] = staged["context_details"]
+                # Transport may reorder equivalent CLI flags. Check the
+                # executable selection and every other control exactly.
+                from loopx.cli import build_parser
 
-                    cli = source["interaction_contract"]["cli_channel"]
-                    selection_command = cli["selection_command"]
-                    selection_args = shlex.split(selection_command["command_args_template"])
-                    shown_template = staged["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
-                    shown_args = shlex.split(shown_template)
-                    parser = build_parser()
-                    assert parser.parse_args(shown_args) == parser.parse_args(selection_args)
-                    assert sorted(shown_args) == sorted(selection_args)
-                    displayed_cli = {**cli, "selection_command": {**selection_command,
-                        "command_args_template": shown_template}}
-                    assert staged["interaction_contract"]["cli_channel"] == displayed_cli
-                    selection_source = {**source, "interaction_contract": {
-                        **source["interaction_contract"], "cli_channel": displayed_cli}}
-                expected_hash = (source["contract_binding"]["content_hash"]
-                                 if turn_envelope else _canonical_digest(source))
+                cli = source["interaction_contract"]["cli_channel"]
+                selection_command = cli["selection_command"]
+                selection_args = shlex.split(selection_command["command_args_template"])
+                shown_template = staged["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+                shown_args = shlex.split(shown_template)
+                parser = build_parser()
+                assert parser.parse_args(shown_args) == parser.parse_args(selection_args)
+                assert sorted(shown_args) == sorted(selection_args)
+                displayed_cli = {**cli, "selection_command": {**selection_command,
+                    "command_args_template": shown_template}}
+                assert staged["interaction_contract"]["cli_channel"] == displayed_cli
+                selection_source = {**source, "interaction_contract": {
+                    **source["interaction_contract"], "cli_channel": displayed_cli}}
+                expected_hash = source["contract_binding"]["content_hash"]
                 for stage in ("review", "writeback"):
                     argv = shlex.split(staged_packet[stage])
                     assert argv[argv.index("--decision-file") + 1] == str(view_path)
@@ -420,10 +416,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                     expected = expected[int(token)] if isinstance(expected, list) else expected[token]
                 assert row["value"] == expected
         assert source_path.read_bytes() == captured.read_bytes() == raw
-        if turn_envelope:
-            assert source["schema_version"] == "loopx_turn_envelope_v1"
-        else:
-            assert "schema_version" not in source and "contract_binding" not in source
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
         selection = source["interaction_contract"]["cli_channel"].get("selection_command")
@@ -436,7 +429,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert followup[followup.index("--codex-context-dir") + 1] == str(native)
             assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
         selector = checkpoint.select_checkpoint_replan(source, goal_id=GOAL, agent_id=AGENT,
-            turn_instance_id=TURN, allow_legacy_source=not turn_envelope)
+            turn_instance_id=TURN)
         assert selector["capture"] is replan
         if not replan:
             assert "result_writeback_read" not in explore_source(source)["content"]["graph"]
