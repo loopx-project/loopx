@@ -344,15 +344,23 @@ def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, mon
         assert len(consumers) == 1
 
 
-@pytest.mark.parametrize("binding_change", ["replace", "add", "remove"])
+@pytest.mark.parametrize(("stored_app", "binding_change"), [
+    (True, "replace"), (True, "add"), (True, "remove"),
+    (False, "replace"), (False, "add"), (False, "remove"),
+    (False, "add_after_retarget"), (False, "remove_after_retarget"),
+])
 def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     ordinary,  # noqa: F811
-    tmp_path, monkeypatch, binding_change,
+    tmp_path, monkeypatch, stored_app, binding_change,
 ):
+    import http.client
     from pathlib import Path
 
     from extensions.test_lark_goal_topic_runtime import _reply_runner, _seed_legacy_topic
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.cli_resolution import LarkCliResolution
+    from loopx.extensions.lark.conversation_identity import identity_ref
     from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
     from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
     from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
@@ -363,18 +371,26 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "group-binding.json"
     _seed_legacy_topic(target_path, binding_path)
     targets = read_goal_channel_targets(target_path)
-    targets["targets"]["fixture"]["identity"].update(
-        sender_profile=profile, bot_app_id=provider.profile_apps[profile],
-    )
+    identity = targets["targets"]["fixture"]["identity"]
+    original_app = provider.profile_apps[profile]
+    identity.update(sender_profile=profile, bot_open_id="ou_notes_app_bot")
+    if stored_app:
+        identity["bot_app_id"] = original_app
+    else:
+        identity.pop("bot_app_id")
     bindings = {"goal-alpha": read_goal_channel_binding(binding_path)}
     before = transport.profiles()[profile]["binding_id"]
-    if binding_change == "add":
+    adding = binding_change.startswith("add")
+    removing = binding_change.startswith("remove")
+    retargeted = binding_change.endswith("_retarget")
+    if adding:
         transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
-    config = transport.profiles().get(profile)
+
+    group_config = {"target_payload": targets, "binding_payloads": bindings}
 
     def snapshot():
-        return {"target_payload": targets, "binding_payloads": bindings,
-                "private_profiles": {profile: config} if config is not None else {}}
+        private = transport.profiles().get(profile)
+        return {**group_config, "private_profiles": {profile: private} if private is not None else {}}
 
     group_events = [
         dict(provider.topic(name, f"@linkmacbot group {name}", root="om_topic_alpha",
@@ -394,8 +410,10 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         answered.append(message_id)
         return "Group answer"
 
+    original_admit = transport.admit
+
     def admit(profile_name, event, **kwargs):
-        result = transport.admit(profile_name, event, **kwargs)
+        result = original_admit(profile_name, event, **kwargs)
         if event["message_id"] == new_private["message_id"]:
             assert result["status"] == "command_recorded"
             next_stream_ready.set()
@@ -408,7 +426,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         queued.set()
 
     def replacement_connection():
-        yield group_events[2] if binding_change == "remove" else new_private
+        yield group_events[2] if removing else new_private
 
     def spawn(args):
         assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
@@ -426,7 +444,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
 
         def observe_health(update):
             health_sink(update)
-            if binding_change == "remove" and len(consumer_processes) == 2 and update.get("replied_count") == 1:
+            if removing and len(consumer_processes) == 2 and update.get("replied_count") == 1:
                 next_stream_ready.set()
 
         return stream(**{**kwargs, "health_sink": observe_health}, reply_runner=_reply_runner(replies))
@@ -435,34 +453,61 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     monkeypatch.setattr(runtime, "_default_process_factory", spawn)
     monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
     monkeypatch.setattr(runtime, "answer_lark_goal_topic", answer)
+    monkeypatch.setattr(transport, "admit", admit)
+    monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
+    monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
     service = runtime.LarkGoalTopicRuntimeService(
         snapshot_provider=snapshot, runtime_root=store.root.parent,
-        runtime_controller=controller, private_conversations=SimpleNamespace(admit=admit),
+        runtime_controller=controller, private_conversations=transport,
     )
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, controller
+    server.registry_path, server.runtime_root_override = controller.registry_path, store.root.parent
+    server.verbose = False
+    server.lark_cli_resolution = LarkCliResolution(
+        command="lark-cli", available=True, source="explicit", version="fixture", error_code=None,
+    )
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = service
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def change_private_binding(method, body):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request(method, "/api/chat/lark/private-conversations", json.dumps(body),
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            data = json.loads(response.read())
+            assert response.status == 200, data
+        finally:
+            connection.close()
 
     try:
         service.refresh()
         assert queued.wait(8), service.health_snapshot()
-        if binding_change == "remove":
-            transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
-            config = None
+        if retargeted:
+            provider.profile_apps[profile] = "cli_retargeted_app"
+        if removing:
+            change_private_binding("DELETE", {"binding_id": before, "revision": transport.bindings.read()["revision"]})
         else:
             projects = transport.bindings.projects
             other = tmp_path / "other-workspace"
             other.mkdir()
             projects.roots.append((other, other))
             project = next(row for row in projects.available() if row["workspace_path"] == str(other))
-            replacement = transport.bindings.configure(
-                transport_ref=profile, project_ref=project["project_ref"], executor_endpoint_id="codex",
-            )
-            config = transport.profiles()[profile]
-            assert config["binding_id"] == replacement["binding_id"] != before
-        service.refresh()
+            change_private_binding("POST", {"app_ref": profile, "project_ref": project["project_ref"],
+                                            "executor_endpoint_id": "codex"})
+            replacement = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
+            assert transport.profiles()[profile]["binding_id"] == replacement["binding_id"] != before
+            assert replacement["provider_ref"] == identity_ref(provider.profile_apps[profile])
         assert consumer_processes[0].exited.wait(8)
         assert len(consumer_processes) == 1
         release.set()
         assert next_stream_ready.wait(8), service.health_snapshot()
-        expected = group_events if binding_change == "remove" else group_events[:2]
+        expected = group_events[:1] if retargeted else group_events[:2]
+        if removing:
+            expected += group_events[2:]
         assert answered == [event["message_id"] for event in expected]
         reply_targets = [call[call.index("--message-id") + 1] for call in replies["calls"]
                          if "+messages-reply" in call and "--dry-run" not in call]
@@ -474,6 +519,9 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     finally:
         release.set()
         service.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(3)
         controller.close()
 
 

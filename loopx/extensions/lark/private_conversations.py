@@ -254,6 +254,20 @@ class LarkPrivateConversations:
         bindings = self.bindings.read()["bindings"]
         if not bindings:
             return {}
+        apps = self.configured_profile_apps()
+        profiles = {}
+        for row in bindings:
+            app_id = apps.get(row["transport_ref"], "")
+            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
+                    or identity_ref(app_id) != row["provider_ref"]):
+                continue
+            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
+                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
+                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
+        return profiles
+
+    def configured_profile_apps(self) -> dict[str, str]:
+        """Read local App identities for listener leases, without granting access."""
         result = call(self.runner, [self.cli_bin, "profile", "list"])
         try:
             configured = json.loads(str(result.get("stdout") or ""))
@@ -271,16 +285,7 @@ class LarkPrivateConversations:
         # profile names take precedence over the App-ID fallback.
         for app_id in list(apps.values()):
             apps.setdefault(app_id, app_id)
-        profiles = {}
-        for row in bindings:
-            app_id = apps.get(row["transport_ref"], "")
-            if (row.get("enabled") is not True or not APP_ID_PATTERN.fullmatch(app_id)
-                    or identity_ref(app_id) != row["provider_ref"]):
-                continue
-            profiles[row["transport_ref"]] = {"cli_bin": self.cli_bin, "provider_ref": row["provider_ref"],
-                "bot_app_id": app_id, "audience": row.get("audience", "owner"),
-                "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
-        return profiles
+        return {profile: app_id for profile, app_id in apps.items() if APP_ID_PATTERN.fullmatch(app_id)}
 
     @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:

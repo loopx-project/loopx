@@ -341,6 +341,37 @@ class LarkGoalTopicRuntimeService:
         identity = config.get("bot_app_id") or profile
         return str(config.get("consumer_ref") or hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32])
 
+    def _listener_configs(self, snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+        from . import goal_topic_runtime as runtime
+
+        profiles = runtime._active_profile_configs(snapshot)
+        legacy = {
+            profile for profile, config in runtime._active_group_profile_configs(snapshot).items()
+            if not config.get("bot_app_id") and not profiles[profile].get("bot_app_id")
+        }
+        inventory = getattr(self.private_conversations, "configured_profile_apps", None)
+        if not legacy or not callable(inventory):
+            return profiles
+        try:
+            apps = inventory()
+        except OSError:
+            # Unknown inventory does not establish continuity across a binding
+            # change. The ordinary stop path still handles unknown identities.
+            return profiles
+        for profile in legacy:
+            app_id = apps.get(profile)
+            if app_id:
+                # Fence the original profile and the resolved App on both
+                # sides of a private binding change. Routing keeps the original
+                # snapshot and its separate group and owner grants.
+                config = profiles[profile]
+                profiles[profile] = {
+                    **config,
+                    "bot_app_id": app_id,
+                    "consumer_ref": self._consumer_lease_key(profile, config),
+                }
+        return profiles
+
     def _profile_worker_fingerprint(
         self,
         snapshot: Mapping[str, Any],
@@ -463,7 +494,7 @@ class LarkGoalTopicRuntimeService:
                         )
 
                     snapshot = self.snapshot_provider()
-                    profile_config = runtime._active_profile_configs(snapshot).get(profile) or {}
+                    profile_config = self._listener_configs(snapshot).get(profile) or {}
                     private_profiles = snapshot.get("private_profiles")
                     private_binding = private_profiles.get(profile) if isinstance(private_profiles, Mapping) else None
                     binding_id = private_binding.get("binding_id") if isinstance(private_binding, Mapping) else None
@@ -499,8 +530,8 @@ class LarkGoalTopicRuntimeService:
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
                     app_id = str(profile_config.get("bot_app_id") or "")
-                    # A composed legacy route explicitly retains its original
-                    # profile lease. Otherwise both paths use the App digest.
+                    # Legacy group listeners retain their original profile
+                    # lease alongside the resolved App lease.
                     digests = {self._consumer_lease_key(profile, profile_config)}
                     if app_id:
                         digests.add(hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32])
@@ -616,12 +647,10 @@ class LarkGoalTopicRuntimeService:
                     self.refresh()
 
     def refresh(self) -> None:
-        from . import goal_topic_runtime as runtime
-
         if self._closed.is_set():
             return
         snapshot = self.snapshot_provider()
-        profile_configs = runtime._active_profile_configs(snapshot)
+        profile_configs = self._listener_configs(snapshot)
         desired = {
             profile: self._profile_worker_fingerprint(
                 snapshot,
