@@ -158,7 +158,7 @@ flowchart TB
 | 统一工作契约 | [#7430](https://github.com/loopx-project/loopx/pull/7430) 已合入，随后由 [#8265](https://github.com/loopx-project/loopx/pull/8265) 回退；C1 替换由 [#8266](https://github.com/loopx-project/loopx/pull/8266) 继续。[#8238](https://github.com/loopx-project/loopx/pull/8238) 和 [#8323](https://github.com/loopx-project/loopx/pull/8323) 已分别改善结算读取和叙事读取。[#8304](https://github.com/loopx-project/loopx/pull/8304) 已合入分阶段重规划路径。 [#8499](https://github.com/loopx-project/loopx/pull/8499) 独立交付 EdgeBench 单 Worker 入口和按原唤醒恢复，C1 写入格式切换另行推进。 | 继续将可独立验收的修复合入主干。切换 profile 前，按原 quota 单会话验收替换路径。此前传输或写回测量只适用于各自测过的路径。 |
 | 通用 Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) 仍为 Draft，本次核对头 `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | 可作为适配器候选；bounded 调用不证明双向长期 session/异步控制，不把 OAR 或全 Host 重写设为先决条件 |
 
-在 C1 `853eb8f56c1a` 上，benchmark 已走通任务规划、quota 准入，以及在隔离 SQLite 环境下经过独立验证的两次 Turn 结算。原生 Codex 连接脚本化模型端点，Host 收到了 v1 工作契约。quota 原有兼容视图通过哈希标识签名 capture。这些检查覆盖派发和恢复。比较成果与成本仍需在同等条件下运行原生评分器。
+在 C1 `853eb8f56c1a` 上，benchmark 已走通任务规划、quota 准入，以及在隔离 SQLite 环境下经过独立验证的两次 Turn 结算。原生 Codex 连接脚本化模型端点，Host 收到了 v1 工作契约。quota 原有兼容视图通过哈希标识签名 capture。这些检查覆盖派发和恢复。§11 记录了同题原生对照及仍待验证的多题效果与完整成本。
 
 旧的逐字段审计与实验保留原版本，位于下面的技术附录；其中历史 Draft/测试记录不能
 代替本表的状态，也不能用本表给旧结果重新标注版本。下一次认领须重查实时 PR 与任务。
@@ -856,6 +856,107 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 <a id="delivery-path-from-current-state"></a>
 
+<a id="heartbeat-turn-convergence"></a>
+
+### 提议细化：一个运行入口与执行内核
+
+**决定。** 执行入口与内部实现一并融合。目标是一个通用运行操作，在既有 Turn 产品面
+暴露为 `loopx turn run`，产品通过同一个类型化服务调用。该命令仍是提案，不是当前
+实现 checkpoint 已交付的功能。Benchmark、Managed Host、Chat、Steward 都调用它。
+执行一次准入迭代，或按策略持续到截止/停止，是运行设置；single-worker 与
+controller-worker 也是运行设置。Heartbeat 成为内部唤醒与续跑机制，quota 继续拥有
+共同策略、准入和观察；两者均不再保留独立的正常执行链路。采用 Turn 名称不意味着
+保留现有 Turn 实现：吸收 heartbeat 的有效行为，重塑内部接口并退役被替代的 owner。
+
+这里统一的是逻辑服务入口，不要求所有调用方启动 CLI。App/Chat 提供已有原生会话
+绑定与 Host effects，CLI 是另一适配层。Benchmark 只提供任务、预算、评测，不拥有
+专用编排模式。旧 heartbeat 与 run-once 命令可在明确的兼容窗口内转调，再按真实
+消费者弃用或移除。Quota 查询继续只是同一策略/状态的非执行视图，不因只读查询启动工作。
+
+当前候选已有部分收敛：两种 benchmark 入口使用相同的外部调度器和阶段时钟。但
+heartbeat 在原生会话中开启 context delivery，由模型通过类型化 CLI 操作写回；
+单 Worker Turn 则由 Host 交付 C1，要求结构化结果，再独立验证并交给 Core 结算，
+该入口的 context delivery 为 off。差异已经影响行为，远不只是命令名称。现有 Turn
+设计本身也需要改进，不能预设它应替代 heartbeat 的全部有效行为。
+
+```mermaid
+flowchart LR
+  B[Benchmark] --> R[统一运行服务 / loopx turn run]
+  P[Managed Host / Chat / Steward] --> R
+  R --> Q[Quota 策略与观察]
+  Q --> A[准入并准备原 Turn]
+  A --> X[Host：单 Worker 或双角色]
+  X --> V[验证并提交一份结果]
+  V --> W[继续 / 等待 / 停止]
+  W -->|授权唤醒| Q
+```
+
+调度观察可以决定是否唤醒，但不成为另一笔工作准入。执行 owner 捕获一次权威决策，
+领取并回读同一 Todo/lease，再绑定所选 Host 与原 attempt。监控或无工作 tick 不制造
+模型调用或 Spend。结果返回后，继续工作重新按当前 quota 策略准入；回执恢复保留
+原身份。
+
+**共同部分。** 状态迁移、上下文决策、结果命令、预算与恢复规则各有一个 owner，
+在类型化控制面内保持职责内聚的模块。复用或扩展既有 TypeScript owner，Python/
+原生适配器提供传输与 effects。给两套决策实现包一个 facade 不满足本决定。
+
+- **来源与上下文交付——C1/C2。** 同一 owner 解析 canonical source、capture/view、
+  Progressive/Delta 选择与恢复。显式选择并记录支持的上下文 profile，不再因调用方
+  或旧命令名称而静默改变 on/off。首次一致性比较先使用单个原生 Worker，
+  对齐这一因素后再引入第二个角色。普通 quota 与显式 C1 的证据仍分别保留。
+- **执行与回执——C4/C5。** 复用准备、Host 启动/观察、独立验证、类型化写回和一次结算。
+  模型可通过支持的类型化 CLI 操作或结构化 Host result 提交判断，但两者只是进入同一
+  typed result command 和原 Turn/result owner 的传输适配。逐项盘点并退休重复的
+  正常 writer；不从自由文本推断权限，也
+  不同时执行两条结算路径。身份与执行事实等机械信息由 Host 补齐，不让 Worker 重复
+  制造记账信息。
+- **工作与拓扑——C3/C6。** 交付原始目标、验收条件和任务材料，提供普通工具并保留方法
+  选择空间。双角色由 Controller 提交面向 Core 的判断，Worker 不再继承另一套 Core
+  职责。执行中的观察与反馈复用 session、request revision 和中断 owner，并验证反馈
+  实际进入产物；阻塞式串行交接不能算作实时反馈。
+- **预算与恢复——C4/C7。** 准备、所有角色和工作共用同一绝对阶段截止。不为了凑齐回执
+  给某个入口偷偷扣除提前结束窗口。取消后的清理可以越过截止，新模型工作不可以。
+  最后可验证产物与未完成回执分开保留。截止时无法确认原生身份仍需对账，不能通过
+  新开会话或伪造成功来“恢复”。
+
+**Host 差异明确保留。** Headless CLI 可以提供自己拥有的 create/resume/observe/
+interrupt 回调。已运行的 App 或 Chat 会话应将经过验证的原生绑定及支持的回调交给
+同一生命周期；在其 heartbeat 外再包一次 CLI，会重复创建 Worker 并丢失原对话。
+缺少所有权、中断或角色隔离能力时明确不支持。本提案不新增认证、MCP 注册或原生
+会话库复制。拓扑 provider 属于 LoopX；benchmark 提供任务与评测设置，Managed Host、
+Chat、Steward 提供既有调用方及结果返回路径。
+
+**切换与验收。** 迁移期间冻结当前 heartbeat 作为对照，不把它永久保留为另一个产品
+runner。在显式的新准入上验证统一操作，再把 benchmark 与各产品迁入。允许在同步迁移
+调用方时进行内部 breaking change；版本化公开契约、持久化 attempt 和回退仍需明确处理。
+先盘点并对齐来源/上下文、模型/工具、任务入口、会话策略、结果作者、validator 与预算，
+再比较单 Worker 前后成果和完整成本；双角色作为另一个 treatment 引入。一题或更少的
+原生 token 不能证明无回退，更不能直接推广默认行为。
+
+相同公开入口测试须覆盖：plan/观察不领取工作、不派发 Host、不扣额，常规领取与
+同 Todo 回读，外部/过期 lease，输入变化，验证失败，回复丢失与只结算一次，Stop 后实际原生工具退出且
+无延迟写入，以及截止/重启不另开会话。真实验证继续追踪证据如何进入后续工作和独立
+验收成果，包含负面结果与有依据的继续。C8 采用须在相关产品流程中展示相同的授权
+操作、忙碌/错误/恢复状态和结果回读。C9 在替代路径通过后逐项退休旧正常 producer/
+caller，并保留版本化历史 reader。回退只为新准入选择已验收版本；待处理 attempt
+仍通过其原 Host 和回执对账。完成时需以调用方检索和真实入口证据证明：benchmark 与
+受支持产品已采用同一个操作，旧正常执行/结算 producer 已删除，修改共同规则只需修改
+一个 owner。不支持的 Host 明确保留为不支持，不静默转到第二个 runner。沿用仓库的
+[结构融合范式](../../development/README.md#structural-convergence--结构融合)：固定任务、
+权限与结果边界，吸收实验所得，在替代路径通过后移除冗余结构。
+
+运行观察、续跑与取消复用已有 managed-operation、Turn、session 和 receipt 身份，
+不再新增并行的 run 账本。首批迁移对象具体如下：
+
+| 当前边界 | 最终 owner / 调用方迁移 | 退役证据 |
+| --- | --- | --- |
+| `benchmark/runtime/worker.py` 选择 heartbeat/Turn，分别启动与恢复 | 任务/评测适配器调用统一运行服务 | 不再保留 benchmark 专用的正常 LoopX 启动、上下文和回执分支；native/plain 对照仍保留独立研究协议 |
+| `benchmark/runtime/scheduler.py` 提供唤醒和阶段预算 | 实验外部时钟提供预算，通用 runtime 拥有授权续跑 | 调度一次 LoopX run 不复制策略、不再启动第二个循环 |
+| `turn_run_once.py` / `turn_driver/executor.py` 与 heartbeat 启动/结算调用方 | 一个准入后生命周期与 typed result owner，Host effects 按传输适配 | 采用已有原生续跑/上下文行为，删除被替代的正常 writer 和重复失败分类 |
+| Managed Host / Chat / Steward 调用方 | 同一操作接入已有绑定、request revision 与原受众返回 | 真实打包操作、Stop、失败恢复和结果读回，无第二个 CLI Worker 或调用方专用决策 owner |
+
+这些是迁移任务，不代表当前 PR 已完成相应退役。验收继续归 C1–C9，不再另开一套架构计划。
+
 ### 从现状到可用产品：依赖图与交付切片
 
 ```mermaid
@@ -872,7 +973,10 @@ flowchart TB
 ```
 
 **首个调用方与对照。** 先用 EdgeBench 调用公开 Turn provider，保留标准
-`heartbeat-resume` 及其常规 quota 决策作对照。在同一 benchmark 入口的新准入上用
+`heartbeat-resume` 作对照，并记录它实际使用的决策来源。当前 C1 候选已将新 benchmark
+heartbeat 默认切到完整 Turn 来源，普通 CLI quota/heartbeat 仍需显式启用 C1。在该候选
+上的三组比较衡量拓扑与入口行为，不能替代 C1 对原 quota 来源的独立比较。
+在同一 benchmark 入口的新准入上用
 `--turn-topology single-worker` 或 `controller-worker` 选择拓扑。独立产品入口为
 `loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`。
 默认使用单 Worker。Turn 提供执行与恢复能力，benchmark 适配器传入拓扑、任务验证器和 judge 设置。
@@ -910,12 +1014,33 @@ Worker 的回读为 Controller 判断是否返工提供证据，独立验收由 
 私有 Turn 记录把角色步骤、消息摘要绑定到原生会话。原生记录仍在时，操作者可以按摘要核对
 原文，Core 无需再存一份完整对话。
 
+**共享工作区检查点。** 隔离 CLI provider 现将调用方的普通工作区工具授予两个角色，
+最高为工作区写权限。使用受控 Responses 后端的原生 CLI 验证中，Controller 读取
+Worker 的观察、写入核验产物，再通过
+反馈改变 Worker 的输出，最终由独立 validator 验收。这验证传输与采用，未证明模型判断或
+成果收益。两个角色仍无法读取 Core 私有状态。
+只读授权保持只读；原 Controller 的纯回执修复也保持只读，不重跑已完成的 Worker。
+角色串行执行，因此本次验证覆盖交接时访问，未证明并发写入或工作进行中的检查。
+Stop 使用原生中断与进程清理路径，验证实际 shell 和子进程退出、未出现延迟写入，
+而非只看 CLI 退出码。无法确认原生清理时，停止仍属于待对账状态。
+
+[会话发现更新](https://github.com/loopx-project/loopx/pull/8655) 中的会话发现与共享环境
+要求仍是 C3/C6 的下一验收边界。当前保存的角色 ID 和消息摘要属于留存证据，并非已交付
+的发现与阅读流程。有界的授权会话/事件读取、Worker 执行中的反馈、request revision，
+以及 App/Chat/Steward 采用仍未验收。继续复用已有 owner，不新增 benchmark 专用
+controller 或第二套会话数据库。
+
 **相同的有效预算。** 三组均可用到标准 heartbeat 的阶段截止，包括准备、派发、工作、
 验证和结算。到期停止发起新工作并中断运行中的 Host，保留待恢复身份。固定任务入口、
 模型及推理强度、沙箱、CPU、反馈与评测频率、提交冷却、评测器、验证器及外部调度器。
 记录求解与全程时间、计分轮次、原生分数和通过率、可验证产物、调用次数、按独立线程
 统计的输入／缓存／输出 token、重试、配额和人工介入。无法观测的指标保留为未知。
 原生及 plain 对照沿用各自协议。
+声称反馈带来收益时，沿用既有
+[决策片段回读](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#action-value-episode)，
+把当时状态、事前选择、实际工作、返回证据与下一决策连接到冻结终点的结果。有依据的继续
+也算采用；缺失的事前预测保持缺失。会话存活、消息送达或合成反馈测试，均不能单独证明
+模型成果收益。
 
 **首题验证范围。** 在公开排列题的 600 秒求解预算下，标准 heartbeat 和统一单
 Worker 实际分别使用 602.27 与 602.24 秒，原生 token 为 1,613,614 与 1,624,174，
@@ -938,6 +1063,20 @@ shell 临时文件受限、模型服务容量不足，以及 Controller 将自�
 中运行，分配两个 CPU。此前也观察到 Host 到期时尚未返回回执，但已有提交可由独立
 judge 评分。分别记录最后验证的分数、黑盒调用次数、完整 token 和 Core 结算。实现 PR
 保留各拓扑的实验读回与标准 guest 的验证边界。[实验记录](https://github.com/loopx-project/loopx/pull/8484)
+
+**一小时补充实验。** 在 `771b8ec8b0` 上串行完成三组各 1,200 秒的原生诊断，
+使用相同公开题目、模型/推理强度、离线双核工作镜像和阶段截止。Heartbeat、单 Worker
+Turn、双角色得分依次为 1.1265403166、0.4637035725、1.6457014069，产物均通过独立
+成本复算。包含缓存输入的原生累计 token 依次为 4,569,942、2,211,239、1,321,569，
+不等于完整账单成本；Core Spend 为 1、0、0。两组 Turn 均到期而未完成回执。
+Heartbeat 最后一次续跑在截止前 28 毫秒发起，原生身份尚未确认即到期，保留待对账，
+不当作成功。双角色 Controller 用 10.738 秒完成派工，随后 Worker 用完阶段、未返回
+中间报告，因此未证明反馈收益。单 Worker 结果仍低于参考路径；上下文交付和结果撰写
+差异也使本次无法把效果归因于拓扑。每组仅一题一次，原生 Host 隔离未完整证明，且有
+原样 judge 的 4/5 限制，均不作为官方成绩或默认推广依据。另有两次失败的启动预检，
+合计 229.99 秒与 707,673 个观测 token，单独保留失败与成本。下一验收是
+[单 Worker 融合对照](#heartbeat-turn-convergence)，再验证执行中的反馈，不自动推广
+双角色默认值。
 
 **产品接入。** Managed Host、Chat、Steward 在资格验证后复用同一 Turn provider。
 两个 headless 角色均使用 `codex exec`，与标准 heartbeat 和单 Worker Turn 的 CLI

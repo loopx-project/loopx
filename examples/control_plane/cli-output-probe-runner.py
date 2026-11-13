@@ -154,8 +154,18 @@ def _quota_control_observation(value: Any) -> dict[str, Any] | None:
     def digest(child):
         return hashlib.sha256(json.dumps(child, ensure_ascii=False,
             sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-    return {"source_schema": version, "controls_sha256": digest(controls),
-            "field_sha256": {key: digest(child) for key, child in controls.items()}}
+    witness = {"source_schema": version, "controls_sha256": digest(controls),
+               "field_sha256": {key: digest(child) for key, child in controls.items()}}
+    # Compare the intentional reward-authority clarification in its forward
+    # direction. Hash every other original control, including scope and rule.
+    if boundary["stop_condition"] == (
+        "stop before unauthorized reward assignment, gate approval, write-control changes, or production access"
+    ):
+        prior = {**controls["boundary"], "stop_condition":
+            "stop if the next action needs reward, gate approval, write control, or production access"}
+        witness["prior_reward_boundary"] = {"boundary": digest(prior),
+            "controls_sha256": digest({**controls, "boundary": prior})}
+    return witness
 
 
 def _quota_markdown_field_observations(text: str) -> dict[str, str]:

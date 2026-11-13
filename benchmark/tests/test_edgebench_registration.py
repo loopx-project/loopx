@@ -39,7 +39,7 @@ def native_cli(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("profile,complete_turn", [
     ("official", False), ("single", False), ("native-goal", False),
-    ("heartbeat-resume", False), ("heartbeat-explore", False), ("turn-resume", False),
+    ("heartbeat-resume", False), ("heartbeat-explore", False), ("turn-resume", False), ("turn-controller-worker", False),
     ("heartbeat-resume", True),
 ])
 @pytest.mark.parametrize("custom_registration", [False, True])
@@ -98,7 +98,7 @@ def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypa
     with pytest.raises(RuntimeError, match="synthetic worker boundary"):
         run.main([*args, "--worker", profile,
                   *(["--complete-turn"] if complete_turn else []),
-                  *(["--validation-command-json", '["trusted-validator"]'] if profile == "turn-resume" else [])])
+                  *(["--validation-command-json", '["trusted-validator"]'] if profile.startswith("turn-") else [])])
     if custom_registration:
         assert events == ["prepare", "register", "bind"]
     else:
@@ -108,12 +108,12 @@ def test_native_cli_prepares_registration_for_every_profile(native_cli, monkeypa
     assert receipt["status"] == "runner_failed"
     assert receipt["feedback"] == "native"
     assert receipt["local_docker_images"] == _IMAGES
-    assert ("validation_argv_sha256" in receipt) is (profile == "turn-resume")
+    assert ("validation_argv_sha256" in receipt) is profile.startswith("turn-")
     assert ("complete_turn" in receipt) is complete_turn
     assert "checkpoint_export_directory" not in receipt
 
 
-@pytest.mark.parametrize("profile", ["official", "native-goal", "turn-resume"])
+@pytest.mark.parametrize("profile", ["official", "native-goal", "turn-resume", "turn-controller-worker"])
 def test_registration_preparation_failure_prevents_native_admission(native_cli, monkeypatch, profile):
     run, args, trial = native_cli
     events = []
@@ -129,7 +129,28 @@ def test_registration_preparation_failure_prevents_native_admission(native_cli, 
                         pytest.fail("failed preparation must prevent registration and all worker effects"))
     with pytest.raises(RuntimeError, match="synthetic registration unavailable"):
         run.main([*args, "--worker", profile,
-                  *(["--validation-command-json", '["trusted-validator"]'] if profile == "turn-resume" else [])])
+                  *(["--validation-command-json", '["trusted-validator"]'] if profile.startswith("turn-") else [])])
     assert events == ["prepare"]
     receipt = json.loads((trial / "runtime-receipt.json").read_text())
     assert receipt["status"] == "runner_failed" and receipt["error_kind"] == "RuntimeError"
+
+
+@pytest.mark.parametrize("topology,profile", [
+    ("single-worker", "turn-resume"),
+    ("controller-worker", "turn-controller-worker"),
+])
+def test_heartbeat_entry_records_effective_turn_arm(native_cli, monkeypatch, topology, profile):
+    run, args, trial = native_cli
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **kw: SimpleNamespace(
+        observe_local_images=lambda **keys: {}, image_exists=lambda image: True,
+        registration_options=lambda provider: {}))
+    def stop(**kwargs):
+        raise RuntimeError("trial prepared")
+    monkeypatch.setattr(run, "run_agent", stop)
+    with pytest.raises(RuntimeError, match="trial prepared"):
+        run.main([*args, "--worker", "heartbeat-resume", "--turn-topology", topology,
+                  "--validation-command-json", '["check"]', "--container-cpus", "2"])
+    receipt = json.loads((trial / "runtime-receipt.json").read_text())
+    assert (receipt["requested_worker"], receipt["worker"]) == ("heartbeat-resume", profile)
+    assert receipt.get("turn_topology", "single-worker") == topology
+    assert receipt["container_cpus"] == 2

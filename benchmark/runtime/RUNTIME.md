@@ -426,14 +426,15 @@ state or force the agent active. An unresolved Turn must be recovered before
 another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
-before opening an execution. Heartbeat workers may use the entire positive
+before opening an execution. Heartbeat and Turn workers may use the entire positive
 remainder, including a continuation shorter than 160 seconds. Their bounded
 process cleanup is not a solver-time deduction. The adapters do not derive an
 independent wake limit from the initial trial budget; an explicitly supplied
 Harbor wake limit remains an independent limit and retains its failure semantics.
-Native Goal and managed-turn transports retain their existing reserve.
-When the applicable work allowance is exhausted, the worker records a
-budget-exhausted no-op without creating a pending Turn. In the
+Native Goal retains its existing reserve. A deadline reached before dispatch
+records a budget-exhausted no-op without creating a pending Turn. A deadline
+reached during a Turn interrupts the owned process and keeps its pending
+identity for original-journal recovery, including a lost acknowledgement. In the
 heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
 configured shell worker stops normally. It does not re-admit empty wakes, mark
 the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
@@ -734,7 +735,7 @@ also needs installed Codex, the native Harbor backend and independently checked
 task output. Unit tests establish no score or model-uplift claim. Validate small
 jobs through each benchmark's native configuration before launching a study.
 
-By default, worker calls have no independent turn deadline. Harbor derives their available time from the remaining total phase budget, reserving cleanup and settlement time. An explicit `turn_timeout_sec` remains supported as an operator override.
+By default, Harbor gives heartbeat and Turn workers the remaining phase time. Native Goal retains its runtime reserve. An explicit `turn_timeout_sec` can shorten the Host window. Process cleanup can finish after the model deadline.
 
 ### Native SForge task entry
 

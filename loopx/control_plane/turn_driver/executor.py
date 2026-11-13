@@ -1485,7 +1485,10 @@ def _prepare_host_invocation(
         raise ValueError("run-once accepts either host_argv or host_runner, not both")
     if host_runner is None:
         argv = normalize_host_argv(host_argv or [])
-        return argv, {"executable": Path(argv[0]).name, "argv_count": len(argv)}
+        projection: dict[str, str | int] = {"executable": Path(argv[0]).name, "argv_count": len(argv)}
+        if (plan.get("host") or {}).get("topology") == "controller-worker":
+            projection.update(kind="codex-cli", topology="controller-worker")
+        return argv, projection
     planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
     return None, {"executable": "built-in", "kind": str(planned_host.get("kind") or "codex-cli")}
 
@@ -1508,6 +1511,40 @@ def _host_attempt_requirements(
     if isinstance(recorded, Mapping) and recorded.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
         return needs_host, retry_validation, recorded
     return needs_host, retry_validation, None
+
+
+def _prepare_failed_turn_retry(
+    journal: dict[str, Any], request: dict[str, Any], *, validation_reinvokes_host: bool,
+) -> dict[str, Any]:
+    """Reset the failed phase and return the original request with any applicable feedback."""
+    receipt = journal.get("receipt")
+    if isinstance(receipt, dict) and receipt.get("failed_phase") == "validation":
+        if validation_reinvokes_host:
+            if journal.get("validation_stage") == "host_result_contract":
+                # Feedback is about the previous response, outside the immutable
+                # work contract. Never send rejected private values back on this wire.
+                request = {**request, "result_contract": {
+                    **request["result_contract"],
+                    "correction": "The previous result failed the Host result contract. "
+                    "Read back existing work and correct its structured receipt. "
+                    "Use public-safe artifact names and observed checks in evidence. "
+                    "Keep private locations and raw output in the workspace.",
+                }}
+            journal.pop("host_result", None)
+        journal.pop("result_kind", None)
+        journal["completed_phases"] = (
+            list(TRANSACTION_PHASES[:2])
+            if isinstance(journal.get("host_result"), dict)
+            else []
+        )
+        journal.pop("task_validation", None)
+        journal.pop("validation_stage", None)
+    journal.pop("reason", None)
+    journal.pop("receipt", None)
+    journal.pop("host_recovery", None)
+    journal.pop("host_failure", None)
+    journal["status"] = "in_progress"
+    return request
 
 
 @single_executor_per_turn_lane(execution_payload)
@@ -1634,6 +1671,9 @@ def run_loopx_turn_once(
                 ):
                     pass
             if recorded_plan is not None:
+                requested_host, original_host = plan.get("host") or {}, recorded_plan.get("host") or {}
+                if any(requested_host.get(k) != original_host.get(k) for k in ("topology", "topology_config_sha256")):
+                    raise ValueError("Recovery requires the original Turn topology and Host configuration")
                 # Recovery uses the recorded source through Host dispatch,
                 # cached-result validation and settlement.
                 plan, request = recorded_plan, build_loopx_turn_host_request(recorded_plan)
@@ -1736,27 +1776,7 @@ def run_loopx_turn_once(
             persist_journal(journal)
 
         if journal and journal.get("status") == "failed":
-            receipt = (
-                journal.get("receipt")
-                if isinstance(journal.get("receipt"), dict)
-                else {}
-            )
-            if receipt.get("failed_phase") == "validation":
-                if validation_reinvokes_host:
-                    journal.pop("host_result", None)
-                journal.pop("result_kind", None)
-                journal["completed_phases"] = (
-                    list(TRANSACTION_PHASES[:2])
-                    if isinstance(journal.get("host_result"), dict)
-                    else []
-                )
-                journal.pop("task_validation", None)
-                journal.pop("validation_stage", None)
-            journal.pop("reason", None)
-            journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
-            journal.pop("host_failure", None)
-            journal["status"] = "in_progress"
+            request = _prepare_failed_turn_retry(journal, request, validation_reinvokes_host=validation_reinvokes_host)
             persist_journal(journal)
         reserved_start = admission is not None and admission.get("reserved") is True
         if journal is None or reserved_start:

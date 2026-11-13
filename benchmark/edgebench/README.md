@@ -155,7 +155,7 @@ its own image provenance, and a later retag can change what gets launched.
 ## Worker profiles
 
 The worker profiles are `official`, `single`, `native-goal`, `heartbeat-resume`,
-`heartbeat-explore`, and `turn-resume`. `official` uses SForge's Codex Stop
+`heartbeat-explore`, `turn-resume`, and `turn-controller-worker`. `official` uses SForge's Codex Stop
 hook and outer recovery. `single` executes once with neither. `native-goal` uses
 the shared native Codex Goal transport. The heartbeat profiles use the shared
 LoopX scheduler and resume store. `heartbeat-explore` additionally enables the
@@ -174,9 +174,15 @@ Both `heartbeat-resume` and `turn-resume` use the external quota scheduler,
 planned task entry and one Agent-scoped Codex session by default. Turn sends
 the captured work to the Host, runs the validator and settles through Core.
 For a comparison, freeze both source revisions, task, feedback, model, effort
-and effective solve time. Heartbeat's native context delivery defaults on.
-Turn uses its product Host request and reserves 160 seconds for managed cleanup.
-Allow for that difference when choosing the phase budget.
+and phase limit. Record solver and controller elapsed time separately. Compare
+the judge's selected round using the task's declared selection policy, native
+session usage including cached input, and verified quota spends. For example,
+`pass_rate_first` retains the first round at the highest partial pass rate;
+a later raw score can improve without changing the selected round. Heartbeat's
+native context delivery defaults on.
+Turn uses its product Host request. Both workers use the remaining phase time
+for planning, admission and execution. Turn also runs its required validator
+and settles the original transaction within the same trial budget.
 
 A lost reply leaves a private pending marker. The next Turn wake looks up the
 original journal by Goal, Agent and wake identity. A committed replay produces
@@ -185,8 +191,49 @@ the wake for reconciliation. Older markers without a validator digest also
 require reconciliation against the original validator; the current command
 cannot establish that history. Retain the original trial state while diagnosing
 a failure. To return to heartbeat, select `heartbeat-resume` for a new trial.
-The Controller–Worker profile and its matched comparison are specified in the
-[delivery RFC](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md#from-current-code-to-a-useful-product-dependencies-and-delivery-slices).
+A rejected Host result permits one automatic receipt correction on the original
+Turn. A second contract rejection stops the scheduler and retains the pending
+transaction for explicit repair. A lost corrective reply permits journal
+readback without another automatic model attempt.
+The benchmark passes the topology to the public Turn provider. Other callers use
+`loopx turn run-once --host codex-cli --execution-mode isolated-headless --topology controller-worker`
+with their own project, Goal, validator and phase budget.
+
+Use the same task, validator and model with `--worker turn-controller-worker` to
+run two fresh Codex CLI sessions inside the admitted Turn. The Controller sees
+the captured decision and task. On its first dispatch the Host passes the
+pinned task file to the Worker verbatim. After the Worker returns a finding and
+artifact paths, the Controller can request further work on the original Worker
+session while the admission and phase budget remain live, or send its receipt
+to Core. Both roles use `codex exec` and resume by exact session ID.
+The guest needs a kernel that supports the native Codex CLI filesystem sandbox.
+The sandbox enforces the two roles' file and tool grants at execution.
+Both roles can use the caller's ordinary workspace tools, capped at workspace
+write, and hand off that workspace serially. Only receipt repair restricts the
+Controller to reading. This provider does not yet deliver feedback while the
+Worker's native Turn is still running.
+
+From the heartbeat trial entry, specify
+`--worker heartbeat-resume --turn-topology single-worker` or `--worker heartbeat-resume --turn-topology controller-worker` and
+supply the same validator. Both use the existing heartbeat scheduler, quota decision
+and public Turn transaction. The unqualified heartbeat profile keeps its native
+context transport for baseline comparisons. Receipts distinguish the requested
+entry from the effective treatment. During fresh execution, Turn's built-in
+preparation owner performs the exact ordinary claim supplied by quota and rereads
+the same Todo before dispatch. This needs no extra preparation switch. Existing
+native heartbeat consumes the same claim contract.
+
+The original Turn’s private `turns/controller-worker/` record includes role evidence with native thread and turn IDs,
+message digests, step wall time and reported cumulative token use per thread.
+For role cost, take the last cumulative count for each thread once. A missing
+count remains unknown. Include planning, validation, retries, idle time and
+operator interventions in a matched comparison. Cold trials accept
+`--container-cpus N` (default 4) for both work and judge containers and record it
+in the runtime settings. Use the same CPU limit across compared arms.
+The trial's Goal, pending identity, original decision and validator survive a
+lost acknowledgement. Roles start fresh for the next admitted Turn. The
+longer-lived role binding and matched comparison are specified in the
+[delivery RFC](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md#controller-delivery-cadence).
 
 All profiles use the same explicitly staged Codex binary and model/effort. This
 permits an updated Codex version with the native scaffold; it is not a claim of
@@ -444,8 +491,8 @@ qualification runs. The shared Harbor defaults are unchanged. Native task
 internet policy is retained. Each attempt requires a new output directory.
 
 Heartbeat and native Goal workers have no independent per-call time limit.
-The shared worker uses the remaining trial budget, retaining 160 seconds for
-startup/cleanup; natural completion determines continuation boundaries. A second
+Heartbeat and Turn can use the entire remaining trial budget. Native Goal
+retains a 160-second reserve. Natural completion determines continuation boundaries. A second
 scheduler wake alone does not prove resume: verify another actual model
 invocation with the same session identity. Native Goal owns its continuation
 without an outer resume loop. Heartbeat profiles now also disable SForge outer

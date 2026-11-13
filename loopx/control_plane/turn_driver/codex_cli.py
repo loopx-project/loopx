@@ -352,6 +352,37 @@ def _checked_prompt_context(
     return checked
 
 
+def codex_receipt_instructions() -> tuple[str, ...]:
+    """Instructions for the role producing the Core receipt."""
+    return (
+        "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
+        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. Use workspace-relative artifact names and describe scratch artifacts by purpose. Keep absolute paths, private URLs and raw output out of both fields. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
+        "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
+        "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
+        "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
+        "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
+        'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
+    )
+
+
+def prepare_codex_controller_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Deliver the verified C1 source once. Receipt guidance follows the first Worker return."""
+    from ..quota.turn_envelope import captured_turn_host_input
+
+    checked = _checked_prompt_context(request)
+    if checked is None:
+        raise ValueError("Controller dispatch requires the complete original Turn contract")
+    source = json.dumps(captured_turn_host_input(request), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return (
+        "You are the Controller. Use the complete work_contract and its outstanding task materials. "
+        "The Host verified the captured decision and delivered it inline. Give the Worker the original objective, "
+        "success criteria and useful task material. Leave the approach to the Worker unless the task specifies it. "
+        "You own the Core receipt. Set instruction to delegate or result to return your decision.\nTurn request:\n"
+        + source,
+        _result_schema(request, checked=checked),
+    )
+
+
 def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     """Prepare one launch's prompt and schema from one complete-source check.
 
@@ -394,13 +425,7 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         ("Use work_contract as the complete source of truth. Its interaction_contract.agent_channel carries work_context, required_reads and primary_action; its cli_channel describes Core effects owned by the outer adapter. " if complete else ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. "))
         + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
-        "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
-        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
-        "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
-        "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
-        "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
-        "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
-        'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
+        *codex_receipt_instructions(),
     ]
     if complete:
         from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
@@ -765,35 +790,22 @@ def _codex_command(
     project: Path,
     schema_path: Path | None,
     output_path: Path | None,
-    sandbox: str,
+    sandbox: str | None,
     model: str | None,
     reasoning_effort: str | None,
     session_id: str | None,
     mcp_server: Mapping[str, Any] | None,
+    config_args: tuple[str, ...] = (),
 ) -> list[str]:
+    command = [codex_bin, "exec", "--skip-git-repo-check"]
+    if sandbox is not None and not session_id:
+        command.extend(["--sandbox", sandbox])
+    command.extend(["-C", str(project)])
     if session_id:
-        command = [
-            codex_bin,
-            "exec",
-            "--skip-git-repo-check",
-            "-C",
-            str(project),
-            "resume",
-            "-c",
-            f'sandbox_mode="{sandbox}"',
-            "--json",
-        ]
-    else:
-        command = [
-            codex_bin,
-            "exec",
-            "--skip-git-repo-check",
-            "--sandbox",
-            sandbox,
-            "-C",
-            str(project),
-            "--json",
-        ]
+        command.append("resume")
+        if sandbox is not None:
+            command.extend(["-c", f'sandbox_mode="{sandbox}"'])
+    command.extend(["--json", *config_args])
     if schema_path is not None:
         command.extend(["--output-schema", str(schema_path)])
     if output_path is not None:

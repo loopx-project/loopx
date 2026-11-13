@@ -704,3 +704,27 @@ def test_turn_report_requires_the_same_validator_argv(trial, profile_digest):
     else:
         with pytest.raises(ValueError, match="validator argv"):
             export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
+@pytest.mark.parametrize("observed", ["controller-worker", None, "single-worker"])
+def test_heartbeat_turn_export_binds_role_topology(trial, observed):
+    runs, selection, output, _ = trial
+    task = runs / "run" / "case"
+    for name, key in (("runtime-receipt", "worker"), ("worker-profile", "profile")):
+        path = task / (name + ".json")
+        record = json.loads(path.read_text())
+        record[key] = "turn-controller-worker"
+        record["validation_argv_sha256"] = "c" * 64
+        if name == "runtime-receipt":
+            record.update(turn_topology="controller-worker", requested_worker="heartbeat-resume", container_cpus=2)
+        elif observed is not None:
+            record["turn_topology"] = observed
+        write(path, record)
+    if observed != "controller-worker":
+        with pytest.raises(ValueError, match="topology"):
+            export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+        return
+    export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+    recorded = json.loads((output / "settings/run.json").read_text())["runner"]
+    assert (recorded["requested_worker"], recorded["worker"]) == ("heartbeat-resume", "turn-controller-worker")
+    assert recorded["turn_topology"] == observed and recorded["container_cpus"] == 2

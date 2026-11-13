@@ -299,6 +299,8 @@ def pending_turn(path: Path, turn_id: str, execution: Execution) -> dict:
         atomic_write_private_json(path, pending)
         return pending
     pending = read_json(path.read_text())
+    if pending.get("turn_topology") != validator.get("turn_topology"):
+        raise ValueError("Pending Turn requires its original worker topology")
     if pending.get("validation_argv_sha256") != validator["validation_argv_sha256"]:
         raise ValueError("Pending Turn requires its original validation command")
     return pending
@@ -309,20 +311,26 @@ def turn_command(
     execution: Execution,
     turn_id: str,
     resume_turn_key: str | None = None,
-    *, recover_instance: bool = False,
+    *, recover_instance: bool = False, retry_failed: bool = True,
 ) -> list[str]:
     address = ["--turn-instance-id", turn_id]
     if resume_turn_key:
-        address = ["--resume-turn-key", resume_turn_key, "--retry-failed-turn"]
+        address = ["--resume-turn-key", resume_turn_key, *(["--retry-failed-turn"] if retry_failed else [])]
     elif recover_instance:
         address = ["--resume-turn-instance-id", turn_id, "--retry-failed-turn"]
+    host = ["--host", "codex-cli", "--session-scope", "agent",
+            "--codex-reasoning-effort", env["REASONING_EFFORT"], "--codex-bin", env["CODEX_BIN"],
+            "--codex-model", env["MODEL_NAME"], "--codex-sandbox", execution.sandbox]
+    if execution.controller_worker:
+        host.extend(["--topology", "controller-worker"])
+        if env.get("LOOPX_TASK_DOC"):
+            host.extend(["--task-material", env["LOOPX_TASK_DOC"]])
     return loopx_command(env) + [
         "turn",
         "run-once",
         "--execute",
         "--no-global-sync",
-        "--host",
-        "codex-cli",
+        *host,
         "--project",
         env["LOOPX_PROJECT"],
         "--goal-id",
@@ -334,16 +342,6 @@ def turn_command(
         *address,
         "--iteration-context",
         execution.context,
-        "--session-scope",
-        "agent",
-        "--codex-reasoning-effort",
-        env["REASONING_EFFORT"],
-        "--codex-bin",
-        env["CODEX_BIN"],
-        "--codex-model",
-        env["MODEL_NAME"],
-        "--codex-sandbox",
-        execution.sandbox,
         *(["--timeout-seconds", str(execution.timeout_seconds)]
           if execution.timeout_seconds is not None else []),
         "--validation-command-json",
@@ -529,7 +527,11 @@ def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
     display = explicit_turn_display(env)
+    topology = env.get("LOOPX_TURN_TOPOLOGY", "single-worker")
+    if topology not in {"single-worker", "controller-worker"}:
+        raise ValueError("unknown governed Turn topology")
     execution = Execution(
+        controller_worker=topology == "controller-worker",
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
         sandbox=env.get("LOOPX_CODEX_SANDBOX", "danger-full-access"),
@@ -615,14 +617,11 @@ def run_once(env: dict[str, str]) -> dict:
             receipt["recovery_handoff_sha256"] = handoff["sha256"]
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-            # Heartbeat work uses the whole remaining phase. Cleanup is bounded
-            # by its existing host transport, not subtracted from each wake.
-            # Native Goal and managed-turn transports retain their own reserve.
             reserve = phase_work_reserve(execution.mode)
             if remaining <= reserve:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
-            if execution.mode == "heartbeat":
+            if reserve == 0:
                 phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"])
             execution = replace(
                 execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
@@ -713,6 +712,7 @@ def run_once(env: dict[str, str]) -> dict:
                                 process_evidence_path=wake / "native-process.json")
             else:
                 pending = {}
+                retry_failed = True
                 if execution.mode == "turn" and stage == "execute":
                     from loopx.file_lock import try_exclusive_file_lock
 
@@ -721,13 +721,22 @@ def run_once(env: dict[str, str]) -> dict:
                         raise RuntimeError("Another benchmark wake owns the pending Turn")
                     pending = pending_turn(pending_path, turn_id, execution)
                     receipt["turn_instance_id"] = pending["turn_instance_id"]
+                    if pending.get("validation_stage") == "host_result_contract":
+                        from loopx.control_plane.runtime.document_io import atomic_write_private_json
+
+                        # Reserve a single corrective Host call on the original journal.
+                        # A lost reply after reservation permits readback only.
+                        retry_failed = not pending.get("correction_started", False)
+                        if retry_failed:
+                            pending["correction_started"] = True
+                            atomic_write_private_json(pending_path, pending)
                 command = (
                     turn_command(
                         env,
                         execution,
                         pending["turn_instance_id"],
                         pending.get("resume_turn_key"),
-                        recover_instance=pending["turn_instance_id"] != turn_id,
+                        recover_instance=pending["turn_instance_id"] != turn_id, retry_failed=retry_failed,
                     )
                     if execution.mode == "turn" and stage == "execute"
                     else native_command(env, execution, stage, wake, session_wake)
@@ -784,6 +793,12 @@ def run_once(env: dict[str, str]) -> dict:
                         # Product recovery owns eligibility and retry limits.
                         # Never disguise a failed transaction as a fresh Turn.
                         pending["resume_turn_key"] = result["resume_turn_key"]
+                        if pending.get("correction_started"):
+                            # Any returned failure on the reserved correction requires
+                            # repair. Lost replies still read back the original journal.
+                            receipt["turn_repair_required"] = True
+                        elif result.get("validation_stage") == "host_result_contract":
+                            pending["validation_stage"] = "host_result_contract"
                         from loopx.control_plane.runtime.document_io import atomic_write_private_json
 
                         atomic_write_private_json(pending_path, pending)
@@ -837,10 +852,10 @@ def main() -> int:
     print(json.dumps(receipt))
     if receipt.get("native_goal_outcome") == "cancelled":
         return 130
-    if receipt.get("budget_exhausted") and receipt["mode"] in {"heartbeat", "turn"}:
-        from benchmark.runtime.scheduler import BUDGET_EXHAUSTED_EXIT_CODE
+    if (receipt.get("budget_exhausted") or receipt.get("turn_repair_required")) and receipt["mode"] in {"heartbeat", "turn"}:
+        from benchmark.runtime.scheduler import WAKE_REQUESTED_STOP_EXIT_CODE
 
-        return BUDGET_EXHAUSTED_EXIT_CODE
+        return WAKE_REQUESTED_STOP_EXIT_CODE
     return 124 if receipt["timed_out"] else (0 if receipt["ok"] else 1)
 
 

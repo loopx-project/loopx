@@ -336,10 +336,10 @@ local delivery (a File-only performance miss must be disclosed but does not bloc
 SQLite qualification), while correctness, durability, authority and recovery
 checks remain required for every affected backend.
 
-### Bounded Future-Facing Refactoring
+### Refactoring And Convergence
 
 During development and before approving or merging, apply the
-[scope and refactoring](docs/development/README.md#engineering-scope-and-refactoring)
+[convergence and refactoring](docs/development/README.md#engineering-scope-and-refactoring)
 to the touched behavior and adjacent owner. Include a same-domain, reversible,
 behavior-preserving improvement when locally reviewable and covered by parity;
 report applied/deferred/unnecessary with the concrete boundary.

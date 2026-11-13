@@ -60,6 +60,7 @@ class BenchmarkCodex(CodexOffline):
         self,
         *args,
         execution_mode="heartbeat",
+        controller_worker=False,
         iteration_context=None,
         codex_sandbox="danger-full-access",
         validation_command=None,
@@ -104,6 +105,7 @@ class BenchmarkCodex(CodexOffline):
             turn_envelope,
             context_delivery,
             native_child_limit,
+            controller_worker=controller_worker,
             complete_turn=complete_turn,
         )
         if type(provider_request_admission) is not bool:
@@ -319,6 +321,16 @@ class BenchmarkCodex(CodexOffline):
     async def install(self, environment: BaseEnvironment) -> None:
         await self._capture_task_path(environment)
         await super().install(environment)
+        if self.execution.controller_worker:
+            # Probe the staged CLI as the actual solver user before loading
+            # trial credentials or paying for a role that cannot run tools.
+            probe = await environment.exec(
+                command="/usr/local/bin/codex sandbox -P :workspace -- /bin/sh -c 'exit 0'",
+                timeout_sec=30,
+            )
+            if probe.return_code:
+                raise RuntimeError("Controller–Worker requires a working native Codex workspace sandbox "
+                                   "inside the task guest; check guest kernel and namespace support")
 
         loopx_src = Path(os.environ["LOOPX_SRC_DIR"]).resolve()
         node_root = Path(os.environ["LOOPX_NODE_DIR"]).resolve()
@@ -333,6 +345,11 @@ class BenchmarkCodex(CodexOffline):
             ),
             timeout_sec=180,
         )
+        if self.execution.mode == "turn":
+            # Core protects the pending Turn marker's parent. Mode 0777 on a
+            # root-owned directory still forbids the guest user from chmod.
+            owner = shlex.quote(str(environment.default_user or "root"))
+            await self.exec_as_root(environment, command=f"chown {owner} {_LOOPX_RUNTIME} && chmod 0700 {_LOOPX_RUNTIME}")
         actual_commit = await self._stage_source(environment, loopx_src)
         await stage_portable_python(environment, _PYTHON)
         if self.execution.uses_loopx:
@@ -704,6 +721,7 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
+                "LOOPX_TURN_TOPOLOGY": "controller-worker" if self.execution.controller_worker else "single-worker",
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
                     self.execution.validation_command
                 ),

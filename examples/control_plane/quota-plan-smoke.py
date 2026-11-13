@@ -863,7 +863,7 @@ def assert_attention_queue_overrides_stale_run_history() -> None:
 def assert_project_asset_backed_no_evidence_should_run() -> None:
     goal_id = "platform-migration-material-registry"
     expected_next = "Refresh the public-safe material registry summary."
-    expected_stop = "stop if the next action needs reward, gate approval, write control, or production access"
+    expected_stop = "stop before unauthorized reward assignment, gate approval, write-control changes, or production access"
     expected_user_todo = "Confirm whether owner review is fresh enough to resume delivery."
     expected_agent_todo = "Run read-only map and report material freshness without internal links."
     raw_next = "raw queue says ask for an old gate"

@@ -33,6 +33,7 @@ from sforge.harness.task_spec import make_task_spec
 from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
+from benchmark.runtime.codex import governed_worker_profile
 from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker, profile_execution,
 )
@@ -118,8 +119,10 @@ def main(argv=None):
     parser.add_argument("--log-dir", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--worker", choices=PROFILES, required=True)
+    parser.add_argument("--turn-topology", choices=("single-worker", "controller-worker"),
+                        help="Execute the quota-admitted heartbeat or Turn through the shared governed Turn host")
     parser.add_argument("--validation-command-json", type=json.loads,
-                        help="For turn-resume, trusted guest argv that independently checks the work postcondition")
+                        help="For governed Turn workers, trusted guest argv that independently checks the work postcondition")
     parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="native",
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--managed-run-json", type=Path,
@@ -149,6 +152,7 @@ def main(argv=None):
                         help="Per-attempt cap for explicit native readiness setup, at most 25s; "
                              "omitted keeps 25s (not a model retry)")
     # Preserve the existing unique abbreviation after adding --managed-run-json.
+    parser.add_argument("--container-cpus", type=int, help="CPU limit per cold work and judge container (default 4)")
     parser.add_argument("--model", "--m", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
@@ -207,6 +211,13 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    requested_worker = args.worker
+    try:
+        args.worker = governed_worker_profile(requested_worker, args.turn_topology)
+    except ValueError as error:
+        parser.error(str(error))
+    if args.container_cpus is not None and (args.container_cpus < 1 or args.restore_checkpoint):
+        parser.error("--container-cpus requires a positive limit on a cold trial")
     if args.native_result_comparison and (
             args.worker != "heartbeat-explore" or args.feedback != "native"):
         parser.error("--native-result-comparison requires native heartbeat-explore")
@@ -412,10 +423,10 @@ def main(argv=None):
         agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
-        work_cpu_limit=4, work_mem_limit="16g",
+        work_cpu_limit=args.container_cpus or 4, work_mem_limit="16g",
         # A restored judge already owns its captured resource profile. Cold
         # defaults must not replace or conflict with that live registration.
-        judge_cpu_limit=None if args.restore_checkpoint else 4,
+        judge_cpu_limit=None if args.restore_checkpoint else (args.container_cpus or 4),
         judge_mem_limit=None if args.restore_checkpoint else "8g",
     )
     try:
@@ -539,6 +550,8 @@ def main(argv=None):
     receipt = {
         "run_id": args.run_id, "task": args.task, "worker": args.worker,
         "task_entry": agent.task_entry,
+        **({"requested_worker": requested_worker} if args.turn_topology is not None else {}),
+        **({"container_cpus": config.work_cpu_limit} if not args.restore_checkpoint else {}),
         **execution.validation_receipt(),
         **({"planning_timeout_seconds": None}
            if agent.task_entry == "loopx-planned" else {}),

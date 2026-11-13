@@ -575,7 +575,9 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
         prepared = "--prepared-capture-reference" in command
         if prepared:
             assert ("--complete-turn" in command) is (replace_stage in {"version", "downgrade"})
-        result = run(command, **kwargs)
+        # Reach the injected capture replacement even under suite contention.
+        # This test exercises identity refusal, not the hook's wall-clock budget.
+        result = run(command, **{**kwargs, "timeout": 30})
         if prepared:
             verified["writer"] = json.loads(result.stdout)
             if replace_stage == "guard":
@@ -730,9 +732,9 @@ def test_native_hook_recovers_the_original_claim_after_guard_timeout(
             guards.append(command[command.index("--turn-instance-id") + 1])
             if not after_ready and len(guards) == 1:
                 raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-        # Reach the deliberate post-ready fault rather than accidentally
-        # injecting the separate pre-commit timeout under test contention.
-        result = run(command, **{**kwargs, "timeout": 30} if after_ready else kwargs)
+        # Complete prerequisites before the explicit guard/ready fault above;
+        # accidental claim timeouts would test a different recovery boundary.
+        result = run(command, **{**kwargs, "timeout": 30})
         if "claim" in command:
             claims.append(json.loads(result.stdout))
         return result
@@ -1141,3 +1143,51 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         timeout=15,
     )
     assert repeated.returncode == 0 and json.loads(repeated.stdout) == {}
+
+
+@pytest.mark.parametrize("lease,ready", [
+    (None, False), ("own", True), ("foreign", False),
+])
+def test_benchmark_turn_and_heartbeat_share_selected_work_and_lease(tmp_path, monkeypatch, lease, ready):
+    """The two real entry decisions must agree before either Host can act."""
+    leases = [] if lease is None else [_lease(owner=AGENT if lease == "own" else "agent-b")]
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    instance = "parity-wake"
+    capabilities = ["--available-capability", "shell", "--available-capability", "filesystem_write"]
+    heartbeat = _run(tmp_path, monkeypatch, "sqlite", leases, "--runtime-profile", "generic_cli",
+                     "--turn-instance-id", instance, *capabilities)
+    _, turn = run_json_cli_result(
+        "turn", "plan", "--goal-id", GOAL, "--agent-id", AGENT, "--host", "codex-cli",
+        "--execution-mode", "isolated-headless", "--scheduler-owner", "outer_controller",
+        "--iteration-context", "resume", "--session-scope", "agent", "--turn-instance-id", instance,
+        "--include-transaction-detail", *capabilities, registry_path=registry, runtime_root=runtime,
+    )
+    captured = turn["work_contract"]
+    for field in ("should_run", "selected_todo", "execution_preparation", "normal_delivery_allowed"):
+        assert captured[field] == heartbeat[field], field
+    assert captured["selected_todo"]["todo_id"] == TODO
+    assert captured["execution_preparation"]["delivery_allowed"] is ready
+    assert turn["route"]["would_invoke_host"] is ready
+    before = heartbeat["interaction_contract"]["agent_channel"]
+    after = captured["interaction_contract"]["agent_channel"]
+    assert before["primary_action"] == after["primary_action"]
+    if not ready:
+        assert before["required_reads"] == after["required_reads"]
+        assert before["work_context"] == after["work_context"]
+        return
+    before_sources = {item["source"]: item for item in before["work_context"]["sources"]}
+    after_sources = {item["source"]: item for item in after["work_context"]["sources"]}
+    for source in before_sources:
+        assert before_sources[source] == after_sources[source]
+    outstanding = list(before["required_reads"])
+    for item in after["required_reads"]:
+        outstanding.remove(item)
+    # Native heartbeat reads the canonical text on demand. C1 may discharge
+    # that read only by delivering the actual source before primary work.
+    read, = outstanding
+    assert read["source"] == "goal_state" and read["ordering"] == "before_work"
+    delivered = after_sources["goal_state"]
+    assert delivered["command"] == read["command"] and delivered["ordering"] == read["ordering"]
+    content = delivered["content"]
+    assert content["full_source"] is True and Path(content["state_file"]) == tmp_path / "state.md"
+    assert content["text"] == (tmp_path / "state.md").read_text()
