@@ -390,7 +390,7 @@ def _emit_quota_result(
     """Capture the full decision before projecting and printing the CLI view."""
     capture_sha256: str | None = None
 
-    def record_capture(digest: str) -> None:
+    def record_capture(digest: str | None) -> None:
         nonlocal capture_sha256
         capture_sha256 = digest
 
@@ -427,7 +427,7 @@ def _publish_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
-    record_capture: Callable[[str], None],
+    record_capture: Callable[[str | None], None],
 ) -> int:
     from ..command_invocation import current_loopx_cli_argv
 
@@ -486,8 +486,7 @@ def _publish_quota_result(
             scheduler_context=scheduler_context,
             capture_directory=capture_directory, native_context=native_context)
         captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
-        if captured_digest is not None:
-            record_capture(captured_digest)
+        record_capture(captured_digest)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
             from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
@@ -505,7 +504,7 @@ def _publish_quota_result(
     except QuotaDecisionTransportError as exc:
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace
-        # the capture (an inline reentry runs inside the caller's guard).
+        # the original capture.
         failure = _export("quota_decision_transport_failure_payload")(
             args, payload, exc, capture_directory=capture_directory,
         )
@@ -653,8 +652,7 @@ def handle_quota_command(
     detail_sections: frozenset[str] = frozenset()
     context: QuotaCommandContext | None = None
     goal_ref: dict[str, str] | None = None
-    reentry_args: argparse.Namespace | None = None
-    reentry_todo_id: str | None = None
+    reentry: tuple[argparse.Namespace, str | None] | None = None
     try:
         capture_directory = prepare_quota_capture(args, capture_directory)
         goal_ref, turn_start_hook_dispatch, context = (
@@ -764,9 +762,10 @@ def handle_quota_command(
                     turn_instance_id=heartbeat_turn_id,
                 )
                 if reentry_args is not None:
-                    reentry_todo_id = (
+                    reentry = (
+                        reentry_args,
                         action_selection.requested_todo_id
-                        if action_selection_preflight.receipt is None else None
+                        if action_selection_preflight.receipt is None else None,
                     )
                 else:
                     heartbeat_receipt_existing = action_selection_preflight.receipt
@@ -776,10 +775,8 @@ def handle_quota_command(
                     heartbeat_receipt_existing_appended = (
                         action_selection_preflight.receipt_appended
                     )
-            if heartbeat_turn_id and reentry_args is None:
-                if action_selection_preflight_failed:
-                    heartbeat_receipt_ready = True
-                elif heartbeat_receipt_existing:
+            if heartbeat_turn_id and reentry is None and not action_selection_preflight_failed:
+                if heartbeat_receipt_existing:
                     (
                         heartbeat_receipt_existing,
                         heartbeat_receipt_existing_status,
@@ -914,13 +911,14 @@ def handle_quota_command(
             runtime_root_arg=runtime_root_arg,
             error=exc,
         )
-    if reentry_args is not None:
+    if reentry is not None:
         # The next evaluation owns its collection and publication failures.
         # This frame may not yet know about a receipt committed by that evaluation.
+        reentry_args, retained_todo_id = reentry
         return handle_quota_command(
             reentry_args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
             print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
-            capture_directory=capture_directory, retained_action_selection_todo_id=reentry_todo_id,
+            capture_directory=capture_directory, retained_action_selection_todo_id=retained_todo_id,
         )
     if _export("should_log_quota")(args.quota_command, payload):
         spend_turn_instance_id = _effective_spend_turn_instance_id(
