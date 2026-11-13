@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from copy import deepcopy
 import io
 import json
 import os
@@ -1392,8 +1393,8 @@ def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
     def compare_same_source(payload, *, share_inline_diagnostics=False, **kwargs):
         # Compare two encodings of the exact guard observation, without a
         # second guard or a change of time, launcher or settlement identity.
-        baseline.update(compose(payload, **kwargs))
-        return compose(payload, **kwargs, **(
+        baseline.update(compose(deepcopy(payload), **kwargs))
+        return compose(deepcopy(payload), **kwargs, **(
             {"share_inline_diagnostics": True} if share_inline_diagnostics else {}))
 
     monkeypatch.setattr(quota, "compose_turn_decision", compare_same_source)
@@ -1415,8 +1416,8 @@ def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
     assert decision["interaction_contract"]["cli_channel"]["selection_required"] is True
     assert decision["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
 
-    # Independently reconstruct both encodings. Check the full source,
-    # including the original task, gates, claim order and source freshness.
+    # Compare the full source, including the original task, gates, claim
+    # order and freshness. Restore the facts through their existing owner.
     agent = decision["agent_todo_summary"]
     assert agent["backlog_items_ref"] == "first_executable_items[0:2]"
     prefix = agent["first_executable_items"][:2]
@@ -1433,9 +1434,14 @@ def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
 
     projection = decision["projection_envelope"]
     assert projection["schema_version"] == "loopx_projection_envelope_v1"
-    defaults = projection.pop("source_defaults")
-    projection["sources"] = [{**defaults, **row} for row in projection["sources"]]
-    projection["schema_version"] = "loopx_projection_envelope_v0"
+    from loopx.control_plane.projection_envelope_facts import serve_projection_envelope
+
+    original_projection = baseline["projection_envelope"]
+    restored = serve_projection_envelope(projection, served_at=original_projection["served_at"])
+    assert {key: value for key, value in projection.items() if key not in {"schema_version", "sources", "source_defaults"}} == {
+        key: value for key, value in original_projection.items() if key not in {"schema_version", "sources"}
+    }
+    decision["projection_envelope"] = {**restored, "served_from_cache": original_projection["served_from_cache"]}
     compact_binding = decision.pop("contract_binding")
     baseline_binding = baseline.pop("contract_binding")
     assert compact_binding["scheduler_execution_args"] == baseline_binding["scheduler_execution_args"]

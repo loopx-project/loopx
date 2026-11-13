@@ -68,13 +68,13 @@ interface UpstreamSummary {
   complete: boolean;
 }
 
-// The sealed source-row fields can be shared. Source identity and any future
-// evidence fields stay local to their row.
+// Store repeated input facts. Derived fields are restored by the same
+// sealer at the original serve time. Identity and future facts stay local.
 const SHAREABLE_SOURCE_FIELDS = [
   "required", "read_status", "last_read_at", "source_updated_at",
-  "window_seconds", "staleness_seconds", "status", "item_count", "missing_count",
-  "unreadable_count", "alert", "alert_reasons",
+  "window_seconds", "item_count", "missing_count", "unreadable_count",
 ];
+const DERIVED_SOURCE_FIELDS = ["staleness_seconds", "status", "alert", "alert_reasons"];
 
 /** Store exact recurring sealed facts once. Explicit row values take priority.
  * No freshness or scope verdict is re-derived by the encoding. */
@@ -90,6 +90,23 @@ export function shareProjectionSourceFields(
   if (rows.length < 2 || rows.some(row => row === null)) return envelope;
   const originals = rows as JsonObject[];
   const sources = originals.map(row => ({...row}));
+  try {
+    const servedMillis = timestamp(envelope.served_at, "served_at").millis;
+    for (const [index, row] of originals.entries()) {
+      const sealed = sealSource(decodeSource(row, index), servedMillis);
+      // A historical or extended row may not use today's derivation. Keep
+      // its original shape unless every field, including numeric IO, matches.
+      if (Object.entries(sealed).some(([field, fact]) => !isDeepStrictEqual(row[field], fact))) return envelope;
+      for (const field of DERIVED_SOURCE_FIELDS) {
+        if (identity(row[field], [...sourcePath, "sources", index, field]) !==
+            identity(sealed[field], [...sourcePath, "source_defaults", field])) return envelope;
+        delete sources[index][field];
+      }
+    }
+  } catch (error) {
+    if (error instanceof EffectRuntimeRequestError) return envelope;
+    throw error;
+  }
   const defaults: JsonObject = {};
   for (const field of SHAREABLE_SOURCE_FIELDS) {
     // A shared field is present in every source, including when its value is
@@ -114,24 +131,15 @@ export function shareProjectionSourceFields(
     defaults[field] = fact;
     for (const index of common) delete sources[index][field];
   }
-  if (!Object.keys(defaults).length) return envelope;
   const packed = {...envelope, schema_version: SHARED_SOURCE_ENVELOPE_VERSION, source_defaults: defaults, sources};
-  if (Buffer.byteLength(JSON.stringify(packed)) >= Buffer.byteLength(JSON.stringify(envelope))) return envelope;
-  // A historical or extended row that cannot be expanded by this codec
-  // stays in the original wire representation.
-  try { expandProjectionSourceFields(packed); }
-  catch (error) {
-    if (error instanceof EffectRuntimeRequestError) return envelope;
-    throw error;
-  }
-  return packed;
+  return Buffer.byteLength(JSON.stringify(packed)) < Buffer.byteLength(JSON.stringify(envelope)) ? packed : envelope;
 }
 
 /** Restore the same sealed rows, preserving explicit overrides and row order. */
 export function expandProjectionSourceFields(value: JsonObject): JsonObject {
   if (value.schema_version !== SHARED_SOURCE_ENVELOPE_VERSION) return value;
   const defaults = requireJsonObject(value.source_defaults, "projection source defaults");
-  if (!Object.keys(defaults).length || Object.entries(defaults).some(([field, fact]) =>
+  if (Object.entries(defaults).some(([field, fact]) =>
       !SHAREABLE_SOURCE_FIELDS.includes(field) || !shareableSourceFact(fact))) {
     throw new EffectRuntimeRequestError("projection source defaults must name registered sealed source fields");
   }
@@ -140,12 +148,16 @@ export function expandProjectionSourceFields(value: JsonObject): JsonObject {
   if (rows.length < 2) throw new EffectRuntimeRequestError("shared projection facts require at least two source rows");
   const sources = rows.map((row, index) => {
     const source = {...defaults, ...requireJsonObject(row, `sources[${index}]`)};
+    if (DERIVED_SOURCE_FIELDS.some(field => Object.hasOwn(source, field))) {
+      throw new EffectRuntimeRequestError("shared projection source cannot override derived source facts");
+    }
     const decoded = decodeSource(source, index);
     const sealed = sealSource(decoded, servedMillis);
-    // Optional future row facts remain literal. Check the registered facts
-    // against their owner, including presence and original alert verdicts.
+    for (const field of DERIVED_SOURCE_FIELDS) source[field] = sealed[field];
+    // Keep original and future values. Reject missing or malformed known input
+    // fields instead of treating a decoder's fallback as a recorded fact.
     if (Object.entries(sealed).some(([field, fact]) => !isDeepStrictEqual(source[field], fact))) {
-      throw new EffectRuntimeRequestError("shared projection source does not reconstruct a sealed source row");
+      throw new EffectRuntimeRequestError("shared projection source requires complete sealed input facts");
     }
     return source;
   });

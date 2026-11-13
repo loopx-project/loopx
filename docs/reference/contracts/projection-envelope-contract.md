@@ -60,9 +60,10 @@ An unbound JSON `quota should-run --complete-turn --context-delivery off`
 response may carry `loopx_projection_envelope_v1` when sharing fields saves
 space. Reconstruct each source in order by copying `source_defaults` and then
 applying that row's fields, including explicit `null` overrides. Each row
-retains its own `source_id` and any `via`. Coverage, timestamps and alert
-verdicts describe the original observation. Re-serving a projection still
-uses the kernel's freshness calculation at the new serve time.
+retains its own `source_id` and any `via`. The kernel reconstructs each
+row's `staleness_seconds`, `status`, `alert` and `alert_reasons` at the
+envelope's original `served_at`. Re-serving a projection uses the same
+calculation at the new serve time.
 
 ```json
 {

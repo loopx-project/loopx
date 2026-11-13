@@ -136,7 +136,7 @@ test("shared source facts restore exact freshness, scope and optional future val
     projection: "quota_should_run",
     sources: [
       { source_id: "registry", read_status: "read", last_read_at: OBSERVED, item_count: 1 },
-      { source_id: "goals", via: "status", read_status: "read", last_read_at: OBSERVED, item_count: 1 },
+      { source_id: "goals", via: "status", read_status: "read", last_read_at: at(-1), item_count: 1 },
       { source_id: "cadence", read_status: "read", last_read_at: at(-400), item_count: 1 },
       { source_id: "optional", read_status: "missing", required: false },
       { source_id: "authority", read_status: "unreadable" },
@@ -157,6 +157,8 @@ test("shared source facts restore exact freshness, scope and optional future val
   assert.equal(defaults.window_seconds, 300);
   assert.ok(!Object.hasOwn(defaults, "item_count"));
   assert.ok(!Object.hasOwn(defaults, "future_evidence"));
+  assert.ok(sources(shared).every(row => !Object.hasOwn(row, "status") && !Object.hasOwn(row, "alert")));
+  assert.equal(sources(expandProjectionSourceFields(shared))[1].staleness_seconds, 1);
   assert.ok(JSON.stringify(shared).length < JSON.stringify(projection).length);
   assert.deepEqual(expandProjectionSourceFields(shared), projection);
   const serve = (envelope: Row) => sealProjectionEnvelope({
@@ -166,7 +168,10 @@ test("shared source facts restore exact freshness, scope and optional future val
   assert.throws(() => expandProjectionSourceFields({...shared, source_defaults: {...defaults, source_id: "other"}}),
     /registered sealed source fields/);
   const overrides = sources(shared).map((row, index) => index === 0 ? {...row, alert: true} : row);
-  assert.throws(() => expandProjectionSourceFields({...shared, sources: overrides}), /reconstruct a sealed source row/);
+  assert.throws(() => expandProjectionSourceFields({...shared, sources: overrides}), /cannot override derived source facts/);
+  const historical = {...projection, sources: [{...rows[0], alert: true}, ...rows.slice(1)]};
+  assert.equal(shareProjectionSourceFields(historical, contextSourceIdentity({projection_envelope: historical}),
+    ["projection_envelope"]), historical);
 });
 
 test("a derived projection inherits upstream sources and completeness", () => {
