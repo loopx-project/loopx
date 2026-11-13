@@ -684,20 +684,24 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   const signedSource = request.surface === "complete_turn";
   if (signedSource && required !== context && required.context_details === undefined)
     required.context_details = sourceNavigation;
+  // A rebound selection command needs the signed source reference in both
+  // presentations. Its command bytes cancel in the size comparison.
+  const selectionPath = ["interaction_contract", "cli_channel", "selection_command", "command_args_template"];
+  const transport = details.selection_command_args_template;
+  const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
+    && transport !== at(context, selectionPath);
+  const comparison = signedSource && bindTransport && context.context_details === undefined
+    ? {...context, context_details: sourceNavigation} : context;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
   const adjustment = (entries: [Path, string][]) => entries.reduce((size, [path, token]) =>
     path[0] === "context" ? size + token.length - JSON.stringify(at(request, path)).length : size, 0);
   const projected = required !== context && Buffer.byteLength(JSON.stringify(required))
-    - Buffer.byteLength(JSON.stringify(context)) + adjustment(remaining) - adjustment(tokens) < 0;
+    - Buffer.byteLength(JSON.stringify(comparison)) + adjustment(remaining) - adjustment(tokens) < 0;
   if (!projected) { required = context; copies.clear(); }
   // The capture can predate the current native invocation. Only the view gets
   // its current selection recipe. Replan commands still use the original hash.
-  const selectionPath = ["interaction_contract", "cli_channel", "selection_command", "command_args_template"];
-  const transport = details.selection_command_args_template;
-  const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
-    && transport !== at(context, selectionPath);
   if (bindTransport) {
     parent(selectionPath)[selectionPath.at(-1)!] = transport;
     if (signedSource && required.context_details === undefined)

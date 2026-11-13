@@ -1422,6 +1422,63 @@ def test_complete_quota_shares_repeated_peer_claims_in_the_original_capture(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_bound_complete_quota_reuses_backlog_rows_when_source_navigation_is_already_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    import hashlib
+
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = _write_fixture(root, SCENARIOS[2])
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        capture = root / "capture"
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry,
+            state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
+        turn = "bound-backlog-budget"
+        code, text = _invoke_cli([*command, "--complete-turn", "--turn-instance-id", turn,
+            "--decision-output-dir", str(capture)])
+        assert code == 0, text
+        event_log = rollout_event_log_path(runtime, GOAL_ID)
+        receipt_log = event_log.read_bytes()
+        assert sum(row["event_kind"] == "quota_should_run" and row.get("run_id") == turn
+            for row in map(json.loads, receipt_log.splitlines())) == 1
+        navigation = json.loads(text)
+        body, _, _ = read_pinned_cli_body(navigation["recovery"]["command"])
+        view = json.loads(body)
+        path = capture / "decision.json"
+        raw = path.read_bytes()
+        source = json.loads(raw)
+        assert_complete_turn_decision(source)
+
+        source_summary = source["agent_todo_summary"]
+        assert [row["todo_id"] for row in source_summary["backlog_items"]] == ["todo_fixture_000", "todo_fixture_003"]
+        summary = view["agent_todo_summary"]
+        assert summary["first_executable_items"] == source_summary["first_executable_items"]
+        assert summary["backlog_items"] == [
+            {"todo_id": row["todo_id"], "context_ref": f"/agent_todo_summary/first_executable_items/{index}"}
+            for index, row in enumerate(source_summary["backlog_items"])
+        ]
+        assert "context_ref" in view.pop("context_reference_instruction")
+        source_read = shlex.split(view.pop("context_details")["command_template"])
+        assert source_read[source_read.index("--capture-file") + 1] == str(path)
+        assert source_read[source_read.index("--capture-sha256") + 1] == hashlib.sha256(raw).hexdigest()
+
+        selection = view["interaction_contract"]["cli_channel"]["selection_command"]
+        selection_args = shlex.split(selection["command_args_template"])
+        assert selection_args[selection_args.index("--turn-instance-id") + 1] == turn
+        assert "--complete-turn" in selection_args
+        selection["command_args_template"] = source["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
+        summary["backlog_items"] = summary["first_executable_items"][:2]
+        assert view == source
+        assert source["heartbeat_receipt"]["turn_instance_id"] == turn
+        assert path.read_bytes() == raw
+        assert event_log.read_bytes() == receipt_log
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_staged_complete_replan_shares_exact_todo_rows_in_its_required_view(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
