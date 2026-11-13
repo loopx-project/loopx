@@ -720,6 +720,17 @@ the existing expansion budget. This qualifies the browser driver's target
 selection; product focus recovery and the causes of earlier partial inventories
 retain their separate evidence requirements.
 
+Coverage-enabled source runs now qualify the complete M2 journey without V8
+coverage first, enforcing the ordinary below-1-second transition medians, all
+15 loaded-lens samples, and the unchanged initial-render and expansion limits.
+When coverage is requested, a second complete journey collects coverage and
+reports both timing sets while retaining classification, selection, no-effect,
+error and remote-source checks. A failed uninstrumented gate stops the run
+before coverage can supply a replacement result. Acceptance retains
+`renderQualification` and `coverageDiagnostics`; ordinary and packaged runs
+execute only the uninstrumented qualification. This changes neither the
+workload nor the numerical budgets and does not reclassify earlier failures.
+
 **Checkpoint 2026-11-12 (source-coverage execution).**
 The source lane now executes the real disposable first-Goal and runtime-readiness
 backends rather than returning packaged-only PASS receipts. Explicitly required

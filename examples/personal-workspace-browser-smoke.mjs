@@ -219,6 +219,7 @@ async function main() {
           status: "PASS",
           note: result.note,
           ...(scenario.requiresBackendReadback ? {backend_readback_verified: true} : {}),
+          ...(result.measurements ? {measurements: result.measurements} : {}),
           duration_ms: Date.now() - startedAt,
         };
       } catch (error) {
