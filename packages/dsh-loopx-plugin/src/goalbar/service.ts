@@ -697,7 +697,8 @@ export class GoalBarService implements GoalBarServiceHandle {
     } catch {
       return { kind: 'unknown', code: 'operation_result_unknown' }
     } finally {
-      // The runner promise settles only after child close, including forced kill.
+      // Release the local operation after the runner has verified the result
+      // or reported it unknown. Never replay a lifecycle mutation here.
       admission.resolveMutation()
     }
     if (!verified) return { kind: 'unknown', code: 'operation_result_unknown' }

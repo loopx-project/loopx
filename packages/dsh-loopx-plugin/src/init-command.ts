@@ -7,6 +7,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-session'
 import {
   LoopXCliError,
   MINIMUM_LOOPX_VERSION,
+  isUnsafeToContinue,
   resolveLoopXCommand,
   runFile,
   runJsonCommand,
@@ -183,7 +184,7 @@ async function compatible(
       && payload.host_surface === HOST_SURFACE
       && typeof payload.install_required === 'boolean'
   } catch (error: unknown) {
-    if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+    if (isUnsafeToContinue(error)) throw error
     return false
   }
 }
@@ -236,7 +237,7 @@ async function resolveInstallPython(options: LoopXInitOptions): Promise<string> 
       )
       if (pipResult.exitCode === 0) return python
     } catch (error: unknown) {
-      if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+      if (isUnsafeToContinue(error)) throw error
     }
   }
   throw new LoopXInitError(
@@ -324,7 +325,7 @@ export async function initializeLoopX(options: LoopXInitOptions = {}): Promise<L
   try {
     command = await resolvePluginLoopXCommand(effectiveOptions)
   } catch (error: unknown) {
-    if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+    if (isUnsafeToContinue(error)) throw error
   }
 
   const configuredCli = effectiveOptions.env?.LOOPX_BIN ?? process.env.LOOPX_BIN

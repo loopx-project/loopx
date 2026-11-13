@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   LoopXCliError,
@@ -312,4 +316,90 @@ describe('reap-aware mutation execution', () => {
       signal: undefined,
     }])
   })
+})
+
+describe.skipIf(process.platform === 'win32')('owned CLI process group', () => {
+  it.each(['timeout', 'abort', 'mutation', 'escaped pipe'] as const)(
+    'retires a descendant holding an inherited pipe on %s before returning or retrying',
+    async mode => {
+      const dir = mkdtempSync(join(tmpdir(), 'loopx-cli-child-'))
+      const childPidFile = join(dir, 'child-pid')
+      const signal = new AbortController()
+      const cli = { ...command, file: process.execPath }
+      const child = [
+        "process.on('SIGTERM', () => {})",
+        'setTimeout(() => {}, 5000)',
+      ].join(';')
+      const fixture = [
+        'const {spawn} = require("node:child_process")',
+        'const {writeFileSync} = require("node:fs")',
+        'const [code, path, mode] = process.argv.slice(1)',
+        'const child = spawn(process.execPath, ["-e", code], {stdio: "inherit", detached: mode === "escaped pipe"})',
+        'writeFileSync(path, String(child.pid))',
+        // The grandchild keeps the pipe open after the CLI leader is gone.
+        'process.exit(0)',
+      ].join(';')
+      const live = (pid: number): boolean => {
+        try {
+          const state = execFileSync('ps', ['-p', String(pid), '-o', 'stat='], {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+          }).trim()
+          return !state.startsWith('Z')
+        } catch (error) {
+          if ((error as { status?: number }).status === 1) return false
+          throw error
+        }
+      }
+      let attempts = 0
+      let descendantAliveAfterFirst: boolean | undefined
+      const pid = () => Number(readFileSync(childPidFile, 'utf8'))
+      const runner: FileRunner = (_file, _args, options) => {
+        attempts += 1
+        if (attempts === 1) {
+          return runFile(process.execPath, ['-e', fixture, child, childPidFile, mode], options)
+        }
+        descendantAliveAfterFirst = live(pid())
+        return runFile(process.execPath, ['-e', 'console.log(JSON.stringify({ok:true}))'], options)
+      }
+      const options = { runner, timeoutMs: 750 }
+      const operation = mode === 'mutation'
+        ? runJsonMutationCommand(cli, [], options)
+        : runJsonCommand(cli, [], {
+            ...options, signal: signal.signal, attempts: 2, retryDelaysMs: [0],
+          })
+      // Attach the failure observer before scheduling abort or a bounded test
+      // deadline so neither test path leaves an unhandled rejection.
+      const observed = operation.catch((error: unknown) => error)
+      try {
+        if (mode === 'abort') {
+          await expect.poll(pid, { timeout: 600 }).toBeGreaterThan(1)
+          signal.abort()
+        }
+        const pending = Symbol('pending after cleanup')
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const outcome = await Promise.race([
+          observed,
+          new Promise(resolve => { timer = setTimeout(() => resolve(pending), 3200) }),
+        ]).finally(() => { clearTimeout(timer) })
+        expect(outcome).not.toBe(pending)
+        expect(live(pid())).toBe(mode === 'escaped pipe')
+        if (mode === 'timeout') {
+          expect(outcome).toEqual({ ok: true })
+          expect(attempts).toBe(2)
+          expect(descendantAliveAfterFirst).toBe(false)
+        } else {
+          expect(outcome).toMatchObject({
+            kind: mode === 'mutation' ? 'timeout' : mode === 'escaped pipe' ? 'transport' : 'aborted',
+            retryable: false,
+          })
+          expect(attempts).toBe(1)
+        }
+      } finally {
+        try { const childPid = pid(); if (live(childPid)) process.kill(childPid, 'SIGKILL') } catch {}
+        await observed
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    10_000,
+  )
 })
