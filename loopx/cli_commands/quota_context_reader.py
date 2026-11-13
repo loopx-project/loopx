@@ -216,19 +216,33 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
-def pinned_context_read_fits(reference_file: Path, *, content_bytes: int, page_bytes: int,
-                             output_limit: int, reader_argv: list[str] | None) -> bool:
-    """Leave space for the largest cursor and one JSON-escaped character."""
-    offset = max(0, content_bytes - 1)
-    # A pinned selection never emits the capture path or digest in page metadata.
-    sample = bytes(offset + 2)
-    try:
-        _capture_page(reference_file, sample, "", offset=offset, size=1,
-            output_limit=output_limit, instruction=False, next_page_bytes=page_bytes,
-            select=[], reference_file=reference_file, reader_argv=reader_argv)
-    except ValueError:
-        return False
-    return True
+def pinned_context_read_window(reference_file: Path, content: bytes, *, page_bytes: int,
+                               output_limit: int, reader_argv: list[str] | None) -> tuple[int, int]:
+    """Keep the caller's page budget when it can carry a verified selection."""
+    # The reader resolves parent aliases before printing its path and cursor.
+    reference_file = reference_file.parent.resolve(strict=True) / reference_file.name
+    offset = max(0, len(content) - 1)
+    sample = bytes(offset + 2)  # NUL needs six bytes in JSON.
+    def continuation_bytes(size: int, budget: int) -> int:
+        page = _capture_page(reference_file, sample, "", offset=offset, size=1,
+            output_limit=None, instruction=False, next_page_bytes=size,
+            next_page_output_bytes=budget, select=[], reference_file=reference_file,
+            reader_argv=reader_argv)
+        return len(_native_output_bytes(page))
+
+    if continuation_bytes(page_bytes, output_limit) <= output_limit:
+        return page_bytes, output_limit
+    # A small selection can avoid the long continuation altogether. If its
+    # complete page needs a separate budget, return enough to read it in one go.
+    if len(content) <= NATIVE_CONTEXT_PAGE_BYTES:
+        page_bytes = max(page_bytes, len(content))
+        whole = _capture_page(reference_file, content, "", offset=0, size=page_bytes,
+            output_limit=None, instruction=False, select=[], reference_file=reference_file,
+            reader_argv=reader_argv)
+        return page_bytes, max(output_limit, len(_native_output_bytes(whole)))
+    while (needed := continuation_bytes(page_bytes, output_limit)) > output_limit:
+        output_limit = needed
+    return page_bytes, output_limit
 
 
 

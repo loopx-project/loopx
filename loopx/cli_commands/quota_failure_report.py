@@ -335,30 +335,34 @@ def captured_quota_failure_view(
                 select=pointers if reader is None else None,
                 page_bytes=page_size, max_page_output_bytes=limit, reader_argv=reader_argv)}
         if reader is not None and selected is not None:
-            from .quota_context_reader import pinned_context_read_fits
+            from .quota_context_reader import pinned_context_read_window
 
-            readable = pinned_context_read_fits(reader, content_bytes=len(selected),
+            read_size, read_limit = pinned_context_read_window(reader, selected,
                 page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
-            if (not fits(result) or not readable) and runtime_root is not None:
+            if (not fits(result) or read_limit > limit) and runtime_root is not None:
                 from .context_machine import _private_transport_root
 
                 try:
                     transport = Path(_private_transport_root(runtime_root))
                     if len(str(transport)) < len(str(reader.parent)):
-                        reader, _ = write_initial_context_read_reference(saved, digest, dict(source), selections,
+                        shorter, _ = write_initial_context_read_reference(saved, digest, dict(source), selections,
                             reference_directory=transport)
-                        result["command"] = context_capture_read_command(saved, digest,
-                            reference_file=reader, page_bytes=page_size, max_page_output_bytes=limit,
-                            reader_argv=reader_argv)
-                        readable = pinned_context_read_fits(reader, content_bytes=len(selected),
+                        read_size, read_limit = pinned_context_read_window(shorter, selected,
                             page_bytes=page_size, output_limit=limit, reader_argv=reader_argv)
+                        reader = shorter
                 except (OSError, ValueError):
                     pass  # Keep the original capture and its existing reference.
+            result["command"] = context_capture_read_command(saved, digest,
+                reference_file=reader, page_bytes=read_size, max_page_output_bytes=read_limit,
+                reader_argv=reader_argv)
+            if read_limit > limit:
+                # A different reader budget must be explicit. Return a working
+                # command for the same capture instead of a dead continuation.
+                result["recovery_page_output_bytes"] = read_limit
+                result["instruction"] = "Do not rerun admission."
             if not fits(result):
                 # The pinned descriptor already carries the full capture path.
                 result["captured_decision"] = {"sha256": digest}
-            if not readable:
-                result["instruction"] = "Raise the reader output limit and read this Turn. Do not rerun admission."
         if not fits(result):
             # Even an impossibly small envelope must keep the original failure
             # and locator. Report why the requested output size cannot be met.

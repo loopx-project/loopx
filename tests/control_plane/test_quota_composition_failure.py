@@ -23,12 +23,15 @@ from tests.control_plane.test_quota_settlement_cli import (
     _initialize_fixture_authority, _spend_run_count, _write_fixture,
 )
 
+LONG_PATH_ROUTES = {"long-paths", "deep-paths", "deep-launcher", "deep-installation"}
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("fault,bounded_route", [
     ("action", None), ("interaction", None), ("runtime", None),
     ("interaction", "complete"), ("read_order", "explicit"), ("read_order", "prepared"),
-    ("runtime", "long-paths"), ("runtime", "deep-paths"),
+    ("runtime", "long-paths"), ("runtime", "deep-paths"), ("runtime", "deep-launcher"),
+    ("runtime", "deep-installation"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
         tmp_path, monkeypatch, provider, fault, bounded_route):
@@ -55,14 +58,19 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     original_journal = (native / "session.json").read_bytes()
     capture = tmp_path / "capture"
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
-    if bounded_route in {"long-paths", "deep-paths"}:
+    if bounded_route in LONG_PATH_ROUTES:
         parent = tmp_path
         if bounded_route == "deep-paths":
             parent /= "checkout-" + "x" * 130
             parent.mkdir()
-        capture_length = 480 if bounded_route == "deep-paths" else 250
+        capture_length = {"deep-paths": 480, "deep-launcher": 271 - len("/decision.json")}.get(bounded_route, 250)
         capture = parent / ("capture-" + "x" * (capture_length - len(str(parent)) - len("/capture-")))
-        launcher = tmp_path / ("launcher-" + "x" * (204 - len(str(tmp_path)) - len("/launcher-")))
+        launcher_parent = tmp_path
+        if bounded_route == "deep-installation":
+            launcher_parent = tmp_path / ("release-" + "x" * 110) / ("package-" + "x" * 110)
+            launcher_parent.mkdir(parents=True)
+        launcher_length = {"deep-launcher": 276, "deep-installation": 500}.get(bounded_route, 204)
+        launcher = launcher_parent / ("launcher-" + "x" * (launcher_length - len(str(launcher_parent)) - len("/launcher-")))
         launcher.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, "-m", "loopx.entrypoint"]) + ' "$@"\n')
         launcher.chmod(0o700)
         prefix[:0] = ["--cli-bin", str(launcher)]
@@ -125,7 +133,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     if "path" in captured:
         assert captured["path"] == str(saved)
     else:
-        assert bounded_route == "deep-paths" and "--reference-file" in failed["command"]
+        assert bounded_route in {"deep-paths", "deep-launcher", "deep-installation"} and "--reference-file" in failed["command"]
     digest = captured["sha256"]
     if limit is None:
         markdown = render_quota_should_run_markdown(failed)
@@ -153,6 +161,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     if limit is not None:
         command = failed.get("command") or captured["command"]
         tokens = shlex.split(command)
+        reader_limit = failed.get("recovery_page_output_bytes", limit)
         if "--reference-file" in tokens:
             reader_ref = Path(tokens[tokens.index("--reference-file") + 1])
             reader = json.loads(reader_ref.read_bytes())
@@ -164,18 +173,25 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
             assert "/composition_error" in reader["selection"]["select"]
         else:
             assert tokens[tokens.index("--capture-sha256") + 1] == digest
-        assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(limit)
-        if bounded_route in {"long-paths", "deep-paths"}:
+        assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(reader_limit)
+        if bounded_route == "deep-installation":
+            assert reader_limit > limit
+            assert "rerun admission" in failed["instruction"]
+        else:
+            assert reader_limit == limit
+        if bounded_route in LONG_PATH_ROUTES:
             assert tokens[:3] == [str(launcher), "--cli-bin", str(launcher)]
             selected = bytearray()
             while True:
                 result = subprocess.run(tokens, cwd=project, capture_output=True, check=False,
                     env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=30)
                 assert result.returncode == 0, result.stdout
-                assert len(result.stdout) <= limit
+                assert len(result.stdout) <= reader_limit
                 page = json.loads(result.stdout)
                 assert page["ok"] and page["offset"] == len(selected)
                 selected.extend(page["content"].encode())
+                if bounded_route == "deep-installation":
+                    assert page["eof"] is True
                 if page["eof"]:
                     assert len(selected) == page["total_bytes"]
                     break
