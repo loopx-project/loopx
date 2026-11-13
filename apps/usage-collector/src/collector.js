@@ -209,10 +209,9 @@ export async function handle(request, db, now = new Date()) {
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    const raw = new TextDecoder().decode(bytes);
     let parsed;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch {
       return json({ error: "invalid JSON" }, 400);
     }

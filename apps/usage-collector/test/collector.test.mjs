@@ -83,6 +83,20 @@ test("ping endpoint rejects wrong method, type, size and JSON", async () => {
   assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM pings").n, 0);
 });
 
+test("ping rejects invalid UTF-8 even in a duplicate JSON field", async () => {
+  const db = d1();
+  const body = Buffer.from(JSON.stringify(ping(1)).replace(
+    '"schema":"loopx_usage_ping_v0"',
+    '"schema":"X","schema":"loopx_usage_ping_v0"',
+  ));
+  body[body.indexOf(Buffer.from('"X"')) + 1] = 0xff;
+  const request = new Request("https://collector.example/v0/ping", {
+    method: "POST", headers: { "content-type": "application/json" }, body,
+  });
+  assert.equal((await handle(request, db, at("2026-10-01"))).status, 400);
+  assert.equal(db.raw.get("SELECT COUNT(*) AS n FROM pings").n, 0);
+});
+
 test("one row per installation per day; first day kept; only payload fields stored", async () => {
   const db = d1();
   assert.equal((await handle(post(ping(1)), db, at("2026-10-01"))).status, 204);
