@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 from io import StringIO
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -24,6 +25,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 @pytest.mark.parametrize("fault,bounded_route", [
     ("action", None), ("interaction", None), ("runtime", None),
     ("interaction", "complete"), ("read_order", "explicit"), ("read_order", "prepared"),
+    ("runtime", "long-paths"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
         tmp_path, monkeypatch, provider, fault, bounded_route):
@@ -50,6 +52,10 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     original_journal = (native / "session.json").read_bytes()
     capture = tmp_path / "capture"
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
+    if bounded_route == "long-paths":
+        capture = tmp_path / ("capture-" + "x" * (250 - len(str(tmp_path)) - len("/capture-")))
+        launcher = tmp_path / ("launcher-" + "x" * (204 - len(str(tmp_path)) - len("/launcher-")))
+        prefix[:0] = ["--cli-bin", str(launcher)]
     identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", TURN_ID]
 
     output_bytes = 0
@@ -134,7 +140,14 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     if limit is not None:
         command = failed.get("command") or captured["command"]
         tokens = shlex.split(command)
-        assert tokens[tokens.index("--capture-sha256") + 1] == digest
+        if "--reference-file" in tokens:
+            reader_ref = Path(tokens[tokens.index("--reference-file") + 1])
+            reader = json.loads(reader_ref.read_bytes())
+            assert reader["path"] == str(saved) and reader["sha256"] == digest
+            assert "/heartbeat_receipt" in reader["selection"]["select"]
+            assert "/composition_error" in reader["selection"]["select"]
+        else:
+            assert tokens[tokens.index("--capture-sha256") + 1] == digest
         assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(limit)
         reader = tokens[tokens.index("context-read") + 1:]
         rc, first_page = cli("context-read", *reader)
@@ -179,7 +192,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     assert _heartbeat_receipt_count(runtime, TURN_ID) == 1 and _spend_run_count(runtime) == 0
     assert saved.read_bytes() == raw
 
-    if fault == "runtime":
+    if fault == "runtime" and bounded_route is None:
         from loopx.control_plane.turn_driver import decision_capture
 
         missing_capture = tmp_path / "unwritable-capture"

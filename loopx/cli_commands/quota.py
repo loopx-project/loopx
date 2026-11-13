@@ -474,15 +474,17 @@ def _emit_quota_result(
                 report = _export("quota_decision_transport_failure_payload")
                 failure = report(args, payload, exc, capture_directory=None)
                 if capture_directory is not None:
-                    digest = capture_decision(capture_directory, {**failure, "source_diagnostic": payload,
+                    diagnostic = {**failure, "source_diagnostic": payload,
                         "composition_error": {"type": type(exc).__name__, "message": str(exc),
-                            "diagnostic_code": exc.diagnostic_code}})
+                            "diagnostic_code": exc.diagnostic_code}}
+                    digest = capture_decision(capture_directory, diagnostic)
                     failure = report(args, payload, exc, capture_directory=capture_directory,
                         capture_sha256=digest)
                     if present_capture_failure:
                         failure = _export("captured_quota_failure_view")(failure,
                             capture_directory=capture_directory, capture_sha256=digest,
-                            max_page_output_bytes=output_limit)
+                            max_page_output_bytes=output_limit, reader_argv=reader_argv,
+                            captured_payload=diagnostic)
                 print_payload(failure, args.format, _quota_renderer(args))
                 return 1
             # Validate before capture or handoff; the complete source is unchanged.
@@ -501,7 +503,7 @@ def _emit_quota_result(
             return 0
         if payload.get("ok") is False and capture_directory and present_capture_failure:
             print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
-                max_page_output_bytes=output_limit),
+                max_page_output_bytes=output_limit, reader_argv=reader_argv),
                 args.format, _quota_renderer(args))
             return 1
         if payload.get("ok") is True:

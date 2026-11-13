@@ -274,6 +274,8 @@ def captured_quota_failure_view(
     payload: Mapping[str, object], *, capture_directory: Path,
     max_page_output_bytes: int | None = None,
     capture_sha256: str | None = None,
+    reader_argv: list[str] | None = None,
+    captured_payload: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Bound an opted-in refusal without entering native delivery continuity.
 
@@ -282,7 +284,7 @@ def captured_quota_failure_view(
     a prerequisite for following that recovery. No field is silently truncated.
     """
     from ..control_plane.turn_driver.decision_capture import (
-        context_capture_read_command, native_context_page_budget,
+        context_capture_read_command, native_context_page_budget, write_initial_context_read_reference,
     )
 
     page_bytes, limit = native_context_page_budget()
@@ -300,27 +302,35 @@ def captured_quota_failure_view(
     reference = {"path": str(saved), "sha256": digest}
     result["captured_decision"] = {**reference,
         "command": context_capture_read_command(saved, digest,
-            page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
+            page_bytes=min(page_bytes, limit), max_page_output_bytes=limit, reader_argv=reader_argv)}
     result["instruction"] = (
         "The guard refused this request. Follow its recovery using the original Turn identity. "
         "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
         "This response does not establish a context baseline or grant execution authority."
     )
+
     def fits(value: dict[str, object]) -> bool:
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
 
     if not fits(result):
-        # Exceptional large diagnostics still use the shared digest-checked
-        # selected reader, never an eager replay of the full failed packet.
-        pointers = ["/" + key for key in fields if key in payload]
+        # Pin the small diagnostic selection so long launcher/capture paths and
+        # repeated --select arguments do not crowd out the recovery command.
+        source = payload if captured_payload is None else captured_payload
+        paths = [[key] for key in (*fields, "composition_error") if key in source]
         if isinstance(cli, Mapping) and "next_cli_actions" in cli:
-            pointers.append("/interaction_contract/cli_channel/next_cli_actions")
+            paths.append(["interaction_contract", "cli_channel", "next_cli_actions"])
+        selections = [{"path": path, "pointer": "/" + "/".join(path)} for path in paths]
+        try:
+            reader, _ = write_initial_context_read_reference(saved, digest, dict(source), selections)
+        except (OSError, ValueError):
+            # Existing captures can remain readable when publishing reader metadata fails.
+            reader = None
         result = {"ok": False, "captured_decision": reference,
             **{key: payload[key] for key in ("error_code", "diagnostic_code") if key in payload},
-            "instruction": "Read the selected failure and recovery fields before acting; "
-                "the original decision and Turn identity remain unchanged. No execution authority or context baseline was granted.",
-            "command": context_capture_read_command(saved, digest, select=pointers,
-                page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
+            "instruction": "Read the original failure and Turn receipt before recovery. Do not rerun admission.",
+            "command": context_capture_read_command(saved, digest, reference_file=reader,
+                select=[item["pointer"] for item in selections] if reader is None else None,
+                page_bytes=min(page_bytes, limit), max_page_output_bytes=limit, reader_argv=reader_argv)}
         if not fits(result):
             raise QuotaDecisionTransportError("Failure recovery metadata exceeds the output limit; read the saved original decision.")
     return result
