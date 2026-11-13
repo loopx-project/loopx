@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import os
 import shlex
 import subprocess
@@ -8,6 +9,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from shutil import which as _which
 from typing import Any
 
 # Keep the historical exports and caller patch points, but select the OS
@@ -43,6 +45,83 @@ if "loopx.extensions.process_runtime" in _sys.modules:
 # compatibility with existing caller-repo-branch receipts.
 CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION = "issue_fix_validation_command_v0"
 _VALIDATION_STDIN: ContextVar[int | None] = ContextVar("validation_stdin", default=None)
+_VALIDATION_EXECUTION_FD: ContextVar[int | None] = ContextVar("validation_execution_fd", default=None)
+
+
+@contextmanager
+def retain_validation_execution_lock(descriptor: int | None) -> Iterator[None]:
+    """Bind a borrowed POSIX execution lock to validation in this context."""
+    token = _VALIDATION_EXECUTION_FD.set(descriptor)
+    try:
+        yield
+    finally:
+        _VALIDATION_EXECUTION_FD.reset(token)
+
+
+# Load the supervisor from the caller's exact package, even for a source
+# checkout launched with PYTHONPATH. The validator keeps its original cwd/env.
+_SUPERVISOR_ENTRY = (
+    "import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); "
+    "runpy.run_module('loopx.control_plane.runtime.validation_supervisor',run_name='__main__')"
+)
+
+
+def _supervised_validation(
+    argv: list[str], workspace: Path, timeout_seconds: int, lock_descriptor: int,
+) -> int:
+    # Closing this private pipe requests cleanup while the supervisor still
+    # owns the lock. The validator receives the caller's ordinary stdin.
+    control_read, control_write = os.pipe()
+    process = None
+    python = _which(_sys.executable) or _sys.executable
+    try:
+        try:
+            process = subprocess.Popen(
+                [python, "-I", "-S", "-c", _SUPERVISOR_ENTRY,
+                 str(Path(__file__).resolve().parents[3]), str(control_read), str(timeout_seconds), *argv],
+                cwd=workspace,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                stdin=_VALIDATION_STDIN.get(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                pass_fds=(control_read, lock_descriptor),
+                start_new_session=True,
+            )
+        finally:
+            os.close(control_read)
+        # Bound startup and cleanup independently of the validator deadline.
+        try:
+            output, _ = process.communicate(timeout=timeout_seconds + 3)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("completion validation supervisor did not finish before its deadline") from error
+    except BaseException:
+        os.close(control_write)
+        if process is not None:
+            # The supervisor is the only child with the execution lock. Give
+            # its cleanup bounded time without killing that lock holder.
+            try:
+                process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                assert process.stdout is not None
+                process.stdout.close()
+        raise
+    else:
+        os.close(control_write)
+    if process.returncode != 0:
+        raise RuntimeError("completion validation supervisor did not confirm process cleanup")
+    try:
+        outcome, value = _json.loads(output)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("completion validation supervisor returned an invalid result") from error
+    if outcome == "exited":
+        return int(value)
+    if outcome == "timeout":
+        raise subprocess.TimeoutExpired(argv, timeout_seconds)
+    if outcome == "launch_failed":
+        raise OSError("completion validation executable could not be launched")
+    if outcome == "malformed":
+        raise ValueError(value)
+    raise RuntimeError("completion validation supervisor returned an invalid result")
 
 
 @contextmanager
@@ -91,6 +170,23 @@ def run_caller_validation(
     )
     if not argv:
         raise ValueError("validation command must not be empty")
+    execution_descriptor = _VALIDATION_EXECUTION_FD.get()
+    if execution_descriptor is None:
+        returncode = _direct_validation(argv, workspace, timeout_seconds)
+    else:
+        returncode = _supervised_validation(argv, workspace, timeout_seconds, execution_descriptor)
+    return {
+        "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+        "command_label": validation_label or "caller-declared validation",
+        "exit_code": returncode,
+        "passed": returncode == 0,
+        "stdout_captured": False,
+        "stderr_captured": False,
+        "local_path_captured": False,
+    }
+
+
+def _direct_validation(argv: list[str], workspace: Path, timeout_seconds: int) -> int:
     with subprocess.Popen(
         argv,
         cwd=workspace,
@@ -110,15 +206,7 @@ def run_caller_validation(
             # POSIX leader whose surviving children still hold the output pipes.
             _export("terminate_process_tree")(process, grace_seconds=0)
             raise
-    return {
-        "schema_version": CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION,
-        "command_label": validation_label or "caller-declared validation",
-        "exit_code": process.returncode,
-        "passed": process.returncode == 0,
-        "stdout_captured": False,
-        "stderr_captured": False,
-        "local_path_captured": False,
-    }
+    return int(process.returncode)
 
 
 def require_validation_passed(step: Mapping[str, Any]) -> None:

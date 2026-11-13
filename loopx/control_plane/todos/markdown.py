@@ -4,6 +4,7 @@ import json
 import shlex
 from typing import Any
 
+from ...project_prompt import host_command, shell_arg_for_host
 from ..quota.settlement import render_settlement_progress_markdown
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
@@ -330,6 +331,13 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         )
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
+        if recovery_command := payload.get("recovery_command"):
+            command = " ".join([host_command(recovery_command[0]),
+                                *(shell_arg_for_host(arg) for arg in recovery_command[1:])])
+            lines.extend([
+                "", "Read the original operation receipt:",
+                "```sh", command, "```",
+            ])
         if payload.get("error_code") == "todo_claim_invalid_arguments":
             recovery = payload["recovery"]
             lines.extend([

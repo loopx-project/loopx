@@ -15,11 +15,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
+from ...command_invocation import loopx_cli_argv
 from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
 from ..runtime.time import now_local_iso as now_local
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 from .coordination_state_contract import (
@@ -96,6 +98,33 @@ class CanonicalAuthorityRequired(LocalCoordinationAuthorityRejection):
             code="canonical_authority_required",
             payload=evidence,
         )
+
+
+def ambiguous_todo_write(
+    error: EffectRuntimeResponseAmbiguous,
+    *,
+    registry_path: Path,
+    runtime_root: str,
+    goal_id: str,
+    todo_id: str,
+    operation_id: str,
+) -> LocalCoordinationAuthorityUnavailable:
+    """Return an exact, read-only lookup for an unverifiable write response."""
+    return LocalCoordinationAuthorityUnavailable(
+        f"{error}. A missing receipt does not prove the original writer has stopped",
+        code=error.diagnostic_code,
+        payload={
+            "goal_id": goal_id,
+            "todo_id": todo_id,
+            "operation_id": operation_id,
+            "recovery_command": [
+                *loopx_cli_argv(), "--format", "json",
+                "--registry", str(registry_path.expanduser().resolve()),
+                "--runtime-root", runtime_root, "todo", "receipt",
+                "--goal-id", goal_id, "--operation-id", operation_id,
+            ],
+        },
+    )
 
 
 def raise_canonical_write_failure(

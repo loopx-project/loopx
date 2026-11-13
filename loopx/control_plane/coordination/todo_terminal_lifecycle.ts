@@ -1781,6 +1781,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
         schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
         status: "execute_validation",
         changed: false,
+        operation_id: input.operation_id,
         todo_id: input.todo_id,
         command: input.command,
         validation_effect: completion.decision === "execute_validation" ? completion.validation_effect : null,
