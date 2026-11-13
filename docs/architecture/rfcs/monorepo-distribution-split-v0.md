@@ -3780,3 +3780,32 @@ Unicode readback through the real LoopX reader with a synthetic Desktop peer.
 This qualifies optional record reading, not model-context retention, managed
 V4/R1, split-package M3, installed-App adoption or complete costs. The original
 Goal regression, acceptance gaps, authority and frozen failures remain intact.
+
+### 2026-11-13 — Standalone continuation retains its installation
+
+Standalone startup previously returned an ambient `loopx` command even when
+the caller selected an isolated core interpreter. Executing that complete
+command could import another installation through PATH/PYTHONPATH. Earlier
+installed tests discarded the executable and replayed its arguments, hiding
+the failure. Core-generated commands now retain the same environment's Python
+with `-I -m loopx.entrypoint` through the existing invocation owner. An explicit
+global `--cli-bin` and ordinary-distribution defaults retain their behavior;
+invalid arguments retain complete parser diagnostics. Multi-Goal selection
+uses the same command renderer.
+
+Core module diagnosis verifies its actual imported distribution, recorded
+module and present recorded console entrypoints. Version/catalog/help probes
+use the same isolated module invocation, so a foreign PYTHONPATH cannot
+silently change the artifact being checked. Missing or redirected module
+records, absent console records/files, unrecorded launchers and missing runtime
+files remain failures. The installed qualification executes whole returned
+activation and diagnosis commands, with a foreign-package sentinel and an
+explicit-route control, alongside existing SQLite/File recovery and context
+checks. This repairs command provenance without adding a lifecycle, authority,
+configuration or protocol owner.
+
+Full R1/V1–V5/V10, real model recovery/adoption, progressive product control,
+minimal dependency closure, M3/Standard/workspace/meta packaging and complete
+cost acceptance remain open. This does not upgrade an installed host, start a
+model service or establish effectiveness from protocol fixtures. Preserve all
+nine original requirements, the original-Goal regression and earlier failures.
