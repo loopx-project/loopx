@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -15,7 +16,8 @@ from loopx.control_plane.goals.activation_service import set_goal_activation_sta
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
 from tests.control_plane.test_dated_vision_wait_cli import AGENT as WAIT_AGENT, GOAL as WAIT_GOAL, fixture as wait_fixture
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _spend_run_count, _write_fixture,
+    AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _heartbeat_receipt_count,
+    _initialize_fixture_authority, _spend_run_count, _write_fixture,
 )
 
 
@@ -31,7 +33,9 @@ def test_scheduler_observation_preserves_native_wake_context(
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "native-home"))
     repository = Path(__file__).resolve().parents[2]
     monkeypatch.setenv("PYTHONPATH", str(repository))
-    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     cli = tmp_path / "loopx-cli"
     cli.write_text(f"#!{sys.executable}\nfrom loopx.entrypoint import main\nraise SystemExit(main())\n")
     cli.chmod(0o700)
@@ -93,7 +97,7 @@ def test_scheduler_observation_preserves_native_wake_context(
     turn = "native-wake-after-observation"
     command = [str(cli), "--format", "json", "--registry", str(registry),
         "--runtime-root", str(runtime), "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli",
+        "--agent-id", AGENT_ID, "--runtime-profile", "generic_cli", "--complete-turn", "--todo-id", TODO_ID,
         "--turn-instance-id", turn, "--context-delivery", native_context]
     if native_context == "on":
         from loopx.control_plane.turn_driver.codex_context import codex_context_hook
@@ -104,18 +108,57 @@ def test_scheduler_observation_preserves_native_wake_context(
             "source": "startup", "session_id": "native-context-wake", "cwd": str(project)})
         command += ["--decision-output-root", str(tmp_path / "captures"),
             "--codex-context-dir", str(tmp_path / "context")]
-    result = subprocess.run(command, cwd=project, capture_output=True, text=True,
-        env=os.environ.copy(), timeout=30, check=False)
-    assert result.returncode == 0, result.stderr or result.stdout
-    payload = json.loads(result.stdout)
+    def run(argv):
+        return subprocess.run(argv, cwd=project, capture_output=True, text=True, timeout=60, check=True)
+
+    wake_output = tmp_path / "wake.json"
+    dispatches = tmp_path / "dispatches"
+    worker_cli = [sys.executable, str(repository / "scripts" / "external_scheduler_worker.py"),
+        "--cli-bin", str(cli), "--registry", str(registry), "--runtime-root", str(runtime),
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--once", "--state-file", str(tmp_path / "worker-state.json"),
+        "--wake-cmd", f"printf '.\\n' >> {shlex.quote(str(dispatches))} && "
+                    f"{shlex.join(command)} > {shlex.quote(str(wake_output))}"]
+    assert "status=should_run wake_ok" in run(worker_cli).stdout
+    payload = json.loads(wake_output.read_bytes())
     assert payload["ok"], json.dumps({k: payload.get(k) for k in ("reason", "error_code", "state")})
     if native_context == "on":
         assert payload["schema_version"] == "context_capture_navigation_v1"
         assert Path(payload["reference_file"]).is_file()
+        reader = payload["recovery"]["command"]
+        full = b""
+        while reader:
+            page = json.loads(run(shlex.split(reader)).stdout)
+            assert page["ok"] and page["offset"] == len(full)
+            full += page["content"].encode()
+            reader = page.get("next_command")
+        assert page["eof"] and len(full) == page["total_bytes"]
+        payload = json.loads(full)
     else:
-        assert payload["selected_todo"]["todo_id"] == TODO_ID
+        assert not (runtime / "context-delivery").exists()
+    assert payload["schema_version"] == "loopx_turn_envelope_v1"
+    assert payload["selected_todo"]["todo_id"] == TODO_ID
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0
+    plan = payload["interaction_contract"]["cli_channel"]["settlement_plan"]
+    identity = payload["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"] == identity and identity["turn_instance_id"] == turn
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    fill = {"<validated_progress>": "verified_native_wake", "<scale>": "implementation",
+            "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
+    settle = [str(cli), *(fill.get(arg, arg) for arg in shlex.split(writeback["command_template"])[1:])]
+    settle += ["--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
+    first, replay = [json.loads(run(settle).stdout) for _ in range(2)]
+    assert first["settlement_progress"]["state"] == "settled"
+    assert replay["idempotent_replay"] and replay["settlement_identity"] == first["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+    stopped = set_goal_activation_state(registry_path=registry, goal_id=GOAL_ID, state="stopped",
+                                       reason="Stop the shell worker fixture.", actor_kind="owner", execute=True)
+    assert stopped["readback"]["verified"]
+    assert "status=terminal" in run(worker_cli).stdout
+    assert dispatches.read_text().splitlines() == ["."]
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert _spend_run_count(runtime) == 1
 
 
 _VISIBLE_HOST_PROBE = """
