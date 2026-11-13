@@ -64,7 +64,9 @@ def _import_summary(module_names: Sequence[str] = REPRESENTATIVE_CLI_IMPORTS) ->
     }
 
 
-def _command_summary(command_path: Path | None) -> dict[str, Any]:
+def _command_summary(
+    command_path: Path | None, *, invocation_argv: Sequence[str] | None = None,
+) -> dict[str, Any]:
     if command_path is None:
         return {"ok": False, "results": {}, "failed": ["command_missing"]}
 
@@ -72,7 +74,7 @@ def _command_summary(command_path: Path | None) -> dict[str, Any]:
         probe_name, args = item
         try:
             result = subprocess.run(
-                command_argv(command_path, args),
+                [*invocation_argv, *args] if invocation_argv is not None else command_argv(command_path, args),
                 check=False,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
@@ -130,7 +132,15 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
         }
 
     recorded_commands: list[Path] = []
+    recorded_module = False
+    resolved_command = command_path.resolve()
+    standalone_core = getattr(installed, "name", None) == "loopx-core"
     for item in installed.files or ():
+        if standalone_core and str(item) == "loopx/entrypoint.py":
+            recorded_module = (
+                Path(item.locate()).resolve() == resolved_command
+                == Path(__file__).with_name("entrypoint.py").resolve()
+            )
         if Path(str(item)).name.lower() not in {
             "loopx",
             "loopx.exe",
@@ -144,9 +154,10 @@ def _distribution_command_summary(command_path: Path | None) -> dict[str, Any]:
         if resolved_path not in recorded_commands:
             recorded_commands.append(resolved_path)
     recorded_commands.sort(key=str)
-    resolved_command = command_path.resolve()
     return {
-        "ok": resolved_command in recorded_commands,
+        "ok": resolved_command in recorded_commands or (
+            recorded_module and any(path.is_file() for path in recorded_commands)
+        ),
         **({"distribution_name": "loopx-core"} if getattr(installed, "name", None) == "loopx-core" else {}),
         "command": str(resolved_command),
         "recorded_commands": [str(path) for path in recorded_commands],
@@ -227,7 +238,12 @@ def collect_python_distribution_checks(
     distribution_command = _distribution_command_summary(command_path)
     standalone_core = distribution_command.get("distribution_name") == "loopx-core"
     imports = _import_summary(CORE_CLI_IMPORTS) if standalone_core else _import_summary()
-    commands = _command_summary(command_path)
+    if standalone_core and command_path == Path(__file__).with_name("entrypoint.py").resolve():
+        commands = _command_summary(
+            command_path, invocation_argv=[sys.executable, "-I", "-m", "loopx.entrypoint"],
+        )
+    else:
+        commands = _command_summary(command_path)
     package_paths = _package_path_summary(
         package_root,
         CORE_DISTRIBUTION_PATHS if standalone_core else REPRESENTATIVE_DISTRIBUTION_PATHS,
