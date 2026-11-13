@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -29,7 +30,23 @@ from .team_plan_confirmation import (
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class ProfileTransport:
+    cli_bin: str
+    app_id: str
+    consumer_lease_key: str
+    callback_chats: tuple[str, ...]
+    other_binding_id: str
+
+
+@dataclass(frozen=True)
+class ProfileWorkerFingerprint:
+    transport: ProfileTransport
+    owner_binding_id: str = ""
+
+
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
 MessageConsumer = tuple[threading.Event, Popen[str], threading.Event]
 
@@ -134,20 +151,11 @@ class LarkGoalTopicRuntimeService:
                             with self._lock:
                                 worker = self._workers.get(profile)
                                 current = self._message_consumers.get(profile)
-                            if worker is None or current is None or current[0] is not worker[0]:
-                                continue
-                            stop, process, requested = current
-                            if stop.is_set() or requested.is_set() or process.poll() is not None:
-                                continue
-                            # End this message pipe and let it drain under the
-                            # existing App lease. Stopping the worker discards
-                            # transient events already read by the stream.
-                            requested.set()
-                            try:
-                                process.terminate()
-                            except OSError:
-                                requested.clear()
-                                logging.getLogger(__name__).warning("Lark message consumer could not reconnect")
+                                if (
+                                    worker is not None and worker[2].owner_binding_id
+                                    and current is not None and current[0] is worker[0]
+                                ):
+                                    self._disconnect_message_consumer(current)
                     except Exception:
                         logging.getLogger(__name__).warning("Private Chat source observation is unavailable")
                     ingress = None
@@ -311,6 +319,28 @@ class LarkGoalTopicRuntimeService:
         with self._lock:
             return {profile: dict(health) for profile, health in self._health.items()}
 
+    @staticmethod
+    def _disconnect_message_consumer(consumer: MessageConsumer) -> bool:
+        """End the current pipe under the service lock and let the worker drain."""
+
+        stop, process, requested = consumer
+        if stop.is_set():
+            return False
+        if not requested.is_set() and process.poll() is None:
+            requested.set()
+            try:
+                process.terminate()
+            except OSError:
+                requested.clear()
+                logging.getLogger(__name__).warning("Lark message consumer could not reconnect")
+                return False
+        return True
+
+    @staticmethod
+    def _consumer_lease_key(profile: str, config: Mapping[str, str]) -> str:
+        identity = config.get("bot_app_id") or profile
+        return str(config.get("consumer_ref") or hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32])
+
     def _profile_worker_fingerprint(
         self,
         snapshot: Mapping[str, Any],
@@ -322,16 +352,18 @@ class LarkGoalTopicRuntimeService:
             if self.action_service is not None
             else ()
         )
-        app_ref = str(profile_config.get("bot_app_id") or "")
+        app_id = str(profile_config.get("bot_app_id") or "")
         binding_id = str(profile_config.get("binding_id") or "")
-        # A same-App replacement changes which workspace receives live input.
-        # Keep the App lease identity, but retire the old worker on refresh.
-        worker_ref = f"{app_ref}:{binding_id}" if app_ref and binding_id else app_ref or binding_id
-        return (
-            str(profile_config.get("cli_bin") or "lark-cli"),
-            worker_ref,
-            str(profile_config.get("consumer_ref") or ""),
-            callback_chats,
+        owner_binding_id = binding_id if app_id and profile_config.get("audience") == "owner" else ""
+        return ProfileWorkerFingerprint(
+            transport=ProfileTransport(
+                cli_bin=str(profile_config.get("cli_bin") or "lark-cli"),
+                app_id=app_id,
+                consumer_lease_key=self._consumer_lease_key(profile, profile_config),
+                callback_chats=callback_chats,
+                other_binding_id="" if owner_binding_id else binding_id,
+            ),
+            owner_binding_id=owner_binding_id,
         )
 
     def _poll_profile(self, profile: str, stop: threading.Event) -> None:
@@ -436,7 +468,10 @@ class LarkGoalTopicRuntimeService:
                     private_binding = private_profiles.get(profile) if isinstance(private_profiles, Mapping) else None
                     binding_id = private_binding.get("binding_id") if isinstance(private_binding, Mapping) else None
                     reconnect_requested = threading.Event()
-                    private_admitter = self._admit_private if self.private_conversations is not None else None
+                    # A group-only connection must not pick up private work
+                    # read before a newly added owner binding.
+                    private_admitter = (self._admit_private if self.private_conversations is not None
+                                        and isinstance(private_binding, Mapping) else None)
                     bound_owner = (
                         private_admitter is not None
                         and isinstance(binding_id, str) and bool(binding_id)
@@ -466,9 +501,7 @@ class LarkGoalTopicRuntimeService:
                     app_id = str(profile_config.get("bot_app_id") or "")
                     # A composed legacy route explicitly retains its original
                     # profile lease. Otherwise both paths use the App digest.
-                    digest = str(profile_config.get("consumer_ref") or (
-                        hashlib.sha256((app_id or profile).encode("utf-8")).hexdigest()[:32]))
-                    digests = {digest}
+                    digests = {self._consumer_lease_key(profile, profile_config)}
                     if app_id:
                         digests.add(hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32])
                     # A legacy/shared consumer holds both identities: wait for
@@ -490,7 +523,7 @@ class LarkGoalTopicRuntimeService:
                                 route, self.runtime_controller
                             )
 
-                        process_options = {"process_factory": start_consumer} if bound_owner else {}
+                        process_options = {"process_factory": start_consumer} if self.private_conversations is not None else {}
                         try:
                             result = runtime.stream_lark_goal_topic_profile(
                                 profile=profile,
@@ -611,7 +644,22 @@ class LarkGoalTopicRuntimeService:
                 if self._workers[profile][2] != desired[profile]
             }
             for profile in stale:
-                stop, _thread, _fingerprint = self._workers.pop(profile)
+                stop, thread, previous = self._workers[profile]
+                replacement = desired.get(profile)
+                consumer = self._message_consumers.get(profile)
+                if (
+                    replacement is not None
+                    and previous.transport == replacement.transport
+                    and consumer is not None
+                    and consumer[0] is stop
+                ):
+                    # Group routes still own their queued messages. The old
+                    # private admission closure fences its revoked binding
+                    # while the same worker drains under the existing App lease.
+                    if self._disconnect_message_consumer(consumer):
+                        self._workers[profile] = (stop, thread, replacement)
+                    continue
+                self._workers.pop(profile)
                 stop.set()
             missing = set(desired) - set(self._workers)
             for profile in sorted(missing):
