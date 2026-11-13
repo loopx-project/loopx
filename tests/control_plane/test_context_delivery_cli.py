@@ -136,9 +136,6 @@ def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, mon
         assert max(sizes) > 3072
     # Page reads have no authority or settlement effects.
     assert _heartbeat_receipt_count(runtime, "reader-budget") == 0 and _spend_run_count(runtime) == 0
-    code, rejected = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(capture),
-        "--capture-sha256", digest, "--max-page-output-bytes", "1")
-    assert code == 1 and not rejected["ok"] and "same capture" in rejected["reason"]
     assert _spend_run_count(runtime) == 0
 
 

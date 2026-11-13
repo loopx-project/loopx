@@ -652,7 +652,8 @@ def test_compact_recovery_reference_rejects_changed_source_or_route(tmp_path, da
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Private reader references require POSIX")
-@pytest.mark.parametrize("fault", ["missing_pointer", "selection_digest", "observed_scope", "tiny_budget"])
+@pytest.mark.parametrize("fault", ["missing_pointer", "selection_digest", "observed_scope", "tiny_budget",
+    "invalid_read_option", "attached_selection"])
 def test_bounded_context_read_refusal_preserves_recovery(tmp_path, fault):
     from loopx.control_plane.turn_driver import codex_context
     from loopx.control_plane.turn_driver.decision_capture import (
@@ -663,7 +664,10 @@ def test_bounded_context_read_refusal_preserves_recovery(tmp_path, fault):
     capture_dir.mkdir(mode=0o700)
     source = capture_dir / "decision.json"
     fields = {f"child_{i:02d}": "private body" for i in range(18)}
-    payload = {"task": fields, "tail": "完整原文。" * 240, "stop": "Do not continue past the original limit."}
+    receipt = {"turn_instance_id": "original-turn"}
+    payload = {"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": receipt, "task": fields, "tail": "完整原文。" * 240,
+        "stop": "Do not continue past the original limit."}
     digest = write_decision_capture(source, payload)
     old_bytes = source.read_bytes()
     registry, runtime = tmp_path / "never-open-registry.json", tmp_path / "never-open-runtime"
@@ -697,15 +701,25 @@ def test_bounded_context_read_refusal_preserves_recovery(tmp_path, fault):
             command = page["next_command"]
         pytest.fail("The returned same-capture recovery cursor did not reach EOF")
 
-    if fault == "tiny_budget":
-        response = invoke("--select", "/task/missing", cap=14)
+    if fault in {"tiny_budget", "invalid_read_option"}:
+        options = ("--list", "--list-depth", "9") if fault == "invalid_read_option" else ("--select", "/task/missing")
+        response = invoke(*options, cap=14)
         assert response.returncode == 1 and len(response.stdout) <= 14
         assert json.loads(response.stdout) == {"ok": False}
-        response = invoke("--select", "/task/missing", cap=2)
+        response = invoke(*options, cap=2)
         assert response.returncode == 1 and response.stdout == b""
+        assert source.read_bytes() == old_bytes and not registry.exists() and not runtime.exists()
         return
     if fault == "missing_pointer":
         response = invoke("--select", "/task/child_00", "--select", "/task/missing", "--page-bytes", "720")
+    elif fault == "attached_selection":
+        context_dir = tmp_path / "native"
+        context_dir.mkdir(mode=0o700)
+        project = [*base[:-1], "context-project", *explicit, "--max-page-output-bytes", str(bound),
+            "--codex-app", "--context-delivery", "on", "--codex-context-dir", str(context_dir),
+            "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", receipt["turn_instance_id"],
+            "--select", "/tail"]
+        response = run(project)
     elif fault == "selection_digest":
         first = invoke("--select", "/tail", "--page-bytes", "256", cap=4000)
         page = json.loads(first.stdout)
@@ -753,8 +767,11 @@ def test_bounded_context_read_refusal_preserves_recovery(tmp_path, fault):
         assert failure["diagnostic_code"] == "context_selection_missing_pointer"
         assert len(selection) == 1 and selection[0]["pointer"] == "/task"
         assert {item["pointer"] for item in selection[0]["fields"]} == {"/task/" + key for key in fields}
-    elif fault == "selection_digest":
-        assert "digest changed" in failure["reason"]
+    elif fault in {"selection_digest", "attached_selection"}:
+        if fault == "selection_digest":
+            assert "digest changed" in failure["reason"]
+        else:
+            assert failure["error_code"] == "quota_decision_transport_failed"
         assert selection == [{"pointer": "/tail", "value": payload["tail"]}]
     else:
         assert "scope changed" in failure["reason"]

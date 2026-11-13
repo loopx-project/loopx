@@ -1508,7 +1508,9 @@ their diagnostic code. These failures do not require restoring a healthy
 capture. Missing or damaged capture files still fail closed through the
 original file/digest checks. Reading again never reruns admission.
 
-The captured reader's serialized output budget also applies to refusals.
+The captured reader's serialized output budget also applies to invalid read
+options and refusals. If the budget cannot carry a JSON object, the command
+exits unsuccessfully with no stdout.
 If an ordinary recovery command cannot fit or its pages cannot advance, the
 reader can return a compact private reference for the same source and scope.
 If even that will not fit, retry the original read with a sufficient tool
@@ -1572,7 +1574,8 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
 文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 
-捕获读取器的序列化输出预算也适用于拒绝回包。普通恢复命令过长或无法在预算内
+捕获读取器的序列化输出预算也适用于参数无效和其他拒绝回包。如果预算连 JSON 对象
+都装不下，命令以失败退出，stdout 为空。普通恢复命令过长或无法在预算内
 翻页时，可以返回绑定同一来源及选区的私有短引用。若短引用也放不下，请用足够
 的工具预算重试原读取命令。不要复用被拒绝的偏移，也不要重新准入。
 

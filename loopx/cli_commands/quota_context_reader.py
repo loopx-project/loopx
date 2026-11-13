@@ -389,7 +389,7 @@ def _bounded_context_read_failure(payload: dict[str, Any], limit: int | None, *,
     """Keep an intact diagnostic and a usable original-capture locator when they fit."""
     if type(limit) is not int or limit <= 0 or (restart_fits and _page_output_size(payload) <= limit):
         return payload
-    diagnostic = {key: payload[key] for key in ("ok", "schema_version", "error_kind", "diagnostic_code")
+    diagnostic = {key: payload[key] for key in ("ok", "schema_version", "error_code", "error_kind", "diagnostic_code")
                   if key in payload}
     command = payload.get("recovery_command") if restart_fits else None
     if command is None or _page_output_size({**diagnostic, "recovery_command": command}) > limit:
@@ -527,9 +527,13 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
 
             width = 10 ** len(str(MAX_REQUEST_BYTES))
             selectors = fallback[1]["selection"]["select"] if fallback else select
+            if selectors is None and list_fields:
+                selectors = [""]
+            if selectors is None and initial_read:
+                selectors = []
             frame = _render_capture_page(path, "\x00", digest, offset=width, total=width * 9,
                 size=page_bytes, output_limit=restart_limit, instruction=False,
-                select=[] if selectors is None else selectors, selection_sha256=digest,
+                select=selectors, selection_sha256=digest,
                 list_fields=list_fields, list_depth=list_depth, initial_read=initial_read,
                 reference_file=reference, reader_argv=reader_argv)
             return _bounded_context_read_failure(failure, output_limit,
@@ -988,7 +992,11 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")
     elif "recovery_command" not in page:
-        return {"ok": False, **page, "recovery_command": recovery["command"]}
+        # Preserve the verified navigation when it fits. The attached read
+        # may have been refused precisely because its opening was too large.
+        fallback = {"ok": False, **page, "recovery_command": recovery["command"]}
+        if output_limit is None or _page_output_size(fallback) <= output_limit:
+            return fallback
     return page
 
 
