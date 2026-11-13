@@ -4,6 +4,7 @@ The deterministic actor proves transport/adoption attribution, not model quality
 or a causal benchmark gain. No evaluator, credentials or active Goal are used.
 """
 import hashlib
+from datetime import datetime, timezone
 from itertools import groupby
 import json
 import shlex
@@ -1125,24 +1126,88 @@ def test_disabled_new_attachment_rejects_before_primary_commit(tmp_path):
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 
 
-def test_committed_pending_capture_recovers_after_disable_without_new_authority(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_work_yardstick_successor_remains_current_after_clock_rollback(tmp_path, provider, monkeypatch, capsys):
+    from loopx.cli import main
+
+    project, runtime, path = setup(tmp_path, provider=provider)
+    source = tmp_path / "finding.json"
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100002)
+
+    class AttachmentClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_time.astimezone(tz)
+
+    def record(turn, value):
+        source.write_text(json.dumps(value))
+        run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
+        with monkeypatch.context() as patch:
+            patch.chdir(project)
+            patch.setattr("loopx.control_plane.runtime.time.datetime", AttachmentClock)
+            code = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json",
+                "refresh-state", *binding(turn), "--classification", "validated_change",
+                "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+                "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks"])
+        packet = json.loads(capsys.readouterr().out)
+        assert code == 0 and packet["explore_result_delivery"]["ok"], packet
+        return packet
+
+    first = record("before-clock-change", attachment())
+    run(project, runtime, path, "quota", "spend-slot", *binding("before-clock-change"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    changed = attachment()
+    changed["work_yardstick_decision"]["prior_finding_id"] = first["explore_result_delivery"]["finding_id"]
+    changed["work_yardstick_decision"]["target"]["summary"] = "Follow the validated successor"
+    wall_time = wall_time.replace(microsecond=100001)
+    second = record("after-clock-change", changed)
+    assert second["explore_result_recorded_at"] < first["explore_result_recorded_at"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == second["explore_result_delivery"]["finding_id"]
+    assert cue["target"]["summary"] == "Follow the validated successor"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_committed_pending_capture_recovers_after_disable_without_new_authority(
+    tmp_path, provider, monkeypatch, capsys,
+):
     from loopx.cli import main
     import loopx.capabilities.explore.result_writeback as writer
-    project, runtime, path = setup(tmp_path)
+    from loopx.control_plane.runtime.time import parse_timestamp
+
+    project, runtime, path = setup(tmp_path, provider=provider)
     source = tmp_path / "capture.json"
     source.write_text(json.dumps(attachment()))
     turn = "turn-interrupted"
     run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
-    command = ["refresh-state", *binding(turn), "--classification", "validated_change",
-        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks"]
+
+    def refresh_command(turn_id, attachment_path):
+        return ["refresh-state", *binding(turn_id), "--classification", "validated_change",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--explore-result-json", str(attachment_path), "--no-global-sync", "--suppress-external-sinks"]
+
+    command = refresh_command(turn, source)
+
+    wall_time = datetime.now(timezone.utc).replace(microsecond=100001)
+
+    class AttachmentClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_time.astimezone(tz)
+
+    def run_refresh(args):
+        with monkeypatch.context() as patch:
+            patch.chdir(project)
+            patch.setattr("loopx.control_plane.runtime.time.datetime", AttachmentClock)
+            rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *args])
+        return rc, json.loads(capsys.readouterr().out)
+
     def unavailable(*args, **kwargs):
         raise OSError("injected graph write interruption")
+
     with monkeypatch.context() as patch:
-        patch.chdir(project)
         patch.setattr(writer, "append_explore_result_events", unavailable)
-        rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *command])
-        failed = json.loads(capsys.readouterr().out)
+        rc, failed = run_refresh(command)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
     run(project, runtime, path, "quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
     # Work continues while the old graph delivery is pending. Its later exact
@@ -1151,14 +1216,24 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
     newer = attachment()
     newer["work_yardstick_decision"]["target"]["summary"] = "Use the updated current target"
     newer_source.write_text(json.dumps(newer))
-    latest = refresh(project, runtime, path, "turn-newer", newer_source)
-    assert latest["explore_result_delivery"]["ok"]
+    run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-newer"))
+    wall_time = wall_time.replace(microsecond=100002)
+    rc, latest = run_refresh(refresh_command("turn-newer", newer_source))
+    assert rc == 0 and latest["explore_result_delivery"]["ok"], latest
+    assert latest["generated_at"] == failed["generated_at"]
     config = json.loads(path.read_text())
     config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
     path.write_text(json.dumps(config))
     recovered = run(project, runtime, path, *command)
     assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
-    assert len(load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))) == 3
+    assert recovered["explore_result_recorded_at"] == failed["explore_result_recorded_at"]
+    assert parse_timestamp(recovered["explore_result_recorded_at"]) < parse_timestamp(latest["explore_result_recorded_at"])
+    events = load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))
+    assert len(events) == 3
+    recovered_finding = next(
+        row for row in events if row.get("result_id") == recovered["explore_result_delivery"]["finding_id"]
+    )
+    assert recovered_finding["recorded_at"] == failed["explore_result_recorded_at"]
     assert "work_yardsticks" not in context(runtime, path)["graph"]
     config["goals"][0]["execution_profile"]["yardstick_enabled"] = True
     path.write_text(json.dumps(config))
