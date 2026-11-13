@@ -55,8 +55,8 @@ def test_poll(tmp_path, monkeypatch, provider, scoped_gate, bound_turn):
 
     # This is a successful negative observation, not an unavailable tool/source.
     assert not (tmp_path / "project/inputs/ready.json").exists()
-    argv = ["input-absent" if arg == "${LOOPX_MONITOR_RESULT_HASH:?}" else arg
-        for arg in poll_commands[0][1:]]
+    argv = poll_commands[0][1:]
+    argv[argv.index("--result-hash") + 1] = "input-absent"
     poll = call(*argv)
     assert poll["ok"] is True
     writeback = poll["todo_writeback"]

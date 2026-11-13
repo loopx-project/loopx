@@ -5,6 +5,7 @@ from typing import Any, cast
 from ..goals.acceptance_readback import configured_checks
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
+from ..quota.effect_program import required_environment_arg
 from ..quota.execution_preparation import attach_interaction_execution_preparation
 from ..effect_runtime import effect_runtime_result
 import json
@@ -73,6 +74,11 @@ AUXILIARY_MONITOR_OBSERVATION_INPUT_SCHEMA_VERSION = (
     "auxiliary_monitor_observation_input_v0"
 )
 AUXILIARY_MONITOR_RESULT_HASH_ENV = "LOOPX_MONITOR_RESULT_HASH"
+MONITOR_RESULT_HASH_INSTRUCTION = (
+    "Set the hash from the actual observation before polling. "
+    "PowerShell: `$env:LOOPX_MONITOR_RESULT_HASH = '<actual-observation-digest>'`; "
+    "POSIX: `export LOOPX_MONITOR_RESULT_HASH='<actual-observation-digest>'`."
+)
 
 
 class _InteractionContractRequired(typing.TypedDict):
@@ -861,15 +867,15 @@ def _admitted_interaction_next_cli_actions(
             return [f"{typed_quota_guard}{monitor_args} {turn_instance_arg()}"]
         if monitor.get("target_key"):
             monitor_args += f" --target-key {shlex.quote(str(monitor['target_key']))}"
-        monitor_args += f" --turn-instance-id {shlex.quote(turn_instance_id)}"
+        monitor_args += f" {turn_instance_arg(turn_instance_id)}"
         return [
             "Check the selected Monitor once. A successful check with its condition unmet "
             "(including an absent watched file) is an unchanged observation: record it below. "
-            "Use a digest of the actual observation; add --material-change only for a verified change. "
+            f"{MONITOR_RESULT_HASH_INSTRUCTION} Add --material-change only for a verified change. "
             "Only inability to obtain an observation uses typed blocked writeback.",
             f"{command_prefix} quota monitor-poll --goal-id {goal_id}{scoped_cli_args}"
             f"{scheduler_args}{goal_ref_arg}{monitor_args} --use-current-task-lease"
-            f' --result-hash "${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}" --execute',
+            f" --result-hash {required_environment_arg(AUXILIARY_MONITOR_RESULT_HASH_ENV)} --execute",
             "The poll advances next_due_at from cadence and settles this Monitor Turn without "
             "refresh-state or quota spend. Yield; independent work requires a fresh guarded Turn.",
         ]
@@ -1513,15 +1519,15 @@ def _build_interaction_cli_channel(
                     f"{command_prefix} quota monitor-poll --goal-id "
                     f"{shlex.quote(str(payload.get('goal_id') or '<GOAL_ID>'))}"
                     f"{_scoped_cli_args(agent_identity, available_capabilities=available_capabilities)}"
-                    f"{auxiliary_scheduler_args} --turn-instance-id "
-                    f"{shlex.quote(safe_turn_instance_id)} --todo-id "
+                    f"{auxiliary_scheduler_args} {turn_instance_arg(safe_turn_instance_id)} --todo-id "
                     f"{shlex.quote(selected_monitor_id)}{target_args} --use-current-task-lease --result-hash "
-                    f'"${{{AUXILIARY_MONITOR_RESULT_HASH_ENV}:?}}"'
+                    f"{required_environment_arg(AUXILIARY_MONITOR_RESULT_HASH_ENV)}"
                     f"{_goal_ref_cli_arg(payload)}"
                 )
                 auxiliary_projection.update(
                     {
                         "availability": "ready",
+                        "next_step": MONITOR_RESULT_HASH_INSTRUCTION,
                         "turn_instance_id": safe_turn_instance_id,
                         "command": f"{command} --execute",
                         "material_change_command": (
