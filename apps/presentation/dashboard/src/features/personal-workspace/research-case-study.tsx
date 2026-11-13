@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import type {TrajectoryCaseStudy} from '../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js';
 import type {AssessmentCitation} from '../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js';
 import {MarkdownText} from './markdown';
@@ -54,31 +54,25 @@ function focusChapter(chapter: HTMLElement) {
 }
 
 /** A document's author controls the composition; the host owns navigation and evidence. */
-export function ResearchCaseStudy({study, zh, historical, active, scope, navigation, onCitation, onLeaveCitation}: {
+export function ResearchCaseStudy({study, zh, historical, active, scope, navigation, onCitation, onCitationLocationChange}: {
   study: TrajectoryCaseStudy; zh: boolean; historical: boolean; active: boolean;
   scope: {case_id: string; run_id: string; revision: string; window: string};
   navigation: {url: URL; goalId: string; packId: string; namespace: string | null; follow: (href: URL, replace?: boolean) => void};
   onCitation: (c: AssessmentCitation, origin: HTMLElement, bookmark: CaseCitationBookmark) => void;
-  onLeaveCitation: () => void;
+  onCitationLocationChange: (hash: string) => void;
 }) {
   const article = useRef<HTMLElement>(null);
-  const openedHash = useRef("");
   const openCitation = useRef(onCitation);
   openCitation.current = onCitation;
   const [missingCitation, setMissingCitation] = useState(false);
   const {url, goalId, packId, namespace, follow} = navigation;
   const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
-  const leaveCitation = useCallback(() => {
-    if (!openedHash.current) return;
-    openedHash.current = "";
-    onLeaveCitation();
-  }, [onLeaveCitation]);
   useEffect(() => {
     if (!active) return;
     let frame = 0;
     const restore = () => {
       cancelAnimationFrame(frame);
-      if (openedHash.current && openedHash.current !== window.location.hash) leaveCitation();
+      onCitationLocationChange(window.location.hash);
       frame = requestAnimationFrame(() => {
         const {searchParams, hash} = new URL(window.location.href);
         if (searchParams.get('view') !== 'research' || searchParams.get('research_reading') !== 'case'
@@ -87,7 +81,6 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
         const citationLink = hash.startsWith(caseChapterHashPrefix) && hash.includes('~');
         const scoped = hash.startsWith(`#${prefix}`);
         if (citationLink) {
-          if (openedHash.current === hash) return;
           // Resolve an ordinal against this saved study. Never turn URL text
           // into a source identifier or range for the evidence API.
           const match = scoped ? /^([a-zA-Z0-9_-]*)~([1-9][0-9]?)$/.exec(hash.slice(prefix.length + 1)) : null;
@@ -102,7 +95,6 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
           setMissingCitation(false);
           const disclosure = origin.closest('details');
           if (disclosure) disclosure.open = true;
-          openedHash.current = hash;
           openCitation.current(citation, origin, {hash, chapterHash: section ? `#${prefix}${section}` : ""});
           return;
         }
@@ -120,7 +112,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
       window.removeEventListener('popstate', restore);
       window.removeEventListener('hashchange', restore);
     };
-  }, [active, goalId, packId, prefix, study, leaveCitation]);
+  }, [active, goalId, packId, prefix, study, onCitationLocationChange]);
   const citationLinks = (citations: AssessmentCitation[], section = "") => <ul className="case-citation-links" role="list">
     {citations.map((c, i) => {
       const id = `${prefix}${section}~${i + 1}`;
@@ -131,7 +123,6 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
         e.preventDefault();
         setMissingCitation(false);
         follow(href, true);
-        openedHash.current = href.hash;
         onCitation(c, e.currentTarget, {hash: href.hash, chapterHash: section ? `#${prefix}${section}` : ""});
       }}>
         {c.source_id} · {zh ? '行' : 'lines'} {c.first_line}–{c.last_line} <span aria-hidden="true">↗</span>
@@ -160,7 +151,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
         return <a key={s.id} href={href.href} onClick={e => {
           if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
           e.preventDefault();
-          leaveCitation();
+          onCitationLocationChange(href.hash);
           setMissingCitation(false);
           follow(href);
           const chapter = document.getElementById(id);

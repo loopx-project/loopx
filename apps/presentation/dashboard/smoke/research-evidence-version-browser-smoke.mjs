@@ -163,6 +163,19 @@ try {
   });
   assert.equal(new URL(page.url()).hash, address.hash);
   assert.equal(await citation.count(), 0);
+  // Paste the same permalink in the existing document. This exercises the
+  // browser route, where neither the link's click handler nor reload runs.
+  const documentStart = await page.evaluate(() => performance.timeOrigin);
+  const readsBeforeReopen = sourceRequests.length;
+  await page.evaluate(href => {window.location.assign(href);}, bookmark.href);
+  await citation.locator("pre").first().waitFor({timeout: 6_000});
+  assert.equal(await page.evaluate(() => performance.timeOrigin), documentStart);
+  assert.equal(await citation.locator("pre").first().textContent(), expectedSource.text);
+  assert.deepEqual(sourceRequests.slice(readsBeforeReopen), [originalQuery],
+    "Reopening a closed permalink reads its original evidence exactly once");
+  await citation.getByRole("button", {name: "关闭原文", exact: true}).click();
+  assert.equal(new URL(page.url()).hash, address.hash);
+  assert.equal(await citation.count(), 0);
   // A valid position from another pack must never fall through to this pack.
   const misplaced = new URL(bookmark);
   misplaced.searchParams.set("research_pack", otherPack.pack_id);

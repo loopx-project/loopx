@@ -32,11 +32,11 @@ type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: 
 type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
 type EvidenceRead = {
   scope: string;
-  bookmark?: CaseCitationBookmark;
   busy?: boolean;
   value?: Citation;
   failure?: {message: string; route: string; selection: Record<string, string>};
 };
+type EvidenceTrigger = {origin?: HTMLElement; bookmark?: CaseCitationBookmark};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -96,12 +96,16 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const [evidenceRead, setEvidenceRead] = useState<EvidenceRead | null>(null);
   const citeGeneration = useRef(0);
   const sourcePanel = useRef<HTMLElement>(null);
-  const sourceTrigger = useRef<HTMLElement | null>(null);
+  const sourceTrigger = useRef<(EvidenceTrigger & {scope: string}) | null>(null);
   const invalidateCitation = useCallback(() => {
     citeGeneration.current++;
     sourceTrigger.current = null;
     setEvidenceRead(null);
   }, []);
+  const onCitationLocationChange = useCallback((hash: string) => {
+    const activeBookmark = sourceTrigger.current?.bookmark;
+    if (activeBookmark && activeBookmark.hash !== hash) invalidateCitation();
+  }, [invalidateCitation]);
   const [location, setLocation] = useState(() => locationFor(goalId));
   const sourceScope = JSON.stringify([goalId, outputLanguage, readSourceUrl ?? ""]);
   const [readState, setReadState] = useState<{scope: string; packId: string | null; snapshot: Snapshot | null; error: string; loading: boolean}>(
@@ -266,12 +270,13 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     } catch (e) {if (current === generation.current) setError(errorText(e));}
     finally {if (current === generation.current) setCancelPending(false);}
   };
-  const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLElement, bookmark?: CaseCitationBookmark) => {
+  const readEvidence = async (selection: Record<string, string>, route: string, trigger?: EvidenceTrigger) => {
     const p = readingPack;
     if (!p || evidenceScope === null) return;
-    if (origin) sourceTrigger.current = origin;
+    if (trigger) sourceTrigger.current = {...trigger, scope: evidenceScope};
+    const bookmark = sourceTrigger.current?.bookmark;
     const current = ++citeGeneration.current;
-    setEvidenceRead({scope: evidenceScope, bookmark, busy: true});
+    setEvidenceRead({scope: evidenceScope, busy: true});
     const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key,
       ...(p.config.output_language ? {output_language: p.config.output_language} : {}), ...selection});
     try {
@@ -280,20 +285,25 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
           || String(value.last_line) !== selection.last_line)) {
         throw new Error(zh ? "原文读回与引用范围不一致。" : "The original returned does not match the cited range.");
       }
-      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, bookmark, value});
+      if (current === citeGeneration.current) setEvidenceRead({scope: evidenceScope, value});
     } catch (e) {
       if (current === citeGeneration.current) setEvidenceRead({
-        scope: evidenceScope, bookmark, failure: {message: errorText(e), route, selection},
+        scope: evidenceScope, failure: {message: errorText(e), route, selection},
       });
     }
   };
-  const readCitation = (c: AssessmentCitation, origin?: HTMLElement, bookmark?: CaseCitationBookmark) =>
-    readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin, bookmark);
-  const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
-  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route, undefined, visibleEvidence?.bookmark) : undefined;
+  const readCitation = (c: AssessmentCitation, origin?: HTMLElement, bookmark?: CaseCitationBookmark) => {
+    const activeTrigger = sourceTrigger.current;
+    // Coalesce browser navigation events only while this source panel is open.
+    if (bookmark && activeTrigger && activeTrigger.scope === evidenceScope && activeTrigger.bookmark?.hash === bookmark.hash) return;
+    return readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)},
+      "citation", {origin, bookmark});
+  };
+  const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", {origin});
+  const retryCitation = failedCitation ? () => void readEvidence(failedCitation.selection, failedCitation.route) : undefined;
   const closeCitation = () => {
-    const origin = sourceTrigger.current;
-    const bookmark = visibleEvidence?.bookmark;
+    const trigger = sourceTrigger.current;
+    const {origin, bookmark} = trigger && trigger.scope === evidenceScope ? trigger : {};
     if (bookmark && window.location.hash === bookmark.hash) {
       const url = new URL(window.location.href);
       url.hash = bookmark.chapterHash;
@@ -303,7 +313,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     const closedAt = citeGeneration.current;
     requestAnimationFrame(() => {if (closedAt === citeGeneration.current) origin?.focus();});
   };
-  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, invalidateCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, retryCitation, closeCitation, onCitationLocationChange, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     studyNavigation, close: () => {invalidateCitation(); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -425,7 +435,8 @@ export function ResearchCaseReading({analysis: a, active, onHistory}: {analysis:
       </select></label> : null}<button type="button" onClick={() => {a.closeCitation(); onHistory();}}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
     <AnalysisReadState analysis={a}/>
     {p?.case_study ? <ResearchCaseStudy key={`${p.pack_id}:${p.analysis_key}`} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"} active={active}
-      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation} onLeaveCitation={a.invalidateCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+      scope={p.scope} navigation={a.studyNavigation(p.pack_id)} onCitation={a.readCitation}
+      onCitationLocationChange={a.onCitationLocationChange}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
     <ResearchCitationPanel analysis={a}/>
   </section>;
 }
