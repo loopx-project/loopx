@@ -1,7 +1,8 @@
 """Transient Codex host events adapted to native-child receipts.
 
 Only opaque identities and typed outcomes reach the existing multi_subagent
-log. Prompts, child messages and raw tool output are never retained.
+log. A supported host may retain the final child message in the coordinator's
+owner-private local inbox; prompts and raw tool output are never retained.
 """
 from __future__ import annotations
 
@@ -13,6 +14,9 @@ from typing import Any
 
 from ..capabilities.multi_subagent.native_child_receipts import (
     _load_native_child_events, record_native_child,
+)
+from ..capabilities.multi_subagent.native_child_result_inbox import (
+    ingest_native_child_result,
 )
 
 
@@ -160,6 +164,18 @@ class CodexNativeChildObserver:
                 wait_ref = "codex-wait-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
             operation_id = self._restore_operation(child, wait_ref=wait_ref) if wait_ref else decision_id
             if operation_id is not None:
+                message = state.get("message")
+                if isinstance(message, str):
+                    ingest_native_child_result(
+                        runtime_root=self.runtime_root,
+                        goal_id=self.lineage["goal_id"],
+                        agent_id=self.lineage["agent_id"],
+                        turn_instance_id=self.turn_instance_id,
+                        operation_id=operation_id,
+                        outcome=outcome,
+                        text=message,
+                        goal_ref=self.goal_ref,
+                    )
                 self._record(stage="result", operation_id=operation_id, outcome=outcome,
                              _host_wait_ref=wait_ref)
 

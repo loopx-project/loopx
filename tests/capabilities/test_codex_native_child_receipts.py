@@ -56,6 +56,14 @@ def test_host_spawn_result_parent_review_and_restart(tmp_path: Path):
     assert len(events) == 4
     assert "private child" not in json.dumps(events)
     assert all(event.get("event_kind") != "quota_spend" for event in events)
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    inbox = effect_runtime_result("multi_subagent.native_result_inbox", {
+        "operation": "list", "runtime_root": str(tmp_path),
+        "goal_id": GOAL, "agent_id": AGENT, "goal_ref": None,
+    })
+    assert len(inbox["items"]) == 1
+    assert inbox["items"][0]["text"] == "private child result"
+    assert inbox["items"][0]["operation_id"] == operation["operation_id"]
 
 
 @pytest.mark.parametrize("items", [[], [{"type": "agentMessage", "text": "I spawned three children"}],

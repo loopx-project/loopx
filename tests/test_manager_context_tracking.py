@@ -67,6 +67,42 @@ def test_delivery_read_decision_are_separate_and_restart_safe(fixture, capsys):
     assert status()["delivery"]["at"] == first["delivery"]["at"]
 
 
+def test_next_turn_requires_reading_a_durable_native_child_result(fixture, capsys):
+    from loopx.capabilities.multi_subagent.native_child_result_inbox import (
+        ingest_native_child_result,
+    )
+
+    root, registry, _session, _turn, _target = fixture
+    created = ingest_native_child_result(
+        runtime_root=root,
+        goal_id="research",
+        agent_id="worker",
+        turn_instance_id="turn-native-result",
+        operation_id="operation-native-result",
+        outcome="completed",
+        text="The independent check found one actionable boundary.",
+    )
+    hook = turn_start_hook(root, registry, "research", "worker")
+    observed = hook.producer()
+    assert observed["status"] == "observed"
+    assert observed["agent_read_required"] is True
+    assert observed["observation_count"] == 1
+
+    args = Namespace(manager_inbox_action="read", goal_id="research", agent_id="worker")
+    assert handle_manager_inbox(args, registry, root) == 0
+    read = json.loads(capsys.readouterr().out)
+    [result] = read["native_child_results"]["items"]
+    assert result["result_id"] == created["result_id"]
+    assert result["text"] == "The independent check found one actionable boundary."
+    assert "native-child acknowledge-result" in result["acknowledge_command"]
+
+    # Delivery does not consume the result; without acknowledgement, restart
+    # projects the same stable identity again on the next Turn.
+    replay = turn_start_hook(root, registry, "research", "worker").producer()
+    assert replay["agent_read_required"] is True
+    assert replay["observation_count"] == 1
+
+
 def test_legacy_decision_is_not_a_fabricated_read(fixture):
     root, registry, session, turn, target = fixture
     rid = deliver(root, registry, session=session, turn=turn, request=target)[
