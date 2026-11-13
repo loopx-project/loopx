@@ -1,6 +1,7 @@
 """Public synthetic provider/native Core journeys, never private credentials."""
 import json
 import re
+import sys
 import time
 import http.client
 import threading
@@ -2356,6 +2357,65 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
         assert all(not transport.core.context_recovery_candidate(row["request_ref"]) for row in rows)
     finally:
         runtime.close()
+
+
+def test_settings_health_reuses_core_correlation_but_observes_current_work(tmp_path, monkeypatch):
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.chat_store import _atomic_write_json
+    from test_private_chat_backlog_projection import fixture_history
+
+    store, core, transport, rows = fixture_history(tmp_path, count=2)
+    partial, completed = rows
+    binding = partial["binding_id"]
+    sid = partial["session_id"]
+    partial_path = transport.root / f"{partial['request_ref']}.json"
+    completed_path = transport.root / f"{completed['request_ref']}.json"
+    partial_request, completed_request = core.root / partial_path.name, core.root / completed_path.name
+    response = {"schema_version": "loopx_chat_agent_response_v0",
+                "message": "Original result", "proposals": []}
+    store.update_turn(sid, partial["turn_id"], status="completed", response={
+        **response, "unfinished_work": {"remaining": "Return the report", "dependency": "Worker",
+                                        "effects_settled": True}})
+    store.update_turn(sid, completed["turn_id"], status="completed", response=response)
+    initial_partial = json.loads(partial_path.read_text())
+    _atomic_write_json(partial_path, {**initial_partial, "deliveries": {
+        "terminal": {"started": True, "verified": False}}})
+    read_request = external_conversations._read_json
+    request_reads = []
+
+    def observe(path):
+        request_reads.append(path)
+        return read_request(path)
+
+    monkeypatch.setattr(external_conversations, "_read_json", observe)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    assert set(request_reads) == {partial_request, completed_request}
+    request_reads.clear()
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    # Windows has no reliable ctime mutation stamp; its reader stays fresh.
+    assert set(request_reads) == ({partial_request, completed_request} if sys.platform == "win32" else set())
+    request_reads.clear()
+
+    # Independent native updates must not wait for the Lark receipt to change.
+    store.update_turn(sid, partial["turn_id"], status="completed", response=response)
+    store.update_turn(sid, completed["turn_id"], status="failed", error_code="usage_limit_exceeded", response=None)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 0}
+    assert set(request_reads) == ({partial_request, completed_request} if sys.platform == "win32" else set())
+    request_reads.clear()
+
+    # Atomically replace the journal with one from a different source. Core
+    # must not pair the original delivery with this changed request.
+    _atomic_write_json(completed_request, {**completed, "source": {"source_ref": "e" * 24}})
+    assert transport.health()[binding] == {"pending_count": 0, "recovery_count": 0}
+    assert completed_request in request_reads
+    _atomic_write_json(completed_request, completed)
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 0}
+
+    _atomic_write_json(completed_path, {**json.loads(completed_path.read_text()), "status": "accepted",
+                                       "deliveries": {"terminal": {"started": True, "verified": False}}})
+    assert transport.health()[binding] == {"pending_count": 1, "recovery_count": 1}
+    completed_path.unlink()
+    assert transport.health()[binding] == {"pending_count": 0, "recovery_count": 0}
 
 
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",

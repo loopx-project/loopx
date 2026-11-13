@@ -6,8 +6,9 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import cache
 from pathlib import Path
 import hashlib
 import json
@@ -105,6 +106,7 @@ class ChatExternalConversations:
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
         self._source_control_discovery = FileChatDiscovery()
+        self._backlog_request_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _retained_result_review(self, row: dict[str, Any]) -> dict[str, Any] | None:
@@ -283,20 +285,22 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
                 for item in (source_controls or self.source_controls)())))
 
-    def quota_backlog_observer(self) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
-        """Batch the existing typed projection; share controls only within this read."""
-        controls: list[dict[str, Any]] | None = None
+    def quota_backlog_observer(
+        self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
+    ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
+        """Reuse Session metadata and controls within one observation, with fresh Turns."""
+        read_controls = cache(source_controls or self.source_controls)
 
-        def read_controls() -> list[dict[str, Any]]:
-            nonlocal controls
-            if controls is None:
-                controls = self.source_controls()
-            return controls
+        @cache
+        def session_view(session_id: str) -> dict[str, Any] | None:
+            session = self.controller.store.load_session(session_id)
+            return ({key: session[key] for key in ("session_id", "status") if key in session}
+                    if session is not None else None)
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
-            params = [self._quota_pending_inputs(row) for row in rows]
+            params = [self._quota_pending_inputs(row, session_view(row["session_id"])) for row in rows]
             flags = self._quota_pending_flags(params)
             stopped = []
             for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
@@ -350,16 +354,11 @@ class ChatExternalConversations:
         flush()
         return flags
 
-    def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
-        store = self.controller.store
-        turn = store.load_turn(row["session_id"], row["turn_id"])
-        session = store.load_session(row["session_id"])
-        # Keep the full request/response evidence. The related Session and
-        # Turn need only identity, lifecycle and result for this read.
+    def _quota_pending_inputs(self, row: dict[str, Any], session: dict[str, Any] | None) -> dict[str, Any]:
+        turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": ({key: session[key] for key in ("session_id", "status") if key in session}
-                                if session is not None else None),
+            "current_session": session,
             "pending_observation": {
                 "turn": ({key: turn[key] for key in ("session_id", "turn_id", "client_turn_id", "status",
                     "error_code", "response") if key in turn} if turn is not None else None),
@@ -370,22 +369,7 @@ class ChatExternalConversations:
     def quota_backlog_pending(self, row: dict[str, Any], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Retain quota and declared unfinished work without admitting recovery."""
-        from ...control_plane.effect_runtime import effect_runtime_result
-
-        params = self._quota_pending_inputs(row)
-        observation = params["pending_observation"]
-        turn = observation["turn"]
-        # The typed owner first excludes work that has no retained obligation even
-        # without a stop. Stop evidence can only remove a pending request;
-        # never expose a positive result before reading those native facts.
-        if effect_runtime_result("collaboration.conversation.request", params).get("pending") is not True:
-            return False
-        assert turn is not None  # Required by the typed pending projection.
-        events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
-        if self._source_stop_observed(row, turn, events, source_controls=source_controls):
-            observation["stop_observed"] = True
-            return effect_runtime_result("collaboration.conversation.request", params).get("pending") is True
-        return True
+        return self.quota_backlog_observer(source_controls=source_controls)([row])[0]
 
     def context_recovery_observer(self) -> Callable[[str], bool]:
         """Reuse scan-local hints; reread each request, Turn and binding."""
@@ -1707,6 +1691,21 @@ class ChatExternalConversations:
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")
+
+    def read_backlog_requests(self, request_refs: Iterable[str]) -> Iterator[dict[str, Any]]:
+        """Observe settings correlation, without retaining ordinary request bodies."""
+        fields = ("request_ref", "binding_id", "source", "session_id", "turn_id",
+                  "status", "command", "created_at")
+
+        def project(_path: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+            # Recovery evidence is consumed by the typed pending rule.
+            if any(row.get(k) is not None for k in ("context_recovery", "native_result_recovery")):
+                return None
+            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+
+        paths = (self.root / f"{ref}.json" for ref in request_refs)
+        for _, row in self._backlog_request_discovery.rows(self.root, paths, read=_read_json, project=project):
+            yield row
 
     def commission_evidence(self, session: dict[str, Any]) -> list[dict[str, Any]]:
         """Read original Core execution facts for this exact bound audience.
