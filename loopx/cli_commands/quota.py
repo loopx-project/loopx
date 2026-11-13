@@ -625,6 +625,31 @@ def handle_quota_command(
         registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     if native_result is not None:
         return native_result
+    limit = getattr(args, "max_page_output_bytes", None)
+    def execute() -> int:
+        return _execute_quota_command(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
+            capture_directory=capture_directory, retained_action_selection_todo_id=retained_action_selection_todo_id,
+        )
+
+    if args.quota_command != "should-run" or args.format != "json" or limit is None:
+        return execute()
+    from .quota_failure_report import run_with_quota_failure_reader
+
+    return run_with_quota_failure_reader(args, limit, print_payload=print_payload, run=execute)
+
+
+def _execute_quota_command(
+    args: argparse.Namespace,
+    *,
+    registry_path: Path,
+    runtime_root_arg: str | None,
+    print_payload: PrintPayload,
+    append_cli_rollout_event: RolloutEventAppender,
+    capture_directory: Path | None = None,
+    retained_action_selection_todo_id: str | None = None,
+) -> int:
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -901,7 +926,7 @@ def handle_quota_command(
         # The next evaluation owns its collection and publication failures.
         # This frame may not yet know about a receipt committed by that evaluation.
         reentry_args, retained_todo_id = reentry
-        return handle_quota_command(
+        return _execute_quota_command(
             reentry_args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
             print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
             capture_directory=capture_directory, retained_action_selection_todo_id=retained_todo_id,

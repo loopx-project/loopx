@@ -1,8 +1,11 @@
 """A deferred selection must expose a runnable recovery before settlement."""
 from hashlib import sha256
 import json
+import os
+from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 import pytest
 from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
@@ -495,7 +498,10 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
 @pytest.mark.parametrize(("failure_stage", "limit"), [
     ("collection", 4096), ("capture", 4096), ("registration", 4096),
     ("publication", 4096), ("publication", 900),
-], ids=["collection", "capture", "registration", "publication", "tight-opening"])
+    ("long_route", 900), ("long_route", 650), ("long_route", 256),
+    ("long_no_capture", 650),
+], ids=["collection", "capture", "registration", "publication", "tight-opening",
+        "long-900", "long-650", "no-room", "long-before-capture"])
 def test_inline_replan_failure_reports_the_actual_receipt(
     tmp_path, monkeypatch, capsys, provider, failure_stage, limit,
 ):
@@ -511,6 +517,19 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     turn = "turn-inline-replan-publication"
     retained = "todo_chain_000000000001"
     capture = tmp_path / "original"
+    cli_prefix = []
+    if failure_stage.startswith("long_"):
+        if os.name != "posix":
+            pytest.skip("Exercises a POSIX launcher with spaces")
+        release_prefix = tmp_path / "release "
+        missing = max(1, 227 - len(os.fsencode(release_prefix / "scripts" / "loopx")))
+        launcher = release_prefix.with_name(release_prefix.name + "a" * missing) / "scripts" / "loopx"
+        launcher.parent.mkdir(parents=True)
+        launcher.symlink_to(Path(__file__).resolve().parents[2] / "scripts" / "loopx")
+        monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+        cli_prefix = ["--cli-bin", str(launcher)]
+        capture = tmp_path / ("capture " + "x" * 150) / ("nested " + "x" * 120) / "original"
+        capture.parent.mkdir(parents=True)
     native = tmp_path / "native"
     native.mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-inline-replan")
@@ -548,25 +567,29 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         raise RuntimeError("fixture private capture detail")
 
     with monkeypatch.context() as patch:
-        if failure_stage == "publication":
+        if failure_stage in {"publication", "long_route"}:
             patch.setattr(codex_context, "prepare_codex_context", fail_publication)
         elif failure_stage == "registration":
             patch.setattr(codex_context, "record_native_claim_source", fail_registration)
-        elif failure_stage == "capture":
+        elif failure_stage in {"capture", "long_no_capture"}:
             patch.setattr(quota, "_prepare_quota_result_context", fail_capture)
         else:
             patch.setattr(quota, "build_live_quota_should_run_decision", fail_collection)
-        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        code = main([*cli_prefix, "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--turn-instance-id", turn, "--todo-id", retained, "--context-delivery", "on",
             "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
             "--max-page-output-bytes", str(limit)])
-    stdout = capsys.readouterr().out
-    reply = json.loads(stdout)
+    stdout = capsys.readouterr().out.encode()
+    assert len(stdout) <= limit and b"fixture private" not in stdout
+    reply = json.loads(stdout[:limit])
     assert code == 1 and reply["ok"] is False
-    assert len(stdout.encode()) <= limit and "fixture private" not in stdout
     saved = capture / "decision.json"
     assert _spend_run_count(runtime) == 0
+    if limit == 256:
+        assert "no guard" in reply["reason"].lower()
+        assert _heartbeat_receipt_count(runtime, turn) == 0 and not saved.exists()
+        return
     if failure_stage == "collection":
         assert reply["error_code"] == "quota_unexpected_collection_error"
         assert reply["heartbeat_receipt"]["status"] == "write_failed"
@@ -583,6 +606,19 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         assert _heartbeat_receipt_count(runtime, turn) == 1
         return
 
+    if failure_stage == "long_no_capture":
+        assert not saved.exists() and _heartbeat_receipt_count(runtime, turn) == 1
+        reader = shlex.split(reply["command"])
+        assert reader[:3] == [cli_prefix[1], *cli_prefix]
+        assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
+        page = subprocess.run([*reader, "--select", "/heartbeat_receipt"], cwd=project,
+                              text=True, capture_output=True, timeout=30)
+        assert page.returncode == 0, (page.stdout, page.stderr)
+        receipt = json.loads(json.loads(page.stdout)["content"])["selections"][0]["value"]
+        assert receipt["status"] == "committed"
+        assert receipt["settlement_identity"]["turn_instance_id"] == turn
+        return
+
     [original] = observed
     receipt = json.loads(original)["heartbeat_receipt"]
     assert saved.read_bytes() == original
@@ -591,10 +627,25 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         reader = shlex.split(reply["captured_decision"]["command"])
     else:
         reader = shlex.split(reply["command"])
-    assert reader[reader.index("--capture-sha256") + 1] == sha256(original).hexdigest()
-    page_code, page = _run_cli(registry, runtime, "quota", "context-read",
-        *reader[reader.index("context-read") + 1:],
-        "--select", "/heartbeat_receipt", "--select", "/interaction_contract/cli_channel/next_cli_actions")
+    if "--reference-file" in reader:
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+        ref_path = reader[reader.index("--reference-file") + 1]
+        _, reference = read_context_read_reference(ref_path)
+        assert reference["path"] == str(saved)
+        assert reference["sha256"] == sha256(original).hexdigest()
+    else:
+        assert reader[reader.index("--capture-sha256") + 1] == sha256(original).hexdigest()
+    fields = ["--select", "/heartbeat_receipt", "--select", "/interaction_contract/cli_channel/next_cli_actions"]
+    if cli_prefix:
+        assert reader[:3] == [cli_prefix[1], *cli_prefix]
+        assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
+        response = subprocess.run([*reader, *fields], cwd=project, capture_output=True,
+                                  text=True, timeout=30)
+        page_code, page = response.returncode, json.loads(response.stdout)
+    else:
+        page_code, page = _run_cli(registry, runtime, "quota", "context-read",
+            *reader[reader.index("context-read") + 1:], *fields)
     assert page_code == 0 and page["eof"]
     values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
     assert values["/heartbeat_receipt"] == receipt
