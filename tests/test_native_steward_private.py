@@ -580,12 +580,15 @@ def test_verified_empty_steward_is_not_missing_authorization_and_does_not_inheri
 
 def test_steward_reads_every_registration_across_pages_and_future_goals(steward):
     from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+    from loopx.control_plane.goals.activation import build_goal_activation
     store, runtime, _, transport, binding, _, _ = steward
     source = {"source_ref": "a" * 24, "sender_ref": binding["operator_ref"], "private_human_message": True}
     saved = transport.bindings.resolve(binding_id=binding["binding_id"], **source)["context"]
     goals = [{"id": f"work-{i:03d}", "coordination": {"registered_agents": ["builder", "reviewer"]}}
              for i in range(150)]
-    goals[-1]["activation_state"] = "stopped"
+    goals[-1]["activation"] = build_goal_activation(
+        state="stopped", updated_at="2026-01-01T00:00:00Z", reason="Stopped for the discovery fixture.",
+    )
     runtime.registry_path.write_text(json.dumps({"goals": goals}))
     inspection = ManagerInspection(context={"scope": "external_authorized", "goals": []},
         registry_path=runtime.registry_path, runtime_root=getattr(runtime, "coordination_runtime_root", store.root.parent),
