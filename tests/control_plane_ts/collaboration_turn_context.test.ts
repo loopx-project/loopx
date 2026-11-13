@@ -33,6 +33,31 @@ test("sent work remains visible before return and until the requester consumes i
     results: [{...conclusion, status: "delivered"}]}), []);
 });
 
+test("a returned peer result stays in bounded turn attention even beyond the visible agenda", () => {
+  const observations = Array.from({length: 21}, (_, index) => ({
+    direction: "outgoing",
+    request: {...request, request_id: index.toString(16).padStart(64, "0"), source_kind: "peer"},
+    receipt: index === 20 ? settled : {kind: "pending", recorded_decision: null},
+    todo_ids: [], evidence_unavailable: false,
+    results: index === 20 ? [{...conclusion, status: "delivered"}] : [],
+  }));
+  const batch = projectDelegationTurnItems({observations}) as Record<string, any>;
+  assert.equal(batch.items.length, 20);
+  assert.equal(batch.items.some((row: Record<string, unknown>) => row.request_id === "14".padStart(64, "0")), false);
+  assert.equal(batch.return_attention.count, 1);
+  assert.equal(batch.return_attention.items[0].request_id, "14".padStart(64, "0"));
+  assert.deepEqual(Object.keys(batch.return_attention.items[0]).sort(), [
+    "agent_id", "request_id", "request_revision", "returns", "step", "unconsumed_return_count",
+  ]);
+
+  const result = projectDelegationTurnContext({batches: [batch], scan_complete: true, unavailable_count: 0,
+    read_command: "loopx manager-inbox read", observed_at: "2026-01-01T00:00:00Z"});
+  const attention = (result.unfinished_delegations as Record<string, any>).return_attention;
+  assert.equal(attention.count, 1);
+  assert.equal(attention.omitted_count, 0);
+  assert.equal(attention.items[0].step, "consume_peer_result");
+});
+
 test("an original conversation retains its typed address instead of inventing a Goal receiver", () => {
   const recipient = {schema_version: "collaboration_original_conversation_recipient_v0",
     binding_id: "b".repeat(24), session_id: "original-session", identity_sha256: "c".repeat(64)};
@@ -93,7 +118,8 @@ test("a new brief retains unresolved original-route delivery without reopening r
 
 test("a bounded agenda never mistakes omitted or unavailable work for an empty queue", () => {
   const items = Array.from({length: 26}, (_, i) => ({...project()[0], request_id: String(i), direction: i < 23 ? "incoming" : "outgoing"}));
-  const result = projectDelegationTurnContext({batches: [{items, incoming_count: 23, outgoing_count: 3}], scan_complete: true, unavailable_count: 0,
+  const result = projectDelegationTurnContext({batches: [{items, incoming_count: 23, outgoing_count: 3,
+    return_attention: {count: 0, items: [], omitted_count: 0}}], scan_complete: true, unavailable_count: 0,
     read_command: "loopx manager-inbox read", observed_at: "2026-01-01T00:00:00Z"});
   assert.equal(result.read_complete, false);
   const agenda = result.unfinished_delegations as Record<string, any>;
@@ -102,7 +128,17 @@ test("a bounded agenda never mistakes omitted or unavailable work for an empty q
   assert.equal(agenda.items.length, 20);
   assert.equal(agenda.items[1].direction, "outgoing");
   assert.equal(agenda.omitted_count, 6);
+  assert.deepEqual(agenda.return_attention, {count: 0, items: [], omitted_count: 0});
   assert.equal(agenda.scan_complete, true);
   const unknown = projectDelegationTurnContext({batches: [], scan_complete: true, unavailable_count: 1}).unfinished_delegations as Record<string, unknown>;
   assert.equal(unknown.scan_complete, false);
+});
+
+test("return attention aggregation rejects inconsistent bounded counts", () => {
+  const item = {request_id: "b".repeat(64), request_revision: 1, step: "consume_peer_result",
+    unconsumed_return_count: 1, returns: [{result_key: "conclusion", consumed: false}]};
+  const params = {batches: [{items: [], incoming_count: 0, outgoing_count: 1,
+    return_attention: {count: 2, items: [item], omitted_count: 0}}], scan_complete: true,
+    unavailable_count: 0};
+  assert.throws(() => projectDelegationTurnContext(params), /invalid delegation return attention/);
 });
