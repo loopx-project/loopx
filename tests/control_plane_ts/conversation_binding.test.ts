@@ -429,7 +429,8 @@ test("exhausted business quota permits one read-only answer, never a fresh busin
     context_recovery: {...packet.context_recovery, native_observation: {...proof, thread_id: "123"}}}).recovery_eligible, true,
   "numeric-looking string identities remain valid");
   for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
-    {attachments_present: true}, {queued_input_present: true}, {metadata_capacity: null},
+    {attachments_present: true}, {queued_input_present: true}, {later_equivalent_input_present: true},
+    {metadata_capacity: null},
     {executor_configuration: {...configuration, configuration_revision: "changed"}},
     {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at - 121}}},
     {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at + 1}}},
@@ -448,7 +449,8 @@ test("exhausted business quota permits one read-only answer, never a fresh busin
   assert.equal(planBoundConversationRequest(reserved).recovery_eligible, true);
   const admitted = {session_id: "original", turn_id: "review", client_turn_id: plan.client_turn_id, message, origin: "lark"};
   assert.equal(planBoundConversationRequest({...reserved, current_session: {...session, status: "busy", active_turn_id: "review"},
-    context_recovery: {...reserved.context_recovery, native_observation: null, admitted_turn: admitted}}).admitted_turn_id, "review");
+    context_recovery: {...reserved.context_recovery, native_observation: null,
+      admitted_turn: admitted, later_equivalent_input_present: true}}).admitted_turn_id, "review");
   assert.notEqual(planBoundConversationRequest({...reserved, request: {...reserved.request,
     context_recovery_history: []}}).recovery_eligible, true);
   const failedReview = {...failed, ...admitted};

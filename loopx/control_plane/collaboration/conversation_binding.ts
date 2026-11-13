@@ -1498,7 +1498,10 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       admitted_turn_id: sessionIdentity(admitted.turn_id, "answer review"), native_thread_ids: []};
   }
   const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(failed.completed_at));
+  // Let a newer admitted resend answer the question. The branch above still
+  // repairs the receipt of a review already accepted under its own identity.
   if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || recovery.later_equivalent_input_present === true
       || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   if (recovery.native_observation == null) return candidate;
   const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
