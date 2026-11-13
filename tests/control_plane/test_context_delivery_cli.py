@@ -645,6 +645,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
 
 @pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
+    from hashlib import sha256
+
     from loopx.cli import build_parser
     from loopx.cli_commands import quota, quota_context_reader
     from loopx.control_plane.turn_driver import codex_context
@@ -687,7 +689,9 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert len(printed) == 1 and printed[0]["ok"] is False
         assert printed[0]["error_code"] == "quota_decision_transport_failed"
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
-        assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
+        saved = tmp_path / "decision.json"
+        assert printed[0]["captured_decision"]["path"] == str(saved)
+        assert printed[0]["captured_decision"]["sha256"] == sha256(saved.read_bytes()).hexdigest()
     else:
         assert len(printed) == 1 and "content" not in printed[0]
         reference = read_context_read_reference(printed[0]["reference_file"])[1]
