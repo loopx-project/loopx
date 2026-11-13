@@ -339,7 +339,15 @@ def load_index_snapshot(
     with stream:
         for encoded_line in stream:
             digest.update(encoded_line)
-            line = encoded_line.decode("utf-8")
+            try:
+                line = encoded_line.decode("utf-8")
+            except UnicodeDecodeError:
+                # A write torn inside a multibyte character leaves bytes that
+                # are not text. Count the row as invalid like any other
+                # unparseable row instead of failing every reader of the index.
+                raw_count += 1
+                invalid_count += 1
+                continue
             if not line.strip():
                 continue
             raw_count += 1

@@ -94,6 +94,54 @@ def test_history_append_starts_a_new_record_after_an_unterminated_tail(
     assert [row["goal_id"] for row in snapshot.records] == expected_goal_ids
 
 
+def test_history_read_skips_a_row_torn_inside_a_multibyte_character(
+    tmp_path: Path,
+) -> None:
+    """A write torn mid-character is an invalid row, not a failure of the index.
+
+    The writer keeps non-ASCII text verbatim (`ensure_ascii=False`), so an
+    interrupted append can end in a partial UTF-8 sequence. Every reader of the
+    index used to raise `UnicodeDecodeError`, including the append-side
+    readback, so one torn row blocked all later history reads and projections.
+    """
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    index_path = runs_dir / "index.jsonl"
+    complete = {"goal_id": GOAL_ID, "generated_at": "2026-09-15T00:00:00Z"}
+    torn = json.dumps(
+        {"goal_id": GOAL_ID, "generated_at": GENERATED_AT, "summary": "进度更新"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    index_path.write_bytes(
+        (json.dumps(complete) + "\n").encode("utf-8")
+        + torn[: torn.index("进".encode("utf-8")) + 1]
+    )
+    record = {"goal_id": GOAL_ID, "generated_at": "2026-09-16T00:00:01+00:00"}
+
+    snapshot = history.load_index_snapshot(index_path)
+    assert [row["generated_at"] for row in snapshot.records] == [
+        complete["generated_at"]
+    ]
+    assert (snapshot.raw_count, snapshot.invalid_count) == (2, 1)
+
+    history.write_reserved_run_artifacts(
+        runs_dir=runs_dir,
+        generated_at=record["generated_at"],
+        record=record.copy(),
+        index_record=record.copy(),
+        payload=record.copy(),
+        render_markdown=lambda _payload: "# run",
+    )
+
+    snapshot = history.load_index_snapshot(index_path)
+    assert [row["generated_at"] for row in snapshot.records] == [
+        complete["generated_at"],
+        record["generated_at"],
+    ]
+    assert snapshot.invalid_count == 1
+
+
 @pytest.mark.parametrize(
     "text",
     [
