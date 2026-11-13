@@ -350,6 +350,7 @@ def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, mon
     (False, "add_after_retarget"), (False, "remove_after_retarget"),
     (False, "add_cli_alias"), (False, "remove_cli_alias"),
     (False, "add_different_cli"), (False, "remove_different_cli"),
+    (False, "profile_read_fails"), (False, "profile_read_fails_then_retargets"),
 ])
 def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     ordinary,  # noqa: F811
@@ -396,8 +397,13 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     removing = binding_change.startswith("remove")
     retargeted = binding_change.endswith("_retarget")
     different_transport = retargeted or binding_change.endswith("_different_cli")
+    unreadable = binding_change.startswith("profile_read_fails")
+    retarget_on_retry = binding_change == "profile_read_fails_then_retargets"
     if adding:
         transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
+    if unreadable:
+        for row in transport.bindings.read()["bindings"]:
+            transport.bindings.disconnect(row["binding_id"], expected_revision=transport.bindings.read()["revision"])
 
     group_config = {"target_payload": targets, "binding_payloads": bindings}
 
@@ -412,6 +418,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     ]
     new_private = provider.event(profile, "after_rebind", "/status")
     in_group_answer, release, queued, next_stream_ready = (threading.Event() for _ in range(4))
+    second_replied, inventory_retried = threading.Event(), threading.Event()
     answered, consumer_processes = [], []
     replies = {}
 
@@ -439,7 +446,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         queued.set()
 
     def replacement_connection():
-        yield group_events[2] if removing else new_private
+        yield group_events[2] if removing or unreadable else new_private
 
     def spawn(args):
         assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
@@ -457,8 +464,11 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
 
         def observe_health(update):
             health_sink(update)
-            if removing and len(consumer_processes) == 2 and update.get("replied_count") == 1:
-                next_stream_ready.set()
+            if update.get("replied_count") == 1:
+                if (removing or unreadable) and len(consumer_processes) == 2:
+                    next_stream_ready.set()
+                if answered == [event["message_id"] for event in group_events[:2]]:
+                    second_replied.set()
 
         return stream(**{**kwargs, "health_sink": observe_health}, reply_runner=_reply_runner(replies))
 
@@ -499,9 +509,28 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     try:
         service.refresh()
         assert queued.wait(8), service.health_snapshot()
-        if retargeted:
+        if retargeted or retarget_on_retry:
             provider.profile_apps[profile] = "cli_retargeted_app"
-        if removing:
+        if unreadable:
+            original_runner = transport.runner
+            inventory_failed = threading.Event()
+
+            def read_profile(args, cwd=None, timeout=None):
+                if args[1:] == ["profile", "list"]:
+                    if not inventory_failed.is_set():
+                        inventory_failed.set()
+                        return {"returncode": 1, "stdout": "", "stderr": "temporary profile read failure"}
+                    inventory_retried.set()
+                return original_runner(args, cwd, timeout)
+
+            monkeypatch.setattr(transport, "runner", read_profile)
+            original_worker = service._workers[profile]
+            service.refresh()
+            assert inventory_failed.is_set()
+            assert service._workers[profile] == original_worker
+            assert not original_worker[0].is_set()
+            assert not consumer_processes[0].exited.is_set()
+        elif removing:
             change_private_binding("DELETE", {"binding_id": before, "revision": transport.bindings.read()["revision"]})
         else:
             projects = transport.bindings.projects
@@ -514,13 +543,23 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
             replacement = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
             assert transport.profiles()[profile]["binding_id"] == replacement["binding_id"] != before
             assert replacement["provider_ref"] == identity_ref(provider.profile_apps[profile])
-        assert consumer_processes[0].exited.wait(8)
-        assert len(consumer_processes) == 1
-        release.set()
-        assert next_stream_ready.wait(8), service.health_snapshot()
-        expected = group_events[:1] if different_transport else group_events[:2]
-        if removing:
-            expected += group_events[2:]
+        if unreadable and not retarget_on_retry:
+            release.set()
+            assert second_replied.wait(8), service.health_snapshot()
+            assert inventory_retried.wait(8)
+            assert service._workers[profile] == original_worker
+            assert len(consumer_processes) == 1
+            expected = group_events[:2]
+        else:
+            assert consumer_processes[0].exited.wait(8)
+            assert len(consumer_processes) == 1
+            release.set()
+            assert next_stream_ready.wait(8), service.health_snapshot()
+            expected = group_events[:1] if different_transport or retarget_on_retry else group_events[:2]
+            if removing or unreadable:
+                expected += group_events[2:]
+            if unreadable:
+                assert inventory_retried.is_set()
         assert answered == [event["message_id"] for event in expected]
         reply_targets = [call[call.index("--message-id") + 1] for call in replies["calls"]
                          if "+messages-reply" in call and "--dry-run" not in call]

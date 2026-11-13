@@ -81,6 +81,7 @@ class LarkGoalTopicRuntimeService:
         self._closed = threading.Event()
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
+        self._refresh_retry: threading.Timer | None = None
         self._delivery_thread: threading.Thread | None = None
         self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
             name="loopx-lark-private-delivery", retry_seconds=5)
@@ -286,6 +287,27 @@ class LarkGoalTopicRuntimeService:
                 )
             self._closed.wait(5)
 
+    def _retry_profile_refresh(self) -> None:
+        try:
+            unavailable = self._refresh_profile_workers(resume_queues=False)
+        except (OSError, LarkCliUnavailableError):
+            unavailable = True
+        except Exception:
+            logging.getLogger(__name__).warning("Lark profile refresh failed")
+            unavailable = False
+        with self._lock:
+            self._refresh_retry = None
+            if unavailable:
+                self._schedule_profile_refresh()
+
+    def _schedule_profile_refresh(self) -> None:
+        # Called under the service lock. Only the configuration read is retried.
+        if self._closed.is_set() or self._refresh_retry is not None:
+            return
+        self._refresh_retry = threading.Timer(5, self._retry_profile_refresh)
+        self._refresh_retry.daemon = True
+        self._refresh_retry.start()
+
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -343,7 +365,7 @@ class LarkGoalTopicRuntimeService:
         identity = config.get("bot_app_id") or profile
         return str(config.get("consumer_ref") or hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32])
 
-    def _listener_configs(self, snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    def _listener_configs(self, snapshot: Mapping[str, Any]) -> tuple[dict[str, dict[str, str]], set[str]]:
         from . import goal_topic_runtime as runtime
 
         profiles = runtime._active_profile_configs(snapshot)
@@ -352,20 +374,23 @@ class LarkGoalTopicRuntimeService:
             if not config.get("bot_app_id") and not profiles[profile].get("bot_app_id")
         }
         inventory = getattr(self.private_conversations, "configured_profile_apps", None)
+        unavailable: set[str] = set()
         if not callable(inventory):
-            return profiles
-        apps_by_cli: dict[str, dict[str, str]] = {}
-        for profile in legacy:
+            return profiles, unavailable
+        apps_by_cli: dict[str, dict[str, str] | None] = {}
+        for profile in sorted(legacy):
             config = profiles[profile]
             cli_bin = config["cli_bin"]
             if cli_bin not in apps_by_cli:
                 try:
                     apps_by_cli[cli_bin] = inventory(cli_bin=cli_bin)
                 except (OSError, LarkCliUnavailableError):
-                    # Keep the ordinary stop path if App continuity cannot
-                    # be established from this group's CLI configuration.
-                    apps_by_cli[cli_bin] = {}
-            app_id = apps_by_cli[cli_bin].get(profile)
+                    apps_by_cli[cli_bin] = None
+            apps = apps_by_cli[cli_bin]
+            if apps is None:
+                unavailable.add(profile)
+                continue
+            app_id = apps.get(profile)
             if app_id:
                 # Fence the original profile and the resolved App on both
                 # sides of a private binding change. Routing keeps the original
@@ -375,7 +400,7 @@ class LarkGoalTopicRuntimeService:
                     "bot_app_id": app_id,
                     "consumer_ref": self._consumer_lease_key(profile, config),
                 }
-        return profiles
+        return profiles, unavailable
 
     def _profile_worker_fingerprint(
         self,
@@ -503,15 +528,27 @@ class LarkGoalTopicRuntimeService:
                         )
 
                     snapshot = self.snapshot_provider()
-                    profile_config = self._listener_configs(snapshot).get(profile) or {}
+                    profile_configs, unavailable = self._listener_configs(snapshot)
+                    if profile in unavailable:
+                        # A new subprocess must acquire locks for a fresh App
+                        # observation. Only an already running pipe may stay.
+                        self._update_health(
+                            profile, status="retrying", error_code="lark_profile_inventory_unavailable"
+                        )
+                        stop.wait(5)
+                        continue
+                    profile_config = profile_configs.get(profile) or {}
                     private_profiles = snapshot.get("private_profiles")
                     private_binding = private_profiles.get(profile) if isinstance(private_profiles, Mapping) else None
                     binding_id = private_binding.get("binding_id") if isinstance(private_binding, Mapping) else None
                     reconnect_requested = threading.Event()
                     # A group-only connection must not pick up private work
-                    # read before a newly added owner binding.
-                    private_admitter = (self._admit_private if self.private_conversations is not None
-                                        and isinstance(private_binding, Mapping) else None)
+                    # read before a newly added owner binding. A provider with
+                    # no separate group route still owns its private admission.
+                    private_admitter = self._admit_private if self.private_conversations is not None and (
+                        isinstance(private_binding, Mapping)
+                        or profile not in runtime._active_group_profile_configs(snapshot)
+                    ) else None
                     bound_owner = (
                         private_admitter is not None
                         and isinstance(binding_id, str) and bool(binding_id)
@@ -656,10 +693,16 @@ class LarkGoalTopicRuntimeService:
                     self.refresh()
 
     def refresh(self) -> None:
+        if self._refresh_profile_workers():
+            with self._lock:
+                self._schedule_profile_refresh()
+
+    def _refresh_profile_workers(self, *, resume_queues: bool = True) -> bool:
+        """Apply known listener changes and report whether discovery must retry."""
         if self._closed.is_set():
-            return
+            return False
         snapshot = self.snapshot_provider()
-        profile_configs = self._listener_configs(snapshot)
+        profile_configs, unavailable = self._listener_configs(snapshot)
         desired = {
             profile: self._profile_worker_fingerprint(
                 snapshot,
@@ -669,13 +712,29 @@ class LarkGoalTopicRuntimeService:
             for profile, profile_config in profile_configs.items()
         }
         if self._closed.is_set():
-            return
-        self._resume_session_queues(snapshot)
+            return False
+        if resume_queues:
+            self._resume_session_queues(snapshot)
         # A filesystem read may outlive server shutdown (for example, while
         # waiting for OS directory consent). Never start effects after close.
         with self._lock:
             if self._closed.is_set():
-                return
+                return False
+            for profile in unavailable:
+                replacement = desired.pop(profile)
+                worker = self._workers.get(profile)
+                if worker is None:
+                    continue
+                previous = worker[2]
+                # Keep the original pipe and locks while the same group's
+                # local App inventory is unavailable. Routing still checks
+                # current grants; an observed removal uses the stop path.
+                if (
+                    previous.transport.cli_bin == replacement.transport.cli_bin
+                    and previous.transport.callback_chats == replacement.transport.callback_chats
+                    and not previous.transport.other_binding_id
+                ):
+                    desired[profile] = previous
             stale = (set(self._workers) - set(desired)) | {
                 profile
                 for profile in set(self._workers) & set(desired)
@@ -719,6 +778,7 @@ class LarkGoalTopicRuntimeService:
                 )
                 self._workers[profile] = (stop, thread, desired[profile])
                 thread.start()
+        return bool(unavailable)
 
     def _resume_session_queues(self, snapshot: Mapping[str, Any]) -> None:
         binding_payloads = snapshot.get("binding_payloads")
@@ -770,6 +830,9 @@ class LarkGoalTopicRuntimeService:
         self._closed.set()
         self._delivery_wakeup.set()
         with self._lock:
+            if self._refresh_retry is not None:
+                self._refresh_retry.cancel()
+                self._refresh_retry = None
             workers = list(self._workers.values())
             self._workers.clear()
         for stop, _thread, _fingerprint in workers:
