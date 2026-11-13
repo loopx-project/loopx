@@ -143,6 +143,7 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 @pytest.mark.parametrize("replay", [
     "present", "pinned", "paged", "out_of_order", "lost_page", "missing_hook",
     "lost_output", "partial", "compacted", "changed_source",
+    "reread", "reread_lost_page", "reread_changed_page",
 ])
 def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monkeypatch, replay):
     """A selected read can survive a qualified replay without proving full input."""
@@ -177,7 +178,8 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
 
-    paged = replay in {"paged", "out_of_order", "lost_page", "missing_hook"}
+    reread = replay in {"reread", "reread_lost_page", "reread_changed_page"}
+    paged = reread or replay in {"paged", "out_of_order", "lost_page", "missing_hook"}
     if paged or replay == "pinned":
         from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
 
@@ -198,18 +200,40 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         assert len(pages) > 2
     if replay == "out_of_order":
         pages = [pages[-1], *pages[:-1]]
-    for index, page in enumerate(pages):
+    replay_pages = list(pages)
+    extra_address = "/goal_boundary/stop_condition"
+    if reread:
+        extra = command(["context-read", *source, "--select", extra_address])
+        assert extra["ok"] and extra["eof"]
+        replay_pages.insert(0, extra)
+    for index, page in enumerate(replay_pages):
         # A code-mode parent may append its actual output after the nested hook.
         parent = f"parent-{index}"
         append(history, "response_item", {"type": "custom_tool_call", "call_id": parent})
         if replay != "missing_hook" or index != 1:
             command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": f"reader-{index}",
                 "tool_response": json.dumps(page)})
-        if replay != "lost_output" and not (replay == "lost_page" and index == 1):
+        missing_page = (replay == "lost_page" and index == 1) or (replay == "reread_lost_page" and index == 2)
+        if replay != "lost_output" and not missing_page:
+            retained_page = {**page, "content": page["content"] + " changed"} \
+                if replay == "reread_changed_page" and index == 2 else page
             append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
-                "output": [{"type": "input_text", "text": json.dumps(page)}]})
+                "output": [{"type": "input_text", "text": json.dumps(retained_page)}]})
+    if reread:
+        again = command(["context-read", *source, "--select", address, "--page-bytes", "3000",
+            "--max-page-output-bytes", "64000"])
+        assert again == pages[0]
+        parent = "parent-reread"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent})
+        command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": "reader-reread",
+            "tool_response": json.dumps(again)})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": json.dumps(again)}]})
     before = context._state(tmp_path)
     assert (address in before.get("consumed_pointers", {})) == (replay not in {"partial", "missing_hook"})
+    if reread:
+        assert extra_address in before["consumed_pointers"]
+        assert len(before["selected_resume"]["reads"]) == len(replay_pages)
     assert "candidate" not in before
     if replay == "compacted":
         append(history, "compacted", {"message": "Earlier model context was replaced."})
@@ -221,7 +245,7 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     command(hook, {**event, "source": "resume"})
     after = context._state(tmp_path)
     assert "candidate" not in after
-    retained = replay in {"present", "pinned", "paged", "out_of_order"}
+    retained = replay in {"present", "pinned", "paged", "out_of_order", "reread"}
     expected = before["consumed_pointers"] if retained else {}
     assert after.get("consumed_pointers", {}) == expected
     if paged:

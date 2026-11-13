@@ -185,7 +185,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
     expected_pages = Counter(required.values())
     seen_pages: Counter[str] = Counter()
     ranges = []
-    for _, record in _records(stream, start, snapshot["observed_bytes"]):
+    for offset, record in _records(stream, start, snapshot["observed_bytes"]):
         payload = record.get("payload", {})
         native_output = payload.get("type") in {"function_call_output", "custom_tool_call_output"}
         if record.get("type") == "response_item" and native_output:
@@ -203,7 +203,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
                 # from independently observed nested reads. Preserve those
                 # emission boundaries instead of hashing their concatenation
                 # as if it were one nested read. Every exact group and byte
-                # still has to be present; duplicate groups do not help.
+                # still has to be present.
                 if isinstance(output, list):
                     groups = [_read_pages(item.get("text")) for item in output
                               if isinstance(item, dict) and item.get("type") == "input_text"]
@@ -211,7 +211,14 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
             else:
                 groups = []
             for group in groups:
-                seen_pages[_digest(group)] += 1
+                group_digest = _digest(group)
+                # A verified selection can be read again after its checkpoint.
+                # Credit only recorded occurrences in the original interval.
+                # Required call IDs still reject duplicate or changed outputs.
+                if (selected and offset >= end and call not in required
+                        and seen_pages[group_digest] >= expected_pages[group_digest]):
+                    continue
+                seen_pages[group_digest] += 1
                 for page in group:
                     if selected or page.get("sha256") != reference["sha256"]:
                         continue
