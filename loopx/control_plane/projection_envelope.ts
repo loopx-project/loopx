@@ -18,6 +18,7 @@ import { parseIsoTimestamp } from "./runtime_timestamp.ts";
 
 export const PROJECTION_ENVELOPE_SCHEMA_VERSION = "loopx_projection_envelope_v0";
 const SHARED_SOURCE_ENVELOPE_VERSION = "loopx_projection_envelope_v1";
+const DERIVED_SOURCE_ENVELOPE_VERSION = "loopx_projection_envelope_v2";
 export const PROJECTION_ENVELOPE_SEAL_REQUEST = "loopx_projection_envelope_seal_request_v0";
 export const PROJECTION_ENVELOPE_SERVE_REQUEST = "loopx_projection_envelope_serve_request_v0";
 export const DEFAULT_SOURCE_WINDOW_SECONDS = 300;
@@ -76,8 +77,8 @@ const SHAREABLE_SOURCE_FIELDS = [
 ];
 const DERIVED_SOURCE_FIELDS = ["staleness_seconds", "status", "alert", "alert_reasons"];
 
-/** Store exact recurring sealed facts once. Explicit row values take priority.
- * No freshness or scope verdict is re-derived by the encoding. */
+/** Share repeated inputs and omit derived fields only when the sealer
+ * reproduces their original values exactly. */
 export function shareProjectionSourceFields(
   envelope: JsonObject,
   identity: (value: unknown, path: (string | number)[]) => string,
@@ -131,16 +132,20 @@ export function shareProjectionSourceFields(
     defaults[field] = fact;
     for (const index of common) delete sources[index][field];
   }
-  const packed = {...envelope, schema_version: SHARED_SOURCE_ENVELOPE_VERSION, source_defaults: defaults, sources};
+  const packed = {...envelope, schema_version: DERIVED_SOURCE_ENVELOPE_VERSION, source_defaults: defaults, sources};
   return Buffer.byteLength(JSON.stringify(packed)) < Buffer.byteLength(JSON.stringify(envelope)) ? packed : envelope;
 }
 
 /** Restore the same sealed rows, preserving explicit overrides and row order. */
 export function expandProjectionSourceFields(value: JsonObject): JsonObject {
-  if (value.schema_version !== SHARED_SOURCE_ENVELOPE_VERSION) return value;
+  const storesDerivedFacts = value.schema_version === SHARED_SOURCE_ENVELOPE_VERSION;
+  if (!storesDerivedFacts && value.schema_version !== DERIVED_SOURCE_ENVELOPE_VERSION) return value;
   const defaults = requireJsonObject(value.source_defaults, "projection source defaults");
-  if (Object.entries(defaults).some(([field, fact]) =>
-      !SHAREABLE_SOURCE_FIELDS.includes(field) || !shareableSourceFact(fact))) {
+  const allowedDefaults = storesDerivedFacts
+    ? [...SHAREABLE_SOURCE_FIELDS, ...DERIVED_SOURCE_FIELDS]
+    : SHAREABLE_SOURCE_FIELDS;
+  if ((storesDerivedFacts && !Object.keys(defaults).length) ||
+      Object.entries(defaults).some(([field, fact]) => !allowedDefaults.includes(field) || !shareableSourceFact(fact))) {
     throw new EffectRuntimeRequestError("projection source defaults must name registered sealed source fields");
   }
   const servedMillis = timestamp(value.served_at, "served_at").millis;
@@ -148,16 +153,20 @@ export function expandProjectionSourceFields(value: JsonObject): JsonObject {
   if (rows.length < 2) throw new EffectRuntimeRequestError("shared projection facts require at least two source rows");
   const sources = rows.map((row, index) => {
     const source = {...defaults, ...requireJsonObject(row, `sources[${index}]`)};
-    if (DERIVED_SOURCE_FIELDS.some(field => Object.hasOwn(source, field))) {
-      throw new EffectRuntimeRequestError("shared projection source cannot override derived source facts");
-    }
     const decoded = decodeSource(source, index);
     const sealed = sealSource(decoded, servedMillis);
-    for (const field of DERIVED_SOURCE_FIELDS) source[field] = sealed[field];
+    if (!storesDerivedFacts) {
+      for (const field of DERIVED_SOURCE_FIELDS) {
+        if (Object.hasOwn(source, field)) {
+          throw new EffectRuntimeRequestError("shared projection source cannot override derived source facts");
+        }
+        source[field] = sealed[field];
+      }
+    }
     // Keep original and future values. Reject missing or malformed known input
     // fields instead of treating a decoder's fallback as a recorded fact.
     if (Object.entries(sealed).some(([field, fact]) => !isDeepStrictEqual(source[field], fact))) {
-      throw new EffectRuntimeRequestError("shared projection source requires complete sealed input facts");
+      throw new EffectRuntimeRequestError("shared projection source does not reconstruct a sealed source row");
     }
     return source;
   });

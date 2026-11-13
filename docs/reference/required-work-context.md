@@ -1102,8 +1102,8 @@ Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 
 同一摘要中复用字面前缀。`first_executable_items[0:2]` 指 Agent 首批可执行 Todo
 的前两条完整记录。User 摘要对应 `first_open_items`。同一响应的来源清单可复用
 `source_defaults`，逐条以行内字段覆盖共同值，显式 `null` 也覆盖。来源顺序、
-原始时间戳和观测范围均可读回。TypeScript 以响应中的原始 `served_at` 重建各来源
-的时效与告警。
+原始时间戳和观测范围均可读回。v2 读端以响应中的原始 `served_at` 重建各来源的
+时效与告警，同一读端也可读取 v1 已存的派生值。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带完整非生成正文，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。当前 writer 和旧版无 Goal 参数的 writer 生成的

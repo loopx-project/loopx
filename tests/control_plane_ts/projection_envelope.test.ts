@@ -165,6 +165,7 @@ test("shared source facts restore exact freshness, scope and optional future val
     schema_version: PROJECTION_ENVELOPE_SERVE_REQUEST, envelope, served_at: at(600),
   });
   assert.deepEqual(serve(shared), serve(projection));
+  assert.equal(shared.schema_version, "loopx_projection_envelope_v2");
   assert.throws(() => expandProjectionSourceFields({...shared, source_defaults: {...defaults, source_id: "other"}}),
     /registered sealed source fields/);
   const overrides = sources(shared).map((row, index) => index === 0 ? {...row, alert: true} : row);
@@ -172,6 +173,19 @@ test("shared source facts restore exact freshness, scope and optional future val
   const historical = {...projection, sources: [{...rows[0], alert: true}, ...rows.slice(1)]};
   assert.equal(shareProjectionSourceFields(historical, contextSourceIdentity({projection_envelope: historical}),
     ["projection_envelope"]), historical);
+});
+
+test("the projection reader accepts earlier inline responses with stored derived facts", () => {
+  const projection = sealProjectionEnvelope(sealRequest());
+  const previous = {
+    ...projection,
+    schema_version: "loopx_projection_envelope_v1",
+    source_defaults: {window_seconds: 300, alert: false, alert_reasons: []},
+    sources: sources(projection).map(({window_seconds, alert, alert_reasons, ...row}) => row),
+  };
+  assert.deepEqual(expandProjectionSourceFields(previous), projection);
+  const altered = {...previous, source_defaults: {...previous.source_defaults, alert: true}};
+  assert.throws(() => expandProjectionSourceFields(altered), /does not reconstruct a sealed source row/);
 });
 
 test("a derived projection inherits upstream sources and completeness", () => {

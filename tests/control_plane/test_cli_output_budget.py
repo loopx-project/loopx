@@ -1433,7 +1433,7 @@ def test_unbound_complete_quota_fits_the_inline_multi_agent_budget(
             del summary[field]
 
     projection = decision["projection_envelope"]
-    assert projection["schema_version"] == "loopx_projection_envelope_v1"
+    assert projection["schema_version"] == "loopx_projection_envelope_v2"
     from loopx.control_plane.projection_envelope_facts import serve_projection_envelope
 
     original_projection = baseline["projection_envelope"]

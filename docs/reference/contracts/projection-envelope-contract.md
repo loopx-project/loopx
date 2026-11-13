@@ -57,12 +57,14 @@ empty read. `owner_read_failed` makes automation cadence unreadable, while
 
 Most responses carry `loopx_projection_envelope_v0` with literal `sources`.
 An unbound JSON `quota should-run --complete-turn --context-delivery off`
-response may carry `loopx_projection_envelope_v1` when sharing fields saves
+response may carry `loopx_projection_envelope_v2` when sharing fields saves
 space. Reconstruct each source in order by copying `source_defaults` and then
 applying that row's fields, including explicit `null` overrides. Each row
 retains its own `source_id` and any `via`. The kernel reconstructs each
 row's `staleness_seconds`, `status`, `alert` and `alert_reasons` at the
-envelope's original `served_at`. Re-serving a projection uses the same
+envelope's original `served_at`. The reader also accepts earlier
+`loopx_projection_envelope_v1` responses, which carry those derived values
+explicitly or in `source_defaults`. Re-serving a projection uses the same
 calculation at the new serve time.
 
 ```json
