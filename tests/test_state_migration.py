@@ -417,3 +417,28 @@ def test_two_level_symlink_chain_cannot_bypass_the_completed_target_guard(
     assert (chain_a / "S.md").is_symlink()
     assert real.read_text(encoding="utf-8") == original
     assert (done_repo / "S.md").read_text(encoding="utf-8") == completed
+
+
+@pytest.mark.parametrize("in_place_first", [False, True])
+def test_in_place_pair_sharing_a_target_with_another_pair_is_checked_in_either_order(
+    tmp_path: Path, in_place_first: bool
+) -> None:
+    path_map = {"/old": "/old/new"}
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    # Rewriting the legacy text once gives exactly the completed target text.
+    (legacy / "S.md").write_text("- [x] see /old/file\n", encoding="utf-8")
+    shared_repo = tmp_path / "shared"
+    shared_repo.mkdir()
+    completed = "- [x] see /old/new/file\n"
+    (shared_repo / "S.md").write_text(completed, encoding="utf-8")
+    copy = ({"repo": str(legacy), "state_file": "S.md"}, {"repo": str(shared_repo), "state_file": "S.md"})
+    in_place = ({"repo": str(shared_repo), "state_file": "S.md"}, {"repo": str(shared_repo), "state_file": "S.md"})
+    pairs = [in_place, copy] if in_place_first else [copy, in_place]
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="same active state file"):
+            copy_active_state_files(pairs, goal_id_map={}, path_map=path_map, execute=execute)
+
+    assert (shared_repo / "S.md").read_text(encoding="utf-8") == completed
+    assert (legacy / "S.md").read_text(encoding="utf-8") == "- [x] see /old/file\n"

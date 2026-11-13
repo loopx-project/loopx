@@ -200,17 +200,19 @@ def _plan_active_state_copies(
                 "refusing to publish over it"
             )
         in_place = target_entry in (source_entry, source_path.resolve())
-        if not in_place:
-            earlier = planned.get(target_entry)
-            if earlier is not None and earlier != new_bytes:
-                raise ValueError(
-                    f"selected Goals map to the same active state file with different content: {target_path}"
-                )
-            if earlier is None and target_path.exists() and target_path.read_bytes() != new_bytes:
-                raise ValueError(
-                    f"migrated active state already exists with different content: {target_path}; "
-                    "refusing to overwrite it with the legacy copy"
-                )
+        # Every pair that publishes to one file must publish the same document,
+        # in place or not: an in-place pair that follows an earlier pair rewrites
+        # what that pair planned, not what is on disk.
+        earlier = planned.get(target_entry)
+        if earlier is not None and earlier != new_bytes:
+            raise ValueError(
+                f"selected Goals map to the same active state file with different content: {target_path}"
+            )
+        if not in_place and earlier is None and target_path.exists() and target_path.read_bytes() != new_bytes:
+            raise ValueError(
+                f"migrated active state already exists with different content: {target_path}; "
+                "refusing to overwrite it with the legacy copy"
+            )
         planned[target_entry] = new_bytes
         dispositions.append("copy")
     return dispositions
