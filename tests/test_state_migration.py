@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.state_migration import migrate_legacy_state
+from loopx.state_migration import copy_active_state_files, migrate_legacy_state
 
 
 def test_migration_rejects_target_goal_id_collisions_before_writing(
@@ -143,3 +143,104 @@ def test_repeated_migration_does_not_overwrite_diverged_target_active_state(
 
     assert paths["target_state"].read_text(encoding="utf-8") == progressed
     assert paths["target_registry"].read_bytes() == registry_before
+
+
+def _two_goal_active_state_fixture(
+    tmp_path: Path, contents: tuple[str, str]
+) -> tuple[dict[str, Path], dict]:
+    legacy_goals = []
+    for goal_id, content in zip(("goal-a", "goal-b"), contents):
+        repo = tmp_path / f"{goal_id}-repo"
+        state = repo / "ACTIVE_GOAL_STATE.md"
+        state.parent.mkdir(parents=True)
+        state.write_text(content, encoding="utf-8")
+        legacy_goals.append(
+            {
+                "id": goal_id,
+                "status": "active",
+                "repo": str(repo),
+                "state_file": "ACTIVE_GOAL_STATE.md",
+            }
+        )
+    legacy_registry = tmp_path / "legacy-registry.json"
+    legacy_registry.write_text(
+        json.dumps({"schema_version": "0.1", "goals": legacy_goals}),
+        encoding="utf-8",
+    )
+    shared_repo = tmp_path / "shared-repo"
+    paths = {
+        "legacy_registry": legacy_registry,
+        "target_registry": tmp_path / "target-registry.json",
+        "target_state": shared_repo / "ACTIVE_GOAL_STATE.md",
+    }
+    kwargs = {
+        "legacy_registry_path": legacy_registry,
+        "target_registry_path": paths["target_registry"],
+        "legacy_runtime_root": tmp_path / "legacy-runtime",
+        "target_runtime_root": tmp_path / "target-runtime",
+        "goal_ids": ["goal-a", "goal-b"],
+        "goal_id_map": {},
+        "path_map": {
+            str(tmp_path / "goal-a-repo"): str(shared_repo),
+            str(tmp_path / "goal-b-repo"): str(shared_repo),
+        },
+        "copy_active_state": True,
+        "copy_runtime": False,
+    }
+    return paths, kwargs
+
+
+def test_batch_mapping_two_goals_to_one_state_file_is_rejected_before_writing(
+    tmp_path: Path,
+) -> None:
+    paths, kwargs = _two_goal_active_state_fixture(
+        tmp_path, ("- [ ] goal a todo\n", "- [ ] goal b todo\n")
+    )
+    paths["target_registry"].write_bytes(b'{"schema_version":"0.1","goals":[]}\n')
+    registry_before = paths["target_registry"].read_bytes()
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="same active state file"):
+            migrate_legacy_state(**kwargs, execute=execute)
+
+    assert not paths["target_state"].exists()
+    assert paths["target_registry"].read_bytes() == registry_before
+
+
+def test_batch_mapping_two_goals_with_identical_state_to_one_file_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    paths, kwargs = _two_goal_active_state_fixture(
+        tmp_path, ("- [ ] shared todo\n", "- [ ] shared todo\n")
+    )
+    paths["target_registry"].write_bytes(b'{"schema_version":"0.1","goals":[]}\n')
+
+    assert migrate_legacy_state(**kwargs, execute=True)["ok"] is True
+    assert migrate_legacy_state(**kwargs, execute=True)["ok"] is True
+    assert paths["target_state"].read_text(encoding="utf-8") == "- [ ] shared todo\n"
+
+
+def test_batch_source_rewritten_in_place_is_judged_by_its_published_bytes(
+    tmp_path: Path,
+) -> None:
+    path_map = {"/old": "/old/new"}
+    source = tmp_path / "source" / "ACTIVE_GOAL_STATE.md"
+    target = tmp_path / "target" / "ACTIVE_GOAL_STATE.md"
+    source.parent.mkdir()
+    target.parent.mkdir()
+    original = "- [ ] see /old/file\n"
+    source.write_text(original, encoding="utf-8")
+    # The target already holds the single rewrite of the original source.
+    target.write_text("- [ ] see /old/new/file\n", encoding="utf-8")
+    in_place = {"repo": str(source.parent), "state_file": source.name}
+    elsewhere = {"repo": str(target.parent), "state_file": target.name}
+    pairs = [(in_place, in_place), (in_place, elsewhere)]
+
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="already exists with different content"):
+            copy_active_state_files(
+                pairs, goal_id_map={}, path_map=path_map, execute=execute
+            )
+
+    assert source.read_text(encoding="utf-8") == original
+    assert target.read_text(encoding="utf-8") == "- [ ] see /old/new/file\n"

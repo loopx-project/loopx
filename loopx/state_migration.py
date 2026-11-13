@@ -135,18 +135,17 @@ def copy_rewritten_text_file(source: Path, target: Path, *, goal_id_map: dict[st
     atomic_write_state_text(target, rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map))
 
 
-def _planned_state_bytes(source: Path, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> bytes:
-    """The exact bytes ``copy_rewritten_text_file`` publishes for ``source``."""
+def _rewritten_state_bytes(raw: bytes, *, goal_id_map: dict[str, str], path_map: dict[str, str]) -> bytes:
+    """The exact bytes ``copy_rewritten_text_file`` publishes for ``raw``."""
     try:
-        text = source.read_text(encoding="utf-8")
+        text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return source.read_bytes()
+        return raw
     return rewrite_text(text, goal_id_map=goal_id_map, path_map=path_map).encode("utf-8")
 
 
 def _require_no_active_state_clobber(
-    source_path: Path,
-    target_path: Path,
+    resolved_pairs: list[tuple[dict[str, Any], dict[str, Any], Path | None, Path | None]],
     *,
     goal_id_map: dict[str, str],
     path_map: dict[str, str],
@@ -156,14 +155,33 @@ def _require_no_active_state_clobber(
     A repeated migration (for example ``--all-goals`` after more legacy Goals
     appear) must not roll back Todos completed or added at the target since the
     first copy. Identical content and in-place rewrites remain idempotent.
+
+    The batch is simulated in write order: a target already planned by an earlier
+    pair, or a source an earlier pair rewrites in place, is judged by the bytes
+    that pair will publish, so preview and execute reach the same verdict.
     """
-    if not target_path.exists() or source_path.resolve() == target_path.resolve():
-        return
-    if target_path.read_bytes() != _planned_state_bytes(source_path, goal_id_map=goal_id_map, path_map=path_map):
-        raise ValueError(
-            f"migrated active state already exists with different content: {target_path}; "
-            "refusing to overwrite it with the legacy copy"
-        )
+    planned: dict[Path, bytes] = {}
+    for _source_goal, _target_goal, source_path, target_path in resolved_pairs:
+        if not (source_path and target_path and source_path.exists()):
+            continue
+        source_key = source_path.resolve()
+        target_key = target_path.resolve()
+        source_bytes = planned.get(source_key)
+        if source_bytes is None:
+            source_bytes = source_path.read_bytes()
+        new_bytes = _rewritten_state_bytes(source_bytes, goal_id_map=goal_id_map, path_map=path_map)
+        if source_key != target_key:
+            earlier = planned.get(target_key)
+            if earlier is not None and earlier != new_bytes:
+                raise ValueError(
+                    f"selected Goals map to the same active state file with different content: {target_path}"
+                )
+            if earlier is None and target_path.exists() and target_path.read_bytes() != new_bytes:
+                raise ValueError(
+                    f"migrated active state already exists with different content: {target_path}; "
+                    "refusing to overwrite it with the legacy copy"
+                )
+        planned[target_key] = new_bytes
 
 
 def copy_active_state_files(
@@ -182,12 +200,8 @@ def copy_active_state_files(
         )
         for source_goal, target_goal in pairs
     ]
-    # Check every target before the first copy so a conflict leaves no partial write.
-    for _source_goal, _target_goal, source_path, target_path in resolved_pairs:
-        if source_path and target_path and source_path.exists():
-            _require_no_active_state_clobber(
-                source_path, target_path, goal_id_map=goal_id_map, path_map=path_map
-            )
+    # Check the whole batch before the first copy so a conflict leaves no partial write.
+    _require_no_active_state_clobber(resolved_pairs, goal_id_map=goal_id_map, path_map=path_map)
     results: list[dict[str, Any]] = []
     for _source_goal, target_goal, source_path, target_path in resolved_pairs:
         row: dict[str, Any] = {
