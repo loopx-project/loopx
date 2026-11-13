@@ -35,14 +35,20 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
                                           capture_root: Path) -> str | None:
     """Derive display argv without editing the captured decision."""
     interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    selection = cli.get("selection_command") if isinstance(cli, dict) else None
+    if not isinstance(interaction, dict):
+        return None
+    cli = interaction.get("cli_channel")
+    if not isinstance(cli, dict):
+        return None
+    selection = cli.get("selection_command")
     if not isinstance(selection, dict):
         return None
+    selected = dict(selection)
     presentation = {**payload, "interaction_contract": {**interaction,
-        "cli_channel": {**cli, "selection_command": dict(selection)}}}
+        "cli_channel": {**cli, "selection_command": selected}}}
     bind_capture_selection_transport(presentation, args, capture_root=capture_root)
-    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
+    command = selected.get("command_args_template")
+    return command if isinstance(command, str) else None
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
@@ -224,9 +230,26 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
+def _inline_context_read_floor(path: Path, content_bytes: int, digest: str, *, page_bytes: int,
+                               output_limit: int, reader_argv: list[str] | None,
+                               opening_guidance: bool) -> int:
+    # Include the maximum cursor and a six-byte JSON escape, plus the
+    # opening-page guidance. These together bound the smallest useful page
+    # at every offset without reading the body or allocating a second copy.
+    offset = content_bytes - 1
+    opening = _capture_page(path, b"\0\0", digest,
+        offset=0, size=1, output_limit=None, instruction=opening_guidance,
+        next_page_bytes=page_bytes, next_page_output_bytes=output_limit,
+        reader_argv=reader_argv)
+    cursor = context_capture_read_command(path, digest, offset=offset + 1,
+        page_bytes=page_bytes, max_page_output_bytes=output_limit, reader_argv=reader_argv)
+    return len(_native_output_bytes({**opening, "offset": offset, "next_offset": offset + 1,
+        "total_bytes": content_bytes, "next_command": cursor}))
+
+
 def inline_context_read_fits(path: Path, raw: bytes, digest: str, *, page_bytes: int,
                              output_limit: int, reader_argv: list[str] | None) -> bool:
-    """Check both the opening and the longest bounded continuation framing."""
+    """Check whether the original file can be paged under the supplied limit."""
     path = path.parent.resolve(strict=True) / path.name
     try:
         page = _capture_page(path, raw, digest, offset=0, size=page_bytes,
@@ -235,13 +258,23 @@ def inline_context_read_fits(path: Path, raw: bytes, digest: str, *, page_bytes:
         return False
     if page["eof"]:
         return True
-    # Bound the number of cursor digits and the JSON encoding of any one
-    # character, without walking every page of a potentially large capture.
-    offset = len(raw) - 1
-    continuation = _capture_page(path, bytes(offset + 2), digest, offset=offset, size=1,
-        output_limit=None, instruction=False, next_page_bytes=page_bytes,
-        next_page_output_bytes=output_limit, reader_argv=reader_argv)
-    return len(_native_output_bytes(continuation)) <= output_limit
+    return _inline_context_read_floor(path, len(raw), digest, page_bytes=page_bytes,
+        output_limit=output_limit, reader_argv=reader_argv, opening_guidance=False) <= output_limit
+
+
+def inline_context_recovery_budget(path: Path, raw: bytes, digest: str, *, page_bytes: int,
+                                   output_limit: int, reader_argv: list[str] | None) -> int:
+    """Bound an exact-file reader even when no selection reference can be written."""
+    path = path.parent.resolve(strict=True) / path.name
+    if inline_context_read_fits(path, raw, digest, page_bytes=page_bytes,
+                               output_limit=output_limit, reader_argv=reader_argv):
+        return output_limit
+    while (needed := _inline_context_read_floor(path, len(raw), digest, page_bytes=page_bytes,
+            output_limit=output_limit, reader_argv=reader_argv, opening_guidance=True)) > output_limit:
+        # Leave space for a page's smallest supported content window beyond
+        # the cursor and guidance. Recheck the changed budget's digit count.
+        output_limit = needed + 256
+    return output_limit
 
 
 def pinned_context_read_window(reference_file: Path, content: bytes, *, page_bytes: int,
@@ -436,6 +469,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
                 # the payload again in Python. A failed batch delivers no body.
+                if selectors is None:
+                    raise ValueError("context reader rejected an initial view without explicit selectors")
                 pointer = selectors[rejection["argument_index"] - 1]
                 parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
                 command = context_capture_read_command(path, digest, select=[parent], list_fields=True,

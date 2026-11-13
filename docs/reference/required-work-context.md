@@ -325,12 +325,16 @@ and Turn receipt. If the full-file reader cannot page within the caller's
 budget, the refusal links to a digest-bound selection of the original
 diagnostic. Follow that command and its cursor. When its framing requires a
 larger reader budget, `recovery_page_output_bytes` gives the size used by the
-returned command. Reading the diagnostic performs no admission or spend.
+returned command. If the private selection reference cannot be published,
+the command reads the original file by path and digest, with a budget that
+allows its pages to advance. This fallback does not need runtime selection
+to read the file. Reading the diagnostic performs no admission or spend.
 
 中文：捕获后的拒绝会提供读取原决定及 Turn 回执的命令。如果全文读端在调用方预算内
 无法分页，命令会改为读取由原摘要固定的诊断选区。按返回命令和游标读完。若分页头需要
-更大的读端预算，`recovery_page_output_bytes` 指出返回命令采用的大小。读取诊断
-不会重新准入或扣额。
+更大的读端预算，`recovery_page_output_bytes` 指出返回命令采用的大小。若无法保存私有
+选区引用，返回命令会按原路径和摘要直接分页读取，并带上足够推进的读端预算。此时可直接
+读文件，无需运行时选择字段。读取诊断不会重新准入或扣额。
 
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the

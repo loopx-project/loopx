@@ -23,7 +23,7 @@ from tests.control_plane.test_quota_settlement_cli import (
     _initialize_fixture_authority, _spend_run_count, _write_fixture,
 )
 
-LONG_PATH_ROUTES = {"long-paths", "deep-paths", "deep-launcher", "deep-installation"}
+LONG_PATH_ROUTES = {"long-paths", "deep-paths", "deep-launcher", "deep-installation", "reader-metadata-unavailable"}
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -32,6 +32,7 @@ LONG_PATH_ROUTES = {"long-paths", "deep-paths", "deep-launcher", "deep-installat
     ("interaction", "complete"), ("read_order", "explicit"), ("read_order", "prepared"),
     ("runtime", "long-paths"), ("runtime", "deep-paths"), ("runtime", "deep-launcher"),
     ("runtime", "deep-installation"),
+    ("runtime", "reader-metadata-unavailable"),
 ])
 def test_composition_failure_preserves_receipt_without_publishing_execution_source(
         tmp_path, monkeypatch, provider, fault, bounded_route):
@@ -63,13 +64,15 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         if bounded_route == "deep-paths":
             parent = parent / ("checkout-" + "x" * 85) / ("package-" + "x" * 85)
             parent.mkdir(parents=True)
-        capture_length = {"deep-paths": 480, "deep-launcher": 271 - len("/decision.json")}.get(bounded_route, 250)
+        capture_length = {"deep-paths": 480, "deep-launcher": 271 - len("/decision.json"),
+            "reader-metadata-unavailable": 271 - len("/decision.json")}.get(bounded_route, 250)
         capture = parent / ("capture-" + "x" * (capture_length - len(str(parent)) - len("/capture-")))
         launcher_parent = tmp_path
         if bounded_route == "deep-installation":
             launcher_parent = tmp_path / ("release-" + "x" * 110) / ("package-" + "x" * 110)
             launcher_parent.mkdir(parents=True)
-        launcher_length = {"deep-launcher": 276, "deep-installation": 500}.get(bounded_route, 204)
+        launcher_length = {"deep-launcher": 276, "deep-installation": 500,
+            "reader-metadata-unavailable": 276}.get(bounded_route, 204)
         launcher = launcher_parent / ("launcher-" + "x" * (launcher_length - len(str(launcher_parent)) - len("/launcher-")))
         launcher.write_text("#!/bin/sh\nexec " + shlex.join([sys.executable, "-m", "loopx.entrypoint"]) + ' "$@"\n')
         launcher.chmod(0o700)
@@ -112,6 +115,13 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
 
     with monkeypatch.context() as injected:
         injected.setattr(quota, "compose_quota_cli_source", reject_composition)
+        if bounded_route == "reader-metadata-unavailable":
+            from loopx.control_plane.turn_driver import decision_capture
+
+            def fail_reference(*_args, **_kwargs):
+                raise OSError("fixture cannot publish optional reader metadata")
+
+            injected.setattr(decision_capture, "write_initial_context_read_reference", fail_reference)
         code, failed = cli("should-run", *identity, "--todo-id", TODO_ID, "--codex-app",
             "--context-delivery", "on", "--codex-context-dir", str(native),
             "--decision-output-dir", str(capture),
@@ -133,7 +143,8 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
     if "path" in captured:
         assert captured["path"] == str(saved)
     else:
-        assert bounded_route in {"deep-paths", "deep-launcher", "deep-installation"} and "--reference-file" in failed["command"]
+        assert bounded_route in LONG_PATH_ROUTES
+        assert ("--reference-file" in failed["command"]) == (bounded_route != "reader-metadata-unavailable")
     digest = captured["sha256"]
     if limit is None:
         markdown = render_quota_should_run_markdown(failed)
@@ -174,7 +185,7 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         else:
             assert tokens[tokens.index("--capture-sha256") + 1] == digest
         assert tokens[tokens.index("--max-page-output-bytes") + 1] == str(reader_limit)
-        if bounded_route == "deep-installation":
+        if bounded_route in {"deep-installation", "reader-metadata-unavailable"}:
             assert reader_limit > limit
             assert "rerun admission" in failed["instruction"]
         else:
@@ -182,9 +193,15 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
         if bounded_route in LONG_PATH_ROUTES:
             assert tokens[:3] == [str(launcher), "--cli-bin", str(launcher)]
             selected = bytearray()
+            env = {**os.environ, "LOOPX_USAGE_PING": "0"}
+            if bounded_route == "reader-metadata-unavailable":
+                # No selector metadata or TypeScript runtime is needed to
+                # read the original failure after diagnostic publication.
+                assert "--select" not in tokens and "--reference-file" not in tokens
+                env["PATH"] = str(tmp_path / "no-node")
             while True:
                 result = subprocess.run(tokens, cwd=project, capture_output=True, check=False,
-                    env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=30)
+                    env=env, timeout=30)
                 assert result.returncode == 0, result.stdout
                 assert len(result.stdout) <= reader_limit
                 page = json.loads(result.stdout)
@@ -197,10 +214,13 @@ def test_composition_failure_preserves_receipt_without_publishing_execution_sour
                     break
                 assert len(selected) == page["next_offset"] and page["content"]
                 tokens = shlex.split(page["next_command"])
-            details = {item["pointer"]: item["value"] for item in json.loads(selected)["selections"]}
-            assert details["/heartbeat_receipt"] == original["heartbeat_receipt"]
-            assert details["/composition_error"] == diagnostic["composition_error"]
-            assert details["/diagnostic_code"] == diagnostic["diagnostic_code"]
+            if bounded_route == "reader-metadata-unavailable":
+                assert selected == raw
+            else:
+                details = {item["pointer"]: item["value"] for item in json.loads(selected)["selections"]}
+                assert details["/heartbeat_receipt"] == original["heartbeat_receipt"]
+                assert details["/composition_error"] == diagnostic["composition_error"]
+                assert details["/diagnostic_code"] == diagnostic["diagnostic_code"]
         else:
             reader = tokens[tokens.index("context-read") + 1:]
             rc, first_page = cli("context-read", *reader)
