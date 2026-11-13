@@ -651,6 +651,81 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         controller.close()
 
 
+def test_foreground_inventory_failure_rearms_a_finishing_profile_retry(tmp_path, monkeypatch):
+    from extensions.test_lark_goal_topic_runtime import _seed_legacy_topic
+    from loopx.extensions.lark import goal_topic_runtime as runtime
+    from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
+    from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
+
+    target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
+    _seed_legacy_topic(target_path, binding_path)
+    targets = read_goal_channel_targets(target_path)
+    identity = targets["targets"]["fixture"]["identity"]
+    profile = identity["sender_profile"]
+    app_id = identity.pop("bot_app_id", None) or "cli_public_fixture"
+    snapshot = {
+        "target_payload": targets,
+        "binding_payloads": {"goal-alpha": read_goal_channel_binding(binding_path)},
+    }
+    available = threading.Event()
+    available.set()
+    observed, finish = threading.Event(), threading.Event()
+    timer_reads = []
+
+    def inventory(*, cli_bin):
+        if threading.current_thread() is service._refresh_retry:
+            timer_reads.append(threading.current_thread())
+        if not available.is_set():
+            raise OSError("profile inventory unavailable")
+        return {profile: app_id}
+
+    service = runtime.LarkGoalTopicRuntimeService(
+        snapshot_provider=lambda: snapshot,
+        runtime_root=tmp_path,
+        runtime_controller=object(),
+        private_conversations=SimpleNamespace(configured_profile_apps=inventory),
+        profile_poller=lambda _profile, stop: stop.wait(20),
+    )
+    original_refresh = service._refresh_profile_workers
+
+    def pause_after_observation(*, resume_queues=True):
+        retry_needed = original_refresh(resume_queues=resume_queues)
+        if not resume_queues and not observed.is_set():
+            assert not retry_needed
+            observed.set()
+            assert finish.wait(8)
+        return retry_needed
+
+    monkeypatch.setattr(service, "_refresh_profile_workers", pause_after_observation)
+    try:
+        service.refresh()
+        worker = service._workers[profile]
+        available.clear()
+        service.refresh()
+        retry = service._refresh_retry
+        assert retry is not None
+        available.set()
+        assert observed.wait(8)
+        available.clear()
+        service.refresh()
+        assert service._refresh_retry is retry
+        assert service._workers[profile] == worker
+        available.set()
+        finish.set()
+        retry.join(8)
+        assert not retry.is_alive()
+        recheck = service._refresh_retry
+        assert recheck is not None and recheck is not retry
+        recheck.join(8)
+        assert not recheck.is_alive()
+        assert service._refresh_retry is None
+        assert service._workers[profile] == worker
+        assert timer_reads == [retry, recheck]
+    finally:
+        finish.set()
+        service.close()
+
+
 def test_unknown_failed_capture_is_not_replayed(source_monitor):
     f = source_monitor
     native = {**f.carrier, "status": "failed", "event": {**f.carrier["event"], "message_id": "om_missed"}}

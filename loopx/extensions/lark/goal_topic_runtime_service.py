@@ -82,6 +82,7 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._refresh_retry: threading.Timer | None = None
+        self._refresh_retry_requested = False
         self._profile_refresh_sequence = 0
         self._applied_profile_refresh_sequence = 0
         self._delivery_thread: threading.Thread | None = None
@@ -290,6 +291,8 @@ class LarkGoalTopicRuntimeService:
             self._closed.wait(5)
 
     def _retry_profile_refresh(self) -> None:
+        with self._lock:
+            self._refresh_retry_requested = False
         try:
             retry_needed = self._refresh_profile_workers(resume_queues=False)
         except (OSError, LarkCliUnavailableError):
@@ -299,12 +302,16 @@ class LarkGoalTopicRuntimeService:
             retry_needed = False
         with self._lock:
             self._refresh_retry = None
-            if retry_needed:
+            if retry_needed or self._refresh_retry_requested:
                 self._schedule_profile_refresh()
 
     def _schedule_profile_refresh(self) -> None:
         # Called under the service lock. Only the configuration read is retried.
-        if self._closed.is_set() or self._refresh_retry is not None:
+        if self._closed.is_set():
+            return
+        if self._refresh_retry is not None:
+            # A foreground failure can arrive while the timer is finishing.
+            self._refresh_retry_requested = True
             return
         self._refresh_retry = threading.Timer(5, self._retry_profile_refresh)
         self._refresh_retry.daemon = True
