@@ -195,7 +195,8 @@ def test_stale_or_unreadable_health_is_not_verified(source_monitor):
 class _ListenerProcess:
     """Yield fixture events and let the real service end the stream."""
 
-    def __init__(self, events):
+    def __init__(self, events, *, hold_seconds=8):
+        self.hold_seconds = hold_seconds
         self.exited = threading.Event()
         self.waited = threading.Event()
         self.stdout = self.lines(events)
@@ -204,7 +205,7 @@ class _ListenerProcess:
         yield "[event] ready event_key=im.message.receive_v1\n"
         for event in events:
             yield json.dumps(event)
-        assert self.exited.wait(8)
+        assert self.exited.wait(self.hold_seconds)
         yield "[event] exited (reason: signal)\n"
 
     def poll(self):
@@ -351,6 +352,8 @@ def test_live_private_ingress_across_listener_transition(ordinary, tmp_path, mon
     (False, "add_cli_alias"), (False, "remove_cli_alias"),
     (False, "add_different_cli"), (False, "remove_different_cli"),
     (False, "profile_read_fails"), (False, "profile_read_fails_then_retargets"),
+    (False, "stale_inventory"), (False, "stale_inventory_after_error"),
+    (False, "removed_inventory"), (False, "closed_during_inventory"),
 ])
 def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     ordinary,  # noqa: F811
@@ -366,7 +369,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     from loopx.extensions.lark import goal_topic_runtime as runtime
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     from loopx.extensions.lark.conversation_identity import identity_ref
-    from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox
+    from loopx.extensions.lark.event_inbox import inspect_lark_event_inbox, load_lark_event_inbox_config
     from loopx.extensions.lark.goal_channel_contracts import read_goal_channel_binding
     from loopx.extensions.lark.goal_channel_targets import read_goal_channel_targets
     from test_lark_private_conversations import connect
@@ -397,7 +400,11 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     removing = binding_change.startswith("remove")
     retargeted = binding_change.endswith("_retarget")
     different_transport = retargeted or binding_change.endswith("_different_cli")
-    unreadable = binding_change.startswith("profile_read_fails")
+    stale_inventory = binding_change in {"stale_inventory", "stale_inventory_after_error"}
+    removed_inventory = binding_change == "removed_inventory"
+    closing = binding_change == "closed_during_inventory"
+    delayed_inventory = stale_inventory or removed_inventory or closing
+    unreadable = binding_change.startswith("profile_read_fails") or delayed_inventory
     retarget_on_retry = binding_change == "profile_read_fails_then_retargets"
     if adding:
         transport.bindings.disconnect(before, expected_revision=transport.bindings.read()["revision"])
@@ -419,6 +426,8 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     new_private = provider.event(profile, "after_rebind", "/status")
     in_group_answer, release, queued, next_stream_ready = (threading.Event() for _ in range(4))
     second_replied, inventory_retried = threading.Event(), threading.Event()
+    inventory_captured, return_inventory = threading.Event(), threading.Event()
+    timer_reads = []
     answered, consumer_processes = [], []
     replies = {}
 
@@ -446,13 +455,17 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         queued.set()
 
     def replacement_connection():
-        yield group_events[2] if removing or unreadable else new_private
+        if not removed_inventory and not closing:
+            yield group_events[2] if removing or unreadable else new_private
 
     def spawn(args):
         assert args[3:6] == ["event", "consume", "im.message.receive_v1"]
         if consumer_processes:
             assert len(consumer_processes) == 1 and consumer_processes[0].waited.is_set()
-        consumer = _ListenerProcess(replacement_connection() if consumer_processes else first_connection())
+        consumer = _ListenerProcess(
+            replacement_connection() if consumer_processes else first_connection(),
+            hold_seconds=22 if delayed_inventory else 8,
+        )
         consumer_processes.append(consumer)
         return consumer
 
@@ -514,13 +527,28 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         if unreadable:
             original_runner = transport.runner
             inventory_failed = threading.Event()
+            unreadable_inventory = {"returncode": 1, "stdout": "", "stderr": "temporary profile read failure"}
 
             def read_profile(args, cwd=None, timeout=None):
                 if args[1:] == ["profile", "list"]:
                     if not inventory_failed.is_set():
                         inventory_failed.set()
-                        return {"returncode": 1, "stdout": "", "stderr": "temporary profile read failure"}
+                        return unreadable_inventory
                     inventory_retried.set()
+                    if delayed_inventory and threading.current_thread() is service._refresh_retry:
+                        timer_reads.append(threading.current_thread())
+                        if not inventory_captured.is_set():
+                            if removed_inventory:
+                                provider.profile_apps.pop(profile)
+                            response = original_runner(args, cwd, timeout)
+                            if stale_inventory:
+                                rows = json.loads(response["stdout"])
+                                response["stdout"] = json.dumps([row for row in rows if row["name"] != profile])
+                            inventory_captured.set()
+                            assert return_inventory.wait(8)
+                            return response
+                    if binding_change == "stale_inventory_after_error" and not return_inventory.is_set():
+                        return unreadable_inventory
                 return original_runner(args, cwd, timeout)
 
             monkeypatch.setattr(transport, "runner", read_profile)
@@ -543,7 +571,47 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
             replacement = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == profile)
             assert transport.profiles()[profile]["binding_id"] == replacement["binding_id"] != before
             assert replacement["provider_ref"] == identity_ref(provider.profile_apps[profile])
-        if unreadable and not retarget_on_retry:
+        if delayed_inventory:
+            retry = service._refresh_retry
+            assert retry is not None and inventory_captured.wait(8)
+            if stale_inventory:
+                service.refresh()
+                assert service._refresh_retry is retry
+                assert service._workers[profile] == original_worker
+            if closing:
+                release.set()
+                assert second_replied.wait(8), service.health_snapshot()
+                service.close()
+            return_inventory.set()
+            retry.join(8)
+            assert not retry.is_alive()
+            if removed_inventory:
+                assert original_worker[0].is_set()
+                assert consumer_processes[0].exited.wait(8)
+                release.set()
+                original_worker[1].join(8)
+                assert not original_worker[1].is_alive()
+                expected = group_events[:1]
+            else:
+                if stale_inventory:
+                    assert not original_worker[0].is_set()
+                    release.set()
+                    assert second_replied.wait(8), service.health_snapshot()
+                    with service._lock:
+                        recheck = service._refresh_retry
+                    assert recheck is not None and recheck is not retry
+                    recheck.join(8)
+                    assert not recheck.is_alive()
+                    assert timer_reads == [retry, recheck]
+                    assert service._workers[profile] == original_worker
+                else:
+                    assert original_worker[0].is_set()
+                    assert service.active_profiles() == []
+                    assert timer_reads == [retry]
+                assert service._refresh_retry is None
+                assert len(consumer_processes) == 1
+                expected = group_events[:2]
+        elif unreadable and not retarget_on_retry:
             release.set()
             assert second_replied.wait(8), service.health_snapshot()
             assert inventory_retried.wait(8)
@@ -566,11 +634,15 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         assert reply_targets == answered
         config_path, = (store.root.parent / ".loopx/config/lark-goal-topics").glob("*.json")
         inbox = inspect_lark_event_inbox(project=store.root.parent, config_path=config_path)
+        config = load_lark_event_inbox_config(project=store.root.parent, config_path=config_path)
+        acked = json.loads((config["inbox_path"] / "processed.json").read_text())
+        assert set(acked["message_ids"]) == set(reply_targets)
         assert inbox["processed_count"] == len(expected)
         assert inbox["pending_count"] == 0
         if not stored_app and (adding or removing):
             assert [identity["cli_bin"], "profile", "list"] in provider.calls
     finally:
+        return_inventory.set()
         release.set()
         service.close()
         server.shutdown()

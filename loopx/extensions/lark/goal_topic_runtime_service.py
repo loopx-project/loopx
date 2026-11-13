@@ -82,6 +82,8 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._refresh_retry: threading.Timer | None = None
+        self._profile_refresh_sequence = 0
+        self._applied_profile_refresh_sequence = 0
         self._delivery_thread: threading.Thread | None = None
         self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
             name="loopx-lark-private-delivery", retry_seconds=5)
@@ -289,15 +291,15 @@ class LarkGoalTopicRuntimeService:
 
     def _retry_profile_refresh(self) -> None:
         try:
-            unavailable = self._refresh_profile_workers(resume_queues=False)
+            retry_needed = self._refresh_profile_workers(resume_queues=False)
         except (OSError, LarkCliUnavailableError):
-            unavailable = True
+            retry_needed = True
         except Exception:
             logging.getLogger(__name__).warning("Lark profile refresh failed")
-            unavailable = False
+            retry_needed = False
         with self._lock:
             self._refresh_retry = None
-            if unavailable:
+            if retry_needed:
                 self._schedule_profile_refresh()
 
     def _schedule_profile_refresh(self) -> None:
@@ -699,8 +701,11 @@ class LarkGoalTopicRuntimeService:
 
     def _refresh_profile_workers(self, *, resume_queues: bool = True) -> bool:
         """Apply known listener changes and report whether discovery must retry."""
-        if self._closed.is_set():
-            return False
+        with self._lock:
+            if self._closed.is_set():
+                return False
+            self._profile_refresh_sequence += 1
+            sequence = self._profile_refresh_sequence
         snapshot = self.snapshot_provider()
         profile_configs, unavailable = self._listener_configs(snapshot)
         desired = {
@@ -720,6 +725,11 @@ class LarkGoalTopicRuntimeService:
         with self._lock:
             if self._closed.is_set():
                 return False
+            if sequence < self._applied_profile_refresh_sequence:
+                # A newer refresh already owns the listener configuration.
+                # Recheck with the existing timer before changing any worker.
+                return True
+            self._applied_profile_refresh_sequence = sequence
             for profile in unavailable:
                 replacement = desired.pop(profile)
                 worker = self._workers.get(profile)
