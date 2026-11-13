@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name || 'main' }}
+          ref: ${{ github.sha }}
       - id: identity
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -216,7 +216,7 @@ jobs:
           path: dist/updater/*
           if-no-files-found: error
   publish:
-    needs: [identity, build-macos, build-windows, validate]
+    needs: [identity, build-macos, build-windows, validate, windows-desktop-tests]
     # A skipped Windows build is valid only on stable, where the feed is
     # Darwin-only. A main release must have its Windows artifact.
     if: >-
@@ -224,6 +224,7 @@ jobs:
       && needs.identity.result == 'success'
       && needs.build-macos.result == 'success'
       && needs.validate.result == 'success'
+      && needs.windows-desktop-tests.result == 'success'
       && (needs.identity.outputs.channel != 'main' || needs.build-windows.result == 'success')
     runs-on: ubuntu-latest
     permissions:

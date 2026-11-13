@@ -141,6 +141,8 @@ class FeedTests(unittest.TestCase):
 
     def test_stable_publish_does_not_require_the_windows_build(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        identity = workflow.split("\n  identity:\n", 1)[1].split("\n  build-macos:\n", 1)[0]
+        self.assertIn("ref: ${{ github.sha }}", identity)
         build_macos = workflow.split("\n  build-macos:\n", 1)[1].split(
             "\n  build-windows:\n", 1
         )[0]
@@ -156,7 +158,7 @@ class FeedTests(unittest.TestCase):
 
         publish = workflow.split("\n  publish:\n", 1)[1]
         self.assertIn(
-            "needs: [identity, build-macos, build-windows, validate]", publish
+            "needs: [identity, build-macos, build-windows, validate, windows-desktop-tests]", publish
         )
         condition = publish.split("if: >-", 1)[1].split("runs-on:", 1)[0]
         expression = " ".join(line.strip() for line in condition.splitlines())
@@ -168,6 +170,7 @@ class FeedTests(unittest.TestCase):
             .replace("needs.build-macos.result", "darwin_result")
             .replace("needs.build-windows.result", "windows_result")
             .replace("needs.validate.result", "validate_result")
+            .replace("needs.windows-desktop-tests.result", "native_test_result")
             .replace("needs.identity.outputs.channel", "channel")
         )
 
@@ -177,6 +180,7 @@ class FeedTests(unittest.TestCase):
             darwin_result="success",
             windows_result="skipped",
             validate_result="success",
+            native_test_result="success",
         ):
             return eval(  # noqa: S307 - repository-owned expression, no builtins.
                 python_expression,
@@ -187,6 +191,7 @@ class FeedTests(unittest.TestCase):
                     "darwin_result": darwin_result,
                     "windows_result": windows_result,
                     "validate_result": validate_result,
+                    "native_test_result": native_test_result,
                 },
             )
 
@@ -203,6 +208,9 @@ class FeedTests(unittest.TestCase):
             "a main release must reject a missing Windows build",
         )
         self.assertTrue(publish_after("main", windows_result="success"))
+        for channel in ("main", "stable"):
+            for status in ("failure", "cancelled", "skipped"):
+                self.assertFalse(publish_after(channel, windows_result="success", native_test_result=status))
 
     def _upload_step_script(self):
         lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
