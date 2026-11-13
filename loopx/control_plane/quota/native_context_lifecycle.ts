@@ -65,22 +65,24 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (same && event.source === "resume" && request.resume_verified === true
         && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS
         && candidate.capture_bytes_verified === true) return state;
-    if (same && event.source === "resume" && fileEpochCurrent
-        && !(candidate?.native_resume || (state.candidate && !candidate))) {
-      // Resuming a session is not compaction. File comparison does not depend
-      // on model retention; retire that separate assumption when unverified.
-      // A previously qualified history checkpoint that now fails can include
-      // an unreported compaction/rollback, so conservatively rotate below.
-      delete state.candidate;
-      delete state.pending;
-      delete state.active_call;
-      delete state.section_reads;
+    if (same && event.source === "resume" && fileEpochCurrent) {
       // Selected outputs can establish their own literal sections on a
       // qualified replay. They never establish a whole-input candidate.
       const previous = jsonObject(state.consumed_pointers);
       const replayed = jsonObject(request.resume_sections);
       const retained = Object.fromEntries(Object.entries(replayed ?? {}).filter(([address, digest]) =>
         typeof digest === "string" && previous?.[address] === digest));
+      if (candidate?.native_resume || (state.candidate && !candidate)) {
+        // Failed complete replay may conceal compaction. Rotate the file
+        // epoch, keeping only the independently verified literal selections.
+        invalidate();
+      } else {
+        // Ordinary resume alone is not compaction or proof of model retention.
+        delete state.candidate;
+        delete state.pending;
+        delete state.active_call;
+        delete state.section_reads;
+      }
       if (Object.keys(retained).length > 0) {
         state.consumed_pointers = retained;
         state.confirmed_read_sections = Object.keys(retained);

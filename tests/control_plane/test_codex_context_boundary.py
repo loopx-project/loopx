@@ -154,7 +154,8 @@ def _configure_provider(home, url):
 
 
 @pytest.mark.parametrize("restore_missing", ["original", "unobserved", "verified"])
-def test_native_code_mode_resume_requires_observed_selection_coverage(tmp_path, monkeypatch, restore_missing):
+@pytest.mark.parametrize("complete_capture", [False, True])
+def test_native_code_mode_resume_requires_observed_coverage(tmp_path, monkeypatch, restore_missing, complete_capture):
     """Native Bash hooks and replayed Code Mode emissions must cover the same bytes."""
     from canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -197,7 +198,8 @@ def test_native_code_mode_resume_requires_observed_selection_coverage(tmp_path, 
                 _, wire = project(context, payload=payload)
                 source = wire["recovery"]
                 reader = cli + ["context-read", "--capture-file", source["path"], "--capture-sha256", source["sha256"]]
-                opening = shlex.join(reader + ["--select", long_pointer, "--page-bytes", "3000"])
+                fields = [] if complete_capture else ["--select", long_pointer]
+                opening = shlex.join(reader + [*fields, "--page-bytes", "3000"])
                 independent = shlex.join(reader + ["--select", short_pointer])
                 code = "{const result=" + read_command(independent) + ";" + CODE_MODE_EXEC_RESULT_FORWARDER + ";}"
                 if restore_missing == "original":
@@ -235,12 +237,22 @@ def test_native_code_mode_resume_requires_observed_selection_coverage(tmp_path, 
         config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
         session = _app_server(binary, env, workspace, home, True, sandbox="danger-full-access")
         assert not errors, errors
-        before = json.loads((context / "session.json").read_bytes()).get("consumed_pointers", {})
-        assert set(before) == {short_pointer, long_pointer}
+        before = json.loads((context / "session.json").read_bytes())
+        pointers = before.get("consumed_pointers", {})
+        assert set(pointers) == ({short_pointer, ""} if complete_capture else {short_pointer, long_pointer})
+        if complete_capture:
+            assert before["candidate"]["capture_bytes_verified"]
         assert _app_server(binary, env, workspace, home, True,
                            sandbox="danger-full-access", resume=session) == session
-    after = json.loads((context / "session.json").read_bytes()).get("consumed_pointers", {})
-    assert not errors and after == (before if restore_missing != "unobserved" else {short_pointer: before[short_pointer]})
+    after = json.loads((context / "session.json").read_bytes())
+    assert not errors
+    if complete_capture:
+        assert bool(after.get("candidate")) is (restore_missing != "unobserved")
+        if restore_missing == "unobserved":
+            assert after.get("consumed_pointers", {}) == {short_pointer: pointers[short_pointer]}
+    else:
+        assert after.get("consumed_pointers", {}) == (
+            pointers if restore_missing != "unobserved" else {short_pointer: pointers[short_pointer]})
 
 
 @pytest.mark.parametrize("early_yield", [False, True])

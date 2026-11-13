@@ -1028,19 +1028,21 @@ that observation and rotate the file epoch for the next work Turn. A resume may 
 does not attest retention. The shared Codex adapter can qualify a resume against
 the complete read's native replay checkpoint: the native-selected physical
 rollout must retain the digest-bound interval beginning at the current baseline's
-first reader and every observed reader output,
-including complete byte coverage of the pinned capture, with
+first reader and the outputs of observed native calls covering every byte of
+the pinned capture, with
 matching session, workspace, model and permission mode, and no intervening
 compaction, rollback, replacement or unknown replay record. This bounded IO
 profile is qualified on Codex 0.162.1, 0.167.0-alpha.3.2 and 0.167.0-alpha.4.1 paginated rollouts. It streams only the
 baseline's reader interval and subsequent records; unrelated earlier history is
 neither hashed nor decoded, and total file size does not decide reuse. The
 session metadata's creator version is not the running host version. Code-mode
-parent emissions must retain the same complete page bytes observed by nested
-reader hooks. Several nested reads may share one parent call; their individual
-emission digests and full byte coverage remain required. Missing or changed evidence and unqualified replay records fall
-back to full. One decoded record remains bounded; this is not a history-size
-limit. Legacy whole-prefix checkpoints require a fresh complete read. It retains the
+parent emissions contribute page bytes only for hooks bound to that exact call
+occurrence. Several nested reads may share one parent. An observed reread can
+cover a missing range using its own retained output; an unrelated emission
+with identical bytes cannot. Missing coverage or unqualified replay records
+fall back to full. One decoded record remains bounded; this is not a history-size
+limit. Legacy checkpoints without call binding require a fresh complete read
+to attest cross-process retention; the saved capture remains readable. It retains the
 normal-read engineering assumption rather than certifying future model input;
 it neither scans model requests nor asks the model for an ACK.
 For a complete selection from the current capture, the adapter can verify

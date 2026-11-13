@@ -44,13 +44,15 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
                 stream.write(b'x' * (1024 * 1024))
             stream.write(b'"}}\n')
     history.chmod(0o600)
-    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions",
+                 turn_id="read-turn")
+    append(history, "event_msg", {"type": "task_started", "turn_id": event["turn_id"]})
     append(history, "turn_context", {"cwd": str(root), "model": "fixture"})
     payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000},
         "heartbeat_receipt": {"turn_instance_id": "first"}}
     _, first = project(root, payload=payload)
     pages = read_pages(root, first)
-    emissions = []
+    emissions, parent = [], None
     for i, page in enumerate(pages if complete else pages[:-1]):
         call = f"reader-{i}"
         body = json.dumps(page)
@@ -59,13 +61,12 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         if code_mode:
             # Native code-mode retains the parent emission; the nested hook
             # has a different call id. Its actual output must still cover all bytes.
-            if parent_batch == 1:
-                append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
-                    "output": [{"type": "input_text", "text": output}]})
-            else:
-                if not emissions:
-                    append(history, "response_item", {"type": "custom_tool_call", "call_id": f"parent-{i}"})
-                emissions.append({"type": "input_text", "text": output})
+            if not emissions:
+                parent = f"parent-{i}"
+                append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec"})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": event["turn_id"],
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+            emissions.append({"type": "input_text", "text": output})
         else:
             append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": output})
         if lost_prefix and i == len(pages) - 1:
@@ -77,7 +78,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         if emissions and (len(emissions) == parent_batch or i == len(pages) - 1):
             # Nested read hooks run before the enclosing Code Mode emits its
             # complete result. Preserve every emission in that native parent.
-            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
                 "output": emissions})
             emissions = []
     return event, history, payload
@@ -506,6 +507,70 @@ def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_pa
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == "full" and wire["context"] == payload
+
+
+@pytest.mark.parametrize(("replay", "retained"), [
+    ("present", True), ("batch", True), ("missing", False),
+    ("unobserved_copy", False), ("observed_reread", True),
+])
+def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monkeypatch, replay, retained):
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.4.1", "history_mode": "paginated"})
+    history.chmod(0o600)
+    turn_id = "capture-turn"
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1500},
+        "heartbeat_receipt": {"turn_instance_id": "first"}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    assert len(pages) >= 3 and pages[-1]["eof"]
+
+    def open_parent(parent):
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+
+    def observe(reader, page):
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": reader, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": reader, "tool_response": json.dumps(page)})
+
+    def emit(parent, contents):
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": json.dumps(page)} for page in contents]})
+
+    if replay == "batch":
+        open_parent("batch")
+        for i, page in enumerate(pages):
+            observe(f"reader-{i}", page)
+        emit("batch", pages)
+    else:
+        for i, page in enumerate(pages):
+            parent = f"parent-{i}"
+            open_parent(parent)
+            observe(f"reader-{i}", page)
+            emit(parent, [page] if i or replay == "present" else [])
+            if i == 0 and replay in {"unobserved_copy", "observed_reread"}:
+                open_parent("copy")
+                if replay == "observed_reread":
+                    observe("reader-reread", page)
+                emit("copy", [page])
+    before = context._state(tmp_path)
+    assert before["candidate"]["capture_bytes_verified"]
+    append(history, "event_msg", {"type": "task_complete", "turn_id": turn_id})
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    after = context._state(tmp_path)
+    assert bool(after.get("candidate")) is retained
+    current = {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}}
+    _, wire = project(tmp_path, "second", payload=current)
+    if retained:
+        assert_file_delta(wire, before["recovery"], current)
+    else:
+        assert wire["mode"] == "full" and wire["context"] == current
 
 
 @pytest.mark.parametrize("prefix_mib", [0, 96])

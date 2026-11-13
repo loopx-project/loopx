@@ -14,7 +14,6 @@ import json
 import os
 import re
 import stat
-from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +32,7 @@ _IO_CHUNK_BYTES = 64 * 1024
 # Bound one decoded protocol record, not the history or the replay interval.
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
 _MAX_SELECTED_REPLAY_READS = 32
+_MAX_COMPLETE_REREADS = 32
 _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
     r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
 
@@ -126,24 +126,11 @@ def _reader_tail(stream: BinaryIO, end: int) -> Iterator[tuple[int, dict[str, An
             raise ValueError("unsupported native reader record")
 
 
-def _reader_start(stream: BinaryIO, end: int, pages: list[dict[str, Any]]) -> int:
-    """Anchor a full reader at its native call or already retained output."""
-    for offset, record in _reader_tail(stream, end):
-        if _turn_boundary(record):
-            break
-        if record.get("type") == "response_item":
-            payload = record["payload"]
-            if (payload.get("type") in {"function_call", "custom_tool_call"}
-                    or _read_pages(payload.get("output")) == pages):
-                return offset
-    return end
-
-
 def _turn_boundary(record: dict[str, Any]) -> bool:
     return record.get("type") == "event_msg" and record.get("payload", {}).get("type") == "task_started"
 
 
-def _selected_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[int, str] | None:
+def _native_reader(stream: BinaryIO, end: int, event: dict[str, Any]) -> tuple[int, str] | None:
     """Bind a hook to its own call, or to a single open native Code Mode call."""
     reader = event["tool_use_id"]
     completed = False
@@ -225,6 +212,54 @@ def _emission_pages(payload: dict[str, Any]) -> Iterator[list[dict[str, Any]]]:
         yield _read_pages(output)
 
 
+def _replayed_output_groups(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
+                            event: dict[str, Any], reads: list[dict[str, Any]],
+                            ) -> Iterator[tuple[int, str, list[dict[str, Any]]]]:
+    # Old private checkpoints did not bind full reads to a call. They may
+    # still serve their saved file, but cannot attest cross-process retention.
+    call_offsets: dict[int, str] = {}
+    for read in reads:
+        offset, digest = read["native_offset"], read["native_sha256"]
+        if call_offsets.setdefault(offset, digest) != digest:
+            raise ValueError("native replay call changed between observations")
+    native_calls: dict[str, tuple[int, str]] = {}
+    closed_calls: set[str] = set()
+    for offset, record in _records(stream, anchor["reader_start"], snapshot["observed_bytes"]):
+        if not _append_only(record, event):
+            raise ValueError("unsupported native replay continuation")
+        payload = record["payload"]
+        if _turn_boundary(record):
+            native_calls.clear()
+            closed_calls.clear()
+        if record["type"] != "response_item":
+            continue
+        kind, call = payload.get("type"), payload.get("call_id")
+        if kind in {"function_call", "custom_tool_call"}:
+            # Call IDs can repeat in later Turns. Match the exact call
+            # occurrence observed by the hook.
+            native_calls.pop(call, None)
+            closed_calls.discard(call)
+            if offset in call_offsets and call_offsets[offset] == _digest(record):
+                native_calls[call] = offset, kind
+        elif kind in {"function_call_output", "custom_tool_call_output"}:
+            opened = native_calls.pop(call, None)
+            if opened is None:
+                if call in closed_calls:
+                    raise ValueError("duplicate native tool output without a new call")
+                if (kind != "function_call_output" or offset not in call_offsets
+                        or call_offsets[offset] != _digest(record)):
+                    continue
+                call_offset = offset  # the direct output was already present at hook time
+            else:
+                call_offset, call_kind = opened
+                if kind != call_kind + "_output" or call_offset not in call_offsets:
+                    continue
+            closed_calls.add(call)
+            for group in _emission_pages(payload):
+                if group:
+                    yield call_offset, _digest(group), group
+
+
 def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
              event: dict[str, Any]) -> bool:
     from .decision_capture import capture_page_range, read_context_capture_file
@@ -232,47 +267,24 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
     if not _matching_replay_interval(anchor, snapshot, stream):
         return False
     reads, reference = anchor.get("reads"), anchor.get("read_source")
-    if not isinstance(reads, list) or not reads or not isinstance(reference, dict):
+    rereads = anchor.get("rereads", [])
+    if not isinstance(reads, list) or not reads or not isinstance(rereads, list) or not isinstance(reference, dict):
         return False
-    required = {read["call_id"]: read["pages_sha256"] for read in reads}
-    if len(required) != len(reads):
-        return False
+    reads = [*reads, *rereads]
     _, body, _ = read_context_capture_file(reference["path"], reference["sha256"], private=True)
-    # Verify every observed read, not just EOF. A complete last page must never
-    # hide an earlier output that the native replay dropped or truncated.
-    seen: set[str] = set()
-    expected_pages = Counter(required.values())
-    seen_pages: Counter[str] = Counter()
+    required = {(read["native_offset"], read["pages_sha256"]) for read in reads}
     ranges = []
-    for _, record in _records(stream, anchor["reader_start"], snapshot["observed_bytes"]):
-        payload = record.get("payload", {})
-        native_output = payload.get("type") in {"function_call_output", "custom_tool_call_output"}
-        if record.get("type") == "response_item" and native_output:
-            call = payload["call_id"]
-            pages = _read_pages(payload.get("output"))
-            digest = _digest(pages)
-            groups = [pages]
-            if call in required:
-                if call in seen or digest != required[call]:
-                    return False
-                seen.add(call)
-            elif payload.get("type") == "custom_tool_call_output":
-                groups = [group for group in _emission_pages(payload)
-                          if group and _digest(group) in expected_pages]
-            else:
-                groups = []
-            for group in groups:
-                seen_pages[_digest(group)] += 1
-                for page in group:
-                    if page.get("sha256") != reference["sha256"]:
-                        continue
-                    span = capture_page_range(page, raw=body, digest=reference["sha256"])
-                    if span is None:
-                        return False
-                    ranges.append(span)
-        if not _append_only(record, event):
-            return False
-    return seen_pages == expected_pages and _covers_bytes(ranges, len(body))
+    for offset, digest, group in _replayed_output_groups(anchor, snapshot, stream, event, reads):
+        if (offset, digest) not in required:
+            continue
+        for page in group:
+            span = capture_page_range(page, raw=body, digest=reference["sha256"])
+            if span is None:
+                return False
+            ranges.append(span)
+    # An independently observed reread can recover a missing range. A copy
+    # emitted by an unrelated call cannot contribute even identical bytes.
+    return _covers_bytes(ranges, len(body))
 
 
 def _replayed_selection_sections(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
@@ -284,42 +296,13 @@ def _replayed_selection_sections(anchor: dict[str, Any], snapshot: dict[str, Any
         return {}
     source = anchor["read_source"]
     read_context_capture_file(source["path"], source["sha256"], private=True)
-    call_offsets = {read["native_offset"]: read["native_sha256"]
-                    for selection in selections.values() for read in selection["reads"]}
-    native_calls: dict[str, tuple[int, str]] = {}
-    outputs: dict[int, set[str]] = {}
-    for offset, record in _records(stream, anchor["reader_start"], snapshot["observed_bytes"]):
-        if not _append_only(record, event):
-            return {}
-        payload = record["payload"]
-        if _turn_boundary(record):
-            native_calls.clear()
-        if record["type"] != "response_item":
-            continue
-        kind, call = payload.get("type"), payload.get("call_id")
-        if kind in {"function_call", "custom_tool_call"}:
-            # Call IDs can repeat in later Turns. Match the exact call
-            # occurrence observed by the hook.
-            native_calls.pop(call, None)
-            if offset in call_offsets and call_offsets[offset] == _digest(record):
-                native_calls[call] = offset, kind
-        elif kind in {"function_call_output", "custom_tool_call_output"}:
-            opened = native_calls.pop(call, None)
-            if opened is None:
-                if (kind != "function_call_output" or offset not in call_offsets
-                        or call_offsets[offset] != _digest(record)):
-                    continue
-                call_offset = offset  # the direct output was already present at hook time
-            else:
-                call_offset, call_kind = opened
-                if kind != call_kind + "_output" or call_offset not in call_offsets:
-                    continue
-            outputs[call_offset] = {_digest(group) for group in _emission_pages(payload) if group}
+    reads = [read for selection in selections.values() for read in selection["reads"]]
+    outputs = {(offset, digest) for offset, digest, _ in _replayed_output_groups(anchor, snapshot, stream, event, reads)}
 
     retained = {}
     for selection in selections.values():
         ranges = [(read["start"], read["end"]) for read in selection["reads"]
-                  if read["pages_sha256"] in outputs.get(read["native_offset"], ())]
+                  if (read["native_offset"], read["pages_sha256"]) in outputs]
         if _covers_bytes(ranges, selection["total_bytes"]):
             retained.update(selection["sections"])
     return retained
@@ -360,21 +343,53 @@ def observe_native_read(state: dict[str, Any], event: dict[str, Any],
         pending = {}
     if not isinstance(pending, dict):
         return state
-    read = {"call_id": call, "pages_sha256": _digest(pages)}
-    reads = pending.get("native_reads", [])
-    if not isinstance(reads, list):
-        reads = []
+    try:
+        with _snapshot(event) as (facts, stream):
+            native_reader = _native_reader(stream, facts["observed_bytes"], event)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return state
+    if native_reader is None:
+        return state
+    offset, digest = native_reader
+    read = {"native_offset": offset, "native_sha256": digest, "pages_sha256": _digest(pages)}
+    start, reads = pending.get("native_reader_start"), pending.get("native_reads")
+    if not isinstance(start, dict) or not isinstance(reads, list) or not _same_replay_source(start, facts):
+        start, reads = {**facts, "reader_start": offset}, []
+    elif offset < start["reader_start"]:
+        start = {**facts, "reader_start": offset}
     if read not in reads:
         reads = [*reads, read]
-    pending = {**pending, "native_reads": reads}
-    if "native_reader_start" not in pending:
-        try:
-            with _snapshot(event) as (facts, stream):
-                start = _reader_start(stream, facts["observed_bytes"], pages)
-            pending["native_reader_start"] = {**facts, "reader_start": start}
-        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-            pass
+    pending = {**pending, "native_reads": reads, "native_reader_start": start}
     return {**state, "pending": pending}
+
+
+def observe_completed_native_reread(state: dict[str, Any], updated: dict[str, Any],
+                                   event: dict[str, Any], pages: list[dict[str, Any]]) -> None:
+    """Add independently observed output to the current full-capture checkpoint."""
+    candidate = updated.get("candidate")
+    if not isinstance(candidate, dict) or candidate != state.get("candidate") or not pages:
+        return
+    anchor, reference = candidate.get("native_resume"), state.get("recovery")
+    if (not isinstance(anchor, dict) or not isinstance(reference, dict)
+            or anchor.get("read_source", {}).get("sha256") != reference.get("sha256")
+            or any(page.get("ok") is not True or page.get("sha256") != reference.get("sha256") for page in pages)):
+        return
+    try:
+        with _snapshot(event) as (facts, stream):
+            # Resume checks the original interval digest. Extra observations
+            # cannot change it and do not need to hash it again at each hook.
+            if not _same_replay_source(anchor, facts) or anchor["observed_bytes"] > facts["observed_bytes"]:
+                return
+            native_reader = _native_reader(stream, facts["observed_bytes"], event)
+            if native_reader is None or native_reader[0] < anchor["reader_start"]:
+                return
+            offset, digest = native_reader
+            read = {"native_offset": offset, "native_sha256": digest, "pages_sha256": _digest(pages)}
+        rereads = anchor.get("rereads", [])
+        if read not in anchor["reads"] and read not in rereads:
+            candidate["native_resume"] = {**anchor, "rereads": [*rereads, read][-_MAX_COMPLETE_REREADS:]}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return
 
 
 def native_resume_verified(state: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -435,11 +450,11 @@ def checkpoint_native_selection(state: dict[str, Any], updated: dict[str, Any],
         and all(previous.get(k) == event.get(k) for k in ("model", "permission_mode")))
     try:
         with _snapshot(event) as (facts, stream):
-            native_reader = _selected_reader(stream, facts["observed_bytes"], event)
+            native_reader = _native_reader(stream, facts["observed_bytes"], event)
             if native_reader is None:
                 return
             native_offset, native_sha256 = native_reader
-            anchor = previous if same_source and _same_replay_source(previous, facts) else {}
+            anchor = previous if isinstance(previous, dict) and same_source and _same_replay_source(previous, facts) else {}
             selections = dict(anchor.get("selections", {}))
             all_reads = [read for entry in selections.values() for read in entry["reads"]]
             if any(read["call_id"] == call and read["native_offset"] == native_offset for read in all_reads):
@@ -493,7 +508,7 @@ def checkpoint_native_read(state: dict[str, Any], updated: dict[str, Any],
         if not isinstance(reference, dict) or not isinstance(reads, list) or not reads or not isinstance(start, dict):
             return
         with _snapshot(event) as (facts, stream):
-            if any(start.get(k) != facts.get(k) for k in ("path", "device", "inode", "metadata_sha256")):
+            if not _same_replay_source(start, facts):
                 return
             reader_start = start["reader_start"]
             if candidate.get("ancestry", 0):
