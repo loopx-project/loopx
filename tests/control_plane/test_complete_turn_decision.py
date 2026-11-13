@@ -886,6 +886,7 @@ mcp.run()
                     assert channel["checkpoint_recovery_tool"] == "review_task_vision"
                     assert "original committed Turn writeback" in channel["vision_authoring"]["authoring_hint"]
                     if bound_turn:
+                        assert "todo_turn_binding" not in channel
                         identity = received["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
                         assert identity == received["heartbeat_receipt"]["settlement_identity"]
                         assert identity["turn_instance_id"] == "mcp-original-turn"

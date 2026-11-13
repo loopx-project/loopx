@@ -126,13 +126,18 @@ def test_mcp_oracle_requires_successful_transactions_not_only_invocations(failed
         runner.verify_mcp_completions(events, expected_todos)
 
 
-def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
+def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path, monkeypatch):
     pytest.importorskip("mcp.server.fastmcp")
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
     from loopx.claude_goal_mode.scripts.goalmode_cmd import write_loop_md
 
-    project, _, launcher = runner.shared.setup(tmp_path)
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+    from tests.managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, launcher = runner.shared.setup(tmp_path)
     write_loop_md(project, runner.shared.GOAL, runner.shared.AGENT)
     state = project / "ACTIVE_GOAL_STATE.md"
     before = state.read_bytes()
@@ -152,6 +157,7 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 assert current["ok"] and current["goal_id"] == runner.shared.GOAL
                 assert current["agent_id"] == runner.shared.AGENT
                 assert "complete_task" in current["task_body"]
+                assert "todo_turn_binding" in current["task_body"]
                 assert "call the bound LoopX `host_prompt`" not in current["task_body"]
                 complete = next(t for t in tools.tools if t.name == "complete_task")
                 assert "successor_todo_ids" in complete.inputSchema["properties"]
@@ -185,8 +191,38 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
                 assert host["vision_authoring"]["fields"]["vision_patch"]["acceptance_summary"] == 420
                 rejected = await session.call_tool("claim_task", {"todo_id": "todo_reducer", "agent_id": "other-agent"})
                 assert json.loads(rejected.content[0].text)["ok"] is False
-    asyncio.run(exercise())
-    assert state.read_bytes() == before
+                assert state.read_bytes() == before
+
+                binding = host["todo_turn_binding"]
+                assert binding["todo_id"] == "todo_reducer"
+                bound = _run_projected_action(
+                    action + " --todo-id " + shlex.quote(binding["todo_id"]),
+                    launcher=launcher, project=project,
+                    replacements={"<unique-work-iteration-id-reuse-on-retry>": binding["turn_instance_id"]},
+                )
+                assert bound["normal_delivery_allowed"] is True
+                identity = bound["heartbeat_receipt"]["settlement_identity"]
+                assert identity["turn_instance_id"] == binding["turn_instance_id"]
+                (project / "delivery.txt").write_text("synthetic verified delivery\n")
+                args = {"todo_id": binding["todo_id"], "agent_id": runner.shared.AGENT,
+                        "evidence": "Verified the synthetic delivery.", "successor_todo_ids": ["todo_cli"]}
+                first = json.loads((await session.call_tool("complete_task", args)).content[0].text)
+                retry = json.loads((await session.call_tool("complete_task", args)).content[0].text)
+                assert first["ok"] and first["completed"]
+                assert first["settlement_identity"] == retry["settlement_identity"] == identity
+                assert first["settlement"]["quota_spend"]["appended"] is True
+                assert retry["settlement"]["quota_spend"]["idempotent_replay"] is True
+                later = json.loads((await session.call_tool("should_run", {})).content[0].text)
+                assert later["selected_todo"]["todo_id"] == "todo_cli"
+                events = load_rollout_events(rollout_event_log_path(runtime, runner.shared.GOAL))
+                assert [event["run_id"] for event in events
+                        if event["event_kind"] == "quota_should_run" and event.get("run_id")] == [binding["turn_instance_id"]]
+                assert [event["run_id"] for event in events
+                        if event["event_kind"] == "quota_spend"] == [binding["turn_instance_id"]]
+    try:
+        asyncio.run(exercise())
+    finally:
+        stop_disposable_effect_runtimes(tmp_path)
 
 
 def _run_projected_action(

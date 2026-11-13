@@ -29,6 +29,7 @@ def guard_native_controller_writeback(control_plane: Any) -> None:
 
     if os.environ.get(NATIVE_CONTROLLER_ENV) != "1":
         return
+    control_plane.controller_owns_settlement = True
 
     def blocked_claim(_todo_id: str, _agent_id: str) -> str:
         return _native_controller_rejection("claim_task")

@@ -1085,6 +1085,9 @@ add a decision schema, change admission or re-sign a host-modified source.
 
 The complete decision retains the original settlement recipe and identity.
 The host channel designates `complete_task` as the Todo settlement executor.
+When ordinary Todo delivery still needs a Turn binding, the host channel
+supplies the Todo and Turn IDs that `complete_task` will use. Pass both in the
+projected guard and reuse them on retry. The guard still owns admission.
 Independent replan follows the live original CLI actions. Live reads refuse
 unversioned decisions, v0, unsupported versions and invalid bindings or numeric
 representations. A collection error with no decision retains its diagnostic.

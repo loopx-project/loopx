@@ -782,7 +782,9 @@ MCP adapter 负责这层传输，不新增决策 schema、不改变准入，也�
 来源重新签名。
 
 完整决定保留原始结算步骤和身份。Host channel 指定由 `complete_task` 执行
-Todo 结算，独立重规划继续使用当前原始 CLI 动作。实时读取拒绝无版本决定、v0、
+Todo 结算。普通 Todo 尚待绑定 Turn 时，host channel 给出 `complete_task` 会使用
+的 Todo 和 Turn ID。按投影给出的 guard 传入两个 ID，重试时沿用。准入仍由
+guard 决定。独立重规划继续使用当前原始 CLI 动作。实时读取拒绝无版本决定、v0、
 不支持的版本以及无效绑定或数值表示。尚未产生决定的收集失败保留原诊断。
 已保存的 v0 或无版本捕获走原版本的恢复 reader。
 

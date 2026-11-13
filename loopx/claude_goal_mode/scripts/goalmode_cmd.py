@@ -69,6 +69,8 @@ def loop_execution_content(goal_id, agent_id) -> str:
     The leading `loopx:armed` marker persists WHICH goal /loopx armed for this
     project, so goal_state.goal_context() resolves the right goal in multi-goal
     registries instead of guessing from registry order."""
+    from loopx.control_plane.host_adapter_settlement import MCP_TODO_TURN_BINDING_GUIDANCE
+
     armed = json.dumps({"goal_id": goal_id, "agent_id": agent_id})
     return (
         f"<!-- loopx:armed {armed} -->\n"
@@ -86,6 +88,7 @@ def loop_execution_content(goal_id, agent_id) -> str:
         "Complete-v1 MCP results preserve the original JSON in the first text block.\n"
         "For tool ownership and vision input limits, read structuredContent.mcp_channel\n"
         "or the separate host_mcp_interaction_v0 text block.\n"
+        f"{MCP_TODO_TURN_BINDING_GUIDANCE}\n"
         "At material delivery, compare the Goal's vision/acceptance with actual evidence.\n"
         "Pass the resulting agent_vision or a justified vision_unchanged_reason to\n"
         "complete_task. If omitted, call review_task_vision with only that Todo and\n"

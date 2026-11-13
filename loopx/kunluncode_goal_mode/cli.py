@@ -467,10 +467,14 @@ def add_todo(project: Path, text: str) -> dict[str, Any]:
 
 
 def worker_prompt(agent_id: str) -> str:
+    from ..control_plane.host_adapter_settlement import MCP_TODO_TURN_BINDING_GUIDANCE
+
     return (
         f"You are the LoopX KunlunCode worker bound as agent {agent_id!r}. "
         f"Use the {MCP_SERVER_NAME} MCP lifecycle tools; do not use a Claude binding or guess ids. "
-        "Call should_run first. If should_run is false, report the reason and stop. "
+        "Call should_run first and follow its current interaction_contract before work. "
+        f"{MCP_TODO_TURN_BINDING_GUIDANCE} "
+        "If should_run is false, report the reason and stop. "
         "If true, claim exactly the selected todo with claim_task, perform one bounded segment, "
         "verify it with a real check, then call complete_task with the same agent_id and compact "
         "public-safe evidence. Supply either next_agent_todo or no_follow_up=true. "

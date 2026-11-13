@@ -37,6 +37,7 @@ class GoalModeMCPControlPlane:
     def __init__(self, config: GoalModeMCPConfig, context_resolver: ContextResolver):
         self.config = config
         self.context_resolver = context_resolver
+        self.controller_owns_settlement = False
 
     def state(self) -> dict[str, Any]:
         return self.context_resolver() or {}
@@ -151,8 +152,11 @@ class GoalModeMCPControlPlane:
         goal_id, _ = self.context()
         if not goal_id:
             return self.no_goal_message()
-        source = self.run_cli(self.should_run_args(goal_id, self.bound_agent_id()))
-        return project_host_interaction(source)
+        agent_id = self.bound_agent_id()
+        source = self.run_cli(self.should_run_args(goal_id, agent_id))
+        if self.controller_owns_settlement:
+            return project_host_interaction(source)
+        return project_host_interaction(source, goal_id=goal_id, agent_id=agent_id, goal_ref=self.goal_ref())
 
     def should_run(self) -> str:
         result = self._read_guard()
