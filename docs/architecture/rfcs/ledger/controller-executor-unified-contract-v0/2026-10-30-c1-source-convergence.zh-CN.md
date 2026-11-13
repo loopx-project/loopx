@@ -2188,3 +2188,20 @@ Pi、OpenCode 和 OpenCode 2 已绑定 Agent 时，共用现有调度观测。�
 不可用。独立 oracle 检查完整诊断回读、执行投影拒绝、原生 journal 与认领来源
 副作用、一个原回执及零 spend。既有暂停、capture、handoff 和历史恢复覆盖共同
 资格化相邻边界。整体 C1 验收及真实模型效果继续开放。
+
+### Codex SSH 准入命令与 managed retry
+
+新生成的 Codex SSH Goal prompt 和 onboarding guard 使用完整 Turn 来源，并沿用
+原生 begin-Turn 身份。已保存的 bootstrap 若带旧显示参数调用生成器，仍可生成
+当前 guard。显式关闭 context delivery 时直接返回完整来源。启用时按返回命令
+读取同一 capture，并按原 Turn 的结算计划执行。标准包和独立 Core 包使用共有
+的 CLI 入口和参数语法执行待结算命令。
+
+TypeScript controller 的 managed-step 入口要求新鲜的完整决定。已保存的失败
+Turn journal 仍沿原版本读取。在实时入口注入签名有效的 v0 preview 会在启动
+Host、改写 journal 或扣额前拒绝。重试继续使用原 Turn。
+
+源码和隔离安装包的 File/SQLite 用例覆盖启用、显式关闭、旧 bootstrap 重生、
+同一 capture 读取和结算重放。原生 Turn 测试还覆盖丢失扣额响应。下一步验收
+剩余普通 quota 和 MCP 调用方及安装态宿主，再退出其活跃旧 writer。原 quota
+单会话成果与完整成本仍需单独验收。

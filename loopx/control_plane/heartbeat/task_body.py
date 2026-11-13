@@ -448,7 +448,6 @@ def render_visible_goal_task_body(
     compact_prompt_command: str,
     brief_prompt_command: str,
     thin_prompt_command: str,
-    captured_envelope: bool = False,
     captured_context: bool = False,
 ) -> str:
     del (
@@ -472,7 +471,6 @@ def render_visible_goal_task_body(
         permission_rule=permission_rule,
         agent_scope_instruction=agent_scope_instruction,
         host_wait_rule=CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE,
-        captured_envelope=captured_envelope,
         captured_context=captured_context,
     )
 def render_traex_visible_goal_task_body(
@@ -534,7 +532,6 @@ def _render_goal_task_body(
     agent_scope_instruction: str,
     host_wait_rule: str,
     work_rule: str = SCOPE_BOUNDED_WORK_RULE,
-    captured_envelope: bool = False,
     captured_context: bool = False,
 ) -> str:
     scope_block = f"\n{agent_scope_instruction}\n" if agent_scope_instruction else ""
@@ -546,10 +543,6 @@ def _render_goal_task_body(
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
         permission_rule=permission_rule,
-    )
-    envelope_rule = (
-        "Read required and other needed sections via detail_ref.full_decision.\n"
-        if captured_envelope else ""
     )
     if captured_context:
         # The opted-in native Goal has a 4000-character host limit, including
@@ -570,7 +563,7 @@ def _render_goal_task_body(
 {OPERATOR_LANGUAGE_RULE_THIN}
 {prequota_block}Each iteration: read complete successful JSON:
 `{quota_guard_command}`
-{envelope_rule}Follow required selection_command/reentry; do/verify authorized work. Settle current settlement_plan.ordered_steps in order, else next_cli_actions. Exact identities/effect ids; actual outcomes. Never rebuild static refresh/spend; ambiguous effects: readback/recovery, no blind retry. Keep flags; truthful evidence. Authorized entrypoint repair; unavailable/incomplete contract: no work/spend/completion claim.
+Follow returned same-capture read/recovery instructions and required selection_command/reentry; do/verify authorized work. Settle current settlement_plan.ordered_steps in order, else next_cli_actions. Exact identities/effect ids; actual outcomes. Never rebuild static refresh/spend; ambiguous effects: readback/recovery, no blind retry. Keep flags; truthful evidence. Authorized entrypoint repair; unavailable/incomplete contract: no work/spend/completion claim.
 
 Read interaction_contract.agent_channel.work_context+required_reads before work. {SCOPE_BOUNDED_PROGRESS_RULE}
 Notify affects output only; progress alone creates no host Goal. After settlement recheck quota; obey continuation/wait, no unchanged polls. Complete {completion_subject} only on should_run=false + terminal no-follow-up; else next action/wait.{wait_rule}
@@ -585,7 +578,7 @@ Notify affects output only; progress alone creates no host Goal. After settlemen
 
 {prequota_block}Each work iteration: read complete successful JSON:
 `{quota_guard_command}`
-{envelope_rule}Use current `interaction_contract`.
+Use current `interaction_contract`.
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
 Preserve command flags; truthful evidence.
 Repair entrypoints within authority. Unavailable/incomplete contract: no work/spend/completion claim.
@@ -660,7 +653,6 @@ def render_thin_heartbeat_task_body(
     brief_prompt_command: str,
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
-    captured_envelope: bool = False,
 ) -> str:
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,

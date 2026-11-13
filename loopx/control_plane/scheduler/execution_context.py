@@ -445,6 +445,17 @@ def scheduler_runtime_profile_for_execution_context(
     )
 
 
+def uses_codex_ssh_goal_profile(
+    runtime_profile: str | None,
+    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
+) -> bool:
+    if runtime_profile is not None:
+        return runtime_profile == SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE.value
+    return scheduler_runtime_profile_for_execution_context(
+        scheduler_execution_context
+    ) is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
+
+
 def _render_scheduler_runtime_profile_args(
     profile: SchedulerRuntimeProfile,
 ) -> str:

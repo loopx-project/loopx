@@ -25,7 +25,7 @@ def settle_requested_refresh(payload, args, registry_path, goal_ref):
     """Keep refresh's optional settlement composition with its existing owner."""
     if not getattr(args, "settle_turn", False):
         return
-    from ..history import load_registry
+    from ..control_plane.projects.registry_codec import load_registry
     from ..paths import resolve_runtime_root
 
     runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
@@ -133,8 +133,12 @@ def settle_refreshed_turn(
             command = shlex.split(owed["command"])
             # Validate the owner-rendered argv through the actual CLI parser too:
             # a projector bug must not debit a different valid Turn before readback.
-            from ..cli import build_parser
-            args = build_parser().parse_args(["--format", "json", *command[1:]])
+            from ..cli_runtime import build_cli_parser
+            from .quota_registration import register_quota_command
+
+            parser, subparsers = build_cli_parser()
+            register_quota_command(subparsers)
+            args = parser.parse_args(["--format", "json", *command[1:]])
             if (args.command != "quota" or args.quota_command != "spend-slot"
                     or not args.execute or args.slots != 1
                     or Path(args.registry).expanduser().resolve() != registry_path.resolve()
@@ -152,7 +156,7 @@ def settle_refreshed_turn(
             # ambient PATH nor a lower-level debit may replace that adapter.
             entry = (
                 "import sys; sys.path.insert(0, sys.argv.pop(1)); "
-                "import runpy; runpy.run_module('loopx.cli', run_name='__main__')"
+                "import runpy; runpy.run_module('loopx.entrypoint', run_name='__main__')"
             )
             result = subprocess.run(
                 [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),

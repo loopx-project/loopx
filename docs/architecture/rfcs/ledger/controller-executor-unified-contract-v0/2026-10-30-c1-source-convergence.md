@@ -2943,3 +2943,25 @@ oracles check full diagnostic readback, rejected execution projection, native
 journal and claim-source effects, one original receipt and zero spend. Existing
 pause, capture, handoff and historical recovery coverage qualifies the adjacent
 boundary. Whole-C1 acceptance and live-model effectiveness remain open.
+
+### Codex SSH guard and managed retry
+
+New Codex SSH Goal prompts and onboarding guards select the complete Turn
+source with the existing native begin-Turn identity. A saved bootstrap that
+invokes the generator with the previous display argument can still regenerate
+its guard. Explicit context-delivery Off returns the complete inline source.
+With delivery enabled the prompt follows the returned same-capture reader and
+the original Turn's settlement plan. The full and standalone installations
+execute the owed quota command through their shared CLI entry and grammar.
+
+Managed-step requires a fresh complete decision at the TypeScript controller
+boundary. A saved failed Turn journal still uses its original decoder. A
+signed v0 preview injected at the live boundary is refused before launching the
+Host, modifying the journal or spending quota. Retry uses the original Turn.
+
+Source and isolated-wheel File/SQLite cases cover enabled delivery, explicit
+Off, regeneration from the old bootstrap, same-capture reading and settlement
+replay. The native Turn test also covers a lost spend response. Next, qualify
+the remaining ordinary quota and MCP callers and installed host integrations
+before retiring their live legacy writers. Original-quota single-session
+outcomes and full costs remain a separate qualification.

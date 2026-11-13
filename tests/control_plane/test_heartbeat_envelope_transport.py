@@ -561,9 +561,78 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
     assert "--decision-output-root" in guard and "--codex-context-root" in guard
     assert "visible-goal" in enabled["quota_spend_command"]
     assert enabled["interface_budget"]["within_budget"]
-    if turn_envelope:
-        assert "--turn-envelope" in guard
-        assert "detail_ref.full_decision" in enabled["task_body"]
+    assert shlex.split(guard).count("--complete-turn") == 1
+    assert "--turn-envelope" not in shlex.split(guard)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery", ["on", "off", "saved-loader"])
+def test_ssh_goal_generated_command_uses_complete_source(tmp_path, monkeypatch, provider, delivery):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import _configure_read_only_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    captures = tmp_path / "capture"
+    captures.mkdir(mode=0o700)
+    options = ("--thin", "--runtime-profile", "codex_app_ssh_goal",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    if delivery == "off":
+        options += ("--context-delivery", "off")
+    else:
+        options += ("--context-delivery", "on", "--decision-output-root", str(captures),
+            "--codex-context-root", str(captures))
+    if delivery == "saved-loader":
+        # The old bootstrap keeps its exact old invocation. Running that
+        # generator with the new runtime must produce a current guard.
+        rc, bootstrap = _run_cli(registry, runtime, "heartbeat-prompt",
+            *options, "--turn-envelope", "--bootstrap", cwd=project)
+        assert rc == 0, bootstrap
+        command = bootstrap["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0]
+        assert "--turn-envelope" in shlex.split(command)
+        rc, prompt = _run_generated_cli(command, registry_path=registry, cwd=project)
+    else:
+        rc, prompt = _run_cli(registry, runtime, "heartbeat-prompt", *options, cwd=project)
+    assert rc == 0, prompt
+    guard = prompt["quota_guard_command"]
+    assert guard in prompt["task_body"]
+    rc, current = _run_generated_cli(guard + f" --todo-id {TODO_ID}", registry_path=registry, cwd=project)
+    assert rc == 0, current
+    assert_complete_turn_decision(current)
+    assert "detail_ref.full_decision" not in prompt["task_body"]
+    assert shlex.split(guard).count("--complete-turn") == 1
+    assert "--turn-envelope" not in shlex.split(guard)
+    identity = current["heartbeat_receipt"]["settlement_identity"]
+    plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["identity"] == identity
+    assert identity["todo_id"] == TODO_ID
+    assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
+    assert _spend_run_count(runtime) == 0
+    if delivery == "off":
+        assert "--context-delivery off" in guard and not list(captures.iterdir())
+    else:
+        (saved,) = captures.glob("decision-*/decision.json")
+        original = json.loads(read_original_capture(saved, registry=registry, runtime=runtime))
+        assert original["contract_binding"] == current["contract_binding"]
+        assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
+        assert "same-capture read/recovery instructions" in prompt["task_body"]
+
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    command = writeback["command_template"]
+    for key, value in {"<validated_progress>": "verified_source", "<scale>": "implementation",
+                       "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}.items():
+        command = command.replace(key, value)
+    command += " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks"
+    rc, settled = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled
+    assert settled["settlement_identity"] == identity
+    rc, replay = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    assert replay["settlement_identity"] == identity and _spend_run_count(runtime) == 1
+    assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
 
 
 @pytest.mark.parametrize("delivery", ["default", "off", "on", "envelope"])
@@ -586,8 +655,9 @@ def test_visible_goal_reads_required_material_without_unconditional_capture_trav
         "Read complete same-invocation detail_ref.full_decision before",
     ):
         assert enlarged_prerequisite not in body
-    if delivery == "envelope":
-        assert "detail_ref.full_decision" in body
+    if delivery in {"on", "envelope"}:
+        assert "same-capture read/recovery instructions" in body
+        assert "detail_ref.full_decision" not in body
     if delivery == "off":
         assert "--context-delivery off" in prompt["quota_guard_command"]
         assert "--decision-output-root" not in prompt["quota_guard_command"]
@@ -626,8 +696,7 @@ def test_ssh_goal_capture_fits_host_with_full_command_paths(tmp_path, turn_envel
         assert command[0] == paths["cli_bin"]
         assert "--begin-turn" in command and "--heartbeat-turn-receipt" not in command
         assert "--context-delivery" in command and "LOOPX_TURN=" not in body
-        if turn_envelope:
-            assert "detail_ref.full_decision" in body
+        assert "detail_ref.full_decision" not in body
         with pytest.raises(ValueError, match="4000-character"):
             build_heartbeat_prompt(**args, context_delivery="on", decision_output_root=captures,
                 codex_context_root=str(context), turn_envelope=turn_envelope, agent_scopes=[c * 320 for c in "stu"])

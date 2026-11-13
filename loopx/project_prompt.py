@@ -18,9 +18,8 @@ from .paths import (
 from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
-    SchedulerRuntimeProfile,
     render_scheduler_execution_args,
-    scheduler_runtime_profile_for_execution_context,
+    uses_codex_ssh_goal_profile,
 )
 from .control_plane.todos.contract import normalize_required_capabilities
 from . import install_contract
@@ -184,17 +183,12 @@ def render_quota_guard_command(
     heartbeat_turn_receipt: bool = False,
     begin_turn: bool = False,
     include_shared_registry: bool = True,
+    complete_turn: bool = False,
 ) -> str:
-    if not heartbeat_turn_receipt and agent_id and (
-        runtime_profile == SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE.value
-        or (
-            runtime_profile is None
-            and scheduler_runtime_profile_for_execution_context(
-                scheduler_execution_context
-            )
-            is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
-        )
-    ):
+    ssh_goal = not heartbeat_turn_receipt and agent_id and uses_codex_ssh_goal_profile(
+        runtime_profile, scheduler_execution_context
+    )
+    if ssh_goal:
         begin_turn = True
     if heartbeat_turn_receipt and begin_turn:
         raise ValueError(
@@ -216,6 +210,7 @@ def render_quota_guard_command(
         turn_arg = " --begin-turn"
     else:
         turn_arg = ""
+    source_arg = " --complete-turn" if complete_turn or ssh_goal else ""
     registry_arg = (
         _render_global_registry_arg(runtime_root) if include_shared_registry and registry_path is None else ""
     )
@@ -223,7 +218,7 @@ def render_quota_guard_command(
         f"{render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root, registry_path=registry_path)} --format json "
         f"{registry_arg}"
         f"quota should-run --goal-id {shell_arg(goal_id)}{agent_arg}"
-        f"{capability_args}{scheduler_args}{turn_arg}"
+        f"{capability_args}{scheduler_args}{turn_arg}{source_arg}"
     )
 
 

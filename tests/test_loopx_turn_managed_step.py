@@ -147,14 +147,17 @@ def _decide(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Decide one managed step, binding the fresh decision to the receipt."""
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from tests.test_turn_route_action_classification import _run_decision
 
+    if envelope is None:
+        envelope = compose_turn_decision(_run_decision(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, agent_identity={"agent_id": AGENT_ID},
+            selected_todo={"todo_id": TODO_ID, "text": "Advance."},
+        ))
     return decide_managed_step(
         journal,
-        (
-            _envelope(predecessor_turn_key=str(journal["turn_key"]))
-            if envelope is None
-            else envelope
-        ),
+        envelope,
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
         turn_key=str(journal["turn_key"]),
@@ -537,7 +540,8 @@ def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
     import json
     import sys
 
-    from loopx.cli_commands import turn_run_once
+    from loopx.cli_commands import turn_managed_step, turn_run_once
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
     from loopx.control_plane.turn_driver import load_turn_journal, turn_journal_path
     from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
     from loopx.todos import list_goal_todos
@@ -581,6 +585,18 @@ def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
     assert continuation["retry_continuation"]["retry_after_seconds"] == 30
     code, refused = _invoke_turn([*managed, "--observed-attempt", "2"])
     assert code == 1 and "observed_attempt disagrees" in refused["error"], refused
+    if not lost_spend_response:
+        original_preview = turn_managed_step.build_fresh_envelope_for_managed_step
+
+        def legacy_preview(*args, **kwargs):
+            legacy = build_turn_envelope(original_preview(*args, **kwargs))
+            assert legacy["action_signature"]["matches"] is True
+            return legacy
+
+        with monkeypatch.context() as patch:
+            patch.setattr(turn_managed_step, "build_fresh_envelope_for_managed_step", legacy_preview)
+            code, refused = _invoke_turn(managed)
+        assert code == 1 and "complete" in refused["error"].lower(), refused
     assert path.read_bytes() == snapshot
     assert load_rollout_events(events_path) == events
     assert list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture", todo_id="todo_fixture0001")["todo"] == task["todo"]

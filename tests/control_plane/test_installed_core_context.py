@@ -8,8 +8,43 @@ from pathlib import Path
 import shlex
 import subprocess
 
-from test_core_distribution import AGENT, GOAL, _command, _environment
+from test_core_distribution import AGENT, GOAL, _command, _environment, _run
 from test_core_distribution import core_python as core_python
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.test_quota_settlement_cli import (
+    AGENT_ID, GOAL_ID, TODO_ID, _configure_read_only_todo, _initialize_fixture_authority,
+    _spend_run_count, _write_fixture,
+)
+
+
+def test_installed_core_ssh_complete_turn_settles_once(core_python, tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    output = _run(core_python, [*prefix, "heartbeat-prompt", "--thin",
+        "--runtime-profile", "codex_app_ssh_goal", "--context-delivery", "off", *scope], project)
+    prompt = json.loads(output.stdout)
+    guard = shlex.split(prompt["quota_guard_command"])[1:]
+    current = json.loads(_run(core_python, [*guard, "--todo-id", TODO_ID], project).stdout)
+    assert current["schema_version"] == "loopx_turn_envelope_v1"
+    identity = current["heartbeat_receipt"]["settlement_identity"]
+    plan = current["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    assert plan["identity"] == identity and _spend_run_count(runtime) == 0
+    template = next(step["command_template"] for step in plan["ordered_steps"]
+                    if step["kind"] == "durable_writeback")
+    replacements = {"<validated_progress>": "verified_installed_source", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
+    settle = [replacements.get(word, word) for word in shlex.split(template)[1:]]
+    settle += ["--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
+    first = json.loads(_run(core_python, settle, project).stdout)
+    assert first["settlement_progress"]["state"] == "settled"
+    replay = json.loads(_run(core_python, settle, project).stdout)
+    assert replay["idempotent_replay"] and replay["settlement_identity"] == first["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
 
 
 def test_installed_context_recovers_partial_delivery_revisions_and_compaction(core_python, tmp_path):
