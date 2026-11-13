@@ -501,7 +501,10 @@ def _publish_quota_result(
             args.format, _quota_renderer(args, failure=True))
         return 1
     if payload.get("ok") is True:
-        delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
+        delivery_request = handoff_decision(
+            capture_directory, getattr(args, "decision_handoff_socket", None),
+            context_delivery_enabled, capture_sha256=captured_digest,
+        )
     captured_payload = payload
     decision_identity = ("", "")
     if (delivery_request is not None or getattr(args, "codex_context_dir", None)
