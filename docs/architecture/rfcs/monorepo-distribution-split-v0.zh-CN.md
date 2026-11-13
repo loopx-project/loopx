@@ -2866,3 +2866,52 @@ journal 使用的 transaction-key 预约保留精确恢复兼容分支；已启�
 实际模型采用、完整 V1–V5/V10、默认闭包、配对完整成本、渐进产品控制、R1/M3 与
 原始 Goal 回归仍未验收。保留原九项要求、此前失败尝试和冻结预算失败；本次没有
 推广 minimal preset、provider 默认、包发布或付费操作。
+
+### 2026-11-13 — 完整 Turn 延后加载未选择的 Provider 实现
+
+此前独立 core 的已安装 Turn 在解析 Reward Memory 配置时加载 BM25 和
+OpenViking，并在退休治理关闭时加载 anti-entropy 检查器。现在 context-provider
+公开导出和原 builtin builder registry 在明确使用时解析实现。绑定归一化与实际
+provider 共用纯 OpenViking scope owner，原 URI 语法、公开别名与 Python 序列化
+身份保留。Anti-entropy 仍使用原 typed 激活规则和适用 basis，通过这些检查后才
+解析 feedback builder。没有新增或放宽 capability、provider 默认值、authority、
+claim、stop 或 settlement 规则。
+
+12 项新进程检查覆盖 registry 拒绝／custom builder、真实本地 BM25 检索、绑定
+分类、关闭／开启退休治理，以及 attribute/from/star 导出。原 11 项检查在不可变
+基线 `441c6077e7c5c8e896ea79562761fd483baf157e` 上有五项加载 oracle 失败，
+六项公开导出检查通过。两个安装版本的 16 类 URI 成功／拒绝结果与 protocol-4
+pickle 字节一致，跨版本双向读取通过。定义移到纯 scope 源文件，旧模块别名
+不能保留声明源码的 introspection 行为。
+
+最终独立 Python 3.11 core wheel 的 1886 个 runtime 文件与源码字节一致，SHA256
+为 `bc36c92dd437b9418e21031e185fefd04984c91a30169cbd866a3c712d92b4fa`。
+源码 capability 回归通过 628 项。真实隔离 File 与 SQLite 执行提交已检查产物，
+且只结算一次；原 key 重放没有 Host、state 或 quota 副作用。含 package root 的
+受控完整 Turn 模块数在执行时由 525 降到 516，重放由 438 降到 432；capability
+模块数分别由 111 降到 102、56 降到 50。执行 RPC 数仍为 221/220，重放仍为 11。
+这些路径中不再出现未选择的 OpenViking、BM25 和 anti-entropy 检查实现。计数只
+描述已观测的 Python 路径，不能代表完整最小闭包。
+
+配对安装测量使用 macOS 27 arm64、Python 3.11.15、Node 26.0.0，每个 backend、
+阶段各交替运行
+五对基线／候选。每次调用启动新 Python 进程；首次执行前通过原 owner 正常停止
+隔离的 managed RPC server，使其重新启动，已完成 Turn 重放则复用该 server。
+准备与独立回读不计入耗时，OS、bytecode 和 compilation cache 不重置。
+Nearest-rank p95 等于五个样本的最大值。
+
+| Backend／阶段 | Wall 中位数／p95 ms，基线 → 候选 | 调用 RSS 中位数 MiB，基线 → 候选 |
+| --- | --- | --- |
+| SQLite／首次执行 | 2922.5 / 3561.9 → 3006.8 / 4139.9 | 81.81 → 81.25 |
+| SQLite／已完成 Turn 重放 | 809.6 / 948.6 → 889.0 / 1415.0 | 44.73 → 44.42 |
+| File／首次执行 | 2858.7 / 3005.5 → 2862.5 / 2985.0 | 81.09 → 81.36 |
+| File／已完成 Turn 重放 | 645.4 / 679.7 → 692.5 / 773.9 | 44.73 → 44.28 |
+
+40 次调用的独立结果／副作用指纹一致，stdout 大小保持首次执行 4002 bytes、
+重放 4548 bytes。候选 SQLite 中位数较慢、尾延迟较高，本轮不取得延迟或完整成本
+改善资格。调用 RSS 不包含持久 Node server，block-I/O 计数为零也不能证明没有
+文件访问。独立受控 observer 验证 Python import/open/process/loopback 事件，以及
+Node module/loopback/exit 事件，但不能提供 OS 级完整闭包、完整 IPC/I/O、model
+token、service cost 或人工注意力核算。Host 仍为 synthetic。完整 V1–V5/V10、
+真实模型采用／恢复、渐进产品控制、R1/M3、独立 Standard packages 与原目标回归
+仍开放，保留原九项要求和此前冻结失败。
