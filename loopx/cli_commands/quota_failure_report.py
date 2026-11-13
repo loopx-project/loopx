@@ -361,6 +361,62 @@ def quota_decision_transport_failure_payload(
     return payload
 
 
+def quota_unexpected_presentation_failure_view(
+    args: argparse.Namespace,
+    committed: Mapping[str, object],
+    error: Exception,
+    *,
+    capture_directory: Path | None,
+    capture_sha256: str | None,
+) -> dict[str, object]:
+    """Report an unexpected exception after a durable guard, without writing a capture."""
+    failure = quota_decision_transport_failure_payload(
+        args, committed,
+        QuotaDecisionTransportError("The guard committed, but its result could not be presented."),
+        capture_directory=None,
+    )
+    failure["error_class"] = type(error).__name__
+    failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
+    failure["recommended_action"] = (
+        "Inspect this Turn's receipt before recovering the result. Do not rerun admission."
+    )
+    if capture_directory is not None and capture_sha256 is not None:
+        from ..control_plane.turn_driver.decision_capture import context_capture_read_command
+
+        saved = capture_directory / "decision.json"
+        # Recover the publication's exact bytes. The ordinary reader has its
+        # own page budget and rejects a replacement or a damaged capture.
+        failure["captured_decision"] = {
+            "path": str(saved),
+            "sha256": capture_sha256,
+            "command": context_capture_read_command(saved, capture_sha256),
+        }
+    limit = getattr(args, "max_page_output_bytes", None)
+    if limit is None or args.format != "json":
+        return failure
+    from .quota_context_reader import _native_output_bytes
+
+    if len(_native_output_bytes(failure)) <= limit:
+        return failure
+    # The transport may have failed because the opening budget is too small.
+    # Keep a single locator and omit receipt duplicates recoverable from it.
+    compact = {key: failure[key] for key in ("ok", "error_code", "reason", "recommended_action")}
+    reference = failure.get("captured_decision")
+    if isinstance(reference, dict):
+        compact["command"] = reference["command"]
+    elif "heartbeat_receipt" in failure:
+        compact["heartbeat_receipt"] = failure["heartbeat_receipt"]
+    if len(_native_output_bytes(compact)) <= limit:
+        return compact
+    compact.pop("reason")
+    if len(_native_output_bytes(compact)) <= limit:
+        return compact
+    # Below the size of the original recovery command or receipt, preserve
+    # that identity and surface why the requested budget cannot carry it.
+    compact["reason"] = "Output limit is too small for recovery metadata."
+    return compact
+
+
 def quota_validation_failure_payload(
     args: argparse.Namespace,
     exc: QuotaCommandValidationError,
