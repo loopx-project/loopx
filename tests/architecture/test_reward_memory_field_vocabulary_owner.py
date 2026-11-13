@@ -23,12 +23,30 @@ from the module whose constant they restated* -- the strongest form of the
 ``repository_snapshot.py`` builds and stamps the ``repo`` field, while
 ``repository_commit_evidence.py`` only checks a declared one against it.
 
-Two scan layers, because grouping module-level constants by name is not enough
-to call a change complete: bindings are matched on the **folded value** (a set's
-members, a compiled pattern's body) so a same-name-different-value neighbour is
-never reported as a duplicate, and a separate census looks for any collection
-literal with the same members or any string constant embedding the same regex
-body.
+Three scan layers, because grouping module-level constants by name is not enough
+to call a change complete. The field sets and the two repository/explore patterns
+(``TOKEN_PATTERN``, ``_REPO_PATTERN``) keep the original package-wide census:
+bindings are matched on the **folded value** (a set's members, a compiled
+pattern's body) so a same-name-different-value neighbour is never reported as a
+duplicate, and a separate pass looks for any collection literal with the same
+members or any string constant embedding the same regex body -- the latter is
+what lets ``pr_description``'s three larger grammars be *declared* rather than
+merged.
+
+The two reward-memory matchers this change converges (``_OPAQUE_REF_RE``,
+``_MEMORY_REF_DIGEST_RE``) are gated by a **scoped, compiled-rule** census
+instead, for the reason the review of the first revision gave: a body-only
+substring sweep over the whole package flags two things that are not this rule --
+an independent ``re.compile(<same body>, re.IGNORECASE)`` importer that accepts
+uppercase, and a plain help/display string that merely quotes the body and is
+never compiled. So for these two the census (1) walks only
+``capabilities/reward_memory`` -- the owner and its consumers, never an unrelated
+package; (2) counts only real ``re.compile`` sites, not arbitrary string
+constants; and (3) compares the **compiled rule** ``(body, source_flags)``, so a
+flag-different compile is a different rule and is left alone. A true restatement
+-- a reward-memory module that re-compiles the identical flagless body instead of
+importing the owner -- is still caught, and the accept/reject behaviour is pinned
+through both modules' own validators below.
 
 Neighbours this guard deliberately does not merge, each pinned below: the
 ``field_contracts`` table in ``reward_memory/architecture.py`` describes *which
@@ -41,17 +59,14 @@ body as ``CORPUS_ID_RE`` for todo action kinds, which is why
 between those two capability packages, so naming one of them the authority over
 the other is a domain decision for a maintainer, not a deduplication.
 
-The same ``memory_utility`` -> ``utility_reducer`` pair also restated two compiled
-matchers, now converged here: ``_OPAQUE_REF_RE`` (the bounded opaque reference)
-and ``_MEMORY_REF_DIGEST_RE`` (a 16-hex or enveloped-64 memory digest). Two
-same-value neighbours stay separate, each for a stated reason:
-``control_plane/status/goal_source.py`` states the reference body unanchored and
-inline for a ``todo_id`` in another package, with no import direction to make one
-the authority (the same domain decision as ``CORPUS_ID_RE``); and
-``reward_memory/architecture.py`` lists the recall modes in a fixed order inside a
-descriptive manifest, so ``RECALL_MODES`` is pinned by identity -- ``experiment``
-borrows ``application``'s set -- rather than by the member census, which would
-otherwise sweep that ordered list.
+``RECALL_MODES`` is pinned by identity -- ``experiment`` borrows ``application``'s
+set -- rather than by the member census, because ``reward_memory/architecture.py``
+lists the same two modes in a fixed order inside a descriptive manifest, which an
+unordered member fold would reorder. ``control_plane/status/goal_source.py``
+states the opaque-reference body unanchored and inline for a ``todo_id`` in
+another package; it sits outside the reward-memory scope of the compiled-rule
+census and is a different (unanchored) rule in any case, so it is neither scanned
+nor merged -- the same domain decision as ``CORPUS_ID_RE``.
 
 Compiled patterns are real objects, so the ``is`` assertions below carry
 information; the two field sets are compared by identity too, which only holds
@@ -62,6 +77,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 from types import ModuleType
 
 import pytest
@@ -82,6 +98,12 @@ from loopx.capabilities.reward_memory import (
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "loopx"
+REWARD_MEMORY_ROOT = PACKAGE_ROOT / "capabilities" / "reward_memory"
+
+# These two matchers are reward-memory-internal rules. Their ownership census is
+# scoped to REWARD_MEMORY_ROOT and compares compiled (body, flags) rules, not the
+# package-wide body-substring sweep the repository/explore patterns below use.
+SCOPED_COMPILED_MATCHERS = frozenset({"_OPAQUE_REF_RE", "_MEMORY_REF_DIGEST_RE"})
 
 # name -> (kind, payload, owner path, owner module, [(consumer path, consumer module)])
 SET_DECISIONS: dict[str, tuple[frozenset[str], str, ModuleType, list[tuple[str, ModuleType]]]] = {
@@ -142,6 +164,12 @@ PATTERN_DECISIONS: dict[str, tuple[str, str, ModuleType, list[tuple[str, ModuleT
         [("loopx/capabilities/reward_memory/utility_reducer.py", utility_reducer)],
     ),
 }
+
+# The repository/explore patterns keep the package-wide embedded-body census; the
+# reward-memory matchers are gated by the scoped compiled-rule census instead.
+PACKAGE_WIDE_PATTERNS = sorted(
+    name for name in PATTERN_DECISIONS if name not in SCOPED_COMPILED_MATCHERS
+)
 
 # Regex bodies that are legitimately embedded in a larger grammar elsewhere.
 # file -> count of string constants carrying the body, with the reason recorded.
@@ -243,11 +271,97 @@ def body_literal_sites(source: str, body: str) -> list[int]:
     return _sites(_analyse(source), "", "body", body)[1]
 
 
+def _flag_value(node: ast.expr) -> int | None:
+    """Statically evaluate an ``re`` flag expression to an int, or None if unknown."""
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if isinstance(node, ast.Attribute):
+        value = getattr(re, node.attr, None)
+        return value if isinstance(value, int) else None
+    if isinstance(node, ast.Name):
+        value = getattr(re, node.id, None)
+        return value if isinstance(value, int) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        left, right = _flag_value(node.left), _flag_value(node.right)
+        if left is not None and right is not None:
+            return left | right
+    return None
+
+
+def _compile_flags(node: ast.Call) -> int | None:
+    """Source-level flags of an ``re.compile`` call: 0 when none are written.
+
+    This is the flags argument *as written*, not the runtime ``Pattern.flags``
+    (which always carries ``re.UNICODE`` for a str pattern). The owner compiles
+    both matchers with no explicit flags, so a duplicate must also write none; an
+    unresolvable flag expression returns None and is treated as a different rule.
+    """
+
+    flag_node = node.args[1] if len(node.args) >= 2 else None
+    for keyword in node.keywords:
+        if keyword.arg == "flags":
+            flag_node = keyword.value
+    if flag_node is None:
+        return 0
+    return _flag_value(flag_node)
+
+
+def compiled_rule(node: ast.expr) -> tuple[str, int | None] | None:
+    """Fold ``re.compile(<literal>[, flags])`` to ``(body, source_flags)``.
+
+    Unlike ``pattern_body`` this keeps the flags, so an ``re.IGNORECASE`` variant
+    of the same body folds to a different rule and is not counted as a duplicate.
+    """
+
+    if isinstance(node, ast.Call):
+        fname = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        if fname == "compile" and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                return (first.value, _compile_flags(node))
+    return None
+
+
+def scoped_matcher_sites(source: str, body: str) -> list[int]:
+    """Lines that compile exactly the owner's flagless rule ``(body, 0)``.
+
+    Compile-only (a bare help string is never counted), exact-body (a larger
+    grammar that merely embeds the body is a different rule), and flag-aware.
+    """
+
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if compiled_rule(node) == (body, 0)
+    ]
+
+
+def _reward_memory_matcher_scan() -> dict[str, list[str]]:
+    """Census the reward-memory package for recompilations of each scoped rule."""
+
+    findings: dict[str, list[str]] = {}
+    for name in sorted(SCOPED_COMPILED_MATCHERS):
+        body, owner_path, _owner_module, _consumers = PATTERN_DECISIONS[name]
+        offenders: list[str] = []
+        for path in sorted(REWARD_MEMORY_ROOT.rglob("*.py")):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel == owner_path:
+                continue
+            offenders.extend(
+                f"{rel}:{line} recompiles the {name} rule instead of importing it"
+                for line in scoped_matcher_sites(path.read_text(encoding="utf-8"), body)
+            )
+        findings[name] = offenders
+    return findings
+
+
 def _repository_scan():
     queries = [(name, "members", spec[0], spec[1], {})
                for name, spec in SET_DECISIONS.items()]
     queries += [(name, "body", spec[0], spec[1], DECLARED_EMBEDDED_BODIES.get(spec[0], {}))
-                for name, spec in PATTERN_DECISIONS.items()]
+                for name, spec in PATTERN_DECISIONS.items()
+                if name not in SCOPED_COMPILED_MATCHERS]
     bindings = {name: [] for name, *_ in queries}
     sites = {name: {} for name, *_ in queries}
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
@@ -294,6 +408,11 @@ def repository_findings():
     return _repository_reader()
 
 
+@pytest.fixture(scope="module")
+def reward_memory_matcher_findings():
+    return _reward_memory_matcher_scan()
+
+
 @pytest.mark.parametrize("name", sorted(SET_DECISIONS))
 def test_only_the_owner_module_binds_each_field_vocabulary(name: str, repository_findings) -> None:
     bindings, inline = repository_findings(name)
@@ -301,11 +420,28 @@ def test_only_the_owner_module_binds_each_field_vocabulary(name: str, repository
     assert inline == [], f"{name} is still spelled out somewhere: " + "\n".join(inline)
 
 
-@pytest.mark.parametrize("name", sorted(PATTERN_DECISIONS))
+@pytest.mark.parametrize("name", PACKAGE_WIDE_PATTERNS)
 def test_only_the_owner_module_compiles_each_pattern(name: str, repository_findings) -> None:
     bindings, embedded = repository_findings(name)
     assert bindings == [], "\n".join(bindings)
     assert embedded == [], f"{name} body appears undeclared: " + "\n".join(embedded)
+
+
+@pytest.mark.parametrize("name", sorted(SCOPED_COMPILED_MATCHERS))
+def test_only_the_owner_compiles_each_reward_memory_matcher(
+    name: str, reward_memory_matcher_findings
+) -> None:
+    offenders = reward_memory_matcher_findings[name]
+    assert offenders == [], f"{name} is recompiled outside its owner: " + "\n".join(offenders)
+
+
+@pytest.mark.parametrize("name", sorted(SCOPED_COMPILED_MATCHERS))
+def test_the_owner_compiles_each_reward_memory_matcher_exactly_once(name: str) -> None:
+    # Without the owner exemption the scoped census would flag the owner itself;
+    # this pins that the exemption is load-bearing and there is one definition.
+    body, owner_path, owner_module, _consumers = PATTERN_DECISIONS[name]
+    assert getattr(owner_module, name).pattern == body
+    assert len(scoped_matcher_sites(module_source(owner_path), body)) == 1
 
 
 @pytest.mark.parametrize(("name", "spec"), sorted(SET_DECISIONS.items()))
@@ -551,3 +687,67 @@ def test_repository_findings_preserve_refusals_and_retry(tmp_path, monkeypatch, 
         assert rejected == [
             "loopx/capabilities/issue_fix/pr_description.py declares 3 embedded site(s), found 1"
         ]
+
+
+@pytest.mark.parametrize("name", sorted(SCOPED_COMPILED_MATCHERS))
+@pytest.mark.parametrize(
+    ("label", "source", "expected"),
+    [
+        ("renamed flagless restatement", '_X = re.compile(r"__BODY__")\n', 1),
+        ("ignorecase is a different rule", '_X = re.compile(r"__BODY__", re.IGNORECASE)\n', 0),
+        ("short flag is a different rule", '_X = re.compile(r"__BODY__", re.I)\n', 0),
+        ("keyword flag is a different rule", '_X = re.compile(r"__BODY__", flags=re.IGNORECASE)\n', 0),
+        ("multiline is a different rule", '_X = re.compile(r"__BODY__", re.MULTILINE)\n', 0),
+        ("combined flags are a different rule", '_X = re.compile(r"__BODY__", re.I | re.M)\n', 0),
+        ("help text quoting the body is not compiled", 'HELP = "match __BODY__ to validate"\n', 0),
+        ("larger grammar embedding the body", '_X = re.compile(r"^prefix__BODY__suffix$")\n', 0),
+        ("different body", '_X = re.compile(r"^[a-z]+$")\n', 0),
+        ("import from the owner", "from .memory_utility import _OPAQUE_REF_RE, _MEMORY_REF_DIGEST_RE\n", 0),
+    ],
+    ids=[
+        "renamed-restatement",
+        "ignorecase-neighbour",
+        "short-flag-neighbour",
+        "keyword-flag-neighbour",
+        "multiline-neighbour",
+        "combined-flags-neighbour",
+        "help-text-neighbour",
+        "larger-grammar-neighbour",
+        "different-body",
+        "import",
+    ],
+)
+def test_the_scoped_census_bites_a_restatement_and_leaves_the_neighbours(
+    name: str, label: str, source: str, expected: int
+) -> None:
+    # The two review counterexamples are the flag-different importer and the
+    # never-compiled help string; both must read as neighbours, while a flagless
+    # recompilation of the identical body -- even under a new name -- is caught.
+    body = PATTERN_DECISIONS[name][0]
+    sites = scoped_matcher_sites(source.replace("__BODY__", body), body)
+    assert len(sites) == expected, label
+
+
+def test_the_scoped_census_never_leaves_the_reward_memory_package(tmp_path, monkeypatch) -> None:
+    # A restatement inside reward-memory is caught; the identical text in an
+    # unrelated package is out of scope and never scanned. This is the review's
+    # core ask: the new ownership constraint must not reach other packages.
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    monkeypatch.setitem(
+        globals(), "REWARD_MEMORY_ROOT", tmp_path / "loopx/capabilities/reward_memory"
+    )
+    name = "_OPAQUE_REF_RE"
+    body, owner_path, _owner_module, _consumers = PATTERN_DECISIONS[name]
+    owner = tmp_path / owner_path
+    owner.parent.mkdir(parents=True)
+    owner.write_text(f'{name} = re.compile(r"{body}")\n')
+    consumer = tmp_path / "loopx/capabilities/reward_memory/utility_reducer.py"
+    consumer.write_text(f'{name} = re.compile(r"{body}")\n')  # a true restatement
+    outside = tmp_path / "loopx/capabilities/control_plane/goal_source.py"
+    outside.parent.mkdir(parents=True)
+    outside.write_text(f'{name} = re.compile(r"{body}")\n')  # same text, out of scope
+    findings = _reward_memory_matcher_scan()
+    assert findings[name] == [
+        "loopx/capabilities/reward_memory/utility_reducer.py:1 recompiles the "
+        "_OPAQUE_REF_RE rule instead of importing it"
+    ]
