@@ -4,6 +4,7 @@
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {leaseRepositoryRejection, ownerAdministrativeRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {isExploreReferenceAppend} from "../todos/field_update.ts";
+import {isInactiveUserCompletionTarget} from "../todos/user_completion.ts";
 import {acceptanceRestoration} from "./todo_acceptance_restoration.ts";
 import {monitorMutationRejection} from "./todo_monitor_cycle.ts";
 import type {JsonObject} from "../effect_program.ts";
@@ -238,9 +239,10 @@ export function todoUpdateAdmissionRejection(
       if (lease !== undefined) canonicalTaskLease(lease, input.goal_id, input.todo_id);
       if (boundUserGateLink) {
         const target = indexCoordinationProjection(head, input.goal_id).todos.get(intent.unblocks_todo_id as string);
-        if (target?.role !== "agent" || target.claimed_by !== todo.blocks_agent) {
+        if (target?.role !== "agent" || target.claimed_by !== todo.blocks_agent ||
+            target.archive_state !== "active" || isInactiveUserCompletionTarget(target)) {
           return reject("user_gate_link_target_invalid",
-            "Initial gate link requires an existing Agent Todo in this Goal claimed by the gate's bound/blocked agent");
+            "Initial gate link requires an active, open or blocked Agent Todo in this Goal claimed by the gate's bound/blocked agent");
         }
       }
     } catch (error) {

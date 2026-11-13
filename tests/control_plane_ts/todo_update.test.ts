@@ -5,10 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { FileAuthorityStore } from "../../loopx/control_plane/coordination/file_authority_store.ts";
-import { canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import { authorityUnicodeCompare, canonicalAuthoritySha256 } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {
   TODO_DOMAIN_ITEM_SCHEMA, TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT,
+  TODO_ITEM_SCHEMA, TODO_CANONICAL_READ_RECORD_SCHEMA,
 } from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import { executeCoordinationTodoUpdate } from "../../loopx/control_plane/coordination/todo_update.ts";
 import type {CoordinationTodoUpdateInput} from "../../loopx/control_plane/coordination/todo_update_intent.ts";
@@ -402,6 +403,71 @@ test("bound user-gate initial unblock link is administrative and retains provide
       "coordination_operation_identity_mismatch");
     assert.deepEqual(await store.loadAuthority(), after);
   }
+});
+
+for (const schema of ["native", "legacy"] as const) {
+  const cases: [string, Record<string, unknown>][] = [
+    ["completed", {status: "done", done: true}],
+    ["cancelled", {status: "done", done: true, no_followup: true}],
+    ["deferred", {status: "deferred", done: true, resume_when: "resume_at:2099-01-01T00:00:00Z"}],
+    ["archived", {status: "done", done: true, archive_state: "archive"}],
+    ["archived-open", {archive_state: "archive"}],
+    ["superseded-open", {superseded_by: "todo_value"}],
+  ];
+  if (schema === "legacy") cases.push(
+    ["done-flag-only", {done: true}], ["done-status-only", {status: "done"}],
+    ["deferred-status-only", {status: "deferred"}],
+    ["cancelled-status", {status: "cancelled"}], ["canceled-status", {status: "canceled"}],
+    ["superseded-status", {status: "superseded"}], ["unknown-status", {status: "pending"}],
+    ["unknown-archive-state", {archive_state: "archived"}],
+  );
+  for (const [name, facts] of cases) test(`first user-gate link rejects ${name} (${schema}) without consuming retry`, async () => {
+    const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"});
+    const head = await store.loadAuthority();
+    if (head.status !== "loaded") assert.fail("missing fixture");
+    const records = [...head.head.todos as Record<string, unknown>[], todo({todo_id: "todo_old", ...facts})]
+      .map(row => schema === "native" ? row : {...row, schema_version: TODO_ITEM_SCHEMA,
+        source_section: row.role === "user" ? "User Todo" : "Agent Todo"})
+      .sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
+    await store.commitAuthority({operation_id: "seed-old-target", expected_provider_revision: head.provider_revision,
+      events: [], receipts: [], next_projection: {...head.head, todos: records,
+        todo_read_model: coordinationTodoReadModel(records,
+          schema === "native" ? TODO_DOMAIN_READ_RECORD_SCHEMA : TODO_CANONICAL_READ_RECORD_SCHEMA)}});
+    const before = await store.loadAuthority();
+    if (before.status !== "loaded") assert.fail("missing fixture");
+    const edit = {...request, expected_provider_revision: before.provider_revision, patch: {note: "Link the file gate"}};
+    for (const reference of ["todo_old", " \tTODO_OLD\n "]) {
+      for (const dry_run of [true, false]) {
+        const rejected = await executeCoordinationTodoUpdate(store, {...edit, dry_run,
+          planning_intent: {unblocks_todo_id: reference}});
+        assert.equal(rejected.reason_code, "user_gate_link_target_invalid", JSON.stringify(rejected));
+        assert.deepEqual(await store.loadAuthority(), before);
+        assert.equal((await store.readReceipt(edit.operation_id)).status, "missing");
+      }
+    }
+    const valid = {...edit, planning_intent: {unblocks_todo_id: " \tTODO_VALUE\n "}};
+    assert.equal((await executeCoordinationTodoUpdate(store, {...valid, dry_run: true})).status, "planned");
+    assert.deepEqual(await store.loadAuthority(), before);
+    assert.equal((await executeCoordinationTodoUpdate(store, valid)).status, "applied");
+    assert.equal((await executeCoordinationTodoUpdate(store, valid)).status, "replayed");
+  });
+}
+
+test("first user-gate link rejects path/reference syntax without consuming the operation", async () => {
+  const {store, request} = await boundUserAction({task_class: "user_gate", blocks_agent: "agent-a"});
+  const before = await store.loadAuthority();
+  const edit = {...request, patch: {}};
+  for (const reference of ["todo_value/child", "todo_value\\child", "../todo_value", "todo:todo_value"]) {
+    for (const dry_run of [true, false]) {
+      const rejected = await executeCoordinationTodoUpdate(store, {...edit, dry_run,
+        planning_intent: {unblocks_todo_id: reference}});
+      assert.equal(rejected.status, "failed", JSON.stringify(rejected));
+      assert.deepEqual(await store.loadAuthority(), before);
+      assert.equal((await store.readReceipt(edit.operation_id)).status, "missing");
+    }
+  }
+  assert.equal((await executeCoordinationTodoUpdate(store, {...edit,
+    planning_intent: {unblocks_todo_id: "todo_value"}})).status, "applied");
 });
 
 test("user-gate linking cannot retarget, approve, bypass binding or consume execution proof", async () => {

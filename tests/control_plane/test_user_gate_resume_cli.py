@@ -18,7 +18,10 @@ def tmp_path(tmp_path_factory):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "write"])
-@pytest.mark.parametrize("invalid_target", ["missing", "user", "other_goal", "other_lane", "unclaimed"])
+@pytest.mark.parametrize("invalid_target", [
+    "missing", "user", "other_goal", "other_lane", "unclaimed",
+    "completed", "cancelled", "archived", "superseded", "deferred",
+])
 def test_gate_first_link_rejects_invalid_target_without_consuming_link(
     tmp_path, monkeypatch, provider, dry_run, invalid_target,
 ):
@@ -51,6 +54,34 @@ def test_gate_first_link_rejects_invalid_target_without_consuming_link(
         claim = ("--claimed-by", "agent-b") if invalid_target == "other_lane" else ()
         invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
             *claim, "--text", "Work outside the gate's lane")["todo_id"]
+    elif invalid_target in {"completed", "cancelled", "archived", "superseded", "deferred"}:
+        invalid_id = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task",
+            "--claimed-by", "agent-a", "--text", "Previous work outside this decision")["todo_id"]
+        if invalid_target == "deferred":
+            cli("todo", "update", "--todo-id", invalid_id, "--agent-id", "agent-a",
+                "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
+                "--reason", "Wait for a future work window")
+        else:
+            cli("todo", "claim", "--todo-id", invalid_id, "--agent-id", "agent-a", "--claimed-by", "agent-a",
+                "--claim-operation-id", "old-work")
+            # Agent cancellation is a done/no-followup closeout, not a separate status.
+            supersede = invalid_target == "superseded"
+            followup = ("--next-agent-todo", "Replacement work", "--next-claimed-by", "agent-a") if (
+                invalid_target == "superseded") else ("--no-follow-up",)
+            cli("todo", "supersede" if supersede else "complete", "--todo-id", invalid_id,
+                "--agent-id", "agent-a", "--claim-operation-id", "old-work",
+                "--reason", "Cancelled obsolete work" if invalid_target == "cancelled" else "Previous work settled",
+                "--evidence", "Synthetic accepted result", *followup)
+            if invalid_target == "archived":
+                cli("todo", "archive-completed", "--role", "agent", "--max-active-done", "0", "--execute")
+        old = cli("todo", "list", "--todo-id", invalid_id)["todo"]
+        assert old["status"] == ("deferred" if invalid_target == "deferred" else "done")
+        assert old["claimed_by"] == "agent-a"
+        assert old["archive_state"] == ("archive" if invalid_target == "archived" else "active")
+        if invalid_target == "superseded":
+            assert old["superseded_by"]
+        if invalid_target == "cancelled":
+            assert old["no_followup"] is True
 
     before, state_before = snapshot(), state.read_bytes()
     link_args = ("todo", "update", "--role", "user", "--todo-id", gate["todo_id"], "--agent-id", "agent-a",
@@ -73,10 +104,18 @@ def test_gate_first_link_rejects_invalid_target_without_consuming_link(
     dependent = cli("todo", "list", "--todo-id", target["todo_id"])["todo"]
     assert dependent["status"] == "blocked"
     assert dependent["required_decision_scopes"]
+    completed = cli("todo", "complete", "--role", "user", "--todo-id", gate["todo_id"], "--agent-id", "agent-a",
+        "--decision-outcome", "approve", "--evidence", "Synthetic owner approval for the requested prices")
+    assert completed["unblock_resume"]["state"] == "resumed"
+    dependent = cli("todo", "list", "--todo-id", target["todo_id"])["todo"]
+    assert dependent["status"] == "open" and dependent["required_decision_scopes"] == []
+    assert cli("todo", "claim", "--todo-id", target["todo_id"], "--agent-id", "agent-a", "--claimed-by", "agent-a",
+        "--claim-operation-id", "corrected-work")["execution_managed"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_gate_first_link_consumes_scope_and_resumes_dependent(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("target_status", ["open", "blocked"])
+def test_gate_first_link_consumes_scope_and_resumes_dependent(tmp_path, monkeypatch, provider, target_status):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = promoted_create_fixture(
         tmp_path, provider=provider, handoff_mode="hard_lease", registered_agents=["agent-a", "agent-b"])
@@ -90,7 +129,7 @@ def test_gate_first_link_consumes_scope_and_resumes_dependent(tmp_path, monkeypa
     gate = cli("todo", "add", "--role", "user", "--task-class", "user_gate", "--agent-id", "agent-a",
         "--decision-scope", "resource:action:prices_file", "--text", "Provide inputs/prices.json")
     target = cli("todo", "add", "--role", "agent", "--task-class", "advancement_task", "--claimed-by", "agent-a",
-        "--status", "blocked", "--required-decision-scope", "resource:action:prices_file",
+        "--status", target_status, "--required-decision-scope", "resource:action:prices_file",
         "--resume-when", f"todo_done:{gate['todo_id']}", "--text", "Calculate inventory value with supplied prices")
     before = snapshot()
     link_args = ("todo", "update", "--role", "user", "--todo-id", gate["todo_id"], "--agent-id", "agent-a",
@@ -111,7 +150,7 @@ def test_gate_first_link_consumes_scope_and_resumes_dependent(tmp_path, monkeypa
     completed = cli("todo", "complete", "--role", "user", "--todo-id", gate["todo_id"], "--agent-id", "agent-a",
         "--decision-outcome", "approve", "--evidence", "Requested prices file is present with integer prices")
     assert completed["decision_scope_resolution"]["remaining_required_decision_scopes"] == []
-    assert completed["unblock_resume"]["state"] == "resumed"
+    assert completed["unblock_resume"]["state"] == ("resumed" if target_status == "blocked" else "target_not_blocked")
     resumed = cli("todo", "list", "--todo-id", target["todo_id"])["todo"]
     assert resumed["status"] == "open"
     assert resumed["claimed_by"] == "agent-a"
