@@ -213,18 +213,36 @@ export const conversationActivityScenario = {
       await makeStorageUnavailable("storage unavailable");
       await assertStorageUnavailable("storage unavailable");
       await composer.fill("先检查最新证据。");
-      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
-      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across manager views");
+      // A slow resume cannot turn a correction into a fresh message while
+      // the same manager conversation still owns an active Turn.
+      let releaseResume;
+      const resumeGate = new Promise(resolve => { releaseResume = resolve; });
+      const delayResume = async route => {
+        const request = route.request();
+        const body = request.method() === "POST" ? request.postDataJSON() : null;
+        if (body?.context_kind === "manager" && body.mode === "resume_latest") await resumeGate;
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions", delayResume);
+      const streamsBeforeViewChange = observations.length;
       const dispatchedBeforeStorageFailure = adjustments.length;
       const turnsBeforeStorageFailure = api.turnRequests.length;
-      await composer.focus();
-      await page.keyboard.press("Meta+Enter");
-      await waitForFeedback("调整尚未发送", "Storage failure did not report a retained steering draft");
-      assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
-      assert.equal(api.turnRequests.length, turnsBeforeStorageFailure, "Storage failure cannot queue a new conversation Turn");
-      assert.equal(await composer.inputValue(), "先检查最新证据。");
-      await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
+      try {
+        await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
+        await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+        assert.equal(await composer.inputValue(), "先检查最新证据。", "Blocked storage preserves the page draft across manager views");
+        await composer.focus();
+        await page.keyboard.press("Meta+Enter");
+        await waitForFeedback("调整尚未发送", "Storage failure did not report a retained steering draft");
+        assert.equal(adjustments.length, dispatchedBeforeStorageFailure, "Storage failure cannot dispatch steering");
+        assert.equal(api.turnRequests.length, turnsBeforeStorageFailure, "Storage failure cannot queue a new conversation Turn");
+        assert.equal(await composer.inputValue(), "先检查最新证据。");
+        await page.screenshot({path: resolve(outputDir, "conversation-steering-storage-unavailable.png"), animations: "disabled"});
+        assert.equal(observations.length, streamsBeforeViewChange, "Switching manager views keeps the original observer");
+      } finally {
+        releaseResume();
+        await page.unroute("**/api/chat/sessions", delayResume);
+      }
       await restoreStorage();
       await composer.fill("先检查最新证据，再继续。");
       await composer.focus();
