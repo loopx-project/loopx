@@ -98,11 +98,11 @@ RUNTIME_EXECUTION_ROUTING_RULE = (
     "Normal turns: CLI interaction_contract; " + RUNTIME_REPAIR_ROUTING_RULE
 )
 HOST_LOOP_SAFETY_RULE = (
-    "Obey user authority/repo rules. "
-    "Protect credentials/private material; "
-    "publish public-safe evidence. Destructive Git/production needs explicit authorization. "
-    "Gate affected paths only; continue independent allowed work. "
-    "Reuse this action's authorization; ask only for missing necessary authority."
+    "Obey user authority and repository rules. "
+    "Protect credentials and private material. "
+    "Share public-safe evidence. Destructive Git/production needs explicit authorization. "
+    "Gate only the affected path; continue other allowed work. "
+    "Reuse existing authorization here. Ask only for missing necessary authority."
 )
 HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake replace `<current_time_iso>` once; reuse on retries. "
