@@ -544,10 +544,14 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
         {!emptySourceHistory ? <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
+          const disclosure = records.current;
+          const focused = document.activeElement;
           setRecordsOpen(true);
           window.requestAnimationFrame(() => {
-            records.current?.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
-            records.current?.scrollIntoView({block: "start"});
+            // A user can move on to a record before the input's first frame.
+            if (!disclosure?.isConnected || document.activeElement !== focused) return;
+            disclosure.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
+            disclosure.scrollIntoView({block: "start"});
           });
         }}><Search size={15} aria-hidden/></button> : null}
         {!readingSelection && !emptySourceHistory ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
