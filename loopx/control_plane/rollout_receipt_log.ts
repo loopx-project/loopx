@@ -11,7 +11,7 @@ import { relative, resolve, sep } from "node:path";
 
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
-import { requireNonEmptyString } from "./runtime_decode.ts";
+import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
 import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
@@ -154,12 +154,23 @@ export async function readGoalHeartbeatReceipts(
   );
 }
 
+/** A receipt without an exact Goal instance belongs to the legacy goal scope. */
+function receiptMatchesGoalRef(event: JsonObject, goalRef: JsonObject | null): boolean {
+  if (goalRef === null) return !Object.hasOwn(event, "goal_ref");
+  const eventGoalRef = jsonObject(event.goal_ref);
+  return eventGoalRef !== null &&
+    eventGoalRef.goal_id === goalRef.goal_id &&
+    eventGoalRef.goal_instance_id === goalRef.goal_instance_id;
+}
+
 export async function heartbeatReceiptStatus(params: {
   runtimeRoot: string;
   goalId: string;
   agentId: string;
   turnInstanceId: string;
+  goalRef?: JsonObject | null;
 }): Promise<HeartbeatReceiptStatus> {
+  const goalRef = params.goalRef ?? null;
   const snapshot = await readGoalRolloutEventSnapshot(
     params.runtimeRoot,
     params.goalId,
@@ -171,7 +182,8 @@ export async function heartbeatReceiptStatus(params: {
   );
   if (snapshot === null || receipts === null) return "missing";
   const firstReceipt = receipts.find(
-    (event) => event.run_id === params.turnInstanceId,
+    (event) => event.run_id === params.turnInstanceId &&
+      receiptMatchesGoalRef(event, goalRef),
   );
   const firstMatch = firstReceipt === undefined
     ? -1
@@ -181,7 +193,8 @@ export async function heartbeatReceiptStatus(params: {
     if (
       event.event_kind !== HEARTBEAT_RECEIPT_EVENT_KIND ||
       event.goal_id !== params.goalId ||
-      event.agent_id !== params.agentId
+      event.agent_id !== params.agentId ||
+      !receiptMatchesGoalRef(event, goalRef)
     ) return false;
     if (typeof event.run_id === "string" && event.run_id.trim().length > 0) {
       return event.run_id !== params.turnInstanceId;

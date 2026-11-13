@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import {
   atomicWriteJson,
   withFileMutationLock,
@@ -171,6 +172,7 @@ export interface SchedulerHeartbeatCommitResult extends JsonObject {
 
 export interface SchedulerHeartbeatCommitOptions {
   readonly heartbeatReceiptTurnInstanceId?: string | null;
+  readonly heartbeatReceiptGoalRef?: JsonObject | null;
 }
 
 function stableValue(value: unknown): unknown {
@@ -831,6 +833,27 @@ export async function evaluateSchedulerHeartbeatCommit(
       options.heartbeatReceiptTurnInstanceId,
       "heartbeatReceiptTurnInstanceId",
     ).trim();
+  let receiptGoalRef: JsonObject | null = null;
+  if (options.heartbeatReceiptGoalRef !== undefined &&
+      options.heartbeatReceiptGoalRef !== null) {
+    const parsed = parseExactGoalRef(options.heartbeatReceiptGoalRef);
+    if (parsed.kind === "invalid") {
+      throw new EffectRuntimeRequestError(
+        `heartbeat receipt goal_ref is invalid: ${parsed.issue}`,
+        "heartbeat_receipt_goal_ref_invalid",
+      );
+    }
+    receiptGoalRef = {
+      goal_id: parsed.value.goalId.value,
+      goal_instance_id: parsed.value.goalInstanceId.value,
+    };
+    if (receiptGoalRef.goal_id !== request.scope.goalId) {
+      throw new EffectRuntimeRequestError(
+        "heartbeat receipt goal_ref does not match the scheduler scope",
+        "heartbeat_receipt_goal_ref_mismatch",
+      );
+    }
+  }
   const path = schedulerStatePath(request.runtime_root, request.scope);
   const fingerprint = requestDigest(request);
   // Legacy state stays read-only until the commit holds every applicable
@@ -853,6 +876,7 @@ export async function evaluateSchedulerHeartbeatCommit(
         goalId: request.scope.goalId,
         agentId: request.scope.agentId,
         turnInstanceId: receiptTurnInstanceId,
+        goalRef: receiptGoalRef,
       });
       if (status !== "fresh") {
         return result(
