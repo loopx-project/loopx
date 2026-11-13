@@ -400,13 +400,15 @@ def goal_quota_with_spend_ledger(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
     try:
-        window_start = current_time - timedelta(hours=int(payload["window_hours"]))
+        # Ledger timestamps are UTC, so the cutoff is computed in UTC: doing the
+        # subtraction in the host's offset can underflow (or not) at a different
+        # instant and make the same ledger count differently per host timezone.
+        window_start = current_time.astimezone(timezone.utc) - timedelta(
+            hours=int(payload["window_hours"])
+        )
     except OverflowError:
         # A window longer than datetime can represent still covers every
         # representable event. It must not crash the Goal-wide history read.
-        # Ledger timestamps are parsed to UTC, so the bound is UTC regardless of
-        # the caller's offset; a local-offset bound would drop the earliest
-        # hours of a negative-offset host.
         window_start = datetime.min.replace(tzinfo=timezone.utc)
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
