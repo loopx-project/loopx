@@ -494,14 +494,33 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
     assert _spend_run_count(runtime) == 0
 
 
+def _read_recovery_on_limited_host(reader, fields, *, project, limit):
+    """Run the emitted reader and every cursor under the original output cap."""
+    data = bytearray()
+    command = [*reader, *fields]
+    for _ in range(256):
+        result = subprocess.run(command, cwd=project, capture_output=True, timeout=30)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert len(result.stdout) <= limit
+        page = json.loads(result.stdout[:limit])
+        assert page["ok"] and page["offset"] == len(data)
+        data.extend(page["content"].encode())
+        if page["eof"]:
+            assert len(data) == page["total_bytes"]
+            return json.loads(data)
+        assert page["next_offset"] == len(data)
+        command = shlex.split(page["next_command"])
+    pytest.fail("reader did not reach EOF")
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize(("failure_stage", "limit"), [
     ("collection", 4096), ("capture", 4096), ("registration", 4096),
-    ("publication", 4096), ("publication", 900),
-    ("long_route", 900), ("long_route", 650), ("long_route", 256),
+    ("publication", 4096), ("publication", 900), ("console", 900), ("wrapper", 900),
+    ("long_route", 900), ("long_route", 650), ("long_route", 550), ("long_route", 256),
     ("long_no_capture", 650),
-], ids=["collection", "capture", "registration", "publication", "tight-opening",
-        "long-900", "long-650", "no-room", "long-before-capture"])
+], ids=["collection", "capture", "registration", "publication", "tight-opening", "installed-console",
+        "explicit-wrapper", "strict-900", "strict-650", "no-page-room", "no-room", "strict-before-capture"])
 def test_inline_replan_failure_reports_the_actual_receipt(
     tmp_path, monkeypatch, capsys, provider, failure_stage, limit,
 ):
@@ -518,6 +537,21 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     retained = "todo_chain_000000000001"
     capture = tmp_path / "original"
     cli_prefix = []
+    if failure_stage == "console":
+        launcher = Path(sys.executable).with_name("loopx")
+        if os.name != "posix" or not launcher.is_file():
+            pytest.skip("Requires the console script installed with this test interpreter")
+        monkeypatch.delenv("LOOPX_RELEASE_ROOT", raising=False)
+        cli_prefix = ["--cli-bin", str(launcher)]
+    if failure_stage == "wrapper":
+        if os.name != "posix":
+            pytest.skip("Requires a POSIX shell")
+        launcher = tmp_path / "wrapper with spaces"
+        release = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(str(release))} "$@"\n')
+        launcher.chmod(0o700)
+        monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+        cli_prefix = ["--cli-bin", str(launcher)]
     if failure_stage.startswith("long_"):
         if os.name != "posix":
             pytest.skip("Exercises a POSIX launcher with spaces")
@@ -567,7 +601,7 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         raise RuntimeError("fixture private capture detail")
 
     with monkeypatch.context() as patch:
-        if failure_stage in {"publication", "long_route"}:
+        if failure_stage in {"publication", "console", "wrapper", "long_route"}:
             patch.setattr(codex_context, "prepare_codex_context", fail_publication)
         elif failure_stage == "registration":
             patch.setattr(codex_context, "record_native_claim_source", fail_registration)
@@ -586,7 +620,7 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     assert code == 1 and reply["ok"] is False
     saved = capture / "decision.json"
     assert _spend_run_count(runtime) == 0
-    if limit == 256:
+    if limit in {256, 550}:
         assert "no guard" in reply["reason"].lower()
         assert _heartbeat_receipt_count(runtime, turn) == 0 and not saved.exists()
         return
@@ -609,12 +643,11 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     if failure_stage == "long_no_capture":
         assert not saved.exists() and _heartbeat_receipt_count(runtime, turn) == 1
         reader = shlex.split(reply["command"])
-        assert reader[:3] == [cli_prefix[1], *cli_prefix]
+        assert reader[0] == cli_prefix[1]
         assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
-        page = subprocess.run([*reader, "--select", "/heartbeat_receipt"], cwd=project,
-                              text=True, capture_output=True, timeout=30)
-        assert page.returncode == 0, (page.stdout, page.stderr)
-        receipt = json.loads(json.loads(page.stdout)["content"])["selections"][0]["value"]
+        recovered = _read_recovery_on_limited_host(reader, ["--select", "/heartbeat_receipt"],
+            project=project, limit=limit)
+        receipt = recovered["selections"][0]["value"]
         assert receipt["status"] == "committed"
         assert receipt["settlement_identity"]["turn_instance_id"] == turn
         return
@@ -638,16 +671,10 @@ def test_inline_replan_failure_reports_the_actual_receipt(
         assert reader[reader.index("--capture-sha256") + 1] == sha256(original).hexdigest()
     fields = ["--select", "/heartbeat_receipt", "--select", "/interaction_contract/cli_channel/next_cli_actions"]
     if cli_prefix:
-        assert reader[:3] == [cli_prefix[1], *cli_prefix]
+        assert reader[0] == cli_prefix[1]
         assert "--reference-file" in reader and "Do not rerun" in reply["instruction"]
-        response = subprocess.run([*reader, *fields], cwd=project, capture_output=True,
-                                  text=True, timeout=30)
-        page_code, page = response.returncode, json.loads(response.stdout)
-    else:
-        page_code, page = _run_cli(registry, runtime, "quota", "context-read",
-            *reader[reader.index("context-read") + 1:], *fields)
-    assert page_code == 0 and page["eof"]
-    values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+    selection = _read_recovery_on_limited_host(reader, fields, project=project, limit=limit)
+    values = {item["pointer"]: item["value"] for item in selection["selections"]}
     assert values["/heartbeat_receipt"] == receipt
     actions = values["/interaction_contract/cli_channel/next_cli_actions"]
     assert saved.read_bytes() == original

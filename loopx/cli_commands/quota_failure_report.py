@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..command_invocation import current_loopx_cli_argv
+from ..command_invocation import current_loopx_cli_argv, same_context_reader_route
 from ..control_plane.coordination.legacy_writer_fence import (
     LegacyCoordinationWriterFenced,
 )
@@ -347,6 +347,7 @@ class _QuotaFailureReader:
 
     reference: Path
     command: str
+    reader_argv: list[str] | None
 
     def bind(self, path: Path | None, digest: str | None, failure: dict[str, object]) -> None:
         from ..control_plane.turn_driver.decision_capture import write_context_read_reference, write_decision_capture
@@ -356,12 +357,13 @@ class _QuotaFailureReader:
             # as diagnostics without writing or replacing decision.json.
             path = self.reference.with_name("failure.json")
             digest = write_decision_capture(path, failure)
-        write_context_read_reference(path, digest, reference_file=self.reference)
+        write_context_read_reference(path, digest, reference_file=self.reference, reader_argv=self.reader_argv)
 
 
 def _prepare_quota_failure_reader(limit: int) -> _QuotaFailureReader:
     from tempfile import mkdtemp
 
+    from .quota_context_reader import validate_compact_recovery_budget
     from ..control_plane.turn_driver.decision_capture import (
         context_capture_read_command, private_capture_uid,
     )
@@ -371,13 +373,28 @@ def _prepare_quota_failure_reader(limit: int) -> _QuotaFailureReader:
     private_capture_uid()
     directory = Path(mkdtemp(prefix="lx-", dir="/tmp"))
     reference = directory / "r"
-    command = context_capture_read_command(
-        reference, "", reference_file=reference, reader_argv=current_loopx_cli_argv(), compact=True,
-    )
-    if _failure_output_size(_compact_quota_failure(command)) <= limit:
-        return _QuotaFailureReader(reference, command)
-    directory.rmdir()
-    raise QuotaCommandValidationError("Output limit cannot fit recovery metadata; no guard was run.")
+    route = current_loopx_cli_argv()
+    # Keep the caller's explicit route for wrappers. When the running
+    # release or console script already identifies itself, spell it once.
+    bound_route = route if os.path.isabs(route[0]) else None
+    if bound_route and route[1:2] == ["--cli-bin"]:
+        # A released scripts/loopx can be chosen explicitly by a different
+        # caller. Its own release discovery follows symlinks to this entry.
+        release_launcher = Path(__file__).resolve().parents[2] / "scripts" / "loopx"
+        if (same_context_reader_route(current_loopx_cli_argv(preserve_override=False), bound_route)
+                or same_context_reader_route([str(release_launcher)], bound_route)):
+            bound_route = route[:1]
+    try:
+        if bound_route is not None:
+            validate_compact_recovery_budget(reference, limit, bound_route)
+        command = context_capture_read_command(reference, "", reference_file=reference,
+            reader_argv=bound_route or route, compact=True, max_page_output_bytes=limit)
+        if _failure_output_size(_compact_quota_failure(command)) > limit:
+            raise ValueError("Output limit cannot fit a recovery command.")
+    except ValueError as exc:
+        directory.rmdir()
+        raise QuotaCommandValidationError("Output limit cannot fit recovery metadata; no guard was run.") from exc
+    return _QuotaFailureReader(reference, command, bound_route)
 
 
 def _quota_budget_failure_payload(reason: str, limit: int) -> dict[str, object]:
@@ -418,18 +435,11 @@ def _bounded_quota_transport_failure(
     failure: dict[str, object], limit: int, reader: _QuotaFailureReader | None,
     path: Path | None, digest: str | None,
 ) -> dict[str, object]:
-    if _failure_output_size(failure) <= limit:
-        return failure
     original = failure.get("captured_decision")
+    if original is None and _failure_output_size(failure) <= limit:
+        return failure
     receipt = failure.get("heartbeat_receipt")
-    compact = _compact_quota_failure(
-        str(original["command"]) if isinstance(original, Mapping) else None,
-        receipt=receipt if not isinstance(original, Mapping) and isinstance(receipt, Mapping) else None,
-    )
-    instruction = {"instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
-    if (original is not None or receipt is not None) and _failure_output_size(compact) <= limit:
-        guided = {**compact, **instruction}
-        return guided if _failure_output_size(guided) <= limit else compact
+    command = str(original["command"]) if isinstance(original, Mapping) else None
     if reader is not None:
         try:
             reader.bind(path, digest, failure)
@@ -438,8 +448,18 @@ def _bounded_quota_transport_failure(
             # different file. Return whatever original identity fits below.
             pass
         else:
-            result = _compact_quota_failure(reader.command)
-            return {**result, **instruction} if _failure_output_size({**result, **instruction}) <= limit else result
+            command = reader.command
+            if isinstance(original, Mapping):
+                failure = {**failure, "captured_decision": {**original, "command": command}}
+    if _failure_output_size(failure) <= limit:
+        return failure
+    if command is not None or isinstance(receipt, Mapping):
+        compact = _compact_quota_failure(command, receipt=receipt if command is None else None)
+        guided = {**compact, "instruction": "Read the original Turn receipt before recovering. Do not rerun admission."}
+        if _failure_output_size(guided) <= limit:
+            return guided
+        if _failure_output_size(compact) <= limit:
+            return compact
     result = _compact_quota_failure()
     if isinstance(receipt, Mapping):
         result["heartbeat_receipt"] = {key: receipt[key] for key in ("status", "event_id", "turn_instance_id") if key in receipt}
@@ -490,19 +510,20 @@ def quota_decision_transport_failure_payload(
     if not typed_transport:
         failure["error_class"] = type(error).__name__
         failure.update(verbose_debug_fields(error, verbose=bool(getattr(args, "verbose", False))))
+    limit = getattr(args, "max_page_output_bytes", None) if args.format == "json" else None
     if capture_directory is not None and capture_sha256 is not None:
         from ..control_plane.turn_driver.decision_capture import context_capture_read_command
 
         saved = capture_directory / "decision.json"
-        # Recover the publication's exact bytes. The ordinary reader has its
-        # own page budget and rejects a replacement or a damaged capture.
+        # Recover the publication's exact bytes even if the compact reference
+        # cannot be written. Carry any explicit host cap to the direct reader.
         failure["captured_decision"] = {
             "path": str(saved),
             "sha256": capture_sha256,
-            "command": context_capture_read_command(saved, capture_sha256, reader_argv=current_loopx_cli_argv()),
+            "command": context_capture_read_command(saved, capture_sha256, reader_argv=current_loopx_cli_argv(),
+                compact=limit is not None, max_page_output_bytes=limit),
         }
-    limit = getattr(args, "max_page_output_bytes", None)
-    if limit is None or args.format != "json":
+    if limit is None:
         return failure
     return _bounded_quota_transport_failure(
         failure, limit, getattr(args, "_quota_failure_reader", None),
