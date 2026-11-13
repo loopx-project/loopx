@@ -306,8 +306,13 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     not admit work, mint a Turn or stand in for observed model consumption.
     """
     from .context_machine import _private_transport_root
+    from .quota_request import quota_detail_sections_from_args
     from ..control_plane.turn_driver.decision_capture import capture_progressive_context
 
+    # Only a fresh stateless source can supply this route. Saved and explicitly
+    # captured decisions keep the reader chosen by their existing callers.
+    stage_from_projection = (directory is None and captured_decision_path is None
+        and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
@@ -315,7 +320,8 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     required, reference, review = capture_progressive_context(
         payload, directory=directory, surface=quota_context_surface(payload, args),
         selection_command_args_template=transport, captured_decision_path=captured_decision_path,
-        captured_recovery=captured_recovery, replan_review_source=replan_review_source)
+        captured_recovery=captured_recovery, replan_review_source=replan_review_source,
+        replan_reader_argv=reader_argv if stage_from_projection else None)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         source_replan_review=review,
         metadata={"context_delivery": native_context_activation(args),
@@ -1116,12 +1122,17 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("replan-view requires --decision-file and --source-hash")
     if args.outcome_ref == "":
         raise ValueError("replan-view outcome-ref requires an exact reference; use context-read --select for original detail")
-    path = Path(args.decision_file).expanduser()
-    payload = json.loads(read_turn_observation_text(path))
+    capture_sha256 = getattr(args, "capture_sha256", None)
+    if capture_sha256 is None:
+        path = Path(args.decision_file).expanduser()
+        payload = json.loads(read_turn_observation_text(path))
+    else:
+        path, _, payload = _read_capture(args.decision_file, capture_sha256, private=True)
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
                                  captured_decision_path=str(path), reader_argv=current_loopx_cli_argv(),
                                  stage=args.replan_stage, outcome_ref=args.outcome_ref,
-                                 progressive=getattr(args, "context_delivery", None) == "on")
+                                 progressive=getattr(args, "context_delivery", None) == "on",
+                                 **({"capture_sha256": capture_sha256} if capture_sha256 is not None else {}))
 
 
 def handle_replan_view(

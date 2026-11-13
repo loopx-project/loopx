@@ -482,6 +482,20 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
 
+An ordinary JSON `quota should-run` with Progressive enabled can stage an
+eligible replan from its private complete `projection.json` without an
+explicit capture destination. Read `replan_action_packet.review` before choosing
+work, then use `review.next` for selection or writeback. Both stage readers pin
+the original source hash and the exact file digest. The required view's
+`context_details` still addresses the complete source for missing facts.
+These reads do not enter the guard, update authority, or spend quota.
+
+普通 JSON `quota should-run` 启用 Progressive 时，可直接用私有完整
+`projection.json` 分阶段交付符合条件的重规划，无需指定捕获目录。选定工作前先读
+`replan_action_packet.review`，再沿 `review.next` 选任务或读取回写要求。两阶段
+均校验原决策哈希和文件字节摘要。必读视图的 `context_details` 提供完整来源，
+供补读缺失事实。读取不再进入准入检查，不写入权威状态，也不扣额度。
+
 For supporting fields folded by the existing native Progressive owner,
 `context_details.unread_context_index` contains the current complete
 `projection.json` source path/digest and exact `pointers`. The initial reader

@@ -535,6 +535,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 captured_decision_path: str | None = None,
                                 captured_recovery: dict[str, Any] | None = None,
                                 replan_review_source: dict[str, Any] | None = None,
+                                replan_reader_argv: list[str] | None = None,
                                 ) -> tuple[dict[str, Any], dict[str, Any], Path | None]:
     """Publish the complete current source before optional stateless presentation.
 
@@ -551,6 +552,7 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         **({"selection_command_args_template": selection_command_args_template}
             if selection_command_args_template is not None else {}),
         **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
+        **({"replan_reader_argv": replan_reader_argv} if replan_reader_argv is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })
