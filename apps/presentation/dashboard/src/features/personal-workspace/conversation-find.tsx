@@ -8,11 +8,12 @@ export function conversationMessageKey(message: WorkspaceMessage): string {
 }
 
 /** Search only the original text already read by the conversation owner. */
-export function ConversationFind({items, incomplete, zh, onSelect}: {
+export function ConversationFind({items, incomplete, zh, onSelect, onNavigate}: {
   items: WorkspaceMessage[];
   incomplete: boolean;
   zh: boolean;
   onSelect: (id: string | null) => void;
+  onNavigate: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -29,7 +30,9 @@ export function ConversationFind({items, incomplete, zh, onSelect}: {
     trigger.current?.focus();
   }
   function move(offset: number) {
-    if (matches.length) setSelected(conversationMessageKey(matches[(index + offset + matches.length) % matches.length]));
+    if (!matches.length) return;
+    setSelected(conversationMessageKey(matches[(index + offset + matches.length) % matches.length]));
+    onNavigate();
   }
   return <div className="personal-conversation-find">
     <button ref={trigger} type="button" aria-expanded={open} onClick={() => open ? close() : setOpen(true)}>

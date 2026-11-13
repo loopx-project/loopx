@@ -70,6 +70,7 @@ export function ChannelTimeline({
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
+  const [findNavigation, setFindNavigation] = useState(0);
   const [findMessageId, setFindMessageId] = useState<string | null>(null);
   const timeline = useRef<HTMLDivElement>(null);
   const readMessage = useEffectEvent(() => onReadMessage?.());
@@ -82,7 +83,7 @@ export function ChannelTimeline({
       row?.scrollIntoView({block: "start"});
     });
     return () => cancelAnimationFrame(frame);
-  }, [findMessageId]);
+  }, [findMessageId, findNavigation]);
   const orderedItems = conversationOrder(items.filter(item => {
     if (item.kind !== "message") return true;
     if (item.message.queued) return false;
@@ -227,6 +228,7 @@ export function ChannelTimeline({
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isDocumentAttachment(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
+            focusRequest={messageKey(item.message) === findMessageId ? findNavigation : undefined}
             focused={messageKey(item.message) === findMessageId || Boolean(messageFocus && messageKey(item.message) === focusKey)} zh={locale === "zh-CN"} onRead={onReadMessage}/> : null}
           <ConversationReplyContext context={item.message.replyContext} zh={locale === "zh-CN"}/>
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH
@@ -248,7 +250,7 @@ export function ChannelTimeline({
       <p aria-atomic="true" aria-live="polite" className="personal-live-region" role="status"><span key={latestAnnounceable?.id}>{liveAnnouncement}</span></p>
       {focusNotice}
       {orderedItems.some(item => item.kind === "message") ? <ConversationFind items={orderedItems.flatMap(item => item.kind === "message" ? [item.message] : [])}
-        incomplete={historyPhase !== "ready"} zh={locale === "zh-CN"} onSelect={setFindMessageId}/> : null}
+        incomplete={historyPhase !== "ready"} zh={locale === "zh-CN"} onSelect={setFindMessageId} onNavigate={() => setFindNavigation(value => value + 1)}/> : null}
       <div className="personal-channel-timeline" ref={timeline}>
         {backgroundIds.size ? <details className="personal-activity-summary">
           <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>

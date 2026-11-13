@@ -80,6 +80,35 @@ try {
     await bar.getByRole("status").filter({hasText: "3 / 3"}).waitFor();
     await input.fill("保留原始证据");
     await bar.getByRole("status").filter({hasText: "1 / 1"}).waitFor();
+    for (const width of [1200, 390]) {
+      await page.setViewportSize({width, height: 844});
+      // Leave the long original expanded so the old short message can be scrolled away.
+      await input.fill("Earlier public report");
+      await bar.getByRole("status").filter({hasText: "1 / 1"}).waitFor();
+      const inViewport = () => page.waitForFunction(() => {
+        const row = document.querySelector(".is-find-match")?.getBoundingClientRect();
+        const viewport = document.querySelector(".personal-channel-scroll")?.getBoundingClientRect();
+        return row && viewport && row.top >= viewport.top && row.bottom <= viewport.bottom;
+      }, undefined, {timeout: 5000});
+      await inViewport();
+      for (const key of ["Enter", "Shift+Enter", "arrow"]) {
+        await page.locator(".personal-channel-scroll").evaluate(node => {node.scrollTop = node.scrollHeight;});
+        assert(await active.evaluate(node => node.getBoundingClientRect().bottom < node.closest(".personal-channel-scroll").getBoundingClientRect().top), "The unique old message is outside the viewport before navigating again");
+        if (key === "arrow") await bar.getByRole("button", {name: zh ? "上一条匹配消息" : "Previous matching message"}).click();
+        else await input.press(key);
+        await inViewport();
+      }
+      await input.fill("保留原始证据");
+      for (const action of ["arrow", "Shift+Enter"]) {
+        await active.getByRole("button", {name: zh ? "收起消息" : "Collapse message", exact: true}).click();
+        await active.getByRole("button", {name: zh ? "展开完整消息" : "Read full message", exact: true}).waitFor();
+        if (action === "arrow") await bar.getByRole("button", {name: zh ? "下一条匹配消息" : "Next matching message"}).click();
+        else await input.press(action);
+        await active.getByText("Keep the lunar evidence. 保留原始证据。", {exact: true}).waitFor({timeout: 5000});
+        assert.equal(await active.getByRole("button", {name: zh ? "收起消息" : "Collapse message"}).getAttribute("aria-expanded"), "true");
+      }
+    }
+    await page.setViewportSize({width: 1200, height: 844});
     await mkdir(outputDir, {recursive: true});
     // Short matching messages keep the useful reading context in the preview.
     await input.fill("final report");
