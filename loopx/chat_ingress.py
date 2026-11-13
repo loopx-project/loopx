@@ -339,11 +339,18 @@ class ChatIngressStore:
 
     def _strict_ingress_receipt(self, session_id: str, ingress_id: str) -> dict[str, Any] | None:
         """Absent is ``None``; any other unreadable receipt fails closed."""
-        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION
+        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION, _opaque_id
+        # The receipt is stored under the normalized id, so a replay that repeats
+        # the original (padded) text must be matched against that same id.
+        ingress_id = _opaque_id(ingress_id, field="client_ingress_id")
         path = self._ingress_path(session_id, ingress_id)
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            if os.path.lexists(path):
+                # A link whose target is gone is an existing entry, not absence:
+                # replacing it would resend a message that may have been delivered.
+                raise OSError("Ingress receipt is unreadable") from exc
             return None
         except (OSError, ValueError) as exc:
             raise OSError("Ingress receipt is unreadable") from exc
