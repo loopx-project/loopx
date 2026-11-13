@@ -1004,7 +1004,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // The same pending owner read applies before a required replan. Delivery
   // remains disabled while that review is being settled.
   const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true
-    && object(context.execution_obligation)?.must_attempt_work === true && cli?.spend_allowed_now === false;
+    && cli?.spend_allowed_now === false;
   const requiredInboxReads = (normalWork || replanningBeforeWork) && channel?.must_attempt === true
     && Array.isArray(channel.required_reads)
     ? channel.required_reads : [];
