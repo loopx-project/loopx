@@ -4070,6 +4070,39 @@ def test_agent_selects_one_bounded_action_before_delivery_receipt_binding(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
+def _assert_ssh_complete_turn_settles_once(guard, *, registry_path, runtime, project):
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    assert_complete_turn_decision(guard)
+    cli = guard["interaction_contract"]["cli_channel"]
+    plan = cli["settlement_plan"]
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    assert plan["identity"] == identity
+    assert cli["quota_spend_source"] == "visible-goal"
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
+    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    template = next(step["command_template"] for step in plan["ordered_steps"]
+                    if step["kind"] == "durable_writeback")
+    assert template in cli["next_cli_actions"]
+    replacements = {"<validated_progress>": "verified_ssh_selection", "<scale>": "implementation",
+                    "<outcome>": "outcome_progress", "<boundary>": "in_flight_continuation"}
+    settle = [replacements.get(word, word) for word in shlex.split(template)]
+    assert settle[settle.index("--turn-instance-id") + 1] == identity["turn_instance_id"]
+    assert "--settle-turn" in settle and "--settlement-receipt" in settle
+    settle += ["--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks"]
+    command = shlex.join(settle)
+    assert _spend_run_count(runtime) == 0
+    first_rc, first = _run_generated_cli(command, registry_path=registry_path, cwd=project)
+    assert first_rc == 0, first
+    assert first["settlement_progress"]["state"] == "settled"
+    assert first["settlement_identity"] == identity
+    replay_rc, replay = _run_generated_cli(command, registry_path=registry_path, cwd=project)
+    assert replay_rc == 0, replay
+    assert replay["idempotent_replay"] and replay["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+
 @pytest.mark.parametrize("host_surface", ["codex-app", "codex-app-ssh"])
 def test_guided_start_begins_one_turn_and_executes_returned_selection(
     tmp_path: Path,
@@ -4127,13 +4160,15 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
     assert cli_channel["quota_spend_source"] == expected_source
-    # The default guided entry keeps the ordinary capture and manual spend.
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
-    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert spend["owner"] == "agent"
-    assert f"--source {expected_source}" in spend["command_template"]
-    assert "schema_version" not in selected and "contract_binding" not in selected
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+    if host_surface == "codex-app-ssh":
+        _assert_ssh_complete_turn_settles_once(selected, registry_path=registry_path, runtime=runtime, project=project)
+    else:
+        assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
+        spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
+        assert spend["owner"] == "agent"
+        assert f"--source {expected_source}" in spend["command_template"]
+        assert "schema_version" not in selected and "contract_binding" not in selected
 
 
 def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
@@ -4190,11 +4225,8 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
         "settlement_identity"
     ]
     assert cli_channel["quota_spend_source"] == "visible-goal"
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
-    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert spend["owner"] == "agent" and "--source visible-goal" in spend["command_template"]
-    assert "schema_version" not in selected and "contract_binding" not in selected
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
+    _assert_ssh_complete_turn_settles_once(selected, registry_path=registry_path, runtime=runtime, project=project)
 
 
 @pytest.mark.parametrize("fallback_available", [False, True])
@@ -4269,8 +4301,8 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     tmp_path: Path,
     host_surface: str,
 ) -> None:
-    project, _runtime, registry_path = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, _runtime)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime)
     packet = build_start_goal_guided_packet(
         project=project,
         goal_id=GOAL_ID,
@@ -4304,10 +4336,13 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     assert settlement_plan["identity"] == identity
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
     assert guard["interaction_contract"]["cli_channel"]["quota_spend_source"] == expected_source
-    assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
-    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
-    assert "schema_version" not in guard and "contract_binding" not in guard
+    if host_surface == "codex-app-ssh":
+        _assert_ssh_complete_turn_settles_once(guard, registry_path=registry_path, runtime=runtime, project=project)
+    else:
+        assert settlement_plan["schema_version"] == "quota_settlement_plan_v1"
+        spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
+        assert spend["owner"] == "agent" and f"--source {expected_source}" in spend["command_template"]
+        assert "schema_version" not in guard and "contract_binding" not in guard
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
