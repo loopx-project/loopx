@@ -108,10 +108,10 @@ export async function buildStats(db, day) {
     const rows = await db
       .prepare(
         `SELECT ${column} AS key, COUNT(*) AS installs FROM (` +
-          `SELECT install_id, ${column}, MAX(day) FROM pings WHERE substr(day, 1, 7) = ?1 GROUP BY install_id` +
+          `SELECT install_id, ${column}, MAX(day) FROM pings WHERE day >= ?1 AND day < date(?1, '+1 month') GROUP BY install_id` +
           `) GROUP BY key ORDER BY installs DESC`,
       )
-      .bind(day.slice(0, 7))
+      .bind(`${day.slice(0, 7)}-01`)
       .all();
     breakdown[column] = suppressSmall(rows.results);
   }

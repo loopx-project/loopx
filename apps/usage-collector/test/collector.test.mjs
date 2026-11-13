@@ -129,6 +129,22 @@ test("stats report monthly active, new installs and suppressed breakdowns", asyn
   assert.deepEqual(stats.current_month_breakdown.version, { "1.2.0": 5 });
 });
 
+test("monthly breakdown includes only the current calendar month at year and leap-day boundaries", async () => {
+  for (const [day, previous, current, next] of [
+    ["2026-12-31", "2026-11-30", "2026-12-31", "2027-01-01"],
+    ["2024-02-29", "2024-01-31", "2024-02-29", "2024-03-01"],
+  ]) {
+    const db = d1();
+    for (let n = 1; n <= 5; n++) {
+      await handle(post(ping(n, { os: "windows" })), db, at(previous));
+      await handle(post(ping(n, { os: "linux" })), db, at(current));
+      await handle(post(ping(n + 5, { os: "darwin" })), db, at(next));
+    }
+    const response = await handle(new Request("https://collector.example/v0/stats"), db, at(day));
+    assert.deepEqual((await response.json()).current_month_breakdown.os, { linux: 5 });
+  }
+});
+
 test("suppressSmall folds small buckets into other", () => {
   assert.deepEqual(
     suppressSmall([
