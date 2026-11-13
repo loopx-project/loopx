@@ -482,6 +482,7 @@ export async function pollLocalCoordinationMonitor(value: unknown,
       evidence.source_authority = sourceAuthorityFor(store);
       return {...await executeCoordinationMonitorPoll(store, {
         goal_id: goalId, operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
+        runtime_root: root,
         actor_agent_id: input.actor_agent_id == null ? null : claimAgentValue(input.actor_agent_id, "actor_agent_id"),
         registered_agents: registered, dry_run: input.dry_run as boolean,
         receipt_only: receiptOnly,

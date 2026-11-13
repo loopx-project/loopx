@@ -11,6 +11,7 @@ import {requireBoolean} from "../runtime_decode.ts";
 import {CoordinationCommandReceipt} from "./command_receipt.ts";
 import {decodeTaskLeaseProof, type TaskLeaseProof} from "./task_lease_proof.ts";
 import {monitorPollRequestHash, normalizeMonitorPollFields, planMonitorBatch} from "../scheduler/monitor_batch.ts";
+import {evaluateTodoResumeConditionsFromSource, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
 export {monitorPollRequestHash} from "../scheduler/monitor_batch.ts";
 
 export const COORDINATION_MONITOR_POLL_REQUEST_SCHEMA = "loopx_coordination_monitor_poll_request_v0";
@@ -37,6 +38,8 @@ export interface CoordinationMonitorPollInput {
   receipt_only?: boolean;
   /** Authority clock supplied by the runtime, never observation.generated_at. */
   now?: Date;
+  /** Physical runtime already selected by the canonical provider. */
+  runtime_root?: string;
 }
 
 type CoordinationMonitorPollFailureKind = "decision_rejection" | "protocol_failure";
@@ -97,7 +100,19 @@ function normalize(raw: CoordinationMonitorPollInput): NormalizedMonitorPollInpu
   return input;
 }
 
-function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
+async function assertMonitorMergeWait(input: NormalizedMonitorPollInput, monitor: JsonObject): Promise<void> {
+  if (typeof monitor.resume_when !== "string") return;
+  const evaluated = await evaluateTodoResumeConditionsFromSource({
+    schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION, items: [monitor], source_items: [],
+    kinds: ["pr_merged"], ...(input.runtime_root === undefined ? {} : {rollout_event_source: {
+      runtime_root: input.runtime_root, goal_id: input.goal_id,
+    }}),
+  });
+  const [wait] = evaluated.conditions as {condition: JsonObject}[];
+  if (wait && wait.condition.satisfied !== true) throw new Error("Monitor PR merge dependency is not satisfied");
+}
+
+async function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
   const indexed = indexCoordinationProjection(head, input.goal_id);
   validateCoordinationTodoReadModel(head, input.goal_id);
   const readModel = canonicalAuthorityObject(head.todo_read_model, "Todo read model");
@@ -110,8 +125,11 @@ function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject) {
         operation: "observe", proof: input.lease_proof, now: input.now});
       if (rejected !== null) throw new Error(rejected.reason);
     }});
-  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[],
-    writeback: canonicalAuthorityObject(result.writeback, "Monitor writeback")};
+  const writeback = canonicalAuthorityObject(result.writeback, "Monitor writeback");
+  const monitor = indexed.todos.get(String(writeback.todo_id));
+  if (!monitor) throw new Error("Monitor target is unavailable in the commit snapshot");
+  await assertMonitorMergeWait(input, monitor);
+  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[], writeback};
 }
 
 export async function executeCoordinationMonitorPoll(store: AuthorityStore,
@@ -134,8 +152,8 @@ export async function executeCoordinationMonitorPoll(store: AuthorityStore,
   if (observation.kind === "receipt") return observation.result;
   const head = observation.authority;
   if (head.status !== "loaded") return {schema_version: COORDINATION_MONITOR_POLL_RESULT_SCHEMA, ...head};
-  let plan: ReturnType<typeof planWriteback>;
-  try { plan = planWriteback(input, head.head); }
+  let plan: Awaited<ReturnType<typeof planWriteback>>;
+  try { plan = await planWriteback(input, head.head); }
   catch (error) {
     // Receipt lookup succeeded and planning failed before commit. Only this
     // boundary can certify no effect; outages and commit failures cannot.
