@@ -89,6 +89,19 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        managed_cadence = None
+        if args.turn_command == "run-once" and bool(getattr(args, "execute", False)):
+            # Resolve the start owner through the run-once adapter so one
+            # process-wide seam binds admission, confirmation and receipts.
+            from . import turn_run_once as turn_run_once_module
+
+            managed_cadence = turn_run_once_module.managed_cadence_start(
+                runtime_root=runtime_root.resolve(),
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                automation_id=args.automation_id,
+                manual_reason=getattr(args, "manual_interval_bypass_reason", None),
+            )
         execution_preparer = native_execution_preparer
         preparation_error = "native task preparation did not make the same Todo ready"
         if (
@@ -113,6 +126,7 @@ def handle_turn_command(
                     cwd=project_cwd,
                     turn_instance_id=args.turn_instance_id,
                     goal_ref=goal_ref,
+                    admit_start=managed_cadence.admit if managed_cadence else None,
                 )
 
         resume_instance = getattr(args, "resume_turn_instance_id", None)
@@ -190,7 +204,6 @@ def handle_turn_command(
                 "--operation-source-route-json requires --codex-operation-tools for codex-cli or --dsh-operation-module for dsh"
             )
         decision: dict[str, Any] | None = None
-        preclaim_cadence_wait: dict[str, Any] | None = None
         # A resumed Turn already chose its transaction. New work and context
         # belong to the next Turn, not to recovery of this journal.
         if args.turn_command == "run-once" and args.resume_turn_key:
@@ -299,23 +312,13 @@ def handle_turn_command(
             decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
             if execution_preparer is not None and args.turn_command == "run-once" and args.execute:
-                from .turn_cadence import managed_cadence_wait_projection
                 from .turn_host_request import validate_turn_host_inputs
 
-                # Transport and interval refusals land before the Turn receipt
-                # reservation and the ordinary claim can write a lease.
+                # Transport refusals land before the Turn receipt reservation.
+                # The owner interval is admitted atomically inside the same
+                # preparation boundary, ahead of every receipt and claim write.
                 validate_turn_host_inputs(args)
-                preclaim_cadence_wait = managed_cadence_wait_projection(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    automation_id=getattr(args, "automation_id", None),
-                )
-                prepared_todo = (
-                    None
-                    if preclaim_cadence_wait is not None
-                    else execution_preparer(decision)
-                )
+                prepared_todo = execution_preparer(decision)
                 if prepared_todo is not None:
                     # Host preparation changes canonical lease state. Plan and
                     # settle against a fresh read of the same Turn and Todo.
@@ -448,7 +451,7 @@ def handle_turn_command(
                 native_session_binding_resolver=native_session_binding_resolver,
                 native_completion_lease_resolver=native_completion_lease_resolver,
                 native_task_validator=native_task_validator,
-                preclaim_cadence_wait=preclaim_cadence_wait,
+                managed_cadence=managed_cadence,
             )
         else:
             raise ValueError("turn requires the `plan` or `run-once` subcommand")

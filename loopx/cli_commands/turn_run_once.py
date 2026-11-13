@@ -92,7 +92,7 @@ def execute_turn_run_once(
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
-    preclaim_cadence_wait: Mapping[str, Any] | None = None,
+    managed_cadence: Any | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
@@ -109,10 +109,11 @@ def execute_turn_run_once(
             native_task_validator=native_task_validator,
             validator_builder=build_loopx_turn_command_validator,
         )
-        if preclaim_cadence_wait is not None:
-            # The owner's interval read refused the start before any Turn write.
-            # Return its wait through the normal execution projection without
-            # reserving an interval, claiming a Todo, or journaling a Turn.
+        preadmitted = managed_cadence.accepted() if managed_cadence is not None else None
+        if preadmitted is not None and preadmitted.get("admitted") is not True:
+            # The owner refused the interval before this Turn wrote its receipt
+            # or claimed a Todo. Report that same admission without reserving,
+            # claiming or journaling anything.
             from ..control_plane.turn_driver.execution_readback import execution_payload
 
             planned_host = payload.get("host")
@@ -120,11 +121,8 @@ def execute_turn_run_once(
                 "status": "interval_wait",
                 "host": planned_host if isinstance(planned_host, Mapping) else {},
                 "completed_phases": [],
-                "reason": str(
-                    preclaim_cadence_wait.get("reason")
-                    or "automatic start not admitted"
-                ),
-                "admission": dict(preclaim_cadence_wait),
+                "reason": str(preadmitted.get("reason") or "automatic start not admitted"),
+                "admission": preadmitted,
             }
             return execution_payload(
                 payload,
@@ -902,14 +900,19 @@ def execute_turn_run_once(
                 goal_ref=goal_ref,
             )
 
-        managed_cadence = managed_cadence_start(
-            runtime_root=runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            automation_id=args.automation_id,
-            manual_reason=args.manual_interval_bypass_reason,
-            on_admitted=on_managed_start_admitted,
-        )
+        if managed_cadence is None:
+            managed_cadence = managed_cadence_start(
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                automation_id=args.automation_id,
+                manual_reason=args.manual_interval_bypass_reason,
+                on_admitted=on_managed_start_admitted,
+            )
+        else:
+            # A start admitted ahead of the claim keeps this Turn's receipt
+            # writer attached to the same owner reservation.
+            managed_cadence.set_on_admitted(on_managed_start_admitted)
 
         execution_started = bool(args.execute)
         result = run_loopx_turn_once(
@@ -942,7 +945,12 @@ def execute_turn_run_once(
             post_settlement=(configured_post_settlement(
                 payload, registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
             ) if args.execute else None),
-            admit_start=managed_cadence.admit if args.execute else None,
+            admit_start=(
+                managed_cadence.admit
+                if args.execute and preadmitted is None
+                else None
+            ),
+            admission=preadmitted if args.execute else None,
             confirm_start=managed_cadence.confirm if args.execute else None,
             goal_admission=goal_admission,
         )

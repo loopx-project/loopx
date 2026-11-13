@@ -1468,6 +1468,7 @@ def test_run_once_interval_wait_does_not_claim_the_next_todo(
             "--execute",
         ])
     waiting = json.loads(output.getvalue())
+    print("DEBUGWAIT", json.dumps(waiting, ensure_ascii=False)[:2000])
     assert waiting_code == 1, waiting
     assert waiting["status"] == "interval_wait", waiting
     assert waiting["effects"]["host_invoked"] is False, waiting
@@ -1487,6 +1488,92 @@ def test_run_once_interval_wait_does_not_claim_the_next_todo(
     assert lease_code == 0, lease
     assert lease["active"] is False, lease
     assert lease["lease"] is None, lease
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_run_once_manual_interval_bypass_starts_the_next_todo(
+    tmp_path, monkeypatch, provider,
+):
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(
+        tmp_path,
+        provider=provider,
+        handoff_mode="hard_lease",
+        extra_agent_todo_lines=(
+            "- [ ] [P1] Complete the manual bypass fixture.",
+            "  <!-- loopx:todo todo_id=todo_fixture0002 status=open "
+            "task_class=advancement_task action_kind=fixture claimed_by=codex-fixture "
+            "priority=P1 -->",
+        ),
+    )
+    binary, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(Path(__file__).resolve().parents[1]))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        read_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "automation-cadence", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture",
+        ])
+    policy = read_cli_policy_payload(output.getvalue(), returncode=read_code)
+    assert read_code == 0, policy
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        configure_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "automation-cadence", "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture", "--min-interval-minutes", "3",
+            "--expected-revision", str(policy["configuration_revision"]),
+            "--owner-reference", "manual bypass fixture", "--execute",
+        ])
+    configured = read_cli_policy_payload(output.getvalue(), returncode=configure_code)
+    assert configure_code == 0 and configured["written"] is True, configured
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        first_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--turn-instance-id", "manual-first", "--host", "codex-cli",
+            "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    first = json.loads(output.getvalue())
+    assert first_code == 0 and first["status"] == "committed", first
+    assert len([json.loads(line) for line in log.read_text().splitlines()]) == 1
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        manual_code = cli_main([
+            "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--todo-id", "todo_fixture0002", "--turn-instance-id", "manual-second",
+            "--manual-interval-bypass-reason", "explicit operator confirmation",
+            "--host", "codex-cli", "--project", str(project), "--codex-bin", str(binary),
+            "--codex-model", "fixture-model", "--codex-reasoning-effort", "high",
+            "--codex-sandbox", "read-only", "--no-global-sync",
+            "--validation-command-json",
+            json.dumps([sys.executable, "-c", "import sys; sys.stdin.read()"]),
+            "--execute",
+        ])
+    manual = json.loads(output.getvalue())
+    assert manual_code == 0, manual
+    assert manual["status"] == "committed", manual
+    assert manual["effects"]["host_invoked"] is True, manual
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2, calls
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -2970,11 +3057,14 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
 
     def fresh_cadence(**kwargs):
         cadence = make_cadence(**kwargs)
+        latest: dict[str, Any] = {}
 
         def admit(identity):
             attempts.append(dict(identity))
             admission = cadence.admit(identity)
             admissions.append(dict(admission))
+            latest.clear()
+            latest.update(admission)
             return admission
 
         def confirm():
@@ -2987,7 +3077,15 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
             if not interrupted and fault == "confirm_after":
                 interrupt()
 
-        return turn_cadence.ManagedCadenceStart(admit, confirm)
+        def accepted():
+            return dict(latest) if latest else None
+
+        def set_on_admitted(callback):
+            cadence.set_on_admitted(callback)
+
+        return turn_cadence.ManagedCadenceStart(
+            admit, confirm, accepted, set_on_admitted,
+        )
 
     monkeypatch.setattr(executor, "_write_journal", checkpoint)
     monkeypatch.setattr(turn_run_once_command, "managed_cadence_start", fresh_cadence)

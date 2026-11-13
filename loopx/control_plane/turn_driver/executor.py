@@ -1539,6 +1539,7 @@ def run_loopx_turn_once(
     post_settlement: PostSettlement | None = None,
     settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    admission: Mapping[str, Any] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any]:
@@ -1701,9 +1702,11 @@ def run_loopx_turn_once(
                 build_loopx_turn_host_request(capture.plan) if capture is not None else request,
                 operation="host_dispatch_context",
             )
-        admission = None
-        if needs_host and admit_start is not None:
-            admission = admit_start(
+        # A caller that already admitted the start ahead of the ordinary claim
+        # hands that exact reservation down, so no second interval is reserved.
+        admitted = dict(admission) if needs_host and admission is not None else None
+        if needs_host and admitted is None and admit_start is not None:
+            admitted = admit_start(
                 {
                     "turn_key": turn_key,
                     "attempt": int(journal.get("host_attempt_count") or 0) + 1
@@ -1711,6 +1714,8 @@ def run_loopx_turn_once(
                     else 1,
                 }
             )
+        admission = admitted
+        if needs_host and admission is not None:
             if admission.get("admitted") is not True:
                 waiting = {
                     "status": "interval_wait",

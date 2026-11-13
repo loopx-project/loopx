@@ -190,6 +190,7 @@ def builtin_execution_preparation_claim(
     cwd: Path,
     turn_instance_id: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     runner: CommandRunner | None = None,
     timeout: float = 30,
 ) -> str | None:
@@ -264,6 +265,19 @@ def builtin_execution_preparation_claim(
             exact_turn_instance_id = normalize_turn_instance_id(
                 receipt_turn_instance_id
             )
+    if admit_start is not None:
+        # Reserve the owner interval before this Turn writes its receipt or
+        # claim. A refusal therefore leaves no lease, receipt or journal
+        # behind; an accepted reservation is carried to the driver unchanged.
+        admission = admit_start(
+            {
+                "turn_key": exact_turn_instance_id
+                or f"{goal_id}:{caller_agent_id}:{todo_id}",
+                "attempt": 1,
+            }
+        )
+        if admission.get("admitted") is not True:
+            return None
     if exact_turn_instance_id is not None:
         # The receipt lookup and the ordinary claim are separate operations.
         # Reserve the exact Turn binding before the claim can create a lease for
