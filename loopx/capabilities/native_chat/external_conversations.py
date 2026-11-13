@@ -288,19 +288,22 @@ class ChatExternalConversations:
     def quota_backlog_observer(
         self, *, source_controls: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
-        """Reuse Session metadata and controls within one observation, with fresh Turns."""
+        """Read Session state after each batch's Turns and share source controls across batches."""
         read_controls = cache(source_controls or self.source_controls)
-
-        @cache
-        def session_view(session_id: str) -> dict[str, Any] | None:
-            session = self.controller.store.load_session(session_id)
-            return ({key: session[key] for key in ("session_id", "status") if key in session}
-                    if session is not None else None)
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
             if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
                 raise ValueError("select at most 64 pending requests per observation")
-            params = [self._quota_pending_inputs(row, session_view(row["session_id"])) for row in rows]
+            params = [self._quota_pending_inputs(row) for row in rows]
+            load_session = self.controller.store.load_session
+            sessions = {}
+            for session_id in dict.fromkeys(row["session_id"] for row in rows):
+                # A transient read failure must not mask a closed Session.
+                session = load_session(session_id) or load_session(session_id)
+                sessions[session_id] = ({key: session[key] for key in ("session_id", "status") if key in session}
+                                        if session is not None else None)
+            for row, values in zip(rows, params, strict=True):
+                values["current_session"] = sessions[row["session_id"]]
             flags = self._quota_pending_flags(params)
             stopped = []
             for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
@@ -354,11 +357,10 @@ class ChatExternalConversations:
         flush()
         return flags
 
-    def _quota_pending_inputs(self, row: dict[str, Any], session: dict[str, Any] | None) -> dict[str, Any]:
+    def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
         turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
         return {
             "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": session,
             "pending_observation": {
                 "turn": ({key: turn[key] for key in ("session_id", "turn_id", "client_turn_id", "status",
                     "error_code", "response") if key in turn} if turn is not None else None),
