@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Mapping
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 from ...control_plane.capability_hooks import TurnContextHookRegistration
 from .contract import ANTI_ENTROPY_CAPABILITY_ID, RetirementBasis
-from .feedback import build_anti_entropy_turn_context
 
 ANTI_ENTROPY_CONTEXT_MAX_RESULT_BYTES = 64 * 1024
 _BASIS_KEYS = ("retirement_basis", "anti_entropy_basis")
@@ -24,6 +25,18 @@ _ENABLE_CAPABILITY_IDS = frozenset(
     {"anti-entropy-governance", "anti_entropy_governance", "anti_entropy"}
 )
 _UNSET = object()
+
+
+def __getattr__(name: str) -> Any:
+    if name != "build_anti_entropy_turn_context":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(".feedback", __package__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | {"build_anti_entropy_turn_context"})
 
 
 def _embedded_json_objects(text: str):
@@ -484,7 +497,7 @@ def anti_entropy_context_result(
     )
     is_recovery = bool(recovery_evidence)
 
-    context = build_anti_entropy_turn_context(
+    context = getattr(sys.modules[__name__], "build_anti_entropy_turn_context")(
         basis=basis,
         goal_id=goal_id,
         workspace=workspace,
