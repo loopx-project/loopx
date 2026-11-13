@@ -946,7 +946,7 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
         "    authority = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1].lstrip())[0]\n"
         "    if marker == 'Turn request:':\n"
         "        detail = authority.get('detail_ref') or {}\n"
-        "        replan_packet = detail.get('replan_action_packet') or authority['work_contract'].get('replan_action_packet')\n"
+        "        replan_packet = detail.get('replan_action_packet') or authority['task_context'].get('replan_action_packet')\n"
         "    else:\n"
         "        replan_packet = authority.get('replan_action_packet')\n"
         "    if replan_packet:\n"

@@ -36,8 +36,9 @@ from pathlib import Path
 args=sys.argv[1:]
 prompt=sys.stdin.read()
 request=json.loads(prompt.rsplit("Turn request:\n",1)[1])
-selected=request["turn_envelope"]["action"]["selected_todo"]
-text=request["turn_envelope"]["action"]["recommended_action"]
+assert request["schema_version"]=="loopx_turn_model_context_v0",request["schema_version"]
+selected=request["task_context"]["selected_todo"]
+text=request["task_context"]["recommended_action"]
 phase=re.search(r"Phase (S[12])",text).group(1)
 inputs=json.loads(Path("retained-inputs.json").read_text())
 history=Path("native-history.jsonl")
@@ -64,6 +65,8 @@ Path(args[args.index("--output-last-message")+1]).write_text(json.dumps({
     "classification":"phase_probe_completed","recommended_action":"Read the current Goal after accepting this probe.",
     "next_action":"Use current independently authorized work.","delivery_batch_scale":"implementation",
     "delivery_outcome":"outcome_progress","vision_unchanged_reason":"The finite authorized probe remains the accepted scope.",
+    "work_evidence":["artifact:phase-probe-"+phase],
+    "validation_evidence":["check:phase-probe-independent-value"],
     "summary":"The current phase probe executed on the retained inputs."}))
 '''
 
@@ -233,11 +236,13 @@ def test_current_phase_probe_executes_once_after_unique_extension(controllers, t
     assert stopped_guard["should_run"] is False and stopped_guard["pause_cause"] == "goal_stopped"
     if mode == "governed":
         stopped_turn = _in_process(_argv(workspace, runtime, registry, native, "S2"), code=1)
-        assert stopped_turn["effects"]["host_invoked"] is False
+        assert stopped_turn["ok"] is False
+        assert stopped_turn["effects"]["host_invoked"] is not True
     else:
         expired = benchmark_worker.run_once(environment)
         assert expired["budget_exhausted"] is True and expired["host_invoked"] is False
     assert len((workspace / "model-counts.jsonl").read_text().splitlines()) == 1
+    assert not (workspace / "probe-S2.json").exists()
     assert _spends(index) == original_spends
 
     phase_request = {"event_id": "user-continue-phase-s2", "phase": "S2", "extension_seconds": 600,

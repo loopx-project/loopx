@@ -15,6 +15,7 @@ from loopx.control_plane.turn_driver.driver import (
 )
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_turn_host_decision_capture import (
     complete_host_request as complete_host_request,
 )
@@ -349,7 +350,10 @@ def test_original_source_capture_keeps_its_read_reference_without_a_fabricated_j
     assert "turn_key" not in capture
     assert capture["turn_instance_id"] == contract.get("heartbeat_receipt", {}).get("turn_instance_id")
     assert capture["path"] == str(path) and wire["work_contract"] == contract
-    assert extract_turn_authority(wire)["_model_input"] == wire
+    model_input = extract_turn_authority(wire)["_model_input"]
+    assert_host_task_context(model_input, contract)
+    assert model_input["detail_ref"] == wire["detail_ref"]
+    assert model_input["turn_key"] == wire["turn_key"]
     for field, value in (("goal_id", "other-goal"), ("agent_id", "other-agent"),
                          ("turn_instance_id", "other-turn"), ("path", "bad\0path"),
                          ("source_hash_ref", "$.unverified")):

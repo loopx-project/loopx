@@ -2997,3 +2997,41 @@ inline 测试命令触发既有上限，夹具随后采用普通 script path。�
 不关闭完整 V1–V5/V10 或 R1。完整 context retention、最小闭包、渐进产品控制、
 可比完整成本、M3/Standard/workspace 交付与原 Goal 回归仍开放。原九项要求和
 冻结失败全部保留；没有升级已安装 Host 或模型服务。
+
+### 2026-11-13 — 任务呈现省去外层执行器数据
+
+当前内置模型 renderer 从 adapter 请求内已校验的完整 v1 来源派生
+`loopx_turn_model_context_v0`。任务要求、范围、必需读取、backlog 和未知新增信息
+保留；来源绑定、effect projection 与 scheduler/automation 执行数据留在外层
+执行器。指向该 owner 的既有 replan 编写与 Explore 指导引用在隐藏 owner 前展开，
+保留来源数字和文本。模型视图不能代替签名来源。通用 adapter stdin、私有 journal、
+原始 reader 来源关系和仅携带 envelope 的历史 v0 renderer 保持既有合同。
+
+同一捕获库存请求上，交替执行七组新进程配对 probe，每版另有 49 次 warm render。
+模型 JSON 为 44,841 对 34,986 字节，Codex prompt 为 48,724 对 38,859 字节。
+Warm median/p95 为 9.31/11.27 ms 对 9.02/10.26 ms；较早候选批次为
+9.18/11.46 ms 对 10.09/12.44 ms。最终新进程 median/p95 为 25.03/435.52 ms
+对 23.81/1,405.85 ms；保留候选较高尾部及批次波动，不宣称延迟改善。OS/file cache
+为 warm。Model tokens、Node startup/IPC 分解、service/tool 成本和人工注意力仍
+不可得；这些 probe 不构成完整成本或长程收益结论。
+
+当前原生模型通过 stdio、Python 3.11 standalone core 和 SQLite，在既有隔离
+库存 Goal/Agent 内完成新的流水审计。独立核验全部 14 行、六条排除记录、数量
+22/10/5 与价值 185.25。故意更改报告后会拒绝且不覆盖审计产物；11 份既有输入、
+生成器及报告保持 hash。前一阶段已关闭，任务准入首先拒绝；正常的证据关联 replan
+建立审计阶段后才进入新 work Turn，额外 replan 结算保留为成本。完成后的 replay
+不调用 Host、不 writeback、不 spend。源码与安装态 Host 检查使用合成 provider，
+与该原生模型任务分开；最初兼容性失败和修复前悬空引用反例保留为负面证据。
+
+更广的 Ark adapter 回归最初有八项 SDK 模型输入检查失败、817 项通过。旧检查仍
+要求模型呈现含有 `work_contract`，其后的原 receipt 回放断言没有执行。配套检查
+复用任务／来源 parity oracle，要求操作方原输入及其 receipt binding 不变，并在
+任何 provider 调用前拒绝把模型视图版本用作来源。矩阵保留携带完整来源的历史
+v0/v1 输入及 running/completed 回放。可选 CI 命令在首个测试失败后退出，让
+traceback 在既有十分钟上限前显现；通过路径仍选择完整用例。基线与候选同在该
+上限取消，不能证明失败无关或语义成功。SDK HTTP 夹具资格化 transport 与恢复，
+不构成真实云端模型采用证据。
+
+本轮只资格化 V4/R1 的任务呈现切片。完整模型上下文保留、默认最小闭包、渐进
+产品控制、可比完整成本、V1–V5/V10、R1/M3、Standard/workspace 发布与原 Goal
+回归仍开放。原九项要求和冻结失败全部保留；没有升级已安装 Host 或模型服务。

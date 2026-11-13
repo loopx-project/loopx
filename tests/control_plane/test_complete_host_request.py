@@ -13,6 +13,7 @@ from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decisi
 from loopx.control_plane.turn_driver.host_candidate import (
     complete_host_input, extract_turn_authority, extract_turn_work_identity,
 )
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_turn_host_decision_capture import (
     complete_host_request as complete_host_request,
 )
@@ -82,7 +83,9 @@ def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_ho
     assert extract_turn_work_identity(wire) == extract_turn_work_identity(legacy)
     assert extract_turn_authority(wire)["primary_action"] == extract_turn_authority(legacy)["primary_action"]
     rendered = json.loads(_prompt(wire).split("Turn request:\n", 1)[1])
-    assert rendered == wire
+    assert_host_task_context(rendered, wire["work_contract"])
+    assert rendered["detail_ref"] == wire["detail_ref"]
+    assert rendered["turn_key"] == wire["turn_key"]
     assert internal == before
 
 
@@ -133,7 +136,9 @@ def test_open_goal_acceptance_judgment_keeps_its_read_audit(
         assert "vision_continuation_audit" not in instructions
     assert "Do not write LoopX state" in instructions
     assert "owns those effects" in instructions
-    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+    model_input = json.JSONDecoder().raw_decode(encoded)[0]
+    assert_host_task_context(model_input, wire["work_contract"])
+    assert model_input["detail_ref"] == wire["detail_ref"]
     assert request == before
 
 
@@ -156,7 +161,9 @@ def test_complete_host_keeps_notification_and_execution_boundaries(
     assert "alternatives and capability intents do not override admission or scope" in instructions
     assert "Do not write LoopX state" in instructions
     assert "owns those effects" in instructions
-    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+    model_input = json.JSONDecoder().raw_decode(encoded)[0]
+    assert_host_task_context(model_input, wire["work_contract"])
+    assert model_input["detail_ref"] == wire["detail_ref"]
 
 
 def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):

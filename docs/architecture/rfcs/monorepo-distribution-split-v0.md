@@ -3844,3 +3844,56 @@ Complete context retention, minimal closure, progressive product control,
 comparable complete costs, M3/Standard/workspace delivery and the original-Goal
 regression remain open. All nine original requirements and frozen failures
 remain intact; no installed host or model service was upgraded.
+
+### 2026-11-13 — Task presentation omits outer executor data
+
+Current built-in model renderers derive `loopx_turn_model_context_v0` from the
+validated complete v1 source in an adapter request. Task requirements, scope, required reads,
+backlog and unknown additions survive; source binding, effect projection and
+scheduler/automation execution data remain with the outer executor. Existing
+replan authoring and Explore guidance references resolve before their owner is
+omitted, preserving source numbers and text. The model view cannot substitute
+for a signed source. Generic adapter stdin, private journals, original-reader
+provenance and historical envelope-only v0 rendering keep their existing contracts.
+
+Seven alternating paired fresh-process probes and 49 warm renders per version
+on the same captured inventory request measure model JSON at 44,841 versus
+34,986 bytes and Codex prompt at 48,724 versus 38,859 bytes. Warm median/p95
+rendering is 9.31/11.27 ms versus 9.02/10.26 ms. An earlier candidate batch
+measured 9.18/11.46 ms versus 10.09/12.44 ms. Final fresh-process median/p95 is
+25.03/435.52 ms versus 23.81/1,405.85 ms; retain the higher candidate tail and
+batch variability without claiming latency improvement. These use warm OS/file
+caches. Model tokens, Node startup/IPC breakdown, service/tool costs and human
+attention remain unavailable; these probes do not establish complete-cost or
+long-horizon benefit.
+
+The current native model completed a new movement audit in an existing isolated
+inventory Goal/Agent through stdio and the Python 3.11 standalone core on SQLite.
+All 14 rows, six excluded rows, quantities 22/10/5 and value 185.25 reconcile
+independently. A deliberately altered report is refused without overwriting
+audit outputs; 11 retained input/generator/report files keep their hashes. The
+closed preceding stage first refused task admission; normal evidence-linked
+replanning established the audit stage before a fresh work Turn. That extra
+replan settlement remains a cost. Completed replay invokes no Host, writeback
+or spend. Source and installed Host checks use synthetic providers separately
+from this native-model task; the initial compatibility failures and the
+pre-fix dangling-reference counterexample remain negative evidence.
+
+Broader Ark adapter regression initially failed eight SDK model-input checks
+while 817 other cases passed. Those checks still expected `work_contract` in
+the model presentation, so their subsequent original-receipt replay assertions
+were not reached. The counterpart uses the shared task/source parity oracle,
+requires unchanged operator input and its original receipt binding, and rejects
+the model-view version before any provider call. Complete-source historical
+v0/v1 input and running/completed replay remain in the matrix. The optional CI
+command exits on the first test failure so its traceback precedes the existing
+ten-minute deadline; passing runs retain the complete case selection. Equal
+baseline/head cancellations at that deadline did not establish unrelatedness
+or semantic success. SDK HTTP fixtures qualify transport and recovery rather
+than live cloud-model adoption.
+
+This qualifies a task-presentation slice of V4/R1. Full model-context retention,
+minimal default closure, progressive product control, comparable complete costs,
+V1–V5/V10, R1/M3, Standard/workspace publication and original-Goal regression
+remain open. All nine original requirements and frozen failures remain intact;
+no installed host or model service was upgraded.

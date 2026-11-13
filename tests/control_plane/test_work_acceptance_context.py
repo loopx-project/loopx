@@ -20,6 +20,7 @@ from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+from tests.control_plane.host_process_fixture import assert_host_task_context
 
 
 def _recording_host(tmp_path):
@@ -279,9 +280,9 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
     authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["schema_version"] == "loopx_turn_host_request_v1"
-    assert authority["work_contract"] == first
-    assert authority["work_contract"]["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
+    assert request["work_contract"] == first
+    task_context = assert_host_task_context(authority, first)
+    assert task_context["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
 
     # Finish the original synthetic work before attempting another managed
     # Turn. An unsettled receipt is its own legitimate recovery boundary.

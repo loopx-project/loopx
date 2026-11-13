@@ -21,6 +21,7 @@ from loopx.control_plane.turn_driver.codex_cli import _prompt
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
+from tests.control_plane.host_process_fixture import assert_host_task_context
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -306,8 +307,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert read["command"] in _prompt(request)
     assert "work_context" in _prompt(request)
     model_input = json.loads(_prompt(request).split("Turn request:\n", 1)[1])
-    assert model_input["work_contract"] == plan["work_contract"]
-    assert "turn_envelope" not in model_input and "turn_authority" not in model_input
+    assert request["work_contract"] == plan["work_contract"]
+    assert_host_task_context(model_input, plan["work_contract"])
     assert expected in _prompt(request)
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"

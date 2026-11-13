@@ -22,6 +22,7 @@ from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_reque
 from loopx.control_plane.turn_driver.host_candidate import _canonical_hash
 from loopx.control_plane.turn_driver import codex_context
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.test_agent_context import POLICY
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, SELECTED_REPLAN_TODO_ID,
@@ -149,15 +150,13 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         assert prompt_path.read_text() == prompt
     else:
         actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-        # The current producer's own immutable capture is the transport oracle;
-        # the original long task and optional context remain independent inputs.
+        # Verify the immutable capture and the model's long task and optional
+        # context independently.
         detail = actual["detail_ref"]["captured_decision"]
-        assert json.loads(Path(detail["path"]).read_text()) == actual["work_contract"]
-        assert actual["work_contract"] == plan["work_contract"]
-        assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(actual["work_contract"])
-        assert actual["work_contract"] == source
-        assert "turn_envelope" not in actual and "turn_authority" not in actual
-        delivered_context = actual["work_contract"]["interaction_contract"].get("agent_context")
+        assert json.loads(Path(detail["path"]).read_text()) == plan["work_contract"] == source
+        task_context = assert_host_task_context(actual, source)
+        assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(task_context)
+        delivered_context = task_context["interaction_contract"].get("agent_context")
         assert delivered_context == context
         if context:
             assert "detail_ref" not in delivered_context
@@ -242,7 +241,11 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    assert actual["work_contract"] == source == plan["work_contract"]
+    assert request["work_contract"] == source == plan["work_contract"]
+    task_context = actual["task_context"]
+    assert actual["source_schema_version"] == "loopx_turn_host_request_v1"
+    assert task_context["replan_action_packet"]["obligation_id"] == source["replan_action_packet"]["obligation_id"]
+    assert "cli_channel" not in task_context["interaction_contract"]
     # This Goal body is a pending original read, exercised below; a complete
     # contract does not require every retained source to be inline.
     assert "turn_envelope" not in actual and "turn_authority" not in actual

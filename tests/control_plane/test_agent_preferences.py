@@ -230,7 +230,7 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     assert authority["interaction_contract"]["agent_channel"]["required_reads"] == []
     prompt = render_prompt(authority)
     rendered = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
-    rendered_context = rendered["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+    rendered_context = rendered["task_context"]["interaction_contract"]["agent_channel"]["work_context"]
     assert rendered_context["unavailable_context"] == unavailable
     assert "discard affected cached context" in prompt and "Independent work retains" in prompt
     assert "Use a reviewer." not in prompt and "{broken" not in prompt

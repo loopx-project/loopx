@@ -10,13 +10,13 @@ from pathlib import Path
 import pytest
 
 from loopx.capabilities.issue_fix import pr_lifecycle
-from loopx.cli_commands import turn
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.todos import add_goal_todo, list_goal_todos
 from tests.capabilities.test_pr_wait_observation import _invoke_turn, _observation
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 
@@ -79,14 +79,6 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
             assert code == 0, observation
             assert observation["checks"]["pr_dependencies"]["external_read_count"] == (2 if number == 0 else 0)
 
-    captured = []
-    project_envelope = turn.build_turn_envelope
-
-    def capture(decision, **kwargs):
-        captured.append(copy.deepcopy(decision))
-        return project_envelope(decision, **kwargs)
-
-    monkeypatch.setattr(turn, "build_turn_envelope", capture)
     runner = tmp_path / "consumer.py"
     runner.write_text(
         "import json\nfrom pathlib import Path\n"
@@ -95,7 +87,7 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
         "    prompt = kwargs['prompt']\n"
         "    (root / 'consumer-input.txt').write_text(prompt)\n"
         "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])[0]\n"
-        "    authority = request['work_contract']\n"
+        "    authority = request['task_context']\n"
         "    selected = authority['selected_todo']\n"
         f"    assert selected['todo_id'] == {todo_id!r}\n"
         "    assert selected['resume_when'] == 'pr_merged:owner/repo#42'\n"
@@ -127,8 +119,11 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     code, result = _invoke_turn(argv)
     assert code == 0 and result["status"] == "committed", json.dumps(result, indent=2)
     assert _observation(result)["external_read_count"] == (2 if observer_entry == "native" else 0)
-    assert len(captured) == 1
-    full = captured[0]
+    [journal_path] = (runtime / "goals" / "loopx-turn-fixture" / "turns").glob("*.json")
+    journal = json.loads(journal_path.read_text())
+    full = journal["plan"]["work_contract"]
+    capture = journal["plan"]["detail_ref"]["captured_decision"]
+    assert json.loads(Path(capture["path"]).read_text()) == full
     envelope = build_turn_envelope(full)
     expected = list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture", todo_id=todo_id)["todo"]
     assert expected["resume_ready"] is True
@@ -139,7 +134,8 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     assert expected["resume_condition"]["matched_event_at"] == "2026-10-01T00:00:00Z"
     assert envelope["action_signature"]["matches"] is True
     prompt = (project / "consumer-input.txt").read_text()
-    consumed = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]["work_contract"]
+    model_input = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
+    consumed = assert_host_task_context(model_input, full)
     assert consumed["selected_todo"]["resume_condition"] == expected["resume_condition"]
     assert "Require the terminal independent artifact marker." in prompt
 

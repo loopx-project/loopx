@@ -147,6 +147,33 @@ admission, but outstanding v1 plans must retain a compatible reader until their
 pending effects and supported recovery window are reconciled. An older binary
 alone cannot resume a v1 journal; do not strip its version or recreate its input.
 
+Built-in model renderers derive `loopx_turn_model_context_v0` after validating
+the complete source in an adapter request. `task_context` preserves task facts, backlog,
+required reads, scope, execution profile and unknown additions. Source binding,
+the effect projection, scheduler/automation execution data and
+`interaction_contract.cli_channel` remain with the outer executor. The model
+view resolves existing replan authoring and Explore guidance references before
+hiding their outer owner, preserving the original scalar values and text.
+The model receives the original `source_decision_hash`, reader references and
+`source_schema_version`; that hash commits the original source, not the task
+view. Inline task context does not require a filesystem read of a private
+capture that a sandbox cannot access. Missing required evidence still holds
+dependent work. This presentation is not an adapter request or a permission,
+settlement or completion authority. Generic adapter stdin and private journal
+recovery retain the complete v1 source; historical envelope-only v0 inputs keep
+their renderer.
+
+内置模型 renderer 在校验 adapter 请求中的完整来源后派生
+`loopx_turn_model_context_v0`。`task_context` 保留任务事实、backlog、必需读取、
+范围、执行要求和未知新增信息。来源绑定、effect projection、scheduler/automation
+执行数据及 `interaction_contract.cli_channel` 留在外层执行器。
+来源中指向外层 owner 的 replan 编写和 Explore 指导引用在隐藏该 owner 前展开，
+保留原始标量和文本。模型仍收到原始
+`source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
+来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
+缺少必需证据仍暂停依赖该证据的工作。此呈现不是 adapter 请求，也不授予权限、结算或
+完成权。通用 adapter stdin 和私有 journal 恢复仍保留完整 v1 来源；仅携带 envelope 的历史 v0 输入保留原 renderer。
+
 Use `loopx turn plan --include-transaction-detail --format markdown` to inspect
 `should_run`, the effective action, reason and selected work summary. Its **Full
 plan** JSON block retains the complete source contract, session and transaction

@@ -1856,6 +1856,33 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
   return {decision, projection};
 }
 
+/** Task presentation is derived only after full-source validation. Keep task
+ * facts (including unknown additions) and original scalar carriers intact;
+ * scheduler/effect instructions remain with the outer executor. This view is
+ * not a replacement source or a permission/settlement contract. */
+function hostModelContextChanges(decision: JsonObject): JsonObject {
+  const context = {...decision};
+  for (const field of ["schema_version", "contract_binding", "projection_envelope",
+    "scheduler_hint", "automation_cadence_readback", "automation_liveness",
+    "scheduler_execution_context"]) {
+    delete context[field];
+  }
+  const interaction = {...object(decision.interaction_contract)};
+  const agent = object(interaction.agent_channel);
+  // The complete source may share task authoring/evidence with its effect
+  // owner. Resolve those existing references before omitting that owner.
+  if (Object.hasOwn(agent, "work_context")) interaction.agent_channel = {...agent,
+    work_context: resolveExploreGuidance(decision, object(agent.work_context))};
+  const packet = object(decision.replan_action_packet);
+  if (Object.hasOwn(object(packet.writeback_contract), "vision_authoring_ref"))
+    context.replan_action_packet = {...packet, writeback_contract: replanAuthoringContract(decision)};
+  delete interaction.cli_channel;
+  context.interaction_contract = interaction;
+  // Preserve backlog and all unknown facts: task requirements and references
+  // can depend on them even when a Todo is already selected.
+  return contextProjectionChanges(decision, context);
+}
+
 /** A current private plan stores its one admitted source and transport header.
  * The old plan codec is read only for recorded journals or explicit old input. */
 function checkedTurnPlanSource(plan: JsonObject, numberTokens?: unknown): {
@@ -2638,6 +2665,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
         typeof request.include_session_lineage !== "boolean") {
       throw new EffectRuntimeRequestError("Host session-lineage projection option must be a boolean");
     }
+    if (Object.hasOwn(request, "include_model_context") &&
+        typeof request.include_model_context !== "boolean") {
+      throw new EffectRuntimeRequestError("Host model-context projection option must be a boolean");
+    }
     const {decision, projection} = completeHostSource(request);
     if (operation === "host_dispatch_context" && Object.keys(object(projection.replan_action_packet)).length === 0) {
       assertGoalContextDelivered(object(object(decision.interaction_contract).agent_channel));
@@ -2648,6 +2679,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       replan_admitted: Object.keys(object(projection.replan_action_packet)).length > 0,
       checkpointed_write_approval: Object.hasOwn(object(projection.boundary), "checkpointed_boundary_authority"),
       execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
+      ...(request.include_model_context === true
+        ? {model_context_schema_version: "loopx_turn_model_context_v0",
+          model_context_changes: hostModelContextChanges(decision)} : {}),
       ...(operation === "host_dispatch_context" ? {work_identity: completeWorkIdentity(decision),
         ...(request.include_session_lineage === true ? {session_lineage: completeSessionLineage(decision)} : {})} : {})};
   }

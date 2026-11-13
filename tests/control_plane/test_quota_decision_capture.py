@@ -10,6 +10,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import capture_decision, prepare_decision_capture
 from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
+from tests.control_plane.host_process_fixture import assert_host_task_context
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture, read_fixture_todos,
 )
@@ -263,8 +264,8 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
         assert envelope['boundary'][field] == full['goal_boundary'][field], field
     authority = extract_turn_authority({'work_contract': full, 'turn_envelope': envelope})
     assert authority['goal_boundary'] == full['goal_boundary']
-    # Historical requests still decode their scope aliases, while new requests
-    # transport the original complete contract without deriving a second view.
+    # Historical requests still decode scope aliases. The current model view
+    # preserves the same authority facts from the checked original source.
     historical = extract_turn_authority({'turn_envelope': envelope})
     assert historical['write_scope'] == scopes
     assert historical['boundary']['guards'] == guards
@@ -272,7 +273,9 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     assert 'write_scope' not in historical['boundary']
     prompt = render_prompt(authority)
     transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\n', 1)[1])
-    assert transported == {'schema_version': 'loopx_turn_host_request_v1', 'work_contract': full}
+    context = assert_host_task_context(transported, full)
+    for field in ('write_scope', 'guards', 'requires_parent_approval'):
+        assert context['goal_boundary'][field] == full['goal_boundary'][field], field
     altered = json.loads(json.dumps(envelope))
     altered['boundary']['guards'][-1] = 'Continue without the final restriction.'
     with pytest.raises(ValueError, match='complete Turn contract rejected'):
