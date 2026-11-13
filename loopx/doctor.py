@@ -20,10 +20,10 @@ from .control_plane.runtime.promotion_readiness import (
 )
 from .control_plane.runtime.time import chronology_key
 from .install_contract import (
-    _powershell_literal,
     NO_CLONE_INSTALL_URL,
     local_install_command,
     no_clone_upgrade_command,
+    powershell_literal,
 )
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
@@ -774,7 +774,7 @@ def collect_doctor(
         skills = inspect_skill_facades(skill_roots[0])
         project_skill = skills["loopx"]
         home_arg = (
-            _powershell_literal(selected_zcode_home)
+            powershell_literal(selected_zcode_home)
             if os.name == "nt"
             else shlex.quote(str(selected_zcode_home))
         )
