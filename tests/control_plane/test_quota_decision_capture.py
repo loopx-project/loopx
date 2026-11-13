@@ -504,6 +504,7 @@ def test_capture_root_allocates_private_distinct_children(tmp_path):
     for release in ('exact', 'wrong_digest', 'disconnect', 'changed_capture')
 ] + [
     pytest.param('changed_capture', True, 720, True, False, id='bounded-long-capture'),
+    pytest.param('changed_capture', True, 671, True, False, id='tight-long-capture'),
     pytest.param('changed_capture', True, 600, True, True, id='insufficient-metadata-budget'),
 ])
 def test_real_cli_handoff_preserves_original_receipt(
@@ -606,7 +607,8 @@ def test_real_cli_handoff_preserves_original_receipt(
                 if metadata_error:
                     assert 'too small for recovery metadata' in failure['reason']
                 elif long_capture:
-                    assert 'Unverified capture' in failure['instruction']
+                    assert 'Restore capture' in failure['instruction'] and 'Read receipt' in failure['instruction']
+                    assert 'reason' not in failure
                 else:
                     assert 'cannot be verified' in failure['reason']
                 assert 'command' not in failure and 'command' not in reference

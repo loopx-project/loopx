@@ -509,7 +509,7 @@ def quota_captured_transport_failure_view(
         "instruction": "Restore the original capture and inspect its Turn receipt. Do not rerun admission."}
     if not _fits_failure_output(result, output_limit):
         result.pop("reason")
-        result["instruction"] = "Unverified capture. Restore it and read its receipt. Do not rerun admission."
+        result["instruction"] = "Restore capture. Read receipt. Do not rerun admission."
         if not _fits_failure_output(result, output_limit):
             # The locator and recovery rule must survive even below the metadata floor.
             result["reason"] = "Output limit is too small for recovery metadata."

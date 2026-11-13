@@ -671,6 +671,101 @@ def _record_non_guard_quota_event(
         )
 
 
+def _commit_fresh_quota_receipt(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    registry_path: Path, runtime_root_arg: str | None, runtime_root: Path,
+    goal_ref: dict[str, str] | None, heartbeat_turn_id: str,
+    heartbeat_stall_observation: str, requested_todo_id: str | None,
+    rollout_todo_id: str | None, rollout_replan_obligation_id: str | None,
+    rollout_details: dict[str, object], append_cli_rollout_event: RolloutEventAppender,
+) -> None:
+    """Commit a new Turn receipt and attach the readback used for publication."""
+    settlement_identity = (
+        SettlementIdentity(
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=heartbeat_turn_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+        )
+        if rollout_todo_id or rollout_replan_obligation_id
+        else None
+    )
+    rollout_details.update(
+        {
+            "turn_instance_id": heartbeat_turn_id,
+            "stall_observation": heartbeat_stall_observation,
+            "settlement_effect_id": (
+                settlement_identity.effect_id
+                if settlement_identity is not None
+                else ""
+            ),
+        }
+    )
+    append_cli_rollout_event(
+        payload,
+        registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
+        event_kind="quota_should_run",
+        goal_ref=goal_ref,
+        agent_id=args.agent_id,
+        run_id=heartbeat_turn_id,
+        status=str(
+            payload.get("effective_action")
+            or payload.get("decision")
+            or "should-run"
+        ),
+        summary=(
+            "heartbeat quota receipt committed for "
+            f"turn={heartbeat_turn_id} stall={heartbeat_stall_observation}"
+        ),
+        details=rollout_details,
+        allow_failed=True,
+        idempotency_fields=[
+            "goal_id",
+            "event_kind",
+            "agent_id",
+            "run_id",
+            *(["goal_ref"] if goal_ref is not None else []),
+        ],
+    )
+    receipt = find_heartbeat_receipt(
+        runtime_root,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        turn_instance_id=heartbeat_turn_id,
+        goal_ref=goal_ref,
+    )
+    if receipt:
+        rollout_event_value = payload.get("rollout_event")
+        rollout_event: Mapping[str, object] = (
+            rollout_event_value
+            if isinstance(rollout_event_value, Mapping)
+            else {}
+        )
+        payload["heartbeat_receipt"] = heartbeat_receipt_view(
+            receipt,
+            turn_instance_id=heartbeat_turn_id,
+            status="committed"
+            if rollout_event.get("appended")
+            else "replayed",
+        )
+        _export("commit_requested_action_selection")(
+            payload,
+            requested_todo_id=requested_todo_id,
+        )
+    else:
+        fail_heartbeat_receipt(
+            payload,
+            turn_instance_id=heartbeat_turn_id,
+            stall_observation=heartbeat_stall_observation,
+            reason=(
+                "heartbeat receipt append could not be read back; retry "
+                "quota should-run with the same --turn-instance-id"
+            ),
+        )
+
+
 def handle_quota_command(
     args: argparse.Namespace,
     *,
@@ -1040,94 +1135,15 @@ def handle_quota_command(
                     ),
                 )
             else:
-                settlement_identity = (
-                    SettlementIdentity(
-                        goal_id=args.goal_id,
-                        agent_id=args.agent_id,
-                        todo_id=rollout_todo_id,
-                        turn_instance_id=heartbeat_turn_id,
-                        replan_obligation_id=rollout_replan_obligation_id,
-                    )
-                    if rollout_todo_id or rollout_replan_obligation_id
-                    else None
+                _commit_fresh_quota_receipt(
+                    payload, args, registry_path=registry_path,
+                    runtime_root_arg=runtime_root_arg, runtime_root=runtime_root,
+                    goal_ref=goal_ref, heartbeat_turn_id=heartbeat_turn_id,
+                    heartbeat_stall_observation=heartbeat_stall_observation,
+                    requested_todo_id=action_selection.requested_todo_id if action_selection is not None else None,
+                    rollout_todo_id=rollout_todo_id, rollout_replan_obligation_id=rollout_replan_obligation_id,
+                    rollout_details=rollout_details, append_cli_rollout_event=append_cli_rollout_event,
                 )
-                rollout_details.update(
-                    {
-                        "turn_instance_id": heartbeat_turn_id,
-                        "stall_observation": heartbeat_stall_observation,
-                        "settlement_effect_id": (
-                            settlement_identity.effect_id
-                            if settlement_identity is not None
-                            else ""
-                        ),
-                    }
-                )
-                append_cli_rollout_event(
-                    payload,
-                    registry_path=registry_path,
-                    runtime_root_arg=runtime_root_arg,
-                    event_kind="quota_should_run",
-                    goal_ref=goal_ref,
-                    agent_id=args.agent_id,
-                    run_id=heartbeat_turn_id,
-                    status=str(
-                        payload.get("effective_action")
-                        or payload.get("decision")
-                        or "should-run"
-                    ),
-                    summary=(
-                        "heartbeat quota receipt committed for "
-                        f"turn={heartbeat_turn_id} stall={heartbeat_stall_observation}"
-                    ),
-                    details=rollout_details,
-                    allow_failed=True,
-                    idempotency_fields=[
-                        "goal_id",
-                        "event_kind",
-                        "agent_id",
-                        "run_id",
-                        *(["goal_ref"] if goal_ref is not None else []),
-                    ],
-                )
-                receipt = find_heartbeat_receipt(
-                    runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    turn_instance_id=heartbeat_turn_id,
-                    goal_ref=goal_ref,
-                )
-                if receipt:
-                    rollout_event_value = payload.get("rollout_event")
-                    rollout_event: Mapping[str, object] = (
-                        rollout_event_value
-                        if isinstance(rollout_event_value, Mapping)
-                        else {}
-                    )
-                    payload["heartbeat_receipt"] = heartbeat_receipt_view(
-                        receipt,
-                        turn_instance_id=heartbeat_turn_id,
-                        status="committed"
-                        if rollout_event.get("appended")
-                        else "replayed",
-                    )
-                    _export("commit_requested_action_selection")(
-                        payload,
-                        requested_todo_id=(
-                            action_selection.requested_todo_id
-                            if action_selection is not None
-                            else None
-                        ),
-                    )
-                else:
-                    fail_heartbeat_receipt(
-                        payload,
-                        turn_instance_id=heartbeat_turn_id,
-                        stall_observation=heartbeat_stall_observation,
-                        reason=(
-                            "heartbeat receipt append could not be read back; retry "
-                            "quota should-run with the same --turn-instance-id"
-                        ),
-                    )
         else:
             _record_non_guard_quota_event(
                 payload, args, registry_path=registry_path,

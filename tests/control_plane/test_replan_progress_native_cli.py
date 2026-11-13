@@ -350,10 +350,12 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
 
-    def read(command, expected=0):
+    def read(command, expected=0, output_limit=None):
         result = subprocess.run(shlex.split(command), cwd=fixture["project"], capture_output=True,
             text=True, timeout=30)
         assert result.returncode == expected, result.stdout + result.stderr
+        if output_limit is not None:
+            assert len(result.stdout.encode()) <= output_limit
         return json.loads(result.stdout)
 
     try:
@@ -393,6 +395,46 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         assert writer["obligation_id"] == review["obligation_id"] == packet["obligation_id"]
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
         assert writer["allowed_terminal"] == source["replan_action_packet"]["allowed_terminal"]
+
+        output_limit = 1450
+        bounded = read(f"{writer_command} --max-page-output-bytes {output_limit}", output_limit=output_limit)
+        assert bounded["source_hash"] == writer["source_hash"]
+        page_command = bounded["command"]
+        body = bytearray()
+        while True:
+            page = read(page_command, output_limit=output_limit)
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                break
+            assert page["content"] and page["next_offset"] == len(body)
+            page_command = page["next_command"]
+        fields = json.loads(body)["selections"]
+        assert len(fields) == len(writer)
+        restored = {field["pointer"].removeprefix("/"): field["value"] for field in fields}
+        assert restored == writer
+
+        # The staged writeback is the executable source for this observation.
+        # Long launcher paths and quoted values must survive the presentation.
+        original_refresh = next(action for action in source["interaction_contract"]["cli_channel"]["next_cli_actions"]
+                                if "refresh-state" in shlex.split(action))
+        staged_refresh = next(action for action in restored["writeback"]["next_cli_actions"]
+                              if "refresh-state" in shlex.split(action))
+        assert len(original_refresh.encode()) > 420
+        staged_argv = shlex.split(staged_refresh)
+        assert staged_argv == shlex.split(original_refresh)
+        values = {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+                  "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
+                  "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current"}
+        command = [sys.executable, "-m", "loopx.entrypoint",
+            *[values.get(arg, arg) for arg in staged_argv[1:]], "--dry-run", "--no-global-sync",
+            "--suppress-external-sinks"]
+        index_before = fixture["index"].read_bytes()
+        dry_run = subprocess.run(command, cwd=fixture["project"], capture_output=True, text=True, timeout=30)
+        assert dry_run.returncode == 0, (dry_run.stdout, dry_run.stderr)
+        assert json.loads(dry_run.stdout)["ok"] is True
+        assert fixture["index"].read_bytes() == index_before
 
         # Even a byte-only change that keeps the decoded object identical
         # must reject both stages. Restoring the original enables the retry.

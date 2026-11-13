@@ -301,7 +301,7 @@ def register_quota_command(
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,
         help="For JSON context-read, native should-run/context-project, progressive context-project --initial-read, "
-             "or Turn-bound JSON spend-slot: optional positive output byte limit. "
+             "Turn-bound JSON spend-slot or digest-bound JSON replan writeback: optional positive output byte limit. "
              "Reader pages shrink at UTF-8 boundaries; oversized settlement diagnostics remain complete in a private immutable result with reader references. "
              "An insufficient metadata budget returns an error; this option does not enable native context continuity.")
     quota_parser.add_argument(

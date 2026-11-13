@@ -1462,8 +1462,8 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
-    writeback.next_cli_actions = hasSettlementPlan
-      ? nextCliActions.map(command => scalarString(command, "settlement command"))
+    writeback.next_cli_actions = hasSettlementPlan || !deferSettlement
+      ? nextCliActions.map(command => scalarString(command, "writeback command"))
       : preserveBoundReplanCommands || receiptBoundSettlementOnly
       ? nextCliActions.slice(0, 5).map(command => scalarString(command, "bound replan closeout command"))
       : textList(nextCliActions, 5, 420);

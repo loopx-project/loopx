@@ -39,6 +39,7 @@ from .quota_context_reader import (
     _native_context_reference,
     _native_output_bytes,
     _validate_context_page_window,
+    pinned_context_read_window,
     model_context_reference,
     read_context_capture,
 )
@@ -910,10 +911,13 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
     has_output_limit = getattr(args, "max_page_output_bytes", None) is not None
     settlement_output = (args.quota_command == "spend-slot" and args.format == "json"
         and bool(getattr(args, "turn_instance_id", None)) and bool(getattr(args, "agent_id", None)))
+    replan_output = (args.quota_command == "replan-view" and args.format == "json"
+        and getattr(args, "replan_stage", None) == "writeback" and bool(getattr(args, "capture_sha256", None)))
+    bounded_output = settlement_output or replan_output
     budget_scope_error = ("max-page-output-bytes is only supported by JSON context-read "
         "or enabled native should-run/context-project, progressive context-project --initial-read, "
-        "or Turn-bound JSON spend-slot")
-    if has_output_limit and args.quota_command != "context-read" and not settlement_output and (
+        "or Turn-bound JSON spend-slot or digest-bound JSON replan writeback")
+    if has_output_limit and args.quota_command != "context-read" and not bounded_output and (
         args.quota_command not in ("should-run", "context-project") or args.format != "json"
         or (getattr(args, "context_delivery", None) == "off" and getattr(args, "delta_delivery", None) != "auto")):
         print_payload({"ok": False, "reason": budget_scope_error},
@@ -935,10 +939,10 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             print_payload({"ok": False, "reason": str(exc), "appended": False,
                 "registry_mutated": False}, args.format, str)
             return 1
-    if has_output_limit and settlement_output and args.max_page_output_bytes <= 0:
+    if has_output_limit and bounded_output and args.max_page_output_bytes <= 0:
         print_payload({"ok": False, "reason": "max-page-output-bytes must be positive"}, args.format, str)
         return 1
-    if has_output_limit and args.quota_command != "context-read" and not settlement_output:
+    if has_output_limit and args.quota_command != "context-read" and not bounded_output:
         try:
             if not _context_page_output_enabled(args, native_context_activation(args)):
                 raise QuotaCommandValidationError(budget_scope_error)
@@ -1146,6 +1150,44 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
                                  **({"capture_sha256": capture_sha256} if capture_sha256 is not None else {}))
 
 
+def _bounded_replan_writeback(args: argparse.Namespace, view: dict[str, Any]) -> dict[str, Any]:
+    """Page the complete verified stage using the existing private context reader."""
+    from ..command_invocation import current_loopx_cli_argv
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from .context_machine import capture_context_recovery
+
+    limit = getattr(args, "max_page_output_bytes", None)
+    if limit is None:
+        # Keep the existing default delivery for bound settlement consumers.
+        if "settlement_plan" in view["writeback"]:
+            return view
+        limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    raw = _native_output_bytes(view)
+    if len(raw) <= limit:
+        return view
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("The verified writeback exceeds the context reader size limit.")
+    reference = capture_context_recovery(view, runtime_root=Path(args.decision_file).expanduser().resolve().parent,
+        index_and_select=False)
+    if reference.get("available") is False:
+        raise ValueError("Could not save the verified writeback. Repair private capture storage and retry the original read.")
+    path, digest = Path(reference["path"]), reference["sha256"]
+    selections = [{"path": [key], "pointer": "/" + key.replace("~", "~0").replace("/", "~1")} for key in view]
+    reader, selected = write_initial_context_read_reference(path, digest, view, selections)
+    if len(selected) > MAX_REQUEST_BYTES:
+        raise ValueError("The verified writeback exceeds the context reader size limit.")
+    reader_argv = current_loopx_cli_argv()
+    page_bytes, needed = pinned_context_read_window(reader, selected,
+        page_bytes=max(256, min(NATIVE_CONTEXT_PAGE_BYTES, limit)), output_limit=limit, reader_argv=reader_argv)
+    command = context_capture_read_command(path, digest, reference_file=reader, page_bytes=page_bytes,
+        max_page_output_bytes=limit, reader_argv=reader_argv)
+    opening = {"ok": True, "stage": "writeback", "source_hash": view["source_hash"], "command": command,
+        "instruction": "Read all writeback fields through EOF before using commands. This read does not settle the Turn."}
+    if needed > limit or len(_native_output_bytes(opening)) > limit:
+        raise ValueError("The writeback page budget cannot fit recovery metadata. Increase it and retry the original read.")
+    return opening
+
+
 def handle_replan_view(
     args: argparse.Namespace,
     print_payload: Callable[[dict[str, object], str, Callable[[dict[str, object]], str]], None],
@@ -1153,6 +1195,9 @@ def handle_replan_view(
     """Render the captured read without entering live quota dispatch or recovery."""
     try:
         view = read_replan_view(args)
+        if (args.format == "json" and args.replan_stage == "writeback"
+                and getattr(args, "capture_sha256", None)):
+            view = _bounded_replan_writeback(args, view)
     except (OSError, ValueError, EffectRuntimeRejected) as exc:
         view = {"ok": False, "reason": str(exc)}
     print_payload(view, args.format, lambda value: json.dumps(value, ensure_ascii=False, indent=2))
